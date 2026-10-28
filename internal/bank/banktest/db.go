@@ -22,7 +22,7 @@ func baseURL() string {
 	return "host=/tmp dbname=postgres"
 }
 
-func ensureDatabase(ctx context.Context, t testing.TB) string {
+func ensureDatabase(ctx context.Context, t testing.TB) {
 	conn, err := pgx.Connect(ctx, baseURL())
 	if err != nil {
 		t.Skipf("no Postgres for ledger tests (%v); set BEERUS_TEST_DATABASE_URL", err)
@@ -37,22 +37,25 @@ func ensureDatabase(ctx context.Context, t testing.TB) string {
 			t.Fatal(err)
 		}
 	}
+}
+
+func testConfig(t testing.TB) *pgx.ConnConfig {
 	cfg, err := pgx.ParseConfig(baseURL())
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg.Database = database
-	return cfg.ConnString()
+	return cfg
 }
 
 func Schema(t testing.TB) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
-	url := ensureDatabase(ctx, t)
+	ensureDatabase(ctx, t)
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
 	schema := "t_" + hex.EncodeToString(b)
-	admin, err := pgx.Connect(ctx, url)
+	admin, err := pgx.ConnectConfig(ctx, testConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,10 +63,11 @@ func Schema(t testing.TB) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	admin.Close(ctx)
-	cfg, err := pgxpool.ParseConfig(url)
+	cfg, err := pgxpool.ParseConfig(baseURL())
 	if err != nil {
 		t.Fatal(err)
 	}
+	cfg.ConnConfig.Database = database
 	cfg.ConnConfig.RuntimeParams["search_path"] = schema
 	cfg.MaxConns = 16
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
@@ -72,7 +76,7 @@ func Schema(t testing.TB) *pgxpool.Pool {
 	}
 	t.Cleanup(func() {
 		pool.Close()
-		c, err := pgx.Connect(context.Background(), url)
+		c, err := pgx.ConnectConfig(context.Background(), testConfig(t))
 		if err == nil {
 			_, _ = c.Exec(context.Background(), `DROP SCHEMA `+schema+` CASCADE`)
 			c.Close(context.Background())
