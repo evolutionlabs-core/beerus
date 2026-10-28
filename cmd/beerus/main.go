@@ -39,6 +39,8 @@ Usage:
   beerus sync
   beerus webhooks [replay <delivery-id>]
   beerus snapshot [take [name] | restore <id>]
+  beerus trust [--dir .beerus]
+  beerus untrust [--dir .beerus]
   beerus version
 
 The state directory defaults to .beerus, or $BEERUS_DIR when set.
@@ -58,6 +60,10 @@ func main() {
 		err = cmdUp(args)
 	case "info":
 		err = cmdInfo(args)
+	case "trust":
+		err = cmdTrust(args, true)
+	case "untrust":
+		err = cmdTrust(args, false)
 	case "version":
 		fmt.Println("beerus", version)
 	case "help", "-h", "--help":

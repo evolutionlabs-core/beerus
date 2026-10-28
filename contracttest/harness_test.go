@@ -588,10 +588,12 @@ func (s *Stack) syncMore(accountID string, st *feedState, limit int) (*feedState
 		st.pages++
 		for _, x := range r.JSON["added"].([]any) {
 			m := x.(map[string]any)
+			s.checkDates(m)
 			st.lines[fmt.Sprint(m["id"])] = m
 		}
 		for _, x := range r.JSON["modified"].([]any) {
 			m := x.(map[string]any)
+			s.checkDates(m)
 			st.lines[fmt.Sprint(m["id"])] = m
 			st.modified = append(st.modified, m)
 		}
@@ -704,4 +706,17 @@ func (s *Stack) firstDate(accountID string, start clock.Date) clock.Date {
 		return d
 	}
 	return start
+}
+
+func (s *Stack) checkDates(m map[string]any) {
+	s.t.Helper()
+	vd, err := time.Parse("2006-01-02", fmt.Sprint(m["value_date"]))
+	if err != nil || vd.Year() < 2000 {
+		s.t.Fatalf("line %v has value_date %v", m["id"], m["value_date"])
+	}
+	if b, ok := m["booked_at"].(string); ok {
+		if bt, err := time.Parse(time.RFC3339, b); err != nil || bt.Year() < 2000 {
+			s.t.Fatalf("line %v has booked_at %v", m["id"], b)
+		}
+	}
 }

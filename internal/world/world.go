@@ -230,8 +230,11 @@ func New(cfg Config, ov Overrides) *World {
 		w.state[k] = &genState{projected: a.Opening}
 	}
 	w.injectedSet = map[string]bool{}
-	for _, l := range w.ov.Injected {
-		w.injectedSet[l.Key] = true
+	for i := range w.ov.Injected {
+		if w.ov.Injected[i].ValueDate.IsZero() {
+			w.ov.Injected[i].ValueDate = clock.DateOf(w.ov.Injected[i].BookedAt)
+		}
+		w.injectedSet[w.ov.Injected[i].Key] = true
 	}
 	w.through = cfg.Genesis.AddDays(-1)
 	return w
@@ -362,6 +365,9 @@ func (w *World) Inject(at time.Time, lines []Line) error {
 	}
 	for i := range lines {
 		l := lines[i]
+		if l.ValueDate.IsZero() {
+			l.ValueDate = clock.DateOf(l.BookedAt)
+		}
 		w.injectedSet[l.Key] = true
 		w.ov.Injected = append(w.ov.Injected, l)
 		if !DateOf(l.firstAppear()).After(w.through) {
