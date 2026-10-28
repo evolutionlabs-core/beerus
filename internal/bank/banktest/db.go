@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"os"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
@@ -33,7 +35,9 @@ func ensureDatabase(ctx context.Context, t testing.TB) {
 		t.Fatal(err)
 	}
 	if !exists {
-		if _, err := conn.Exec(ctx, `CREATE DATABASE `+database); err != nil {
+		_, err := conn.Exec(ctx, `CREATE DATABASE `+database)
+		var pgErr *pgconn.PgError
+		if err != nil && !(errors.As(err, &pgErr) && (pgErr.Code == "42P04" || pgErr.Code == "23505")) {
 			t.Fatal(err)
 		}
 	}
