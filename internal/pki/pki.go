@@ -210,3 +210,19 @@ func NeedsRenewal(certPath string, at time.Time) bool {
 	life := cert.NotAfter.Sub(cert.NotBefore)
 	return at.After(cert.NotBefore.Add(life * 2 / 3))
 }
+
+func FileThumbprint(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	block, _ := pem.Decode(b)
+	if block == nil {
+		return "", fmt.Errorf("pki: no certificate in %s", path)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", err
+	}
+	return Thumbprint(cert), nil
+}

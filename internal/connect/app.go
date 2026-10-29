@@ -35,6 +35,7 @@ type App struct {
 	wake      chan struct{}
 	statePath string
 	sending   chan struct{}
+	pmu       sync.RWMutex
 	swept     time.Time
 }
 
@@ -222,7 +223,26 @@ func (a *App) sweep() {
 }
 
 func (a *App) partnerOf(id string) *config.Partner {
+	a.pmu.RLock()
+	defer a.pmu.RUnlock()
 	return a.cfg.Partner(id)
+}
+
+func (a *App) partnersSnapshot() []*config.Partner {
+	a.pmu.RLock()
+	defer a.pmu.RUnlock()
+	return append([]*config.Partner(nil), a.cfg.Partners...)
+}
+
+func (a *App) ReloadPartners() (int, error) {
+	fresh, err := config.Load(a.cfg.Dir)
+	if err != nil {
+		return 0, err
+	}
+	a.pmu.Lock()
+	defer a.pmu.Unlock()
+	a.cfg.Partners = fresh.Partners
+	return len(fresh.Partners), nil
 }
 
 type event struct {

@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -28,6 +30,7 @@ type Partner struct {
 	APIKeySHA256 string   `yaml:"api_key_sha256"`
 	RedirectURIs []string `yaml:"redirect_uris"`
 	WebhookURL   string   `yaml:"webhook_url"`
+	CertSHA256   string   `yaml:"cert_sha256"`
 }
 
 type Connect struct {
@@ -165,17 +168,15 @@ type InitOptions struct {
 	PartnerPort int
 	WidgetPort  int
 	ControlPort int
-	WebhookURL  string
-	RedirectURI string
 }
 
-func Init(dir string, o InitOptions) (*Config, string, error) {
+func Init(dir string, o InitOptions) (*Config, error) {
 	if Exists(dir) {
-		return nil, "", fmt.Errorf("%s already holds a Beerus setup", dir)
+		return nil, fmt.Errorf("%s already holds a Beerus setup", dir)
 	}
-	for _, sub := range []string{"ca", "connect", "partners/balance", "webhook", "snapshots"} {
+	for _, sub := range []string{"ca", "connect", "partners", "webhook", "snapshots"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
-			return nil, "", err
+			return nil, err
 		}
 	}
 	if o.Seed == 0 {
@@ -189,16 +190,6 @@ func Init(dir string, o InitOptions) (*Config, string, error) {
 	}
 	if o.ControlPort == 0 {
 		o.ControlPort = 7480
-	}
-	if o.WebhookURL == "" {
-		o.WebhookURL = "http://localhost:3000/webhooks/beerus"
-	}
-	if o.RedirectURI == "" {
-		o.RedirectURI = "http://localhost:3000/bank_connections/callback"
-	}
-	apiKey, err := randomToken("bk_test_", 24)
-	if err != nil {
-		return nil, "", err
 	}
 	c := &Config{
 		Dir:     dir,
@@ -217,37 +208,24 @@ func Init(dir string, o InitOptions) (*Config, string, error) {
 			SyncInterval: "1m",
 			RefreshEvery: "1m",
 		},
-		Partners: []*Partner{{
-			ID:           "balance",
-			Name:         "Balance",
-			LegalName:    "Evolution Labs",
-			Purpose:      "to keep your books in sync with this account",
-			CertCN:       "balance",
-			APIKeySHA256: HashKey(apiKey),
-			RedirectURIs: []string{o.RedirectURI},
-			WebhookURL:   o.WebhookURL,
-		}},
-	}
-	if err := os.WriteFile(c.Path("partners", "balance", "api-key"), []byte(apiKey+"\n"), 0o600); err != nil {
-		return nil, "", err
 	}
 	if err := c.EnsureCertificates(); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if _, err := WebhookKey(c); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	token, err := randomToken("ctl_", 24)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if err := os.WriteFile(c.Path("control-token"), []byte(token+"\n"), 0o600); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if err := c.Save(); err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	return c, apiKey, nil
+	return c, nil
 }
 
 const (
@@ -289,6 +267,11 @@ func (c *Config) EnsureCertificates() error {
 				return err
 			}
 		}
+		fp, err := pki.FileThumbprint(filepath.Join(dir, "client.crt"))
+		if err != nil {
+			return err
+		}
+		p.CertSHA256 = fp
 		if err := os.WriteFile(filepath.Join(dir, "ca.crt"), root.PEM, 0o644); err != nil {
 			return err
 		}
@@ -359,4 +342,100 @@ func ReadSecret(path string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(b)), nil
+}
+
+var partnerID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+
+type PartnerOptions struct {
+	ID           string
+	Name         string
+	LegalName    string
+	Purpose      string
+	RedirectURIs []string
+	WebhookURL   string
+}
+
+func (c *Config) AddPartner(o PartnerOptions) (string, error) {
+	if !partnerID.MatchString(o.ID) {
+		return "", errors.New("partner ID must be lowercase letters, digits and dashes, up to 40 characters")
+	}
+	if c.Partner(o.ID) != nil {
+		return "", fmt.Errorf("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
+	}
+	if len(o.RedirectURIs) == 0 {
+		return "", errors.New("at least one redirect URI is required")
+	}
+	for _, u := range append(append([]string{}, o.RedirectURIs...), o.WebhookURL) {
+		if u == "" {
+			continue
+		}
+		parsed, err := url.Parse(u)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return "", fmt.Errorf("%q is not an http or https URL", u)
+		}
+	}
+	if o.Name == "" {
+		o.Name = o.ID
+	}
+	if o.LegalName == "" {
+		o.LegalName = o.Name
+	}
+	if o.Purpose == "" {
+		o.Purpose = "to read your account details, balances and transactions"
+	}
+	key, err := randomToken("bk_test_", 24)
+	if err != nil {
+		return "", err
+	}
+	p := &Partner{ID: o.ID, Name: o.Name, LegalName: o.LegalName, Purpose: o.Purpose, CertCN: o.ID, APIKeySHA256: HashKey(key), RedirectURIs: o.RedirectURIs, WebhookURL: o.WebhookURL}
+	if err := os.MkdirAll(c.Path("partners", o.ID), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(c.Path("partners", o.ID, "api-key"), []byte(key+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	c.Partners = append(c.Partners, p)
+	if err := c.EnsureCertificates(); err != nil {
+		return "", err
+	}
+	return key, c.Save()
+}
+
+func (c *Config) RotatePartner(id string) (string, error) {
+	p := c.Partner(id)
+	if p == nil {
+		return "", fmt.Errorf("no partner %s", id)
+	}
+	key, err := randomToken("bk_test_", 24)
+	if err != nil {
+		return "", err
+	}
+	if err := os.Remove(c.Path("partners", id, "client.crt")); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	if err := os.WriteFile(c.Path("partners", id, "api-key"), []byte(key+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	p.APIKeySHA256 = HashKey(key)
+	if err := c.EnsureCertificates(); err != nil {
+		return "", err
+	}
+	return key, c.Save()
+}
+
+func (c *Config) RemovePartner(id string) error {
+	if c.Partner(id) == nil {
+		return fmt.Errorf("no partner %s", id)
+	}
+	keep := c.Partners[:0]
+	for _, p := range c.Partners {
+		if p.ID != id {
+			keep = append(keep, p)
+		}
+	}
+	c.Partners = keep
+	if err := c.Save(); err != nil {
+		return err
+	}
+	return os.RemoveAll(c.Path("partners", id))
 }
