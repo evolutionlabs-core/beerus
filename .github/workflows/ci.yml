@@ -48,3 +48,16 @@ jobs:
           node-version: 22
       - name: Spectral
         run: npx --yes @stoplight/spectral-cli@6 lint api/partner/openapi.yaml --fail-severity warn
+
+  css:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build CSS
+        working-directory: web
+        run: npm ci && npm run css
+      - name: Compiled CSS is up to date
+        run: git diff --exit-code internal/connect/assets/beerus.css

@@ -153,3 +153,55 @@ func (w *World) LinesFor(account string, through time.Time) []Line {
 	}
 	return out
 }
+
+type Traced struct {
+	Account Account
+	Line    Presented
+}
+
+func (w *World) Accounts() []Account {
+	out := []Account{}
+	for _, p := range w.Personas() {
+		for _, k := range p.Accounts {
+			a, _ := w.Account(k)
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func (w *World) Statement(account string, at time.Time) ([]Presented, error) {
+	return w.Fetch(account, at, w.cfg.Genesis)
+}
+
+func (w *World) Line(account, key string, pending bool, at time.Time) (Presented, bool) {
+	ls, err := w.Statement(account, at)
+	if err != nil {
+		return Presented{}, false
+	}
+	for _, l := range ls {
+		if l.Key == key && l.Pending == pending {
+			return l, true
+		}
+	}
+	return Presented{}, false
+}
+
+func (w *World) Trace(sessionID string, at time.Time) []Traced {
+	out := []Traced{}
+	if sessionID == "" {
+		return out
+	}
+	for _, a := range w.Accounts() {
+		ls, err := w.Statement(a.Key, at)
+		if err != nil {
+			continue
+		}
+		for _, l := range ls {
+			if l.SessionID == sessionID {
+				out = append(out, Traced{Account: a, Line: l})
+			}
+		}
+	}
+	return out
+}

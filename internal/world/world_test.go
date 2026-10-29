@@ -1,6 +1,7 @@
 package world
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -175,5 +176,55 @@ func TestScenarioLinesHaveValueDates(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestTransfers(t *testing.T) {
+	w, now := testWorld()
+	ad := w.Personas()[0]
+	var aCur, bCur, aSav Account
+	for _, k := range ad.Accounts {
+		a, _ := w.Account(k)
+		switch {
+		case a.Institution == "bank-a" && a.Type == "current":
+			aCur = a
+		case a.Institution == "bank-b":
+			bCur = a
+		case a.Type == "savings":
+			aSav = a
+		}
+	}
+	before, _ := w.LedgerAt(bCur.Key, now)
+	r, err := w.Transfer(now, TransferRequest{From: aCur.NUBAN, To: bCur.NUBAN, Amount: 2500000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Kind != "nip" || len(r.SessionID) != 30 || r.Fee != 2500 || r.VAT != 188 || r.StampDuty != 5000 || !r.Credited {
+		t.Fatalf("cross-bank transfer: %+v", r)
+	}
+	after, _ := w.LedgerAt(bCur.Key, now)
+	if after-before != 2500000 {
+		t.Fatalf("recipient credited %d", after-before)
+	}
+	r2, err := w.Transfer(now, TransferRequest{From: aCur.Key, To: aSav.Key, Amount: 2000000})
+	if err != nil || r2.Kind != "intra_bank" || r2.Fee != 0 || r2.StampDuty != 0 {
+		t.Fatalf("own intra-bank transfer: %+v %v", r2, err)
+	}
+	r3, err := w.Transfer(now, TransferRequest{From: aCur.Key, To: "0123456789", ToBank: "Bank C", ToName: "Emeka Nwosu", Amount: 500000})
+	if err != nil || r3.Credited || r3.Fee != 1000 || r3.StampDuty != 0 {
+		t.Fatalf("outside transfer: %+v %v", r3, err)
+	}
+	if _, err := w.Transfer(now, TransferRequest{From: aCur.Key, To: bCur.Key, Amount: 1 << 50}); !errors.Is(err, ErrInsufficientFunds) {
+		t.Fatalf("overdraw: %v", err)
+	}
+	ls, _ := w.Fetch(aCur.Key, now, clock.DateOf(now))
+	bal := int64(0)
+	for _, l := range ls {
+		if l.SessionID == r.SessionID {
+			bal += l.Amount
+		}
+	}
+	if bal != -2507688 {
+		t.Fatalf("sender lines for the session sum to %d", bal)
 	}
 }

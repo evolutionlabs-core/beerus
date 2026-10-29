@@ -31,6 +31,7 @@ func (a *App) ControlHandler() http.Handler {
 	})
 	mux.HandleFunc("POST /scenarios/{name}", a.ctlScenario)
 	mux.HandleFunc("GET /personas", a.ctlPersonas)
+	mux.HandleFunc("POST /transfers", a.ctlTransfer)
 	mux.HandleFunc("GET /connections", a.ctlConnections)
 	mux.HandleFunc("POST /connections/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.RevokeAtBank(r.PathValue("id")); err != nil {
@@ -58,7 +59,14 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "No such endpoint.")
 	})
-	return a.withRequestID(a.localOnly(mux))
+	api := a.withRequestID(a.localOnly(mux))
+	room := a.roomHandler()
+	top := http.NewServeMux()
+	top.Handle("/ui", room)
+	top.Handle("/ui/", room)
+	top.Handle("/assets/", room)
+	top.Handle("/", api)
+	return top
 }
 
 func (a *App) localOnly(next http.Handler) http.Handler {
@@ -237,6 +245,83 @@ func (a *App) ctlScenario(w http.ResponseWriter, r *http.Request) {
 	}
 	a.poke()
 	writeJSON(w, http.StatusOK, map[string]string{"scenario": name, "result": result})
+}
+
+func parseNaira(s string) (int64, error) {
+	whole, frac, _ := strings.Cut(strings.ReplaceAll(strings.TrimSpace(s), ",", ""), ".")
+	if whole == "" || len(frac) > 2 || strings.Trim(whole, "0123456789") != "" || strings.Trim(frac, "0123456789") != "" {
+		return 0, fmt.Errorf("amount %q must look like 25000 or 25000.50 (naira)", s)
+	}
+	for len(frac) < 2 {
+		frac += "0"
+	}
+	n, err := strconv.ParseInt(whole+frac, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("amount %q must be a positive naira amount", s)
+	}
+	return n, nil
+}
+
+func naira(minor int64) string {
+	sign := ""
+	if minor < 0 {
+		sign, minor = "-", -minor
+	}
+	n := strconv.FormatInt(minor/100, 10)
+	out := ""
+	for i, c := range n {
+		if i > 0 && (len(n)-i)%3 == 0 {
+			out += ","
+		}
+		out += string(c)
+	}
+	return fmt.Sprintf("%s₦%s.%02d", sign, out, minor%100)
+}
+
+func (a *App) ctlTransfer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		From      string `json:"from"`
+		To        string `json:"to"`
+		ToBank    string `json:"to_bank"`
+		ToName    string `json:"to_name"`
+		Amount    string `json:"amount"`
+		Narration string `json:"narration"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"...","to":"...","amount":"25000"}.`)
+		return
+	}
+	amount, err := parseNaira(body.Amount)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	a.mu.Lock()
+	from, to := body.From, body.To
+	if key, ok := a.resolveAccount(from); ok {
+		from = key
+	}
+	if key, ok := a.resolveAccount(to); ok {
+		to = key
+	}
+	res, err := a.world.Transfer(a.clock.Now(), world.TransferRequest{From: from, To: to, ToBank: body.ToBank, ToName: body.ToName, Amount: amount, Narration: body.Narration})
+	if err == nil {
+		a.dirty()
+	}
+	a.mu.Unlock()
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	a.SyncAll()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"result":        res,
+		"amount":        naira(res.Amount),
+		"charges":       naira(res.Fee + res.VAT + res.StampDuty),
+		"total_debit":   naira(res.TotalDebit),
+		"sender_after":  naira(res.BalanceAfter),
+		"business_time": ts(a.clock.Now()),
+	})
 }
 
 func (a *App) ctlPersonas(w http.ResponseWriter, r *http.Request) {

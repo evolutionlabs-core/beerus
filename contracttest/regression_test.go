@@ -2,6 +2,7 @@ package contracttest
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,5 +149,18 @@ func TestFrozenClockSurvivesRestart(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if !again.Clock().Now().Equal(before) {
 		t.Fatal("a frozen clock moved after restart")
+	}
+}
+
+func TestSignInWithoutAccountsAtThatBank(t *testing.T) {
+	s := newStack(t)
+	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
+	b := s.browser()
+	b.get(fmt.Sprint(ls.JSON["widget_url"]))
+	b.post("/link/institution", map[string][]string{"institution": {"bank-a"}})
+	p := s.persona("chidi")
+	b.post("/bank/login", map[string][]string{"username": {p.Username}, "password": {p.Password}})
+	if !strings.Contains(b.last, "has no accounts at Bank A") {
+		t.Fatalf("expected a no-accounts message: %.300s", b.last)
 	}
 }
