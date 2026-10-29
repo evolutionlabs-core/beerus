@@ -157,3 +157,23 @@ func TestScenariosInject(t *testing.T) {
 		}
 	}
 }
+
+func TestScenarioLinesHaveValueDates(t *testing.T) {
+	w, now := testWorld()
+	k := w.Personas()[0].Accounts[0]
+	for _, s := range []string{"debit_then_reversal", "late_reversal", "fee_vat_levy_lines", "identical_same_day_fees", "pending_amount_change", "own_account_transfer_across_banks"} {
+		if _, err := w.RunScenario(s, now.Add(time.Minute), ScenarioParams{Account: k}); err != nil {
+			t.Fatalf("%s: %v", s, err)
+		}
+	}
+	for _, p := range w.Personas() {
+		for _, acct := range p.Accounts {
+			ls, _ := w.Fetch(acct, now.Add(72*time.Hour), clock.DateOf(now).AddDays(-1))
+			for _, l := range ls {
+				if l.ValueDate.IsZero() || l.ValueDate.Y < 2000 {
+					t.Fatalf("line %s has value date %v", l.Key, l.ValueDate)
+				}
+			}
+		}
+	}
+}

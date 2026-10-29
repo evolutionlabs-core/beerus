@@ -58,9 +58,11 @@ func (a *App) Serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	wtls, err := a.WidgetTLS()
-	if err != nil {
-		return err
+	var wtls *tls.Config
+	if a.cfg.Connect.WidgetTLS {
+		if wtls, err = a.WidgetTLS(); err != nil {
+			return err
+		}
 	}
 	type srv struct {
 		s   *http.Server

@@ -85,13 +85,17 @@ func specPath() string {
 	return filepath.Join(filepath.Dir(file), "..", "api", "partner", "openapi.yaml")
 }
 
-func freePort(t *testing.T) int {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+func freePorts(t *testing.T, n int) []int {
+	ports := []int{}
+	for i := 0; i < n; i++ {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer l.Close()
+		ports = append(ports, l.Addr().(*net.TCPAddr).Port)
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	return ports
 }
 
 func newStack(t *testing.T) *Stack {
@@ -107,37 +111,48 @@ func newStack(t *testing.T) *Stack {
 	} else {
 		s.sink = newSink()
 		t.Cleanup(s.sink.srv.Close)
-		dir := t.TempDir()
-		cfg, _, err := config.Init(dir, config.InitOptions{
-			Seed:        20261028,
-			Today:       clock.DateOf(time.Now()),
-			PartnerPort: freePort(t),
-			WidgetPort:  freePort(t),
-			ControlPort: freePort(t),
-			WebhookURL:  s.sink.srv.URL + "/webhooks",
-			RedirectURI: "https://balance.localhost/bank_connections/callback",
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		s.cfg = cfg
-		app, err := connect.New(cfg, connect.Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := app.Clock().SetPace(0); err != nil {
-			t.Fatal(err)
-		}
-		s.app = app
-		ctx, cancel := context.WithCancel(context.Background())
-		done := make(chan error, 1)
-		go func() { done <- app.Serve(ctx) }()
-		t.Cleanup(func() {
-			cancel()
-			if err := <-done; err != nil {
-				t.Errorf("serve: %v", err)
+		var lastErr error
+		for attempt := 0; attempt < 5 && s.app == nil; attempt++ {
+			ports := freePorts(t, 3)
+			cfg, _, err := config.Init(t.TempDir(), config.InitOptions{
+				Seed:        20261028,
+				Today:       clock.DateOf(time.Now()),
+				PartnerPort: ports[0],
+				WidgetPort:  ports[1],
+				ControlPort: ports[2],
+				WebhookURL:  s.sink.srv.URL + "/webhooks",
+				RedirectURI: "https://balance.localhost/bank_connections/callback",
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
-		})
+			app, err := connect.New(cfg, connect.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := app.Clock().SetPace(0); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- app.Serve(ctx) }()
+			select {
+			case lastErr = <-done:
+				cancel()
+				continue
+			case <-time.After(300 * time.Millisecond):
+			}
+			s.cfg, s.app = cfg, app
+			t.Cleanup(func() {
+				cancel()
+				if err := <-done; err != nil {
+					t.Errorf("serve: %v", err)
+				}
+			})
+		}
+		if s.app == nil {
+			t.Fatalf("could not start the stack: %v", lastErr)
+		}
 	}
 	s.redirect = s.cfg.Partners[0].RedirectURIs[0]
 	key, err := config.ReadSecret(s.cfg.Path("partners", "balance", "api-key"))
@@ -424,7 +439,8 @@ type browser struct {
 func (s *Stack) browser() *browser {
 	jar, _ := cookiejar.New(nil)
 	b := &browser{s: s}
-	widgetHost := strings.TrimPrefix(s.cfg.WidgetURL(), "https://")
+	wu, _ := url.Parse(s.cfg.WidgetURL())
+	widgetHost := wu.Host
 	b.c = &http.Client{
 		Jar:       jar,
 		Timeout:   30 * time.Second,
@@ -573,10 +589,12 @@ func (s *Stack) syncMore(accountID string, st *feedState, limit int) (*feedState
 		st.pages++
 		for _, x := range r.JSON["added"].([]any) {
 			m := x.(map[string]any)
+			s.checkDates(m)
 			st.lines[fmt.Sprint(m["id"])] = m
 		}
 		for _, x := range r.JSON["modified"].([]any) {
 			m := x.(map[string]any)
+			s.checkDates(m)
 			st.lines[fmt.Sprint(m["id"])] = m
 			st.modified = append(st.modified, m)
 		}
@@ -689,4 +707,17 @@ func (s *Stack) firstDate(accountID string, start clock.Date) clock.Date {
 		return d
 	}
 	return start
+}
+
+func (s *Stack) checkDates(m map[string]any) {
+	s.t.Helper()
+	vd, err := time.Parse("2006-01-02", fmt.Sprint(m["value_date"]))
+	if err != nil || vd.Year() < 2000 {
+		s.t.Fatalf("line %v has value_date %v", m["id"], m["value_date"])
+	}
+	if b, ok := m["booked_at"].(string); ok {
+		if bt, err := time.Parse(time.RFC3339, b); err != nil || bt.Year() < 2000 {
+			s.t.Fatalf("line %v has booked_at %v", m["id"], b)
+		}
+	}
 }
