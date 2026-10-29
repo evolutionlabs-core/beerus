@@ -53,6 +53,7 @@ func (b *Bank) Setup(ctx context.Context) error {
 		{Code: VATPayable, Name: "VAT payable", Kind: ledger.Liability},
 		{Code: StampPayable, Name: "Stamp duty payable", Kind: ledger.Liability},
 		{Code: Suspense, Name: "Settlement suspense", Kind: ledger.Asset},
+		{Code: TransferClearing, Name: "Internal transfer clearing", Kind: ledger.Liability},
 	} {
 		if _, err := b.L.OpenAccount(ctx, a); err != nil {
 			return err

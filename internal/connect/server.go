@@ -78,6 +78,15 @@ func (a *App) Serve(ctx context.Context) error {
 		{a.cfg.Connect.WidgetPort, a.WidgetHandler(), wtls},
 		{a.cfg.Connect.ControlPort, a.ControlHandler(), nil},
 	}
+	for _, b := range a.cfg.Banks {
+		if h := a.BankHandler(b.ID); h != nil {
+			specs = append(specs, struct {
+				port int
+				h    http.Handler
+				tls  *tls.Config
+			}{b.Port, h, nil})
+		}
+	}
 	servers := []srv{}
 	for _, sp := range specs {
 		ls, err := listenLocal(sp.port)
@@ -123,6 +132,7 @@ func (a *App) Serve(ctx context.Context) error {
 	}
 	cancel()
 	<-done
+	a.closeLedgers()
 	return serr
 }
 

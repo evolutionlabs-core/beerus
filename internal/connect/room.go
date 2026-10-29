@@ -121,13 +121,13 @@ func (a *App) acctView(acc world.Account, at time.Time) acctView {
 	if p, ok := a.world.Persona(acc.Owner); ok {
 		v.Holder = p.Name
 	}
-	v.Ledger, _ = a.world.LedgerAt(acc.Key, at)
-	pend, _ := a.world.PendingAt(acc.Key, at)
+	v.Ledger, _ = a.src(acc.Key).LedgerAt(acc.Key, at)
+	pend, _ := a.src(acc.Key).PendingAt(acc.Key, at)
 	v.Available = v.Ledger
 	if pend < 0 {
 		v.Available += pend
 	}
-	ls, _ := a.world.Fetch(acc.Key, at, clock.DateOf(at).AddDays(-3))
+	ls, _ := a.src(acc.Key).Fetch(acc.Key, at, clock.DateOf(at).AddDays(-3))
 	for _, l := range ls {
 		if l.Pending {
 			v.Pending++
@@ -179,9 +179,9 @@ func (a *App) roomOverview(w http.ResponseWriter, r *http.Request) {
 	for _, acc := range a.world.Accounts() {
 		s := sums[acc.Institution]
 		s.Accounts++
-		bal, _ := a.world.LedgerAt(acc.Key, now)
+		bal, _ := a.src(acc.Key).LedgerAt(acc.Key, now)
 		s.Deposits += bal
-		ls, _ := a.world.Fetch(acc.Key, now, clock.DateOf(now).AddDays(-14))
+		ls, _ := a.src(acc.Key).Fetch(acc.Key, now, clock.DateOf(now).AddDays(-14))
 		if len(ls) > 6 {
 			ls = ls[len(ls)-6:]
 		}
@@ -249,7 +249,7 @@ func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := a.clock.Now()
-	ls, _ := a.world.Statement(acc.Key, now)
+	ls, _ := a.statement(acc.Key, now)
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -306,7 +306,7 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 	}
 	now := a.clock.Now()
 	pending := r.URL.Query().Get("pending") == "1"
-	l, ok := a.world.Line(acc.Key, r.PathValue("line"), pending, now)
+	l, ok := a.line(acc.Key, r.PathValue("line"), pending, now)
 	if !ok {
 		a.roomNotFound(w, r)
 		return
@@ -314,7 +314,7 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 	lv := a.lineView(acc, l)
 	trace := []lineView{}
 	var debit, credit, charges int64
-	for _, t := range a.world.Trace(l.SessionID, now) {
+	for _, t := range a.trace(l.SessionID, now) {
 		tv := a.lineView(t.Account, t.Line)
 		trace = append(trace, tv)
 		switch {

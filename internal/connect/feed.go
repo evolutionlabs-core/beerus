@@ -166,7 +166,7 @@ func (r fetchResult) changed() bool {
 
 func (a *App) fetchAccount(partner string, acct *AccountRec, at time.Time) (fetchResult, error) {
 	var res fetchResult
-	lines, err := a.world.Fetch(acct.WorldKey, at, acct.From)
+	lines, err := a.src(acct.WorldKey).Fetch(acct.WorldKey, at, acct.From)
 	if err != nil {
 		return res, err
 	}
@@ -221,11 +221,11 @@ func (a *App) fetchAccount(partner string, acct *AccountRec, at time.Time) (fetc
 		}
 	}
 	res.added, res.modified, res.removed = len(added), len(modified), len(removed)
-	ledger, err := a.world.LedgerAt(acct.WorldKey, at)
+	ledger, err := a.src(acct.WorldKey).LedgerAt(acct.WorldKey, at)
 	if err != nil {
 		return res, err
 	}
-	pend, err := a.world.PendingAt(acct.WorldKey, at)
+	pend, err := a.src(acct.WorldKey).PendingAt(acct.WorldKey, at)
 	if err != nil {
 		return res, err
 	}
