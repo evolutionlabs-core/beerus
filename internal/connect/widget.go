@@ -200,8 +200,8 @@ func (a *App) sameOrigin(next http.Handler) http.Handler {
 	})
 }
 
-func setCookie(w http.ResponseWriter, name, value string, maxAge int) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
+func (a *App) setCookie(w http.ResponseWriter, name, value string, maxAge int) {
+	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true, Secure: a.cfg.Connect.WidgetTLS, SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
 }
 
 func (a *App) redirectPartner(w http.ResponseWriter, r *http.Request, ls *LinkSession, params url.Values) {
@@ -219,7 +219,7 @@ func (a *App) redirectPartner(w http.ResponseWriter, r *http.Request, ls *LinkSe
 		q.Set("state", ls.State)
 	}
 	u.RawQuery = q.Encode()
-	setCookie(w, widgetCookie, "", -1)
+	a.setCookie(w, widgetCookie, "", -1)
 	for id, ws := range a.st.WidgetSessions {
 		if ws.LinkSessionID == ls.ID {
 			delete(a.st.WidgetSessions, id)
@@ -265,7 +265,7 @@ func (a *App) widgetOpen(w http.ResponseWriter, r *http.Request) {
 	ws := &WidgetSession{ID: hashSecret(raw), LinkSessionID: ls.ID, CSRF: newSecret("", 16), ExpiresReal: ls.ExpiresReal}
 	a.st.WidgetSessions[ws.ID] = ws
 	a.dirty()
-	setCookie(w, widgetCookie, raw, int(linkSessionLife.Seconds()))
+	a.setCookie(w, widgetCookie, raw, int(linkSessionLife.Seconds()))
 	http.Redirect(w, r, "/link/start", http.StatusSeeOther)
 }
 
@@ -631,7 +631,7 @@ func (a *App) customerLogin(w http.ResponseWriter, r *http.Request) {
 	ws := &WidgetSession{ID: hashSecret(raw), LinkSessionID: p.ID, CSRF: newSecret("", 16), ExpiresReal: a.clock.Real().Add(30 * time.Minute)}
 	a.st.WidgetSessions[ws.ID] = ws
 	a.dirty()
-	setCookie(w, customerCookie, raw, 1800)
+	a.setCookie(w, customerCookie, raw, 1800)
 	http.Redirect(w, r, "/customer", http.StatusSeeOther)
 }
 

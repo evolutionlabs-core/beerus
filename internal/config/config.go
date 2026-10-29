@@ -34,6 +34,7 @@ type Connect struct {
 	Host         string `yaml:"host"`
 	PartnerPort  int    `yaml:"partner_port"`
 	WidgetPort   int    `yaml:"widget_port"`
+	WidgetTLS    bool   `yaml:"widget_tls"`
 	ControlPort  int    `yaml:"control_port"`
 	LegalName    string `yaml:"legal_name"`
 	BrandName    string `yaml:"brand_name"`
@@ -99,7 +100,11 @@ func (c *Config) PartnerURL() string {
 }
 
 func (c *Config) WidgetURL() string {
-	return fmt.Sprintf("https://%s:%d", c.Connect.Host, c.Connect.WidgetPort)
+	scheme := "http"
+	if c.Connect.WidgetTLS {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, c.Connect.Host, c.Connect.WidgetPort)
 }
 
 func (c *Config) ControlURL() string {

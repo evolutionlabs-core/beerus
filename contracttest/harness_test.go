@@ -439,7 +439,8 @@ type browser struct {
 func (s *Stack) browser() *browser {
 	jar, _ := cookiejar.New(nil)
 	b := &browser{s: s}
-	widgetHost := strings.TrimPrefix(s.cfg.WidgetURL(), "https://")
+	wu, _ := url.Parse(s.cfg.WidgetURL())
+	widgetHost := wu.Host
 	b.c = &http.Client{
 		Jar:       jar,
 		Timeout:   30 * time.Second,
