@@ -320,6 +320,12 @@ func (w *World) Overrides() Overrides {
 	return cp
 }
 
+func (w *World) injectedCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.ov.Injected)
+}
+
 func (w *World) Down(institution string, at time.Time) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()

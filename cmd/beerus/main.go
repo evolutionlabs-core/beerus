@@ -34,6 +34,7 @@ Usage:
   beerus scenarios
   beerus scenario <name> [--account ID] [--institution bank-a] [--persona adaeze] [--connection ID] [--duration 2h] [--count N]
   beerus personas
+  beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA [--to-bank "Bank C"] [--to-name NAME] [--narration TEXT]
   beerus connections
   beerus revoke <connection-id>
   beerus sync
@@ -161,6 +162,7 @@ func cmdUp(args []string) error {
 	if err := printInfo(c); err != nil {
 		return err
 	}
+	fmt.Printf("\nControl room        %s\n", app.RoomURL())
 	fmt.Println("\nPersonas (username / password):")
 	for _, p := range app.World().Personas() {
 		fmt.Printf("  %-8s %s  %s\n", p.Username, p.Password, p.Name)
@@ -258,6 +260,19 @@ func cmdControl(cmd string, args []string) error {
 		out, err = c.do("POST", "/scenarios/"+args[0], map[string]any{"account_id": *acc, "institution": *inst, "persona": *persona, "connection_id": *conn, "duration": *dur, "count": *count})
 	case "personas":
 		out, err = c.do("GET", "/personas", nil)
+	case "transfer":
+		fs := flag.NewFlagSet("transfer", flag.ExitOnError)
+		from := fs.String("from", "", "account number, bank:number or acc_ ID to pay from")
+		to := fs.String("to", "", "account number, bank:number or acc_ ID to pay to")
+		amount := fs.String("amount", "", "amount in naira, such as 25000 or 2500.50")
+		toBank := fs.String("to-bank", "", "bank of an outside account (Bank A, Bank B, Bank C, Bank D Microfinance)")
+		toName := fs.String("to-name", "", "name of an outside beneficiary")
+		narration := fs.String("narration", "", "narration for the debit")
+		fs.Parse(args)
+		if *from == "" || *to == "" || *amount == "" {
+			return errors.New("usage: beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA")
+		}
+		out, err = c.do("POST", "/transfers", map[string]string{"from": *from, "to": *to, "amount": *amount, "to_bank": *toBank, "to_name": *toName, "narration": *narration})
 	case "connections":
 		out, err = c.do("GET", "/connections", nil)
 	case "revoke":

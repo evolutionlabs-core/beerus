@@ -425,7 +425,7 @@ func (s *Stack) persona(id string) persona {
 
 var (
 	reCSRF    = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
-	reOTP     = regexp.MustCompile(`your code is <strong>(\d{6})</strong>`)
+	reOTP     = regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`)
 	reAccount = regexp.MustCompile(`name="account" value="([^"]+)"`)
 )
 

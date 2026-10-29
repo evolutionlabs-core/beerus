@@ -1,0 +1,139 @@
+@import "tailwindcss";
+
+@source "../internal/connect";
+@source inline("bank-a bank-b");
+
+@font-face {
+  font-family: "Geist";
+  src: url("/assets/fonts/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/assets/fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --canvas: #14120b;
+  --panel: #1a1811;
+  --raised: #211f17;
+  --hover: #29261d;
+  --line: rgba(237, 236, 236, 0.08);
+  --line-strong: rgba(237, 236, 236, 0.15);
+  --ink: #edecec;
+  --muted: rgba(237, 236, 236, 0.56);
+  --faint: rgba(237, 236, 236, 0.36);
+  --primary: #edecec;
+  --on-primary: #14120b;
+  --pos: #7cc79a;
+  --neg: #e8907a;
+  --warn: #e0b45c;
+  --bank: #edecec;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --canvas: #f7f6f2;
+    --panel: #ffffff;
+    --raised: #f2f1ec;
+    --hover: #eae9e3;
+    --line: rgba(20, 18, 11, 0.08);
+    --line-strong: rgba(20, 18, 11, 0.15);
+    --ink: #14120b;
+    --muted: rgba(20, 18, 11, 0.56);
+    --faint: rgba(20, 18, 11, 0.38);
+    --primary: #14120b;
+    --on-primary: #f7f6f2;
+    --pos: #2f7d50;
+    --neg: #b4513a;
+    --warn: #9a6b12;
+    color-scheme: light;
+  }
+}
+
+@theme inline {
+  --font-sans: "Geist", system-ui, -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --color-canvas: var(--canvas);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-hover: var(--hover);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-pos: var(--pos);
+  --color-neg: var(--neg);
+  --color-warn: var(--warn);
+  --color-bank: var(--bank);
+}
+
+@layer base {
+  html {
+    @apply bg-canvas text-ink font-sans antialiased;
+    font-size: 14px;
+    letter-spacing: -0.005em;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-normal tracking-tight;
+  }
+}
+
+@utility bank-a {
+  --bank: #8fa8e6;
+}
+
+@utility bank-b {
+  --bank: #b49cf0;
+}
+
+@utility btn {
+  @apply inline-flex h-9.5 cursor-pointer items-center justify-center gap-2 rounded-full border border-transparent px-4.5 text-[13.5px] leading-none whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-line-strong;
+}
+
+@utility btn-primary {
+  @apply bg-primary text-on-primary hover:opacity-90;
+}
+
+@utility btn-secondary {
+  @apply border-line bg-raised text-ink hover:bg-hover;
+}
+
+@utility btn-sm {
+  @apply h-7.5 px-3 text-[12.5px];
+}
+
+@utility field {
+  @apply h-10 w-full rounded-[10px] border border-line-strong bg-raised px-3 text-[14px] text-ink placeholder:text-faint focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-line-strong;
+}
+
+@utility badge {
+  @apply inline-flex h-5.5 items-center gap-1.5 rounded-full border border-line-strong px-2.5 text-[12px] whitespace-nowrap text-muted before:size-1.5 before:rounded-full before:bg-faint before:content-[''];
+}
+
+@utility badge-ok {
+  @apply before:bg-pos;
+}
+
+@utility badge-warn {
+  @apply before:bg-warn;
+}
+
+@utility badge-bad {
+  @apply before:bg-neg;
+}
+
+@utility num {
+  @apply font-mono text-[0.93em] tracking-normal tabular-nums;
+}

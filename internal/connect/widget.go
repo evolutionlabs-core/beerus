@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"fmt"
-	"html/template"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -22,140 +21,25 @@ const (
 	maxAttempts    = 5
 )
 
-var pages = template.Must(template.New("").Funcs(template.FuncMap{
-	"naira": func(minor int64) string {
-		sign := ""
-		if minor < 0 {
-			sign, minor = "-", -minor
-		}
-		n := fmt.Sprintf("%d", minor/100)
-		out := ""
-		for i, c := range n {
-			if i > 0 && (len(n)-i)%3 == 0 {
-				out += ","
-			}
-			out += string(c)
-		}
-		return fmt.Sprintf("%s₦%s.%02d", sign, out, minor%100)
-	},
-}).Parse(`
-{{define "head"}}<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}}</title>
-<style>
-:root{--ink:#14171f;--muted:#5b6170;--line:#dfe2e8;--bg:#f6f7f9;--card:#fff;--accent:{{.Accent}}}
-*{box-sizing:border-box}body{margin:0;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg)}
-.sim{background:#b42318;color:#fff;text-align:center;font-weight:700;letter-spacing:.08em;padding:6px 12px;font-size:12px}
-.wrap{max-width:480px;margin:24px auto;padding:0 16px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:24px}
-.brand{display:flex;align-items:center;gap:10px;margin-bottom:16px}.logo{width:36px;height:36px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:700}
-h1{font-size:20px;margin:0 0 12px}p{margin:0 0 12px}.muted{color:var(--muted);font-size:13px}
-label{display:block;font-weight:600;margin:12px 0 4px}input[type=text],input[type=password]{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit}
-button{font:inherit;font-weight:600;padding:10px 16px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;width:100%;margin-top:16px}
-button.secondary{background:#fff;color:var(--ink);border-color:var(--line)}
-.bank{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;background:#fff;color:var(--ink);border:1px solid var(--line);margin-top:8px}
-.acct{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;font-weight:400}
-dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:12px 0;font-size:14px}dt{color:var(--muted)}dd{margin:0}
-.inbox{background:#fff8e1;border:1px dashed #c99a00;border-radius:8px;padding:10px;font-size:13px;margin:12px 0}.err{color:#b42318;font-weight:600}
-table{width:100%;border-collapse:collapse;font-size:14px}td{padding:8px 0;border-top:1px solid var(--line)}
-</style></head><body><div class="sim">SIMULATOR · NOT A REAL BANK · NO REAL MONEY</div><div class="wrap"><div class="card">
-<div class="brand"><div class="logo">{{.Logo}}</div><div><strong>{{.Brand}}</strong><div class="muted">{{.Sub}}</div></div></div>{{end}}
-{{define "foot"}}</div><p class="muted" style="text-align:center;margin-top:12px">Beerus simulator. Fictional institutions and people.</p></div></body></html>{{end}}
-
-{{define "choose"}}{{template "head" .}}
-<h1>Connect your bank to {{.PartnerName}}</h1>
-<p class="muted">{{.ConnectName}} lets {{.PartnerName}} read your account details, balances and transactions. You approve access at your bank.</p>
-{{range .Institutions}}<form method="post" action="/link/institution"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="institution" value="{{.ID}}"><button class="bank" type="submit"><span>{{.Name}}</span><span class="muted">{{.Style}} bank →</span></button></form>{{end}}
-<form method="post" action="/link/cancel"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="secondary" type="submit">Cancel</button></form>
-{{template "foot" .}}{{end}}
-
-{{define "login"}}{{template "head" .}}
-<h1>Sign in to {{.Brand}}</h1>
-<p class="muted">{{.ConnectName}} sent you here to approve access for {{.PartnerName}}. Enter your internet banking details.</p>
-{{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-<form method="post" action="/bank/login"><input type="hidden" name="csrf" value="{{.CSRF}}">
-<label for="u">Username</label><input id="u" type="text" name="username" autocomplete="username" required>
-<label for="p">Password</label><input id="p" type="password" name="password" autocomplete="current-password" required>
-<button type="submit">Sign in</button></form>
-<form method="post" action="/link/cancel"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="secondary" type="submit">Cancel</button></form>
-{{template "foot" .}}{{end}}
-
-{{define "otp"}}{{template "head" .}}
-<h1>Enter your one-time code</h1>
-<p>We sent a 6-digit code to the phone number on your account.</p>
-<div class="inbox"><strong>Simulator inbox</strong><br>{{.Brand}}: your code is <strong>{{.OTP}}</strong>. It expires in 5 minutes. Never share it.</div>
-{{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-<form method="post" action="/bank/otp"><input type="hidden" name="csrf" value="{{.CSRF}}">
-<label for="o">Code</label><input id="o" type="text" name="otp" inputmode="numeric" autocomplete="one-time-code" required>
-<button type="submit">Continue</button></form>
-{{template "foot" .}}{{end}}
-
-{{define "consent"}}{{template "head" .}}
-<h1>Share your account data</h1>
-<p><strong>{{.ConnectBrand}}</strong>, on behalf of <strong>{{.PartnerName}}</strong>, {{.Purpose}}.</p>
-<dl>
-<dt>Receiving party</dt><dd>{{.ConnectLegal}} ({{.ConnectBrand}})</dd>
-<dt>Registry number</dt><dd>{{.RegistryID}}</dd>
-<dt>CAC number</dt><dd>{{.CAC}}</dd>
-<dt>Acting for</dt><dd>{{.PartnerLegal}} ({{.PartnerName}})</dd>
-<dt>Access</dt><dd>Account details, balances and transactions. Read only.</dd>
-<dt>History from</dt><dd>{{.Start}}{{if .Effective}} (this bank keeps history from {{.Effective}}){{end}}</dd>
-<dt>Duration</dt><dd>12 months, until {{.Until}}</dd>
-<dt>Frequency</dt><dd>Automatic updates during the day, and when {{.PartnerName}} asks</dd>
-</dl>
-{{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-<form method="post" action="/bank/consent"><input type="hidden" name="csrf" value="{{.CSRF}}">
-<label>Accounts to share</label>
-{{range .Accounts}}<label class="acct"><input type="checkbox" name="account" value="{{.Key}}" {{if .Checked}}checked{{end}}><span>{{.Name}}<br><span class="muted">{{.Type}} · {{.NUBAN}}</span></span></label>{{end}}
-<label class="acct"><input type="checkbox" name="analytics" value="yes"><span>Allow anonymised analytics<br><span class="muted">Optional. You can say no and still connect.</span></span></label>
-<p class="muted">You can withdraw access at any time in {{.Brand}}'s connected apps page or on {{.ConnectBrand}}'s customer page. When you withdraw, {{.ConnectBrand}} stops collecting data and deletes what it holds within 30 days. {{.PartnerName}} keeps records already in your books under its own privacy notice.</p>
-<button type="submit" name="action" value="approve">Approve</button>
-<button class="secondary" type="submit" name="action" value="decline">Decline</button>
-</form>
-{{template "foot" .}}{{end}}
-
-{{define "message"}}{{template "head" .}}<h1>{{.Heading}}</h1><p>{{.Message}}</p>{{template "foot" .}}{{end}}
-
-{{define "customer_login"}}{{template "head" .}}
-<h1>Your connections</h1><p class="muted">Sign in with your bank username and password to see and revoke the apps that read your accounts through {{.ConnectBrand}}.</p>
-{{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-<form method="post" action="/customer/login">
-<label for="u">Username</label><input id="u" type="text" name="username" required>
-<label for="p">Password</label><input id="p" type="password" name="password" required>
-<button type="submit">Sign in</button></form>
-{{template "foot" .}}{{end}}
-
-{{define "customer"}}{{template "head" .}}
-<h1>Your connections</h1>
-{{if not .Connections}}<p>No apps are connected.</p>{{end}}
-<table>{{range .Connections}}<tr><td><strong>{{.Partner}}</strong> via {{$.ConnectBrand}}<br><span class="muted">{{.Bank}} · {{.Status}} · since {{.Since}}</span></td><td style="width:120px">{{if .Active}}<form method="post" action="/customer/revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="connection" value="{{.ID}}"><button class="secondary" type="submit" style="margin:0">Revoke</button></form>{{end}}</td></tr>{{end}}</table>
-{{template "foot" .}}{{end}}
-`))
-
 type page map[string]any
 
 func (a *App) render(w http.ResponseWriter, name string, status int, inst *world.Institution, data page) {
-	data["ConnectName"] = a.cfg.Connect.BrandName
 	data["ConnectBrand"] = a.cfg.Connect.BrandName
+	data["ConnectName"] = a.cfg.Connect.BrandName
 	if inst != nil {
 		data["Brand"] = inst.Name
-		data["Sub"] = "Internet banking"
-		data["Logo"] = inst.Name[len(inst.Name)-1:]
-		data["Accent"] = template.CSS("#1d3a8a")
-		if inst.Style == "digital" {
-			data["Accent"] = template.CSS("#6b2bd9")
-		}
+		data["BankClass"] = inst.ID
+		data["Mark"] = inst.Name[len(inst.Name)-1:]
+		data["Ctx"] = "Online banking"
 	} else {
 		data["Brand"] = a.cfg.Connect.BrandName
-		data["Sub"] = "Open banking"
-		data["Logo"] = "B"
-		data["Accent"] = template.CSS("#0f766e")
+		data["BankClass"] = ""
+		data["Ctx"] = "Open banking"
 	}
 	if _, ok := data["Title"]; !ok {
 		data["Title"] = data["Brand"]
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' http: https:; frame-ancestors 'none'")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	setPageHeaders(w)
 	w.WriteHeader(status)
 	if err := pages.ExecuteTemplate(w, name, data); err != nil {
 		a.log.Error("render", "page", name, "err", err)
@@ -168,6 +52,7 @@ func (a *App) message(w http.ResponseWriter, status int, heading, msg string) {
 
 func (a *App) WidgetHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /assets/", assetHandler())
 	mux.HandleFunc("GET /link", a.widgetOpen)
 	mux.HandleFunc("GET /link/start", a.widgetStart)
 	mux.HandleFunc("POST /link/institution", a.widgetInstitution)
@@ -404,7 +289,12 @@ func (a *App) bankLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	d := a.base(ls, ws)
 	p, ok := a.world.PersonaByUsername(r.PostForm.Get("username"))
-	good := ok && subtle.ConstantTimeCompare([]byte(p.Password), []byte(r.PostForm.Get("password"))) == 1 && len(a.world.AccountsAt(p.ID, inst.ID)) > 0
+	good := ok && subtle.ConstantTimeCompare([]byte(p.Password), []byte(r.PostForm.Get("password"))) == 1
+	if good && len(a.world.AccountsAt(p.ID, inst.ID)) == 0 {
+		d["Error"] = p.Name + " has no accounts at " + inst.Name + ". Go back and choose the bank that holds the account."
+		a.render(w, "login", http.StatusUnprocessableEntity, inst, d)
+		return
+	}
 	if good && ls.ConnectionID != "" {
 		if c := a.st.Connections[ls.ConnectionID]; c == nil || c.Status == "revoked" {
 			a.failSession(w, r, ls, "access_denied")
