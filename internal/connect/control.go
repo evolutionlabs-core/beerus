@@ -40,6 +40,14 @@ func (a *App) ControlHandler() http.Handler {
 		a.poke()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 	})
+	mux.HandleFunc("POST /partners/reload", func(w http.ResponseWriter, r *http.Request) {
+		n, err := a.ReloadPartners()
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"partners": n})
+	})
 	mux.HandleFunc("GET /webhooks/deliveries", a.ctlDeliveries)
 	mux.HandleFunc("POST /webhooks/deliveries/{id}/replay", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.Replay(r.PathValue("id")); err != nil {

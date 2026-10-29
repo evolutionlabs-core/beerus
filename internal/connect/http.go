@@ -16,6 +16,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 type ctxKey int
@@ -78,12 +79,17 @@ func (a *App) authenticate(next http.Handler) http.Handler {
 			return
 		}
 		cert := r.TLS.PeerCertificates[0]
-		p := a.cfg.PartnerByCN(cert.Subject.CommonName)
+		var p *config.Partner
+		for _, x := range a.partnersSnapshot() {
+			if x.CertCN == cert.Subject.CommonName {
+				p = x
+			}
+		}
 		role := ""
 		if len(cert.Subject.OrganizationalUnit) > 0 {
 			role = cert.Subject.OrganizationalUnit[0]
 		}
-		if p == nil || role != "partner" {
+		if p == nil || role != "partner" || (p.CertSHA256 != "" && subtle.ConstantTimeCompare([]byte(pki.Thumbprint(cert)), []byte(p.CertSHA256)) != 1) {
 			writeError(w, r, http.StatusForbidden, "forbidden", "The client certificate does not belong to a registered partner.")
 			return
 		}
@@ -93,7 +99,7 @@ func (a *App) authenticate(next http.Handler) http.Handler {
 			return
 		}
 		if !keyMatches(key, p.APIKeySHA256) {
-			for _, other := range a.cfg.Partners {
+			for _, other := range a.partnersSnapshot() {
 				if other != p && keyMatches(key, other.APIKeySHA256) {
 					writeError(w, r, http.StatusForbidden, "forbidden", "The API key does not belong to the client certificate's partner.")
 					return
