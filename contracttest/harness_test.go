@@ -113,19 +113,21 @@ func newStack(t *testing.T) *Stack {
 		t.Cleanup(s.sink.srv.Close)
 		var lastErr error
 		for attempt := 0; attempt < 5 && s.app == nil; attempt++ {
-			ports := freePorts(t, 3)
+			ports := freePorts(t, 5)
 			cfg, _, err := config.Init(t.TempDir(), config.InitOptions{
 				Seed:        20261028,
 				Today:       clock.DateOf(time.Now()),
 				PartnerPort: ports[0],
 				WidgetPort:  ports[1],
 				ControlPort: ports[2],
+				BankPorts:   []int{ports[3], ports[4]},
 				WebhookURL:  s.sink.srv.URL + "/webhooks",
 				RedirectURI: "https://balance.localhost/bank_connections/callback",
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
+			cfg.DatabaseURL = os.Getenv("BEERUS_TEST_DATABASE_URL")
 			app, err := connect.New(cfg, connect.Options{})
 			if err != nil {
 				t.Fatal(err)
@@ -147,6 +149,9 @@ func newStack(t *testing.T) *Stack {
 				cancel()
 				if err := <-done; err != nil {
 					t.Errorf("serve: %v", err)
+				}
+				if err := app.DropBankDatabases(); err != nil {
+					t.Errorf("drop bank database: %v", err)
 				}
 			})
 		}

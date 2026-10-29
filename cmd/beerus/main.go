@@ -94,8 +94,9 @@ func cmdInit(args []string) error {
 	pp := fs.Int("partner-port", 7443, "partner API port")
 	wp := fs.Int("widget-port", 7444, "widget port")
 	cp := fs.Int("control-port", 7480, "control API port")
+	bp := fs.Int("bank-port", 7445, "first online banking port; each bank takes the next one")
 	fs.Parse(args)
-	c, key, err := config.Init(*dir, config.InitOptions{Seed: *seed, Today: clock.DateOf(time.Now()), WebhookURL: *hook, RedirectURI: *redirect, PartnerPort: *pp, WidgetPort: *wp, ControlPort: *cp})
+	c, key, err := config.Init(*dir, config.InitOptions{Seed: *seed, Today: clock.DateOf(time.Now()), WebhookURL: *hook, RedirectURI: *redirect, PartnerPort: *pp, WidgetPort: *wp, ControlPort: *cp, BankPort: *bp})
 	if err != nil {
 		return err
 	}
@@ -112,6 +113,9 @@ func printInfo(c *config.Config) error {
 	fmt.Fprintf(w, "Partner API\t%s\t(mTLS + X-Api-Key)\n", c.PartnerURL())
 	fmt.Fprintf(w, "Connect widget\t%s\n", c.WidgetURL())
 	fmt.Fprintf(w, "Customer page\t%s/customer\n", c.WidgetURL())
+	for _, b := range c.Banks {
+		fmt.Fprintf(w, "%s online banking\t%s\t(database %s)\n", b.Name, b.URL(), b.Database)
+	}
 	fmt.Fprintf(w, "Control API\t%s\t(Bearer token in %s)\n", c.ControlURL(), c.Path("control-token"))
 	fmt.Fprintf(w, "Client certificate\t%s\n", c.Path("partners", "balance", "client.crt"))
 	fmt.Fprintf(w, "Client key\t%s\n", c.Path("partners", "balance", "client.key"))

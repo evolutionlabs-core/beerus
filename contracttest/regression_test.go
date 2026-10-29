@@ -164,3 +164,29 @@ func TestSignInWithoutAccountsAtThatBank(t *testing.T) {
 		t.Fatalf("expected a no-accounts message: %.300s", b.last)
 	}
 }
+
+func TestBankLedgerStaysConsistent(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newStack(t)
+	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-40))
+	s.ctl("POST", "/scenarios/debit_then_reversal", map[string]any{"account_id": fmt.Sprint(accountAt(t, conn, "current")["id"])})
+	s.ctl("POST", "/scenarios/pending_amount_change", map[string]any{"account_id": fmt.Sprint(accountAt(t, conn, "current")["id"])})
+	s.advance("40d")
+	c, err := s.app.VerifyBank()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Ledger.OK() || len(c.Mismatches) > 0 {
+		t.Fatalf("bank ledger: %v %v", c.Ledger, c.Mismatches)
+	}
+	if len(c.ChargeMonths) == 0 {
+		t.Fatal("no month-end charges were posted")
+	}
+	for k, n := range c.ChargeMonths {
+		if n != 1 {
+			t.Fatalf("%s charged %d times", k, n)
+		}
+	}
+}

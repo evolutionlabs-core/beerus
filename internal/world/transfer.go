@@ -36,6 +36,8 @@ type TransferResult struct {
 	TotalDebit   int64  `json:"total_debit_minor"`
 	Credited     bool   `json:"credited"`
 	BalanceAfter int64  `json:"sender_balance_after_minor"`
+	ToName       string `json:"to_name"`
+	ToBank       string `json:"to_bank"`
 	LineKey      string `json:"-"`
 }
 
@@ -67,7 +69,15 @@ func (w *World) institutionByName(name string) (Institution, bool) {
 	return Institution{}, false
 }
 
+func (w *World) Quote(at time.Time, r TransferRequest) (TransferResult, error) {
+	return w.transfer(at, r, false)
+}
+
 func (w *World) Transfer(at time.Time, r TransferRequest) (TransferResult, error) {
+	return w.transfer(at, r, true)
+}
+
+func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferResult, error) {
 	if r.Amount <= 0 {
 		return TransferResult{}, errors.New("amount must be more than zero")
 	}
@@ -146,6 +156,16 @@ func (w *World) Transfer(at time.Time, r TransferRequest) (TransferResult, error
 	}
 	if available < res.TotalDebit {
 		return res, fmt.Errorf("%w: available %d, needed %d (minor units)", ErrInsufficientFunds, available, res.TotalDebit)
+	}
+	res.BalanceAfter = ledger - res.TotalDebit
+	if to != nil {
+		res.ToName = w.personas[to.Owner].Name
+	} else {
+		res.ToName = cp.Name
+	}
+	res.ToBank = toInst.Name
+	if !send {
+		return res, nil
 	}
 	s := w.newScn(fmt.Sprintf("transfer-%d", w.injectedCount()), at)
 	g := &dayGen{w: w, d: d, rng: s.rng}

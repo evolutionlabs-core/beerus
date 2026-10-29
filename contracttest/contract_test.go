@@ -358,6 +358,8 @@ func TestSnapshotRestoreResetsCursor(t *testing.T) {
 	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "before"})
 	first, _ := s.syncAll(id, "", 100)
 	s.advance("48h")
+	s.ctl("POST", "/scenarios/fee_vat_levy_lines", map[string]any{"account_id": id})
+	s.advance("1m")
 	first, _ = s.syncMore(id, first, 100)
 	restored := s.ctl("POST", "/snapshots/"+fmt.Sprint(snap["id"])+"/restore", nil)
 	if restored["world_id"] == first.worldID {

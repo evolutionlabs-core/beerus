@@ -162,7 +162,16 @@ type IdemRec struct {
 	CreatedReal time.Time `json:"created_real"`
 }
 
+type AccessEvent struct {
+	ConnectionID string    `json:"connection_id"`
+	PartnerID    string    `json:"partner_id"`
+	AccountID    string    `json:"account_id"`
+	WorldKey     string    `json:"world_key"`
+	At           time.Time `json:"at"`
+}
+
 type State struct {
+	Access         []AccessEvent             `json:"access"`
 	WorldID        string                    `json:"world_id"`
 	Clock          clock.State               `json:"clock"`
 	World          world.Overrides           `json:"world"`

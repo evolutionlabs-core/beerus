@@ -423,6 +423,14 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 		ls.OTP = ""
 	}
 	meta := snapshotMeta{ID: newID("snap"), Name: name, BusinessTime: ts(a.clock.Now()), Seed: a.cfg.Seed, Schema: schemaVersion, TakenReal: a.clock.Real()}
+	for _, l := range a.ledgers {
+		if err := l.Sync(a.clock.Now()); err != nil {
+			return snapshotMeta{}, err
+		}
+		if err := l.Snapshot(meta.ID); err != nil {
+			return snapshotMeta{}, err
+		}
+	}
 	if err := saveJSON(filepath.Join(a.snapshotDir(), meta.ID+".json"), snapshotFile{Meta: meta, State: cp}); err != nil {
 		return snapshotMeta{}, err
 	}
@@ -453,7 +461,12 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	a.st = st
 	a.clock.Restore(st.Clock)
 	genesis, _ := a.cfg.GenesisDate()
-	a.world = world.New(world.Config{Seed: a.cfg.Seed, Genesis: genesis}, st.World)
+	a.world = world.New(a.worldConfig(genesis), st.World)
+	for _, l := range a.ledgers {
+		if err := l.Restore(id, a.world); err != nil {
+			return "", err
+		}
+	}
 	for _, rec := range a.st.Accounts {
 		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed {
 			a.emit(c.PartnerID, "sync.available", map[string]any{"connection_id": c.ID, "account_id": rec.ID, "world_id": st.WorldID})

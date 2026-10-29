@@ -18,6 +18,7 @@ type Institution struct {
 	Name        string `json:"name"`
 	NIPCode     string `json:"nip_code"`
 	NUBANCode   string `json:"nuban_code"`
+	Type        string `json:"type"`
 	HistoryDays int    `json:"history_days"`
 	StableIDs   bool   `json:"stable_ids"`
 	Style       string `json:"style"`
@@ -96,14 +97,23 @@ type Overrides struct {
 }
 
 type Config struct {
-	Seed    int64      `json:"seed"`
-	Genesis clock.Date `json:"genesis"`
+	Seed         int64         `json:"seed"`
+	Genesis      clock.Date    `json:"genesis"`
+	Institutions []Institution `json:"-"`
+}
+
+func DefaultInstitutions() []Institution {
+	return []Institution{
+		{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "999001", NUBANCode: "901", HistoryDays: 730, StableIDs: true, Style: "traditional"},
+		{ID: "bank-b", Name: "Bank B", Type: "digital", NIPCode: "999002", NUBANCode: "902", HistoryDays: 180, StableIDs: true, Style: "digital"},
+	}
 }
 
 type World struct {
 	mu           sync.Mutex
 	cfg          Config
 	institutions map[string]*Institution
+	instOrder    []string
 	accounts     map[string]*Account
 	personas     map[string]*Persona
 	order        []string
@@ -199,11 +209,21 @@ func New(cfg Config, ov Overrides) *World {
 	if w.ov.UnstableAt == nil {
 		w.ov.UnstableAt = map[string]time.Time{}
 	}
-	w.institutions["bank-a"] = &Institution{ID: "bank-a", Name: "Bank A", NIPCode: "999001", NUBANCode: "901", HistoryDays: 730, StableIDs: true, Style: "traditional"}
-	w.institutions["bank-b"] = &Institution{ID: "bank-b", Name: "Bank B", NIPCode: "999002", NUBANCode: "902", HistoryDays: 180, StableIDs: true, Style: "digital"}
+	insts := cfg.Institutions
+	if len(insts) == 0 {
+		insts = DefaultInstitutions()
+	}
+	for _, in := range insts {
+		inst := in
+		w.institutions[inst.ID] = &inst
+		w.instOrder = append(w.instOrder, inst.ID)
+	}
 	add := func(p *Persona, accts ...Account) {
 		for _, a := range accts {
-			inst := w.institutions[a.Institution]
+			inst, ok := w.institutions[a.Institution]
+			if !ok {
+				continue
+			}
 			a.NUBAN = NUBAN(inst.NUBANCode, hash64(fmt.Sprint(cfg.Seed), p.ID, a.Institution, a.Type))
 			a.Key = a.Institution + ":" + a.NUBAN
 			a.Currency = "NGN"
@@ -246,7 +266,7 @@ func (w *World) Config() Config {
 
 func (w *World) Institutions() []Institution {
 	out := []Institution{}
-	for _, id := range []string{"bank-a", "bank-b"} {
+	for _, id := range w.instOrder {
 		out = append(out, *w.institutions[id])
 	}
 	return out
