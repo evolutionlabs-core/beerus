@@ -204,6 +204,19 @@ func (s *ledgerSource) Snapshot(id string) error {
 	return s.reopen()
 }
 
+func (s *ledgerSource) HasSnapshot(id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st.HasSnapshot(s.ctx, snapID(id))
+}
+
+func (s *ledgerSource) Keep(w *world.World) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.w = w
+	return s.reopen()
+}
+
 func (s *ledgerSource) Restore(id string, w *world.World) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -56,7 +56,11 @@ func (a *App) roomHandler() http.Handler {
 	mux.HandleFunc("POST /ui/login", a.roomLogin)
 	mux.HandleFunc("GET /ui", a.roomOverview)
 	mux.HandleFunc("GET /ui/{$}", a.roomOverview)
+	mux.HandleFunc("GET /ui/banks/new", a.roomNewBank)
+	mux.HandleFunc("POST /ui/banks", a.roomCreateBank)
 	mux.HandleFunc("GET /ui/banks/{id}", a.roomBank)
+	mux.HandleFunc("POST /ui/banks/{id}/suspend", func(w http.ResponseWriter, r *http.Request) { a.roomSuspend(w, r, true) })
+	mux.HandleFunc("POST /ui/banks/{id}/resume", func(w http.ResponseWriter, r *http.Request) { a.roomSuspend(w, r, false) })
 	mux.HandleFunc("GET /ui/accounts/{key}", a.roomAccount)
 	mux.HandleFunc("GET /ui/accounts/{key}/lines/{line}", a.roomLine)
 	mux.HandleFunc("GET /ui/transfer", a.roomTransferForm)
@@ -218,9 +222,14 @@ func (a *App) roomOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
+	status, managed := a.bankStatus(r.PathValue("id"))
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	inst, ok := a.world.Institution(r.PathValue("id"))
+	if managed && status.Phase == PhaseProvisioning {
+		a.roomRender(w, r, "bank_provisioning", http.StatusOK, status.ID, roomPage{"Title": status.Name, "Status": status, "Refresh": true})
+		return
+	}
 	if !ok {
 		a.roomNotFound(w, r)
 		return
@@ -235,7 +244,7 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 			accts = append(accts, v)
 		}
 	}
-	a.roomRender(w, r, "bank", http.StatusOK, inst.ID, roomPage{"Title": inst.Name, "Bank": inst, "Accounts": accts, "Total": total, "Down": a.world.Down(inst.ID, now)})
+	a.roomRender(w, r, "bank", http.StatusOK, inst.ID, roomPage{"Title": inst.Name, "Bank": inst, "Accounts": accts, "Total": total, "Down": a.world.Down(inst.ID, now), "Managed": managed, "Status": status})
 }
 
 const pageSize = 50
@@ -507,3 +516,45 @@ var roomPages = template.Must(template.New("").Funcs(uiFuncs).Funcs(template.Fun
 	"isFrozen": func(p float64) bool { return p == 0 },
 	"list":     func(v ...any) []any { return v },
 }).Parse(roomTemplates))
+
+func (a *App) roomNewBank(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.roomRender(w, r, "new_bank", http.StatusOK, "new_bank", roomPage{"Title": "New bank", "Form": url.Values{"type": {"commercial"}}})
+}
+
+func (a *App) roomCreateBank(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	f := r.PostForm
+	days, _ := strconv.Atoi(strings.TrimSpace(f.Get("history_days")))
+	b, err := a.CreateBank(BankRequest{Name: f.Get("name"), Type: f.Get("type"), HistoryDays: days, SettlesThrough: f.Get("settles_through")})
+	if err != nil {
+		msg := err.Error()
+		if errors.Is(err, ErrBankInvalid) {
+			msg = strings.TrimPrefix(msg, ErrBankInvalid.Error()+": ")
+		}
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.roomRender(w, r, "new_bank", http.StatusUnprocessableEntity, "new_bank", roomPage{"Title": "New bank", "Form": f, "Error": msg})
+		return
+	}
+	http.Redirect(w, r, "/ui/banks/"+url.PathEscape(b.ID), http.StatusSeeOther)
+}
+
+func (a *App) roomSuspend(w http.ResponseWriter, r *http.Request, suspended bool) {
+	id := r.PathValue("id")
+	if err := a.SetBankSuspended(id, suspended); err != nil {
+		if errors.Is(err, errNotFound) {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.roomNotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	http.Redirect(w, r, "/ui/banks/"+url.PathEscape(id), http.StatusSeeOther)
+}

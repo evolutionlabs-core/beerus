@@ -43,8 +43,11 @@ type bankSite struct {
 }
 
 func (app *App) BankHandler(id string) http.Handler {
+	app.mu.Lock()
 	b := app.cfg.Bank(id)
-	if b == nil || app.ledgerFor(id) == nil {
+	have := app.ledgerFor(id) != nil
+	app.mu.Unlock()
+	if b == nil || !have {
 		return nil
 	}
 	a := &bankSite{App: app, bank: b, auth: &bankAuth{sessions: map[string]*bankSession{}, failures: map[string]int{}, locked: map[string]time.Time{}}}
@@ -73,6 +76,10 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if host, _, err := net.SplitHostPort(r.RemoteAddr); err != nil || !net.ParseIP(host).IsLoopback() || !hosts[r.Host] {
 			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if a.bankPhase(a.bank.ID) == PhaseSuspended && !strings.HasPrefix(r.URL.Path, "/assets/") {
+			a.bankRender(w, "bank_unavailable", http.StatusServiceUnavailable, nil, roomPage{"Title": a.bank.Name})
 			return
 		}
 		if r.Method == http.MethodPost {

@@ -49,6 +49,12 @@ func (a *App) ControlHandler() http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "pending"})
 	})
+	mux.HandleFunc("GET /banks", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"data": a.BankStatuses()})
+	})
+	mux.HandleFunc("POST /banks", a.ctlCreateBank)
+	mux.HandleFunc("POST /banks/{id}/suspend", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, true) })
+	mux.HandleFunc("POST /banks/{id}/resume", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, false) })
 	mux.HandleFunc("GET /snapshots", a.ctlSnapshots)
 	mux.HandleFunc("POST /snapshots", a.ctlTakeSnapshot)
 	mux.HandleFunc("POST /snapshots/{id}/restore", a.ctlRestore)
@@ -389,6 +395,7 @@ type snapshotMeta struct {
 	Seed         int64     `json:"seed"`
 	Schema       int       `json:"schema"`
 	TakenReal    time.Time `json:"taken_real"`
+	Banks        []string  `json:"banks,omitempty"`
 }
 
 const schemaVersion = 1
@@ -430,6 +437,7 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 		if err := l.Snapshot(meta.ID); err != nil {
 			return snapshotMeta{}, err
 		}
+		meta.Banks = append(meta.Banks, l.inst.ID)
 	}
 	if err := saveJSON(filepath.Join(a.snapshotDir(), meta.ID+".json"), snapshotFile{Meta: meta, State: cp}); err != nil {
 		return snapshotMeta{}, err
@@ -454,6 +462,23 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	taken := map[string]bool{}
+	for _, id := range f.Meta.Banks {
+		taken[id] = true
+	}
+	restore := map[string]bool{}
+	for _, l := range a.ledgers {
+		ok, err := l.HasSnapshot(id)
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case ok:
+			restore[l.inst.ID] = true
+		case taken[l.inst.ID] || f.Meta.Banks == nil:
+			return "", fmt.Errorf("snapshot %s has no copy of %s", id, l.inst.Name)
+		}
+	}
 	st := f.State
 	st.fill()
 	st.WorldID = newID("wld")
@@ -462,7 +487,18 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	a.clock.Restore(st.Clock)
 	genesis, _ := a.cfg.GenesisDate()
 	a.world = world.New(a.worldConfig(genesis), st.World)
+	for _, b := range a.cfg.Banks {
+		if b.Suspended() {
+			a.world.SetSuspended(b.ID, true)
+		}
+	}
 	for _, l := range a.ledgers {
+		if !restore[l.inst.ID] {
+			if err := l.Keep(a.world); err != nil {
+				return "", err
+			}
+			continue
+		}
 		if err := l.Restore(id, a.world); err != nil {
 			return "", err
 		}

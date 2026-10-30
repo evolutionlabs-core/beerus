@@ -28,6 +28,14 @@ var counterpartyBanks = []cpBank{
 	{"999001", "Bank A"}, {"999002", "Bank B"}, {"999003", "Bank C"}, {"999004", "Bank D Microfinance"},
 }
 
+func CounterpartyBanks() []Institution {
+	out := []Institution{}
+	for _, b := range counterpartyBanks {
+		out = append(out, Institution{NIPCode: b.code, Name: b.name})
+	}
+	return out
+}
+
 func NIPFee(amount int64) int64 {
 	return charges.NIPFee(amount)
 }

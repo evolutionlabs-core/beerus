@@ -110,6 +110,15 @@ func (s *Store) Snapshot(ctx context.Context, id string) error {
 	return err
 }
 
+func (s *Store) HasSnapshot(ctx context.Context, id string) (bool, error) {
+	c, err := admin(ctx, s.url)
+	if err != nil {
+		return false, err
+	}
+	defer c.Close(ctx)
+	return exists(ctx, c, snapName(s.name, id))
+}
+
 func (s *Store) Restore(ctx context.Context, id string) error {
 	if !regexp.MustCompile(`^[a-z0-9]{1,24}$`).MatchString(id) {
 		return fmt.Errorf("bad snapshot id %q", id)

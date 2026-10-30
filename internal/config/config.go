@@ -54,6 +54,11 @@ type Bank struct {
 	Port           int    `yaml:"port"`
 	Database       string `yaml:"database"`
 	SettlesThrough string `yaml:"settles_through,omitempty"`
+	State          string `yaml:"state,omitempty"`
+}
+
+func (b *Bank) Suspended() bool {
+	return b.State == "suspended"
 }
 
 func (b *Bank) URL() string {
@@ -78,6 +83,7 @@ func DatabaseName(dir, bankID string) string {
 type Config struct {
 	DatabaseURL string     `yaml:"database_url"`
 	Banks       []*Bank    `yaml:"banks,omitempty"`
+	MaxBanks    int        `yaml:"max_banks,omitempty"`
 	Seed        int64      `yaml:"seed"`
 	Genesis     string     `yaml:"genesis"`
 	Pace        float64    `yaml:"pace"`

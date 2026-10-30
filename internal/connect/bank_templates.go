@@ -43,6 +43,11 @@ const bankTemplates = `
 
 {{define "bank_error"}}{{if .Error}}<p class="mt-4 rounded-[10px] border border-neg/30 bg-neg/10 px-3 py-2.5 text-[13px] text-neg" role="alert">{{.Error}}</p>{{end}}{{end}}
 
+{{define "bank_unavailable"}}{{template "bank_auth_head" .}}
+<h1 class="text-[22px]">Temporarily unavailable</h1>
+<p class="mt-2 text-[13.5px] text-muted">{{.Bank.Name}} online banking is not available right now. Please try again later.</p>
+{{template "bank_auth_foot" .}}{{end}}
+
 {{define "bank_login"}}{{template "bank_auth_head" .}}
 <h1 class="text-[22px]">Sign in</h1>
 <p class="mt-2 text-[13.5px] text-muted">Welcome back to {{.Bank.Name}} online banking.</p>

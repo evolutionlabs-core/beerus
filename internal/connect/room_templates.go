@@ -8,6 +8,7 @@ const roomTemplates = `
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <title>{{.Title}} · Beerus</title>
+{{if .Refresh}}<meta http-equiv="refresh" content="2">{{end}}
 <link rel="stylesheet" href="{{css}}">
 </head>
 <body class="min-h-screen">
@@ -18,7 +19,7 @@ const roomTemplates = `
 <a href="/ui" class="flex h-8 shrink-0 items-center rounded-lg px-2 whitespace-nowrap {{if eq .Nav "overview"}}bg-raised text-ink{{else}}text-muted hover:bg-raised hover:text-ink{{end}}">Overview</a>
 <a href="/ui/transfer" class="flex h-8 shrink-0 items-center rounded-lg px-2 whitespace-nowrap {{if eq .Nav "transfer"}}bg-raised text-ink{{else}}text-muted hover:bg-raised hover:text-ink{{end}}">New transfer</a>
 </nav>
-<p class="mt-6 hidden px-2 pb-1.5 text-[11.5px] text-faint lg:block">Banks</p>
+<div class="mt-6 hidden items-center justify-between px-2 pb-1.5 lg:flex"><p class="text-[11.5px] text-faint">Banks</p><a href="/ui/banks/new" class="text-[11.5px] {{if eq .Nav "new_bank"}}text-ink{{else}}text-faint hover:text-ink{{end}}">New</a></div>
 <nav class="flex shrink-0 gap-0.5 text-[13.5px] lg:block lg:space-y-0.5">
 {{range .Banks}}<a href="/ui/banks/{{.ID}}" class="{{.ID}} flex h-8 shrink-0 items-center gap-2.5 rounded-lg px-2 whitespace-nowrap {{if eq $.Nav .ID}}bg-raised text-ink{{else}}text-muted hover:bg-raised hover:text-ink{{end}}"><span class="grid size-5 place-items-center rounded-md border border-line-strong text-[10.5px] text-bank">{{initial .Name}}</span>{{.Name}}</a>{{end}}
 </nav>
@@ -77,9 +78,13 @@ const roomTemplates = `
 {{define "bank"}}{{template "room_head" .}}
 <div class="{{.Bank.ID}} mb-7 flex items-center gap-4">
 <span class="grid size-11 place-items-center rounded-xl border border-line-strong bg-raised text-[17px] text-bank">{{initial .Bank.Name}}</span>
-<div><h1 class="text-[24px]">{{.Bank.Name}}</h1><p class="mt-1 text-[13.5px] text-muted">{{if eq .Bank.Style "digital"}}Digital bank{{else}}Commercial bank{{end}} · NIP code <span class="num">{{.Bank.NIPCode}}</span> · history kept {{.Bank.HistoryDays}} days</p></div>
-{{if .Down}}<span class="badge badge-bad ml-auto">Unavailable</span>{{else}}<span class="badge badge-ok ml-auto">Operational</span>{{end}}
+<div><h1 class="text-[24px]">{{.Bank.Name}}</h1><p class="mt-1 text-[13.5px] text-muted">{{if eq .Bank.Type "digital"}}Digital bank{{else if eq .Bank.Type "microfinance"}}Microfinance bank{{else}}Commercial bank{{end}} · NIP code <span class="num">{{.Bank.NIPCode}}</span> · history kept {{.Bank.HistoryDays}} days</p></div>
+<div class="ml-auto flex items-center gap-2.5">
+{{if eq .Status.Phase "suspended"}}<span class="badge badge-warn">Suspended</span>{{else if .Down}}<span class="badge badge-bad">Unavailable</span>{{else}}<span class="badge badge-ok">Operational</span>{{end}}
+{{if .Managed}}{{if eq .Status.Phase "suspended"}}<form method="post" action="/ui/banks/{{.Bank.ID}}/resume"><button type="submit" class="btn btn-secondary btn-sm">Resume</button></form>{{else}}<form method="post" action="/ui/banks/{{.Bank.ID}}/suspend"><button type="submit" class="btn btn-secondary btn-sm">Suspend</button></form>{{end}}{{end}}
 </div>
+</div>
+{{if eq .Status.Phase "suspended"}}<p class="mb-6 rounded-[10px] border border-line bg-panel px-4 py-3 text-[13px] text-muted">Online banking shows an outage page and connections report the bank as down until you resume it. No data is changed.</p>{{end}}
 <div class="grid grid-cols-2 gap-3 lg:grid-cols-3">
 {{template "stat" (list "Customer deposits" (naira .Total) "")}}
 {{template "stat" (list "Accounts" (printf "%d" (len .Accounts)) "")}}
@@ -95,6 +100,7 @@ const roomTemplates = `
 <td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><span class="num">{{naira .Available}}</span></td>
 <td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><span class="num text-muted">{{naira .Ledger}}</span></td>
 </tr>{{end}}</tbody></table></div>
+{{if not .Accounts}}<p class="px-5 py-10 text-center text-muted">No customers yet.</p>{{end}}
 </section>
 {{template "room_foot" .}}{{end}}
 
@@ -175,6 +181,30 @@ const roomTemplates = `
 </a></li>{{end}}
 </ol>
 </section>{{end}}
+{{template "room_foot" .}}{{end}}
+
+{{define "bank_provisioning"}}{{template "room_head" .}}
+<div class="mb-7"><h1 class="text-[24px]">{{.Status.Name}}</h1><p class="mt-1.5 text-[13.5px] text-muted">Setting up the bank. Failed steps are retried automatically.</p></div>
+<ol class="max-w-[640px] rounded-2xl border border-line bg-panel">
+{{range .Status.Steps}}<li class="flex items-start gap-3 border-b border-line px-5 py-3.5 text-[13.5px] last:border-b-0">
+{{if .Done}}<span class="badge badge-ok">Done</span>{{else if .Error}}<span class="badge badge-bad">Retrying</span>{{else}}<span class="badge">Waiting</span>{{end}}
+<div class="min-w-0"><p>{{.Name}}</p>{{if .Error}}<p class="mt-1 text-[12.5px] break-words text-neg">{{.Error}}</p>{{end}}</div>
+</li>{{end}}
+</ol>
+{{template "room_foot" .}}{{end}}
+
+{{define "new_bank"}}{{template "room_head" .}}
+<div class="mb-7"><h1 class="text-[24px]">New bank</h1><p class="mt-1.5 text-[13.5px] text-muted">The bank gets its own ledger database, online banking site and listing in Beerus Connect. Codes and the port are assigned for you.</p></div>
+<form method="post" action="/ui/banks" class="max-w-[640px] rounded-2xl border border-line bg-panel p-6">
+{{if .Error}}<p class="mb-5 rounded-[10px] border border-neg/30 bg-neg/10 px-3 py-2.5 text-[13px] text-neg" role="alert">{{.Error}}</p>{{end}}
+<div class="grid gap-4 sm:grid-cols-2">
+<label class="block sm:col-span-2"><span class="mb-1.5 block text-[12.5px] text-muted">Name</span><input class="field" type="text" name="name" maxlength="40" value="{{.Form.Get "name"}}" required autofocus></label>
+<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Type</span><select name="type" class="field"><option value="commercial" {{if eq "commercial" (.Form.Get "type")}}selected{{end}}>Commercial</option><option value="digital" {{if eq "digital" (.Form.Get "type")}}selected{{end}}>Digital</option><option value="microfinance" {{if eq "microfinance" (.Form.Get "type")}}selected{{end}}>Microfinance</option></select></label>
+<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">History kept (days)</span><input class="field font-mono" type="text" name="history_days" inputmode="numeric" value="{{.Form.Get "history_days"}}" placeholder="Default for the type"></label>
+<label class="block sm:col-span-2"><span class="mb-1.5 block text-[12.5px] text-muted">Settles through</span><select name="settles_through" class="field"><option value="">Not needed</option>{{range .Banks}}{{if ne .Type "microfinance"}}<option value="{{.ID}}" {{if eq .ID ($.Form.Get "settles_through")}}selected{{end}}>{{.Name}}</option>{{end}}{{end}}</select></label>
+</div>
+<div class="mt-6 flex items-center justify-end gap-2"><a href="/ui" class="btn text-muted hover:text-ink">Cancel</a><button type="submit" class="btn btn-primary">Create bank</button></div>
+</form>
 {{template "room_foot" .}}{{end}}
 
 {{define "transfer"}}{{template "room_head" .}}

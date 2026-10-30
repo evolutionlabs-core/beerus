@@ -37,6 +37,11 @@ type App struct {
 	sending   chan struct{}
 	swept     time.Time
 	ledgers   []*ledgerSource
+	lifeMu    sync.Mutex
+	recMu     sync.Mutex
+	status    map[string]*BankStatus
+	sites     map[string]*siteServer
+	serving   bool
 }
 
 type Options struct {
@@ -97,11 +102,12 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	for _, b := range cfg.Banks {
 		ls, err := openLedgerSource(context.Background(), cfg, b, a.world)
 		if err != nil {
-			a.closeLedgers()
-			return nil, err
+			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
+			continue
 		}
 		a.ledgers = append(a.ledgers, ls)
 	}
+	a.initLifecycle()
 	return a, nil
 }
 
@@ -201,6 +207,10 @@ func (a *App) Run(ctx context.Context) {
 }
 
 func (a *App) Step() {
+	if a.recMu.TryLock() {
+		a.reconcileBanks()
+		a.recMu.Unlock()
+	}
 	a.mu.Lock()
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {

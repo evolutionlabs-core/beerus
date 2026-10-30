@@ -78,15 +78,6 @@ func (a *App) Serve(ctx context.Context) error {
 		{a.cfg.Connect.WidgetPort, a.WidgetHandler(), wtls},
 		{a.cfg.Connect.ControlPort, a.ControlHandler(), nil},
 	}
-	for _, b := range a.cfg.Banks {
-		if h := a.BankHandler(b.ID); h != nil {
-			specs = append(specs, struct {
-				port int
-				h    http.Handler
-				tls  *tls.Config
-			}{b.Port, h, nil})
-		}
-	}
 	servers := []srv{}
 	for _, sp := range specs {
 		ls, err := listenLocal(sp.port)
@@ -99,6 +90,23 @@ func (a *App) Serve(ctx context.Context) error {
 			return err
 		}
 		servers = append(servers, srv{s: &http.Server{Handler: sp.h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: log.New(quietTLS{a}, "", 0)}, tls: sp.tls, ls: ls})
+	}
+	a.lifeMu.Lock()
+	a.serving = true
+	a.lifeMu.Unlock()
+	for _, b := range a.cfg.Banks {
+		if !a.bankReady(b.ID) {
+			continue
+		}
+		if err := a.startBankSite(b); err != nil {
+			for _, s := range servers {
+				for _, l := range s.ls {
+					l.Close()
+				}
+			}
+			a.stopBankSites(context.Background())
+			return err
+		}
 	}
 	errc := make(chan error, 8)
 	for _, s := range servers {
@@ -130,6 +138,7 @@ func (a *App) Serve(ctx context.Context) error {
 	for _, s := range servers {
 		_ = s.s.Shutdown(shut)
 	}
+	a.stopBankSites(shut)
 	cancel()
 	<-done
 	a.closeLedgers()

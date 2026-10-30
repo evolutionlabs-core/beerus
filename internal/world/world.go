@@ -114,6 +114,7 @@ type World struct {
 	cfg          Config
 	institutions map[string]*Institution
 	instOrder    []string
+	suspended    map[string]bool
 	accounts     map[string]*Account
 	personas     map[string]*Persona
 	order        []string
@@ -265,6 +266,8 @@ func (w *World) Config() Config {
 }
 
 func (w *World) Institutions() []Institution {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	out := []Institution{}
 	for _, id := range w.instOrder {
 		out = append(out, *w.institutions[id])
@@ -273,6 +276,8 @@ func (w *World) Institutions() []Institution {
 }
 
 func (w *World) Institution(id string) (Institution, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	i, ok := w.institutions[id]
 	if !ok {
 		return Institution{}, false
@@ -346,9 +351,43 @@ func (w *World) injectedCount() int {
 	return len(w.ov.Injected)
 }
 
+func (w *World) AddInstitution(inst Institution) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, ok := w.institutions[inst.ID]; ok {
+		return nil
+	}
+	for _, other := range w.institutions {
+		if other.NIPCode == inst.NIPCode || other.NUBANCode == inst.NUBANCode || other.Name == inst.Name {
+			return fmt.Errorf("world: %s clashes with %s", inst.ID, other.ID)
+		}
+	}
+	cp := inst
+	next := make(map[string]*Institution, len(w.institutions)+1)
+	for k, v := range w.institutions {
+		next[k] = v
+	}
+	next[inst.ID] = &cp
+	w.institutions = next
+	w.instOrder = append(w.instOrder[:len(w.instOrder):len(w.instOrder)], inst.ID)
+	return nil
+}
+
+func (w *World) SetSuspended(institution string, suspended bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.suspended == nil {
+		w.suspended = map[string]bool{}
+	}
+	w.suspended[institution] = suspended
+}
+
 func (w *World) Down(institution string, at time.Time) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.suspended[institution] {
+		return true
+	}
 	for _, o := range w.ov.Outages {
 		if o.Institution == institution && !at.Before(o.From) && at.Before(o.To) {
 			return true

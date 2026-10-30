@@ -40,6 +40,9 @@ Usage:
   beerus sync
   beerus webhooks [replay <delivery-id>]
   beerus snapshot [take [name] | restore <id>]
+  beerus bank [list]
+  beerus bank create --name NAME [--type commercial|digital|microfinance] [--id ID] [--nip-code N] [--nuban-code N] [--history-days N] [--settles-through ID]
+  beerus bank suspend|resume <id>
   beerus trust [--dir .beerus]
   beerus untrust [--dir .beerus]
   beerus version
@@ -292,6 +295,8 @@ func cmdControl(cmd string, args []string) error {
 		} else {
 			out, err = c.do("GET", "/webhooks/deliveries?limit=20", nil)
 		}
+	case "bank":
+		out, err = cmdBank(c, args)
 	case "snapshot":
 		switch {
 		case len(args) == 0:
@@ -316,4 +321,56 @@ func cmdControl(cmd string, args []string) error {
 	}
 	pretty(out)
 	return nil
+}
+
+func cmdBank(c *ctl, args []string) (map[string]any, error) {
+	switch {
+	case len(args) == 0 || args[0] == "list":
+		return c.do("GET", "/banks", nil)
+	case args[0] == "create":
+		fs := flag.NewFlagSet("bank create", flag.ExitOnError)
+		name := fs.String("name", "", "bank name")
+		typ := fs.String("type", "commercial", "commercial, digital or microfinance")
+		id := fs.String("id", "", "bank ID, derived from the name when empty")
+		nip := fs.String("nip-code", "", "6-digit NIP institution code, assigned when empty")
+		nuban := fs.String("nuban-code", "", "3-digit NUBAN bank code, assigned when empty")
+		days := fs.Int("history-days", 0, "days of history the bank serves")
+		via := fs.String("settles-through", "", "bank a microfinance bank settles through")
+		fs.Parse(args[1:])
+		if *name == "" {
+			return nil, errors.New("usage: beerus bank create --name NAME")
+		}
+		out, err := c.do("POST", "/banks", map[string]any{"name": *name, "type": *typ, "id": *id, "nip_code": *nip, "nuban_code": *nuban, "history_days": *days, "settles_through": *via})
+		if err != nil {
+			return nil, err
+		}
+		return waitBank(c, fmt.Sprint(out["id"]))
+	case (args[0] == "suspend" || args[0] == "resume") && len(args) == 2:
+		return c.do("POST", "/banks/"+args[1]+"/"+args[0], nil)
+	}
+	return nil, errors.New("usage: beerus bank [list | create --name NAME | suspend <id> | resume <id>]")
+}
+
+func waitBank(c *ctl, id string) (map[string]any, error) {
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		out, err := c.do("GET", "/banks", nil)
+		if err != nil {
+			return nil, err
+		}
+		data, _ := out["data"].([]any)
+		for _, d := range data {
+			st, _ := d.(map[string]any)
+			if st["id"] != id {
+				continue
+			}
+			if st["phase"] != "provisioning" || time.Now().After(deadline) {
+				return st, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return out, nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
