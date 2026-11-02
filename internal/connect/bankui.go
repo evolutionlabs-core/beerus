@@ -421,7 +421,7 @@ func (a *bankSite) obTransferReview(w http.ResponseWriter, r *http.Request) {
 		q, err = a.world.Quote(a.clock.Now(), req)
 	}
 	if err != nil {
-		msg := err.Error()
+		msg := transferMessage(err)
 		if errors.Is(err, world.ErrInsufficientFunds) {
 			msg = "There isn't enough available money for this transfer and its charges."
 		}
@@ -443,7 +443,7 @@ func (a *bankSite) obTransferConfirm(w http.ResponseWriter, r *http.Request) {
 		res, err = a.world.Transfer(a.clock.Now(), req)
 	}
 	if err != nil {
-		msg := err.Error()
+		msg := transferMessage(err)
 		if errors.Is(err, world.ErrInsufficientFunds) {
 			msg = "There isn't enough available money for this transfer and its charges."
 		}

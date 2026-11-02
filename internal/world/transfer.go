@@ -129,6 +129,14 @@ func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferRe
 	}
 	cp.BankCode = toInst.NIPCode
 	cp.BankName = toInst.Name
+	if err := w.reachable(fromInst.ID, fromInst.Name, at, "", ""); err != nil {
+		return TransferResult{}, err
+	}
+	if _, ok := w.institutions[toInst.ID]; ok && toInst.ID != fromInst.ID {
+		if err := w.reachable(toInst.ID, "the beneficiary's bank, "+toInst.Name, at, "; NIBSS rejected the transfer", "; nothing was debited"); err != nil {
+			return TransferResult{}, err
+		}
+	}
 	d := clock.DateOf(at)
 	sameOwner := to != nil && to.Owner == from.Owner
 	intra := toInst.ID == fromInst.ID
@@ -222,4 +230,17 @@ func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferRe
 	res.LineKey = lines[0].Key
 	res.BalanceAfter = ledger - res.TotalDebit
 	return res, nil
+}
+
+func (w *World) reachable(id, name string, at time.Time, rejected, kept string) error {
+	if w.Suspended(id, at) {
+		if kept == "" {
+			return fmt.Errorf("%w: %s is suspended by the CBN, so its accounts are frozen", ErrBankSuspended, name)
+		}
+		return fmt.Errorf("%w: %s is suspended by the CBN%s and nothing was debited", ErrBankSuspended, name, rejected)
+	}
+	if end, down := w.OutageEnd(id, at); down {
+		return fmt.Errorf("%w: %s is not reachable until %s WAT%s", ErrBankUnavailable, name, end.In(clock.Lagos).Format("Mon 2 Jan 15:04"), kept)
+	}
+	return nil
 }

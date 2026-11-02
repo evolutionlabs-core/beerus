@@ -12,16 +12,13 @@ const roomTemplates = `
 <link rel="stylesheet" href="{{css}}">
 </head>
 <body class="min-h-screen">
-<div class="grid min-h-screen grid-cols-1 lg:grid-cols-[236px_1fr]">
+<div class="grid min-h-screen grid-cols-1 content-start lg:grid-cols-[236px_1fr]">
 <aside class="flex items-center gap-1 overflow-x-auto border-b border-line px-3 py-2.5 lg:sticky lg:top-0 lg:block lg:h-screen lg:overflow-y-auto lg:border-r lg:border-b-0 lg:px-3.5 lg:py-5">
 <a href="/ui" class="mr-3 flex shrink-0 items-center gap-2.5 px-2 text-[14px] tracking-tight lg:mr-0 lg:pb-5">{{logo}}<span>Beerus</span></a>
 <nav class="flex shrink-0 gap-0.5 text-[13.5px] lg:block lg:space-y-0.5">
 <a href="/ui" class="flex h-8 shrink-0 items-center rounded-lg px-2 whitespace-nowrap {{if eq .Nav "overview"}}bg-raised text-ink{{else}}text-muted hover:bg-raised hover:text-ink{{end}}">Overview</a>
 <a href="/ui/transfer" class="flex h-8 shrink-0 items-center rounded-lg px-2 whitespace-nowrap {{if eq .Nav "transfer"}}bg-raised text-ink{{else}}text-muted hover:bg-raised hover:text-ink{{end}}">New transfer</a>
-</nav>
-<div class="mt-6 hidden items-center justify-between px-2 pb-1.5 lg:flex"><p class="text-[11.5px] text-faint">Banks</p><a href="/ui/banks/new" class="text-[11.5px] {{if eq .Nav "new_bank"}}text-ink{{else}}text-faint hover:text-ink{{end}}">New</a></div>
-<nav class="flex shrink-0 gap-0.5 text-[13.5px] lg:block lg:space-y-0.5">
-{{range .Banks}}<a href="/ui/banks/{{.ID}}" class="{{.ID}} flex h-8 shrink-0 items-center gap-2.5 rounded-lg px-2 whitespace-nowrap {{if eq $.Nav .ID}}bg-raised text-ink{{else}}text-muted hover:bg-raised hover:text-ink{{end}}"><span class="grid size-5 place-items-center rounded-md border border-line-strong text-[10.5px] text-bank">{{initial .Name}}</span>{{.Name}}</a>{{end}}
+<a href="/ui/banks" class="flex h-8 shrink-0 items-center rounded-lg px-2 whitespace-nowrap {{if eq .Nav "banks"}}bg-raised text-ink{{else}}text-muted hover:bg-raised hover:text-ink{{end}}">Banks</a>
 </nav>
 <p class="mt-6 hidden px-2 pb-1.5 text-[11.5px] text-faint lg:block">Beerus Connect</p>
 <nav class="flex shrink-0 gap-0.5 text-[13.5px] lg:block lg:space-y-0.5">
@@ -84,7 +81,7 @@ const roomTemplates = `
 {{if .Managed}}{{if eq .Status.Phase "suspended"}}<form method="post" action="/ui/banks/{{.Bank.ID}}/resume"><button type="submit" class="btn btn-secondary btn-sm">Resume</button></form>{{else}}<form method="post" action="/ui/banks/{{.Bank.ID}}/suspend"><button type="submit" class="btn btn-secondary btn-sm">Suspend</button></form>{{end}}{{end}}
 </div>
 </div>
-{{if eq .Status.Phase "suspended"}}<p class="mb-6 rounded-[10px] border border-line bg-panel px-4 py-3 text-[13px] text-muted">Online banking shows an outage page and connections report the bank as down until you resume it. No data is changed.</p>{{end}}
+{{if eq .Status.Phase "suspended"}}<p class="mb-6 rounded-[10px] border border-line bg-panel px-4 py-3 text-[13px] text-muted">The CBN has suspended this bank. Its accounts are frozen: transfers in and out are rejected, nothing new is posted, and connections report the bank as down until you resume it.</p>{{end}}
 <div class="grid grid-cols-2 gap-3 lg:grid-cols-3">
 {{template "stat" (list "Customer deposits" (naira .Total) "")}}
 {{template "stat" (list "Accounts" (printf "%d" (len .Accounts)) "")}}
@@ -183,8 +180,25 @@ const roomTemplates = `
 </section>{{end}}
 {{template "room_foot" .}}{{end}}
 
+{{define "banks"}}{{template "room_head" .}}
+<div class="mb-7 flex flex-wrap items-end justify-between gap-4"><div><h1 class="text-[24px]">Banks</h1><p class="mt-1.5 text-[13.5px] text-muted">Every bank in this setup, with its own ledger and online banking.</p></div>{{if .CanCreate}}<a href="/ui/banks/new" class="btn btn-primary btn-sm">New bank</a>{{end}}</div>
+{{range .Warnings}}<p class="mb-3 rounded-[10px] border border-warn/30 bg-warn/10 px-4 py-3 text-[13px] text-warn" role="alert">{{.}}</p>{{end}}
+<section class="rounded-2xl border border-line bg-panel">
+<div class="overflow-x-auto"><table class="w-full min-w-[760px] border-collapse text-[13.5px]">
+<thead><tr class="text-left text-[12px] whitespace-nowrap text-faint"><th class="border-b border-line px-5 py-2.5 font-normal">Bank</th><th class="border-b border-line px-5 py-2.5 font-normal">NIP code</th><th class="border-b border-line px-5 py-2.5 font-normal">State</th><th class="border-b border-line px-5 py-2.5 text-right font-normal">Customers</th><th class="border-b border-line px-5 py-2.5 text-right font-normal">Deposits</th><th class="border-b border-line px-5 py-2.5 font-normal">Online banking</th></tr></thead>
+<tbody>{{range .Rows}}<tr class="{{.ID}} group hover:bg-raised">
+<td class="border-b border-line px-5 py-3 group-last:border-b-0"><a href="/ui/banks/{{.ID}}" class="flex items-center gap-3"><span class="grid size-7 place-items-center rounded-lg border border-line-strong bg-raised text-[12px] text-bank">{{initial .Name}}</span><span><span class="block">{{.Name}}</span><span class="block text-[12.5px] text-muted">{{if eq .Type "digital"}}Digital{{else if eq .Type "microfinance"}}Microfinance{{else}}Commercial{{end}}</span></span></a></td>
+<td class="border-b border-line px-5 py-3 group-last:border-b-0"><span class="num text-muted">{{if .NIPCode}}{{.NIPCode}}{{else}}—{{end}}</span></td>
+<td class="border-b border-line px-5 py-3 group-last:border-b-0">{{if eq .Phase "provisioning"}}<span class="badge badge-warn">Provisioning</span>{{else if eq .Phase "repairing"}}<span class="badge badge-bad">Repairing</span>{{else if eq .Phase "suspended"}}<span class="badge badge-warn">Suspended</span>{{else}}<span class="badge badge-ok">Active</span>{{end}}</td>
+<td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><span class="num">{{.Customers}}</span></td>
+<td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><span class="num">{{naira .Deposits}}</span></td>
+<td class="border-b border-line px-5 py-3 group-last:border-b-0">{{if .URL}}<a href="{{.URL}}" target="_blank" rel="noopener" class="whitespace-nowrap text-muted hover:text-ink">{{trimScheme .URL}}</a>{{else}}<span class="text-faint">—</span>{{end}}</td>
+</tr>{{end}}</tbody></table></div>
+</section>
+{{template "room_foot" .}}{{end}}
+
 {{define "bank_provisioning"}}{{template "room_head" .}}
-<div class="mb-7"><h1 class="text-[24px]">{{.Status.Name}}</h1><p class="mt-1.5 text-[13.5px] text-muted">Setting up the bank. Failed steps are retried automatically.</p></div>
+<div class="mb-7"><h1 class="text-[24px]">{{.Status.Name}}</h1><p class="mt-1.5 text-[13.5px] text-muted">{{if eq .Status.Phase "repairing"}}Repairing the bank because {{.Status.Reason}}.{{else}}Setting up the bank.{{end}} Failed steps are retried automatically.</p></div>
 <ol class="max-w-[640px] rounded-2xl border border-line bg-panel">
 {{range .Status.Steps}}<li class="flex items-start gap-3 border-b border-line px-5 py-3.5 text-[13.5px] last:border-b-0">
 {{if .Done}}<span class="badge badge-ok">Done</span>{{else if .Error}}<span class="badge badge-bad">Retrying</span>{{else}}<span class="badge">Waiting</span>{{end}}

@@ -3,6 +3,7 @@ package connect
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -50,7 +51,7 @@ func (a *App) ControlHandler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "pending"})
 	})
 	mux.HandleFunc("GET /banks", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"data": a.BankStatuses()})
+		writeJSON(w, http.StatusOK, map[string]any{"data": a.BankStatuses(), "warnings": a.BankWarnings()})
 	})
 	mux.HandleFunc("POST /banks", a.ctlCreateBank)
 	mux.HandleFunc("POST /banks/{id}/suspend", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, true) })
@@ -315,7 +316,14 @@ func (a *App) ctlTransfer(w http.ResponseWriter, r *http.Request) {
 		a.dirty()
 	}
 	a.mu.Unlock()
-	if err != nil {
+	switch {
+	case errors.Is(err, world.ErrBankSuspended):
+		writeError(w, r, http.StatusConflict, "bank_suspended", transferMessage(err))
+		return
+	case errors.Is(err, world.ErrBankUnavailable):
+		writeError(w, r, http.StatusServiceUnavailable, "bank_unavailable", transferMessage(err))
+		return
+	case err != nil:
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
@@ -488,9 +496,7 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	genesis, _ := a.cfg.GenesisDate()
 	a.world = world.New(a.worldConfig(genesis), st.World)
 	for _, b := range a.cfg.Banks {
-		if b.Suspended() {
-			a.world.SetSuspended(b.ID, true)
-		}
+		a.alignSuspensionLocked(b)
 	}
 	for _, l := range a.ledgers {
 		if !restore[l.inst.ID] {
@@ -561,4 +567,15 @@ func (a *App) ctlRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"world_id": wid, "business_time": ts(a.clock.Now()), "business_date": clock.DateOf(a.clock.Now()).String()})
+}
+
+func transferMessage(err error) string {
+	msg := err.Error()
+	for _, e := range []error{world.ErrBankSuspended, world.ErrBankUnavailable} {
+		msg = strings.TrimPrefix(msg, e.Error()+": ")
+	}
+	if msg != "" {
+		msg = strings.ToUpper(msg[:1]) + strings.TrimSuffix(msg[1:], ".") + "."
+	}
+	return msg
 }

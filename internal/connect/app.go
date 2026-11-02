@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -42,6 +43,12 @@ type App struct {
 	status    map[string]*BankStatus
 	sites     map[string]*siteServer
 	serving   bool
+	cfgSum    string
+	warnings  []string
+	watched   time.Time
+	driftAt   time.Time
+	driftDue  atomic.Bool
+	strikes   map[string]int
 }
 
 type Options struct {
@@ -215,6 +222,7 @@ func (a *App) Step() {
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {
 			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
+			a.driftDue.Store(true)
 		}
 	}
 	a.runConnections()

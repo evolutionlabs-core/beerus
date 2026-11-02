@@ -90,6 +90,10 @@ func (s *scn) cp() *Counterparty {
 func (w *World) RunScenario(name string, at time.Time, p ScenarioParams) (string, error) {
 	s := w.newScn(name, at)
 	acct, hasAcct := w.Account(p.Account)
+	if hasAcct && w.Suspended(acct.Institution, at) {
+		inst, _ := w.Institution(acct.Institution)
+		return "", fmt.Errorf("%w: %s is suspended by the CBN, so its accounts are frozen", ErrBankSuspended, inst.Name)
+	}
 	needAcct := func() error {
 		if !hasAcct {
 			return fmt.Errorf("scenario %s needs an account", name)

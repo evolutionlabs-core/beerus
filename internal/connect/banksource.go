@@ -243,6 +243,12 @@ func (a *App) DropBankDatabases() error {
 	return errors.Join(errs...)
 }
 
+func (s *ledgerSource) Ping(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st.Pool.Ping(ctx)
+}
+
 func (s *ledgerSource) Close() {
 	s.st.Close()
 }

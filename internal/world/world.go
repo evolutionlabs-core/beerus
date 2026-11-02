@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -93,6 +94,7 @@ type Overrides struct {
 	Injected   []Line               `json:"injected"`
 	Mutations  []Mutation           `json:"mutations"`
 	Outages    []Outage             `json:"outages"`
+	Suspended  []Outage             `json:"suspended,omitempty"`
 	UnstableAt map[string]time.Time `json:"unstable_at"`
 }
 
@@ -114,7 +116,6 @@ type World struct {
 	cfg          Config
 	institutions map[string]*Institution
 	instOrder    []string
-	suspended    map[string]bool
 	accounts     map[string]*Account
 	personas     map[string]*Persona
 	order        []string
@@ -339,6 +340,7 @@ func (w *World) Overrides() Overrides {
 	cp.Injected = append(cp.Injected, w.ov.Injected...)
 	cp.Mutations = append(cp.Mutations, w.ov.Mutations...)
 	cp.Outages = append(cp.Outages, w.ov.Outages...)
+	cp.Suspended = append(cp.Suspended, w.ov.Suspended...)
 	for k, v := range w.ov.UnstableAt {
 		cp.UnstableAt[k] = v
 	}
@@ -373,19 +375,83 @@ func (w *World) AddInstitution(inst Institution) error {
 	return nil
 }
 
-func (w *World) SetSuspended(institution string, suspended bool) {
+var (
+	ErrBankSuspended   = errors.New("bank suspended")
+	ErrBankUnavailable = errors.New("bank unavailable")
+)
+
+func (w *World) Suspend(institution string, at time.Time) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.suspended == nil {
-		w.suspended = map[string]bool{}
+	if w.suspendedAt(institution, at) {
+		return false
 	}
-	w.suspended[institution] = suspended
+	w.ov.Suspended = append(w.ov.Suspended, Outage{Institution: institution, From: at})
+	w.reset()
+	return true
+}
+
+func (w *World) Resume(institution string, at time.Time) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	changed := false
+	for i := range w.ov.Suspended {
+		s := &w.ov.Suspended[i]
+		if s.Institution == institution && !at.Before(s.From) && (s.To.IsZero() || at.Before(s.To)) {
+			s.To = at
+			changed = true
+		}
+	}
+	if changed {
+		w.reset()
+	}
+	return changed
+}
+
+func (w *World) Suspended(institution string, at time.Time) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.suspendedAt(institution, at)
+}
+
+func (w *World) OutageEnd(institution string, at time.Time) (time.Time, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.outageAt(institution, at)
+}
+
+func (w *World) suspendedAt(institution string, at time.Time) bool {
+	for _, s := range w.ov.Suspended {
+		if s.Institution == institution && !at.Before(s.From) && (s.To.IsZero() || at.Before(s.To)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *World) outageAt(institution string, at time.Time) (time.Time, bool) {
+	end, down := time.Time{}, false
+	for _, o := range w.ov.Outages {
+		if o.Institution == institution && !at.Before(o.From) && at.Before(o.To) && o.To.After(end) {
+			end, down = o.To, true
+		}
+	}
+	return end, down
+}
+
+func (w *World) reset() {
+	w.lines = map[string][]*Line{}
+	w.state = map[string]*genState{}
+	for k, a := range w.accounts {
+		w.state[k] = &genState{projected: a.Opening}
+	}
+	w.through = w.cfg.Genesis.AddDays(-1)
 }
 
 func (w *World) Down(institution string, at time.Time) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.suspended[institution] {
+	if w.suspendedAt(institution, at) {
 		return true
 	}
 	for _, o := range w.ov.Outages {
@@ -400,6 +466,7 @@ func (w *World) AddOutage(o Outage) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.ov.Outages = append(w.ov.Outages, o)
+	w.reset()
 }
 
 func (w *World) SetUnstable(institution string, at time.Time) {

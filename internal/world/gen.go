@@ -53,12 +53,20 @@ func EMTL(amount int64, d clock.Date) int64 {
 }
 
 type dayGen struct {
-	w     *World
-	d     clock.Date
-	rng   *rand.Rand
-	p     *Persona
-	order int
-	n     int
+	w       *World
+	d       clock.Date
+	rng     *rand.Rand
+	p       *Persona
+	order   int
+	n       int
+	decided bool
+	skip    bool
+	shift   time.Duration
+	also    []string
+}
+
+func (g *dayGen) begin(also ...string) {
+	g.decided, g.also = false, also
 }
 
 func (w *World) generateDay(d clock.Date) {
@@ -116,9 +124,38 @@ func (g *dayGen) trading() []*Account {
 }
 
 func (g *dayGen) add(l *Line) {
+	if !g.decided {
+		g.decided, g.skip, g.shift = true, false, 0
+		start := l.firstAppear()
+		insts := append([]string{g.w.accounts[l.Account].Institution}, g.also...)
+		if l.Counterparty != nil && l.Channel == "nip" {
+			for _, inst := range g.w.institutions {
+				if inst.NIPCode == l.Counterparty.BankCode {
+					insts = append(insts, inst.ID)
+				}
+			}
+		}
+		for _, inst := range insts {
+			if g.w.suspendedAt(inst, start) {
+				g.skip = true
+			}
+			if end, down := g.w.outageAt(inst, start); down && end.Sub(start) > g.shift {
+				g.shift = end.Sub(start)
+			}
+		}
+	}
 	l.order = g.next()
+	if g.skip {
+		return
+	}
 	if l.ValueDate.IsZero() {
 		l.ValueDate = clock.DateOf(l.BookedAt)
+	}
+	if g.shift > 0 {
+		l.BookedAt = l.BookedAt.Add(g.shift)
+		if l.HasPending() {
+			l.PendingAt = l.PendingAt.Add(g.shift)
+		}
 	}
 	g.w.lines[l.Account] = append(g.w.lines[l.Account], l)
 	st := g.w.state[l.Account]
@@ -290,6 +327,7 @@ func titleCase(s string) string {
 }
 
 func (g *dayGen) inflow(a *Account, amt int64, kind string) {
+	g.begin()
 	inst := g.w.institutions[a.Institution]
 	t := g.at(7, 22)
 	cp := g.counterparty(inst.NIPCode)
@@ -340,6 +378,7 @@ func (g *dayGen) debitWithCharges(a *Account, amt int64, cp *Counterparty, t tim
 }
 
 func (g *dayGen) outflow(a *Account) {
+	g.begin()
 	t := g.at(7, 23)
 	amt := g.fit(a, g.amount(1000, 400000, 100), t, false)
 	if amt == 0 {
@@ -401,6 +440,7 @@ func (g *dayGen) ownTransfer() {
 	if amt == 0 {
 		return
 	}
+	g.begin(to.Institution)
 	toInst := g.w.institutions[to.Institution]
 	fromInst := g.w.institutions[from.Institution]
 	cp := &Counterparty{Name: strings.ToUpper(g.p.Name), AccountNumber: to.NUBAN, BankCode: toInst.NIPCode, BankName: toInst.Name}
@@ -425,6 +465,7 @@ func (g *dayGen) sweepToSavings() {
 	if amt < 100000 || avail-amt < buffer {
 		return
 	}
+	g.begin()
 	inst := g.w.institutions[from.Institution]
 	ref := g.bankRef(inst, t)
 	g.add(&Line{Key: g.key("sweep"), Account: from.Key, Amount: -amt, BookedAt: t, Narration: g.narr(inst, "sweep"), Counterparty: &Counterparty{Name: to.Name, AccountNumber: to.NUBAN, BankCode: inst.NIPCode, BankName: inst.Name}, BankRef: ref, Channel: "internal"})
@@ -434,6 +475,7 @@ func (g *dayGen) sweepToSavings() {
 func (g *dayGen) monthEnd() {
 	month := g.d.Start().Format("Jan 2006")
 	for i, k := range g.p.Accounts {
+		g.begin()
 		a := g.w.accounts[k]
 		inst := g.w.institutions[a.Institution]
 		st := g.w.state[k]

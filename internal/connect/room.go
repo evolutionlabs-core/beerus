@@ -56,6 +56,7 @@ func (a *App) roomHandler() http.Handler {
 	mux.HandleFunc("POST /ui/login", a.roomLogin)
 	mux.HandleFunc("GET /ui", a.roomOverview)
 	mux.HandleFunc("GET /ui/{$}", a.roomOverview)
+	mux.HandleFunc("GET /ui/banks", a.roomBanks)
 	mux.HandleFunc("GET /ui/banks/new", a.roomNewBank)
 	mux.HandleFunc("POST /ui/banks", a.roomCreateBank)
 	mux.HandleFunc("GET /ui/banks/{id}", a.roomBank)
@@ -226,8 +227,8 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	inst, ok := a.world.Institution(r.PathValue("id"))
-	if managed && status.Phase == PhaseProvisioning {
-		a.roomRender(w, r, "bank_provisioning", http.StatusOK, status.ID, roomPage{"Title": status.Name, "Status": status, "Refresh": true})
+	if managed && (status.Phase == PhaseProvisioning || status.Phase == PhaseRepairing) {
+		a.roomRender(w, r, "bank_provisioning", http.StatusOK, "banks", roomPage{"Title": status.Name, "Status": status, "Refresh": true})
 		return
 	}
 	if !ok {
@@ -244,7 +245,7 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 			accts = append(accts, v)
 		}
 	}
-	a.roomRender(w, r, "bank", http.StatusOK, inst.ID, roomPage{"Title": inst.Name, "Bank": inst, "Accounts": accts, "Total": total, "Down": a.world.Down(inst.ID, now), "Managed": managed, "Status": status})
+	a.roomRender(w, r, "bank", http.StatusOK, "banks", roomPage{"Title": inst.Name, "Bank": inst, "Accounts": accts, "Total": total, "Down": a.world.Down(inst.ID, now), "Managed": managed, "Status": status})
 }
 
 const pageSize = 50
@@ -412,7 +413,7 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 		data["From"] = f.Get("from")
 		data["To"] = f.Get("to")
 		data["Form"] = f
-		msg := err.Error()
+		msg := transferMessage(err)
 		if errors.Is(err, world.ErrInsufficientFunds) {
 			msg = "The account does not have enough available money for this transfer and its charges."
 		}
@@ -513,14 +514,15 @@ var roomPages = template.Must(template.New("").Funcs(uiFuncs).Funcs(template.Fun
 		}
 		return "text-ink"
 	},
-	"isFrozen": func(p float64) bool { return p == 0 },
-	"list":     func(v ...any) []any { return v },
+	"isFrozen":   func(p float64) bool { return p == 0 },
+	"list":       func(v ...any) []any { return v },
+	"trimScheme": func(u string) string { return strings.TrimPrefix(u, "http://") },
 }).Parse(roomTemplates))
 
 func (a *App) roomNewBank(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.roomRender(w, r, "new_bank", http.StatusOK, "new_bank", roomPage{"Title": "New bank", "Form": url.Values{"type": {"commercial"}}})
+	a.roomRender(w, r, "new_bank", http.StatusOK, "banks", roomPage{"Title": "New bank", "Form": url.Values{"type": {"commercial"}}})
 }
 
 func (a *App) roomCreateBank(w http.ResponseWriter, r *http.Request) {
@@ -538,7 +540,7 @@ func (a *App) roomCreateBank(w http.ResponseWriter, r *http.Request) {
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		a.roomRender(w, r, "new_bank", http.StatusUnprocessableEntity, "new_bank", roomPage{"Title": "New bank", "Form": f, "Error": msg})
+		a.roomRender(w, r, "new_bank", http.StatusUnprocessableEntity, "banks", roomPage{"Title": "New bank", "Form": f, "Error": msg})
 		return
 	}
 	http.Redirect(w, r, "/ui/banks/"+url.PathEscape(b.ID), http.StatusSeeOther)
@@ -557,4 +559,66 @@ func (a *App) roomSuspend(w http.ResponseWriter, r *http.Request, suspended bool
 		return
 	}
 	http.Redirect(w, r, "/ui/banks/"+url.PathEscape(id), http.StatusSeeOther)
+}
+
+type bankRow struct {
+	world.Institution
+	Phase     string
+	URL       string
+	Customers int
+	Deposits  int64
+}
+
+func (a *App) roomBanks(w http.ResponseWriter, r *http.Request) {
+	statuses := map[string]BankStatus{}
+	for _, st := range a.BankStatuses() {
+		statuses[st.ID] = st
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.clock.Now()
+	rows := []*bankRow{}
+	byID := map[string]*bankRow{}
+	for _, inst := range a.world.Institutions() {
+		row := &bankRow{Institution: inst, Phase: PhaseActive}
+		if st, ok := statuses[inst.ID]; ok {
+			row.Phase, row.URL = st.Phase, st.URL
+		}
+		rows = append(rows, row)
+		byID[inst.ID] = row
+	}
+	for _, st := range a.orderedStatuses(statuses) {
+		if byID[st.ID] == nil {
+			row := &bankRow{Institution: world.Institution{ID: st.ID, Name: st.Name}, Phase: st.Phase, URL: st.URL}
+			rows = append(rows, row)
+			byID[st.ID] = row
+		}
+	}
+	owners := map[string]map[string]bool{}
+	for _, acc := range a.world.Accounts() {
+		row := byID[acc.Institution]
+		if row == nil {
+			continue
+		}
+		if owners[acc.Institution] == nil {
+			owners[acc.Institution] = map[string]bool{}
+		}
+		owners[acc.Institution][acc.Owner] = true
+		bal, _ := a.src(acc.Key).LedgerAt(acc.Key, now)
+		row.Deposits += bal
+	}
+	for id, o := range owners {
+		byID[id].Customers = len(o)
+	}
+	a.roomRender(w, r, "banks", http.StatusOK, "banks", roomPage{"Title": "Banks", "Rows": rows, "CanCreate": len(a.cfg.Banks) > 0, "Warnings": a.BankWarnings()})
+}
+
+func (a *App) orderedStatuses(m map[string]BankStatus) []BankStatus {
+	out := []BankStatus{}
+	for _, b := range a.cfg.Banks {
+		if st, ok := m[b.ID]; ok {
+			out = append(out, st)
+		}
+	}
+	return out
 }

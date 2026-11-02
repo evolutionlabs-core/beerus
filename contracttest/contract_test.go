@@ -511,6 +511,9 @@ func TestBankOutage(t *testing.T) {
 	if r.Status != 503 || r.Code() != "institution_down" {
 		t.Fatalf("delete during outage: %d %s", r.Status, r.Body)
 	}
+	if _, err := s.ctlTry("POST", "/transfers", map[string]any{"from": fmt.Sprint(conn.Accounts[0]["account_number"]), "to": "0123456789", "to_bank": "Bank C", "amount": "1000"}); err == nil || !strings.Contains(err.Error(), "bank_unavailable") {
+		t.Fatalf("transfer from a bank that is down: %v", err)
+	}
 	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
 	b := s.browser()
 	b.get(fmt.Sprint(ls.JSON["widget_url"]))
