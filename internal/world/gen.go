@@ -102,10 +102,14 @@ func (g *dayGen) at(minHour, maxHour int) time.Time {
 	return g.d.Start().Add(time.Duration(minHour*3600+g.rng.IntN(span)) * time.Second)
 }
 
+func (g *dayGen) has(a *Account) bool {
+	return a.OpenedAt.IsZero() || g.d.After(clock.DateOf(a.OpenedAt))
+}
+
 func (g *dayGen) accountOf(inst, typ string) *Account {
 	for _, k := range g.p.Accounts {
 		a := g.w.accounts[k]
-		if (inst == "" || a.Institution == inst) && a.Type == typ {
+		if g.has(a) && (inst == "" || a.Institution == inst) && a.Type == typ {
 			return a
 		}
 	}
@@ -116,7 +120,7 @@ func (g *dayGen) trading() []*Account {
 	out := []*Account{}
 	for _, k := range g.p.Accounts {
 		a := g.w.accounts[k]
-		if a.Type == "current" || !g.p.Business {
+		if g.has(a) && (a.Type == "current" || !g.p.Business) {
 			out = append(out, a)
 		}
 	}
@@ -477,6 +481,9 @@ func (g *dayGen) monthEnd() {
 	for i, k := range g.p.Accounts {
 		g.begin()
 		a := g.w.accounts[k]
+		if !g.has(a) {
+			continue
+		}
 		inst := g.w.institutions[a.Institution]
 		st := g.w.state[k]
 		t := g.d.Start().Add(23*time.Hour + time.Duration(i*10)*time.Minute)

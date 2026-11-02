@@ -164,8 +164,12 @@ func (w *World) EndOfDay(account string, d clock.Date) (int64, error) {
 }
 
 func (w *World) Opened(account string) (clock.Date, error) {
-	if _, ok := w.accounts[account]; !ok {
+	a, ok := w.accounts[account]
+	if !ok {
 		return clock.Date{}, ErrUnknownAccount
+	}
+	if !a.OpenedAt.IsZero() {
+		return clock.DateOf(a.OpenedAt), nil
 	}
 	return w.cfg.Genesis, nil
 }

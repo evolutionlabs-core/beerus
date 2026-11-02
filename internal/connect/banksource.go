@@ -104,6 +104,11 @@ func (s *ledgerSource) Sync(at time.Time) error {
 func (s *ledgerSource) syncAccount(acc world.Account, at time.Time) error {
 	mark, ok := s.marks[acc.Key]
 	if !ok {
+		if !acc.OpenedAt.IsZero() {
+			if err := s.b.EnsureCustomer(s.ctx, acc.NUBAN, acc.Name, acc.Type, acc.Owner, acc.Opening, acc.OpenedAt); err != nil {
+				return err
+			}
+		}
 		wm, err := s.b.Watermark(s.ctx, acc.NUBAN)
 		if err != nil {
 			return err

@@ -60,6 +60,7 @@ func (a *App) roomHandler() http.Handler {
 	mux.HandleFunc("GET /ui/banks/new", a.roomNewBank)
 	mux.HandleFunc("POST /ui/banks", a.roomCreateBank)
 	mux.HandleFunc("GET /ui/banks/{id}", a.roomBank)
+	mux.HandleFunc("POST /ui/banks/{id}/accounts", a.roomOpenAccount)
 	mux.HandleFunc("POST /ui/banks/{id}/suspend", func(w http.ResponseWriter, r *http.Request) { a.roomSuspend(w, r, true) })
 	mux.HandleFunc("POST /ui/banks/{id}/resume", func(w http.ResponseWriter, r *http.Request) { a.roomSuspend(w, r, false) })
 	mux.HandleFunc("GET /ui/accounts/{key}", a.roomAccount)
@@ -245,7 +246,7 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 			accts = append(accts, v)
 		}
 	}
-	a.roomRender(w, r, "bank", http.StatusOK, "banks", roomPage{"Title": inst.Name, "Bank": inst, "Accounts": accts, "Total": total, "Down": a.world.Down(inst.ID, now), "Managed": managed, "Status": status})
+	a.roomRender(w, r, "bank", http.StatusOK, "banks", roomPage{"Title": inst.Name, "Bank": inst, "Accounts": accts, "Total": total, "Down": a.world.Down(inst.ID, now), "Managed": managed, "Status": status, "Personas": a.world.Personas(), "Error": r.URL.Query().Get("error")})
 }
 
 const pageSize = 50
@@ -621,4 +622,21 @@ func (a *App) orderedStatuses(m map[string]BankStatus) []BankStatus {
 		}
 	}
 	return out
+}
+
+func (a *App) roomOpenAccount(w http.ResponseWriter, r *http.Request) {
+	_ = r.ParseForm()
+	id := r.PathValue("id")
+	acc, err := a.OpenAccount(id, r.PostForm.Get("persona"), r.PostForm.Get("type"))
+	if errors.Is(err, errNotFound) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.roomNotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Redirect(w, r, "/ui/banks/"+url.PathEscape(id)+"?error="+url.QueryEscape(strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": ")), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/ui/accounts/"+url.PathEscape(acc.Key), http.StatusSeeOther)
 }

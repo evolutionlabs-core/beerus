@@ -26,14 +26,22 @@ type Institution struct {
 }
 
 type Account struct {
-	Key         string `json:"key"`
-	Institution string `json:"institution"`
-	NUBAN       string `json:"nuban"`
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Currency    string `json:"currency"`
-	Opening     int64  `json:"opening_minor"`
-	Owner       string `json:"owner"`
+	Key         string    `json:"key"`
+	Institution string    `json:"institution"`
+	NUBAN       string    `json:"nuban"`
+	Name        string    `json:"name"`
+	Type        string    `json:"type"`
+	Currency    string    `json:"currency"`
+	Opening     int64     `json:"opening_minor"`
+	Owner       string    `json:"owner"`
+	OpenedAt    time.Time `json:"opened_at,omitempty"`
+}
+
+type OpenedAccount struct {
+	Persona     string    `json:"persona"`
+	Institution string    `json:"institution"`
+	Type        string    `json:"type"`
+	At          time.Time `json:"at"`
 }
 
 type Persona struct {
@@ -95,6 +103,7 @@ type Overrides struct {
 	Mutations  []Mutation           `json:"mutations"`
 	Outages    []Outage             `json:"outages"`
 	Suspended  []Outage             `json:"suspended,omitempty"`
+	Opened     []OpenedAccount      `json:"opened,omitempty"`
 	UnstableAt map[string]time.Time `json:"unstable_at"`
 }
 
@@ -248,6 +257,9 @@ func New(cfg Config, ov Overrides) *World {
 		Account{Institution: "bank-b", Name: "Ngozi Fabrics Ventures", Type: "current", Opening: 32000000})
 	add(&Persona{ID: "chidi", Username: "chidi", Name: "Chidi Okafor", Business: false, rate: 0.4},
 		Account{Institution: "bank-b", Name: "Chidi Okafor", Type: "savings", Opening: 8500000})
+	for _, o := range w.ov.Opened {
+		_, _ = w.openLocked(o)
+	}
 	for k, a := range w.accounts {
 		w.state[k] = &genState{projected: a.Opening}
 	}
@@ -341,6 +353,7 @@ func (w *World) Overrides() Overrides {
 	cp.Mutations = append(cp.Mutations, w.ov.Mutations...)
 	cp.Outages = append(cp.Outages, w.ov.Outages...)
 	cp.Suspended = append(cp.Suspended, w.ov.Suspended...)
+	cp.Opened = append(cp.Opened, w.ov.Opened...)
 	for k, v := range w.ov.UnstableAt {
 		cp.UnstableAt[k] = v
 	}
@@ -437,6 +450,57 @@ func (w *World) outageAt(institution string, at time.Time) (time.Time, bool) {
 		}
 	}
 	return end, down
+}
+
+func (w *World) OpenAccount(persona, institution, typ string, at time.Time) (Account, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.suspendedAt(institution, at) {
+		return Account{}, fmt.Errorf("%w: the bank is suspended by the CBN, so it cannot open accounts", ErrBankSuspended)
+	}
+	o := OpenedAccount{Persona: persona, Institution: institution, Type: typ, At: at}
+	a, err := w.openLocked(o)
+	if err != nil {
+		return Account{}, err
+	}
+	w.ov.Opened = append(w.ov.Opened, o)
+	w.reset()
+	return a, nil
+}
+
+func (w *World) openLocked(o OpenedAccount) (Account, error) {
+	p := w.personas[o.Persona]
+	if p == nil {
+		return Account{}, fmt.Errorf("unknown persona %q", o.Persona)
+	}
+	inst := w.institutions[o.Institution]
+	if inst == nil {
+		return Account{}, fmt.Errorf("unknown bank %q", o.Institution)
+	}
+	if o.Type != "current" && o.Type != "savings" {
+		return Account{}, errors.New("type must be current or savings")
+	}
+	for _, k := range p.Accounts {
+		if a := w.accounts[k]; a.Institution == inst.ID && a.Type == o.Type {
+			return Account{}, fmt.Errorf("%s already has a %s account at %s", p.Name, o.Type, inst.Name)
+		}
+	}
+	name := p.Name
+	if inst.Style != "digital" {
+		name = strings.ToUpper(name)
+		if o.Type == "savings" {
+			name += " SAVINGS"
+		}
+	}
+	nuban := NUBAN(inst.NUBANCode, hash64(fmt.Sprint(w.cfg.Seed), p.ID, inst.ID, o.Type))
+	a := Account{Key: inst.ID + ":" + nuban, Institution: inst.ID, NUBAN: nuban, Name: name, Type: o.Type, Currency: "NGN", Owner: p.ID, OpenedAt: o.At}
+	if _, taken := w.accounts[a.Key]; taken {
+		return Account{}, fmt.Errorf("account number %s is already taken", nuban)
+	}
+	w.accounts[a.Key] = &a
+	p.Accounts = append(p.Accounts, a.Key)
+	w.state[a.Key] = &genState{}
+	return a, nil
 }
 
 func (w *World) reset() {

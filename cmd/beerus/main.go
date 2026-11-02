@@ -43,6 +43,7 @@ Usage:
   beerus bank [list]
   beerus bank create --name NAME [--type commercial|digital|microfinance] [--id ID] [--nip-code N] [--nuban-code N] [--history-days N] [--settles-through ID]
   beerus bank suspend|resume <id>
+  beerus bank open-account <id> --persona ID [--type current|savings]
   beerus trust [--dir .beerus]
   beerus untrust [--dir .beerus]
   beerus version
@@ -347,8 +348,17 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		return waitBank(c, fmt.Sprint(out["id"]))
 	case (args[0] == "suspend" || args[0] == "resume") && len(args) == 2:
 		return c.do("POST", "/banks/"+args[1]+"/"+args[0], nil)
+	case args[0] == "open-account" && len(args) >= 2:
+		fs := flag.NewFlagSet("bank open-account", flag.ExitOnError)
+		persona := fs.String("persona", "", "persona who opens the account")
+		typ := fs.String("type", "current", "current or savings")
+		fs.Parse(args[2:])
+		if *persona == "" {
+			return nil, errors.New("usage: beerus bank open-account <id> --persona ID [--type current|savings]")
+		}
+		return c.do("POST", "/banks/"+args[1]+"/accounts", map[string]string{"persona": *persona, "type": *typ})
 	}
-	return nil, errors.New("usage: beerus bank [list | create --name NAME | suspend <id> | resume <id>]")
+	return nil, errors.New("usage: beerus bank [list | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID]")
 }
 
 func waitBank(c *ctl, id string) (map[string]any, error) {

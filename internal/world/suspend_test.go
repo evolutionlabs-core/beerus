@@ -134,3 +134,50 @@ func TestOutageDelaysActivity(t *testing.T) {
 		t.Fatalf("transfer after the outage: %v", err)
 	}
 }
+
+func TestOpenAccountKeepsHistory(t *testing.T) {
+	plain, now := testWorld()
+	w, _ := testWorld()
+	acc, err := w.OpenAccount("tunde", "bank-b", "current", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acc.Institution != "bank-b" || acc.Owner != "tunde" || !ValidNUBAN("902", acc.NUBAN) {
+		t.Fatalf("account: %+v", acc)
+	}
+	for _, a := range plain.Accounts() {
+		x, y := plain.LinesFor(a.Key, now), w.LinesFor(a.Key, now)
+		if len(x) != len(y) {
+			t.Fatalf("%s history changed: %d vs %d lines", a.Key, len(x), len(y))
+		}
+		for i := range x {
+			if x[i].Key != y[i].Key || x[i].Amount != y[i].Amount {
+				t.Fatalf("%s line %d changed", a.Key, i)
+			}
+		}
+	}
+	if got := w.LinesFor(acc.Key, now); len(got) != 0 {
+		t.Fatalf("new account has history: %d lines", len(got))
+	}
+	if got := w.LinesFor(acc.Key, now.Add(60*24*time.Hour)); len(got) == 0 {
+		t.Fatal("new account never moves")
+	}
+	if _, err := w.OpenAccount("tunde", "bank-b", "current", now); err == nil {
+		t.Fatal("second current account at the same bank was allowed")
+	}
+	if _, err := w.OpenAccount("nobody", "bank-b", "current", now); err == nil {
+		t.Fatal("unknown persona was allowed")
+	}
+	w.Suspend("bank-a", now)
+	if _, err := w.OpenAccount("ngozi", "bank-a", "current", now.Add(time.Hour)); !errors.Is(err, ErrBankSuspended) {
+		t.Fatalf("opening at a suspended bank: %v", err)
+	}
+	again := New(w.Config(), w.Overrides())
+	if _, ok := again.Account(acc.Key); !ok {
+		t.Fatal("opened account is not rebuilt from overrides")
+	}
+	horizon := now.Add(60 * 24 * time.Hour)
+	if len(again.LinesFor(acc.Key, horizon)) != len(w.LinesFor(acc.Key, horizon)) {
+		t.Fatal("opened account is not rebuilt the same")
+	}
+}

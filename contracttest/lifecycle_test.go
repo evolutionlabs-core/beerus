@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -311,5 +312,49 @@ func TestBanksFollowConfigFile(t *testing.T) {
 	}
 	if saved.Bank("copycat") != nil || saved.Bank("bank-a").Name != "Bank A" {
 		t.Fatal("rejected edits were not undone in beerus.yaml")
+	}
+}
+
+func TestOpenAccountAtNewBank(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newStack(t)
+	s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
+	s.waitPhase("abuja-digital", connect.PhaseActive, 60*time.Second)
+	acc := s.ctl("POST", "/banks/abuja-digital/accounts", map[string]any{"persona": "adaeze", "type": "current"})
+	nuban := fmt.Sprint(acc["nuban"])
+	if acc["owner"] != "adaeze" || len(nuban) != 10 {
+		t.Fatalf("open account: %v", acc)
+	}
+	if _, err := s.ctlTry("POST", "/banks/abuja-digital/accounts", map[string]any{"persona": "adaeze", "type": "current"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
+		t.Fatalf("second current account: %v", err)
+	}
+	from := ""
+	for _, p := range s.ctl("GET", "/personas", nil)["data"].([]any) {
+		for _, a := range p.(map[string]any)["accounts"].([]any) {
+			m := a.(map[string]any)
+			if p.(map[string]any)["id"] == "adaeze" && m["institution"] == "bank-a" && m["type"] == "current" {
+				from = fmt.Sprint(m["key"])
+			}
+		}
+	}
+	s.ctl("POST", "/transfers", map[string]any{"from": from, "to": fmt.Sprint(acc["key"]), "amount": "25000"})
+	b := s.bankBrowser()
+	b.base = s.cfg.Bank("abuja-digital").URL()
+	p := s.persona("adaeze")
+	b.get("/login")
+	b.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
+	m := regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`).FindStringSubmatch(b.last)
+	if m == nil {
+		t.Fatalf("sign-in at the new bank: %.300s", b.last)
+	}
+	b.post("/verify", url.Values{"otp": {m[1]}})
+	if !strings.Contains(b.last, nuban) || !strings.Contains(b.last, "25,000.00") {
+		t.Fatalf("online banking does not show the funded account: %.600s", b.last)
+	}
+	conn := s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
+	if len(conn.Accounts) != 1 || conn.Accounts[0]["account_number"] != nuban {
+		t.Fatalf("connected accounts: %v", conn.Accounts)
 	}
 }

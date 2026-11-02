@@ -87,7 +87,13 @@ const roomTemplates = `
 {{template "stat" (list "Accounts" (printf "%d" (len .Accounts)) "")}}
 </div>
 <section class="mt-8 rounded-2xl border border-line bg-panel">
-<div class="border-b border-line px-5 py-3.5"><h2 class="text-[15px]">Accounts</h2></div>
+<div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3.5"><h2 class="text-[15px]">Accounts</h2>
+{{if ne .Status.Phase "suspended"}}<form method="post" action="/ui/banks/{{.Bank.ID}}/accounts" class="flex flex-wrap items-center gap-2">
+<select name="persona" class="h-8 rounded-lg border border-line bg-raised px-2.5 text-[13px] text-ink" aria-label="Customer">{{range .Personas}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
+<select name="type" class="h-8 rounded-lg border border-line bg-raised px-2.5 text-[13px] text-ink" aria-label="Account type"><option value="current">Current</option><option value="savings">Savings</option></select>
+<button type="submit" class="btn btn-secondary btn-sm">Open account</button>
+</form>{{end}}</div>
+{{if .Error}}<p class="mx-5 mt-4 rounded-[10px] border border-neg/30 bg-neg/10 px-3 py-2.5 text-[13px] text-neg" role="alert">{{.Error}}</p>{{end}}
 <div class="overflow-x-auto"><table class="w-full min-w-[640px] border-collapse text-[13.5px]">
 <thead><tr class="text-left text-[12px] text-faint"><th class="border-b border-line px-5 py-2.5 font-normal">Holder</th><th class="border-b border-line px-5 py-2.5 font-normal">Account</th><th class="border-b border-line px-5 py-2.5 font-normal">Type</th><th class="border-b border-line px-5 py-2.5 text-right font-normal">Available</th><th class="border-b border-line px-5 py-2.5 text-right font-normal">Ledger balance</th></tr></thead>
 <tbody>{{range .Accounts}}<tr class="group hover:bg-raised">
@@ -97,7 +103,7 @@ const roomTemplates = `
 <td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><span class="num">{{naira .Available}}</span></td>
 <td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><span class="num text-muted">{{naira .Ledger}}</span></td>
 </tr>{{end}}</tbody></table></div>
-{{if not .Accounts}}<p class="px-5 py-10 text-center text-muted">No customers yet.</p>{{end}}
+{{if not .Accounts}}<p class="px-5 py-10 text-center text-muted">No customers yet. Open an account for one of the personas to get started.</p>{{end}}
 </section>
 {{template "room_foot" .}}{{end}}
 

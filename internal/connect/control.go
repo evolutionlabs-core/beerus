@@ -54,6 +54,7 @@ func (a *App) ControlHandler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"data": a.BankStatuses(), "warnings": a.BankWarnings()})
 	})
 	mux.HandleFunc("POST /banks", a.ctlCreateBank)
+	mux.HandleFunc("POST /banks/{id}/accounts", a.ctlOpenAccount)
 	mux.HandleFunc("POST /banks/{id}/suspend", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, true) })
 	mux.HandleFunc("POST /banks/{id}/resume", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, false) })
 	mux.HandleFunc("GET /snapshots", a.ctlSnapshots)

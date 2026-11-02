@@ -748,3 +748,44 @@ func (a *App) detach(b *config.Bank, redo []int) {
 		_ = site.srv.Close()
 	}
 }
+
+func (a *App) OpenAccount(bankID, persona, typ string) (world.Account, error) {
+	if _, ok := a.world.Institution(bankID); !ok {
+		return world.Account{}, errNotFound
+	}
+	if phase := a.bankPhase(bankID); phase == PhaseProvisioning || phase == PhaseRepairing {
+		return world.Account{}, invalid("the bank is %s; try again when it is active", phase)
+	}
+	if typ == "" {
+		typ = "current"
+	}
+	a.mu.Lock()
+	acc, err := a.world.OpenAccount(persona, bankID, typ, a.clock.Now())
+	if err == nil {
+		a.dirty()
+	}
+	a.mu.Unlock()
+	if err != nil {
+		return world.Account{}, invalid("%s", transferMessage(err))
+	}
+	a.poke()
+	return acc, nil
+}
+
+func (a *App) ctlOpenAccount(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Persona string `json:"persona"`
+		Type    string `json:"type"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"persona":"adaeze","type":"current"}.`)
+		return
+	}
+	acc, err := a.OpenAccount(r.PathValue("id"), body.Persona, body.Type)
+	if err != nil {
+		a.bankError(w, r, err)
+		return
+	}
+	inst, _ := a.world.Institution(acc.Institution)
+	writeJSON(w, http.StatusCreated, map[string]any{"key": acc.Key, "bank": inst.Name, "nuban": acc.NUBAN, "name": acc.Name, "type": acc.Type, "owner": acc.Owner, "opened_at": ts(acc.OpenedAt)})
+}
