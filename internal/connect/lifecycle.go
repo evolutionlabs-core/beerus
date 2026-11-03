@@ -55,6 +55,7 @@ type BankStatus struct {
 
 type siteServer struct {
 	srv *http.Server
+	api *http.Server
 }
 
 func newStatus(b *config.Bank, done bool) *BankStatus {
@@ -309,7 +310,7 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 		if database != "" && b.Database == database {
 			return nil, invalid("database %q is already used by %s", database, b.ID)
 		}
-		usedNIP[b.NIPCode], usedNUBAN[b.NUBANCode], usedPort[b.Port] = true, true, true
+		usedNIP[b.NIPCode], usedNUBAN[b.NUBANCode], usedPort[b.Port], usedPort[b.APIPort] = true, true, true, true
 		if b.Port > maxPort {
 			maxPort = b.Port
 		}
@@ -369,6 +370,16 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 			return nil, invalid("no free port near %d for online banking", maxPort)
 		}
 	}
+	apiPort := 0
+	for p := port + 1; p < port+200; p++ {
+		if !usedPort[p] && p != port && portFree(p) {
+			apiPort = p
+			break
+		}
+	}
+	if apiPort == 0 {
+		return nil, invalid("no free port near %d for the bank API", port)
+	}
 	if database == "" {
 		database = config.DatabaseName(a.cfg.Dir, id)
 	} else if !databaseRe.MatchString(database) {
@@ -377,7 +388,7 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 	if err := a.postgresRoom(context.Background()); err != nil {
 		return nil, err
 	}
-	return &config.Bank{ID: id, Name: name, Type: typ, NIPCode: nip, NUBANCode: nuban, HistoryDays: days, Port: port, Database: database, SettlesThrough: req.SettlesThrough}, nil
+	return &config.Bank{ID: id, Name: name, Type: typ, NIPCode: nip, NUBANCode: nuban, HistoryDays: days, Port: port, APIPort: apiPort, Database: database, SettlesThrough: req.SettlesThrough}, nil
 }
 
 func (a *App) SetBankSuspended(id string, suspended bool) error {
@@ -462,6 +473,9 @@ func (a *App) provision(b *config.Bank) {
 		if err := a.cfg.Claim("database", b.Database, b.ID); err != nil {
 			return err
 		}
+		if err := a.cfg.Claim("port", strconv.Itoa(b.APIPort), b.ID); err != nil {
+			return err
+		}
 		return a.cfg.Claim("port", strconv.Itoa(b.Port), b.ID)
 	}) && a.step(st, 1, func() error {
 		a.mu.Lock()
@@ -523,6 +537,7 @@ func (a *App) startBankSite(b *config.Bank) error {
 	if !serving || running {
 		return nil
 	}
+	a.forgetOpenBanking(b.ID)
 	h := a.BankHandler(b.ID)
 	if h == nil {
 		return fmt.Errorf("no ledger for %s", b.ID)
@@ -531,12 +546,19 @@ func (a *App) startBankSite(b *config.Bank) error {
 	if err != nil {
 		return err
 	}
+	api, err := a.startBankAPI(b)
+	if err != nil {
+		for _, l := range ls {
+			l.Close()
+		}
+		return err
+	}
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
 	for _, l := range ls {
 		go func(l net.Listener) { _ = srv.Serve(l) }(l)
 	}
 	a.lifeMu.Lock()
-	a.sites[b.ID] = &siteServer{srv: srv}
+	a.sites[b.ID] = &siteServer{srv: srv, api: api}
 	a.lifeMu.Unlock()
 	return nil
 }
@@ -554,6 +576,9 @@ func (a *App) stopBankSites(ctx context.Context) {
 	sort.Strings(ids)
 	for _, id := range ids {
 		_ = sites[id].srv.Shutdown(ctx)
+		if sites[id].api != nil {
+			_ = sites[id].api.Shutdown(ctx)
+		}
 	}
 }
 
@@ -671,7 +696,7 @@ func (a *App) applyConfig(sum string) {
 		case cur.Suspended() != fb.Suspended():
 			suspend[fb.ID] = fb.Suspended()
 		}
-		if fb.Name != cur.Name || fb.Type != cur.Type || fb.NIPCode != cur.NIPCode || fb.NUBANCode != cur.NUBANCode || fb.HistoryDays != cur.HistoryDays || fb.Port != cur.Port || fb.Database != cur.Database || fb.SettlesThrough != cur.SettlesThrough {
+		if fb.Name != cur.Name || fb.Type != cur.Type || fb.NIPCode != cur.NIPCode || fb.NUBANCode != cur.NUBANCode || fb.HistoryDays != cur.HistoryDays || fb.Port != cur.Port || (fb.APIPort != 0 && fb.APIPort != cur.APIPort) || fb.Database != cur.Database || fb.SettlesThrough != cur.SettlesThrough {
 			a.warn("only the state of %s can be changed in beerus.yaml; other edits were undone", fb.ID)
 			rewrite = true
 		}
@@ -830,7 +855,7 @@ func CheckPorts(c *config.Config) error {
 	ports := []int{c.Connect.PartnerPort, c.Connect.WidgetPort, c.Connect.ControlPort}
 	for _, b := range c.Banks {
 		if !b.Closed() {
-			ports = append(ports, b.Port)
+			ports = append(ports, b.Port, b.APIPort)
 		}
 	}
 	_, err := os.Stat(c.Path("running"))

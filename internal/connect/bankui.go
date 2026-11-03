@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -27,6 +28,7 @@ type bankSession struct {
 	OTPExpires time.Time
 	Attempts   int
 	Expires    time.Time
+	Fresh      string
 }
 
 type bankAuth struct {
@@ -40,6 +42,7 @@ type bankSite struct {
 	*App
 	bank *config.Bank
 	auth *bankAuth
+	ob   *openbanking.Server
 }
 
 func (app *App) BankHandler(id string) http.Handler {
@@ -50,7 +53,7 @@ func (app *App) BankHandler(id string) http.Handler {
 	if b == nil || !have {
 		return nil
 	}
-	a := &bankSite{App: app, bank: b, auth: &bankAuth{sessions: map[string]*bankSession{}, failures: map[string]int{}, locked: map[string]time.Time{}}}
+	a := &bankSite{App: app, bank: b, ob: app.openBanking(id), auth: &bankAuth{sessions: map[string]*bankSession{}, failures: map[string]int{}, locked: map[string]time.Time{}}}
 	mux := http.NewServeMux()
 	mux.Handle("GET /assets/", assetHandler())
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/accounts", http.StatusSeeOther) })
@@ -67,6 +70,9 @@ func (app *App) BankHandler(id string) http.Handler {
 	mux.HandleFunc("POST /transfer/confirm", a.obTransferConfirm)
 	mux.HandleFunc("GET /apps", a.obApps)
 	mux.HandleFunc("POST /apps/{id}/revoke", a.obRevoke)
+	mux.HandleFunc("GET /authorize", a.obAuthorize)
+	mux.HandleFunc("GET /authorize/consent", a.obConsentPage)
+	mux.HandleFunc("POST /authorize/consent", a.obConsentSubmit)
 	return a.bankGuard(mux)
 }
 
@@ -230,6 +236,13 @@ func (a *bankSite) obVerifySubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Verified = true
 	s.OTP = ""
+	if ck, err := r.Cookie(oauthCookie); err == nil && ck.Value != "" {
+		if v, err := url.ParseQuery(ck.Value); err == nil {
+			s.Fresh = v.Get("request_uri")
+			http.Redirect(w, r, "/authorize/consent", http.StatusSeeOther)
+			return
+		}
+	}
 	http.Redirect(w, r, "/accounts", http.StatusSeeOther)
 }
 
@@ -475,13 +488,38 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		return
 	}
+	consents, _ := a.ob.Consents(r.Context(), s.Persona)
+	access, _ := a.ob.AccessHistory(r.Context(), s.Persona, 25)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	mine := map[string]string{}
+	byNUBAN := map[string]string{}
 	for _, acc := range a.world.AccountsAt(s.Persona, a.bank.ID) {
 		mine[acc.Key] = strings.Title(acc.Type) + " · " + acc.NUBAN
+		byNUBAN[acc.NUBAN] = mine[acc.Key]
 	}
 	rows := []appRow{}
+	for _, c := range consents {
+		var status string
+		switch c.Status {
+		case openbanking.Authorised:
+			status = "active"
+		case openbanking.Revoked:
+			status = "revoked"
+		case openbanking.Expired:
+			status = "expired"
+		default:
+			continue
+		}
+		row := appRow{ID: c.ID, Partner: c.PartnerName, Status: status, Since: c.AuthorisedAt, Until: c.ExpiresAt, LastAccess: c.LastUsedAt}
+		if row.Partner == "" {
+			row.Partner = c.ClientID
+		}
+		for _, n := range c.Accounts {
+			row.Accounts = append(row.Accounts, byNUBAN[n])
+		}
+		rows = append(rows, row)
+	}
 	for _, c := range a.st.Connections {
 		if c.PersonaID != s.Persona || c.Institution != a.bank.ID {
 			continue
@@ -517,6 +555,20 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 		}
 		history = append(history, accessRow{Partner: name, Account: label, At: e.At})
 	}
+	names := map[string]string{}
+	for _, c := range consents {
+		names[c.ID] = c.PartnerName
+		if c.PartnerName == "" {
+			names[c.ID] = c.ClientID
+		}
+	}
+	for _, e := range access {
+		history = append(history, accessRow{Partner: names[e.ConsentID], Account: byNUBAN[e.Account], At: e.At})
+	}
+	sort.SliceStable(history, func(i, j int) bool { return history[i].At.After(history[j].At) })
+	if len(history) > 25 {
+		history = history[:25]
+	}
 	a.bankRender(w, "bank_apps", http.StatusOK, s, roomPage{"Title": "Connected apps", "Nav": "apps", "Apps": rows, "History": history, "Revoked": r.URL.Query().Get("revoked") == "1", "Via": a.cfg.Connect.BrandName})
 }
 
@@ -526,6 +578,14 @@ func (a *bankSite) obRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
+	if strings.HasPrefix(id, "obc_") {
+		if err := a.ob.Revoke(r.Context(), id, s.Persona, "bank"); err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, "/apps?revoked=1", http.StatusSeeOther)
+		return
+	}
 	a.mu.Lock()
 	c := a.st.Connections[id]
 	owned := c != nil && c.PersonaID == s.Persona && c.Institution == a.bank.ID

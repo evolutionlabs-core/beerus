@@ -39,6 +39,11 @@ func openLedgerSource(ctx context.Context, cfg *config.Config, b *config.Bank, w
 	if err := cfg.Claim("port", fmt.Sprint(b.Port), b.ID); err != nil {
 		return nil, err
 	}
+	if b.APIPort != 0 {
+		if err := cfg.Claim("port", fmt.Sprint(b.APIPort), b.ID); err != nil {
+			return nil, err
+		}
+	}
 	st, err := store.Open(ctx, cfg.DatabaseURL, b.Database)
 	if err != nil {
 		return nil, err

@@ -56,6 +56,9 @@ func (a *App) ControlHandler() http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]int{"partners": n})
 	})
+	mux.HandleFunc("GET /registry/clients", a.ctlRegistryClients)
+	mux.HandleFunc("POST /registry/clients", a.ctlRegistryAdd)
+	mux.HandleFunc("GET /registry/consents", a.ctlConsentLedger)
 	mux.HandleFunc("GET /webhooks/deliveries", a.ctlDeliveries)
 	mux.HandleFunc("POST /webhooks/deliveries/{id}/replay", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.Replay(r.PathValue("id")); err != nil {
