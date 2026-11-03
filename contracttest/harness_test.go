@@ -106,6 +106,13 @@ func newStack(t *testing.T) *Stack {
 
 const bankHistoryDays = 90
 
+func bankStackPersonas(worldOnly bool) []string {
+	if worldOnly {
+		return nil
+	}
+	return []string{"adaeze", "tunde", "ngozi", "chidi"}
+}
+
 func newBankStack(t *testing.T) *Stack {
 	t.Helper()
 	return startStack(t, false)
@@ -158,7 +165,7 @@ func startStack(t *testing.T, worldOnly bool) *Stack {
 					t.Fatal(err)
 				}
 			}
-			app, err := connect.New(cfg, connect.Options{WorldOnly: worldOnly})
+			app, err := connect.New(cfg, connect.Options{WorldOnly: worldOnly, Personas: bankStackPersonas(worldOnly)})
 			if err != nil {
 				t.Fatal(err)
 			}

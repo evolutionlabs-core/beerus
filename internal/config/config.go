@@ -60,13 +60,18 @@ type Bank struct {
 	SettlesThrough string `yaml:"settles_through,omitempty"`
 	State          string `yaml:"state,omitempty"`
 	NetDebitCap    int64  `yaml:"net_debit_cap,omitempty"`
+	Collateral     int64  `yaml:"collateral,omitempty"`
 }
 
 func (b *Bank) Cap() int64 {
 	if b.NetDebitCap > 0 {
 		return b.NetDebitCap
 	}
-	return nip.DefaultCap(b.Type)
+	return nip.SimulatorDefaultCap(b.Type)
+}
+
+func (b *Bank) CapIsDefault() bool {
+	return b.NetDebitCap <= 0
 }
 
 func (b *Bank) Suspended() bool {
@@ -145,6 +150,23 @@ func (c *Config) buildCalendar() error {
 		return err
 	}
 	c.calendar = clock.NewCalendar(add, remove)
+	return nil
+}
+
+const DefaultNIPSessions = 4
+
+func (c *Config) Sessions() int {
+	if c.NIPSessions == 0 {
+		return DefaultNIPSessions
+	}
+	return c.NIPSessions
+}
+
+func (c *Config) validateSessions() error {
+	n := c.Sessions()
+	if n < 1 || 24*60%n != 0 {
+		return fmt.Errorf("beerus.yaml: nip_sessions must be a whole number of sessions that divides a day into whole minutes, such as 1, 2, 4, 6, 12 or 24, not %d", n)
+	}
 	return nil
 }
 
@@ -235,6 +257,9 @@ func Load(dir string) (*Config, error) {
 	}
 	if _, err := c.GenesisDate(); err != nil {
 		return nil, fmt.Errorf("beerus.yaml: genesis: %w", err)
+	}
+	if err := c.validateSessions(); err != nil {
+		return nil, err
 	}
 	if c.Pace <= 0 {
 		c.Pace = 1
