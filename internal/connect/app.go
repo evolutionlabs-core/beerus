@@ -22,38 +22,40 @@ import (
 )
 
 type App struct {
-	mu        sync.Mutex
-	cfg       *config.Config
-	clock     *clock.Clock
-	world     *world.World
-	st        *State
-	key       config.SigningKey
-	ctlToken  string
-	log       *slog.Logger
-	isDirty   bool
-	limiters  map[string]*rate.Limiter
-	idemLock  sync.Map
-	client    *http.Client
-	wake      chan struct{}
-	statePath string
-	sending   chan struct{}
-	pmu       sync.RWMutex
-	swept     time.Time
-	ledgers   []*ledgerSource
-	rtgs      *rtgs
-	rtgsTried time.Time
-	worldOnly bool
-	lifeMu    sync.Mutex
-	recMu     sync.Mutex
-	status    map[string]*BankStatus
-	sites     map[string]*siteServer
-	serving   bool
-	cfgSum    string
-	warnings  []string
-	watched   time.Time
-	driftAt   time.Time
-	driftDue  atomic.Bool
-	strikes   map[string]int
+	mu         sync.Mutex
+	cfg        *config.Config
+	clock      *clock.Clock
+	world      *world.World
+	st         *State
+	key        config.SigningKey
+	ctlToken   string
+	log        *slog.Logger
+	isDirty    bool
+	limiters   map[string]*rate.Limiter
+	idemLock   sync.Map
+	client     *http.Client
+	wake       chan struct{}
+	statePath  string
+	sending    chan struct{}
+	pmu        sync.RWMutex
+	swept      time.Time
+	ledgers    []*ledgerSource
+	rtgs       *rtgs
+	rtgsTried  time.Time
+	settling   bool
+	settleDone *sync.Cond
+	worldOnly  bool
+	lifeMu     sync.Mutex
+	recMu      sync.Mutex
+	status     map[string]*BankStatus
+	sites      map[string]*siteServer
+	serving    bool
+	cfgSum     string
+	warnings   []string
+	watched    time.Time
+	driftAt    time.Time
+	driftDue   atomic.Bool
+	strikes    map[string]int
 }
 
 type Options struct {
@@ -87,6 +89,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		statePath: cfg.Path("stub-state.json"),
 		sending:   make(chan struct{}, 4),
 	}
+	a.settleDone = sync.NewCond(&a.mu)
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
@@ -152,9 +155,11 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	if err := a.ensureRTGS(); err != nil {
 		return nil, err
 	}
+	a.mu.Lock()
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}
+	a.mu.Unlock()
 	a.initLifecycle()
 	for _, id := range purged {
 		a.warn("%s was purged and cannot come back; it was removed from beerus.yaml", id)

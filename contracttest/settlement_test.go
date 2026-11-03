@@ -3,6 +3,7 @@ package contracttest
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -125,4 +126,29 @@ func TestSettlementCheckDoesNotTrustTheBooks(t *testing.T) {
 	if !strings.Contains(strings.Join(c.Problems, ";"), "customers moved") {
 		t.Fatalf("problems: %v", c.Problems)
 	}
+}
+
+func TestSettlementRunsAlongsideTheApp(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newBankStack(t)
+	checkSettled(t, s.app)
+	s.advance("96h")
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			s.app.Step()
+		}()
+		go func() {
+			defer wg.Done()
+			if c, err := s.app.CheckSettlement(); err != nil || len(c.Problems) > 0 {
+				t.Errorf("settlement: %v %v", err, c.Problems)
+			}
+		}()
+	}
+	wg.Wait()
+	checkSettled(t, s.app)
 }

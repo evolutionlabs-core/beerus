@@ -521,6 +521,9 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	for a.settling {
+		a.settleDone.Wait()
+	}
 	taken := map[string]bool{}
 	for _, id := range f.Meta.Banks {
 		taken[id] = true
@@ -564,9 +567,6 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 		if err := a.rtgs.Restore(id); err != nil {
 			return "", err
 		}
-		if err := a.settleLocked(a.clock.Now()); err != nil {
-			a.log.Error("NIP settlement", "err", err)
-		}
 	}
 	for _, rec := range a.st.Accounts {
 		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed {
@@ -575,6 +575,9 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	}
 	a.dirty()
 	a.poke()
+	if err := a.settleLocked(a.clock.Now()); err != nil {
+		a.log.Error("NIP settlement", "err", err)
+	}
 	return st.WorldID, nil
 }
 
