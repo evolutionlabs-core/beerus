@@ -64,6 +64,10 @@ func (b *Bank) Suspended() bool {
 	return b.State == "suspended"
 }
 
+func (b *Bank) Closed() bool {
+	return b.State == "closed"
+}
+
 func (b *Bank) URL() string {
 	return fmt.Sprintf("http://%s.localhost:%d", b.ID, b.Port)
 }

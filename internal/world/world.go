@@ -98,11 +98,24 @@ type Outage struct {
 	To          time.Time `json:"to"`
 }
 
+type Closure struct {
+	Institution string    `json:"institution"`
+	At          time.Time `json:"at"`
+}
+
+type Move struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Amount int64  `json:"amount_minor"`
+	Payout bool   `json:"payout,omitempty"`
+}
+
 type Overrides struct {
 	Injected   []Line               `json:"injected"`
 	Mutations  []Mutation           `json:"mutations"`
 	Outages    []Outage             `json:"outages"`
 	Suspended  []Outage             `json:"suspended,omitempty"`
+	Closed     []Closure            `json:"closed,omitempty"`
 	Opened     []OpenedAccount      `json:"opened,omitempty"`
 	UnstableAt map[string]time.Time `json:"unstable_at"`
 }
@@ -353,6 +366,7 @@ func (w *World) Overrides() Overrides {
 	cp.Mutations = append(cp.Mutations, w.ov.Mutations...)
 	cp.Outages = append(cp.Outages, w.ov.Outages...)
 	cp.Suspended = append(cp.Suspended, w.ov.Suspended...)
+	cp.Closed = append(cp.Closed, w.ov.Closed...)
 	cp.Opened = append(cp.Opened, w.ov.Opened...)
 	for k, v := range w.ov.UnstableAt {
 		cp.UnstableAt[k] = v
@@ -390,6 +404,7 @@ func (w *World) AddInstitution(inst Institution) error {
 
 var (
 	ErrBankSuspended   = errors.New("bank suspended")
+	ErrBankClosed      = errors.New("bank closed")
 	ErrBankUnavailable = errors.New("bank unavailable")
 )
 
@@ -433,7 +448,94 @@ func (w *World) OutageEnd(institution string, at time.Time) (time.Time, bool) {
 	return w.outageAt(institution, at)
 }
 
+func (w *World) Closed(institution string, at time.Time) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closedAt(institution, at)
+}
+
+func (w *World) ClosedSince(institution string) (time.Time, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closedSinceLocked(institution)
+}
+
+func (w *World) closedAt(institution string, at time.Time) bool {
+	for _, c := range w.ov.Closed {
+		if c.Institution == institution && !at.Before(c.At) {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *World) Close(institution string, at time.Time, moves []Move) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	inst := w.institutions[institution]
+	if inst == nil {
+		return fmt.Errorf("unknown bank %q", institution)
+	}
+	if _, ok := w.closedSinceLocked(institution); ok {
+		return fmt.Errorf("%w: %s is already closed", ErrBankClosed, inst.Name)
+	}
+	lines := []Line{}
+	for i, m := range moves {
+		from, to := w.accounts[m.From], w.accounts[m.To]
+		if from == nil || to == nil || from.Institution != institution || to.Institution == institution || m.Amount <= 0 {
+			return fmt.Errorf("world: bad closing move %+v", m)
+		}
+		toInst := w.institutions[to.Institution]
+		owner := strings.ToUpper(w.personas[from.Owner].Name)
+		outText, inText := closingText(inst, toInst, owner, m.Payout)
+		out := Line{Key: fmt.Sprintf("close:%s:%d:out", institution, i), Account: from.Key, Amount: -m.Amount, BookedAt: at, Channel: "nip", Narration: outText,
+			Counterparty: &Counterparty{Name: owner, AccountNumber: to.NUBAN, BankCode: toInst.NIPCode, BankName: toInst.Name}}
+		in := Line{Key: fmt.Sprintf("close:%s:%d:in", institution, i), Account: to.Key, Amount: m.Amount, BookedAt: at, Channel: "nip", Narration: inText,
+			Counterparty: &Counterparty{Name: owner, AccountNumber: from.NUBAN, BankCode: inst.NIPCode, BankName: inst.Name}}
+		if m.Payout {
+			out.Counterparty.Name = "NIGERIA DEPOSIT INSURANCE CORPORATION"
+			in.Counterparty.Name = "NIGERIA DEPOSIT INSURANCE CORPORATION"
+		}
+		lines = append(lines, out, in)
+	}
+	w.ov.Closed = append(w.ov.Closed, Closure{Institution: institution, At: at})
+	w.reset()
+	return w.injectLocked(lines)
+}
+
+func closingText(from, to *Institution, owner string, payout bool) (string, string) {
+	out, in := "NIP/BANK CLOSURE/TO "+strings.ToUpper(to.Name)+"/"+owner, "NIP/BANK CLOSURE/FRM "+strings.ToUpper(from.Name)+"/"+owner
+	if payout {
+		out, in = "NDIC INSURED DEPOSIT PAYOUT", "NDIC PAYOUT/"+strings.ToUpper(from.Name)+" INSURED DEPOSIT"
+	}
+	if from.Style == "digital" {
+		out = "Bank closure transfer to " + to.Name
+		if payout {
+			out = "NDIC insured deposit payout"
+		}
+	}
+	if to.Style == "digital" {
+		in = "Transfer from " + from.Name + " (bank closure)"
+		if payout {
+			in = "NDIC payout for your " + from.Name + " deposit"
+		}
+	}
+	return out, in
+}
+
+func (w *World) closedSinceLocked(institution string) (time.Time, bool) {
+	for _, c := range w.ov.Closed {
+		if c.Institution == institution {
+			return c.At, true
+		}
+	}
+	return time.Time{}, false
+}
+
 func (w *World) suspendedAt(institution string, at time.Time) bool {
+	if w.closedAt(institution, at) {
+		return true
+	}
 	for _, s := range w.ov.Suspended {
 		if s.Institution == institution && !at.Before(s.From) && (s.To.IsZero() || at.Before(s.To)) {
 			return true
@@ -455,6 +557,9 @@ func (w *World) outageAt(institution string, at time.Time) (time.Time, bool) {
 func (w *World) OpenAccount(persona, institution, typ string, at time.Time) (Account, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closedAt(institution, at) {
+		return Account{}, fmt.Errorf("%w: the bank is closed, so it cannot open accounts", ErrBankClosed)
+	}
 	if w.suspendedAt(institution, at) {
 		return Account{}, fmt.Errorf("%w: the bank is suspended by the CBN, so it cannot open accounts", ErrBankSuspended)
 	}
@@ -550,6 +655,10 @@ func (w *World) AddMutation(m Mutation) {
 func (w *World) Inject(at time.Time, lines []Line) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.injectLocked(lines)
+}
+
+func (w *World) injectLocked(lines []Line) error {
 	for i := range lines {
 		l := lines[i]
 		if w.injectedSet[l.Key] {

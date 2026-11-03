@@ -63,6 +63,8 @@ func (a *App) roomHandler() http.Handler {
 	mux.HandleFunc("POST /ui/banks/{id}/accounts", a.roomOpenAccount)
 	mux.HandleFunc("POST /ui/banks/{id}/suspend", func(w http.ResponseWriter, r *http.Request) { a.roomSuspend(w, r, true) })
 	mux.HandleFunc("POST /ui/banks/{id}/resume", func(w http.ResponseWriter, r *http.Request) { a.roomSuspend(w, r, false) })
+	mux.HandleFunc("GET /ui/banks/{id}/close", a.roomCloseBank)
+	mux.HandleFunc("POST /ui/banks/{id}/close", a.roomCloseBank)
 	mux.HandleFunc("GET /ui/accounts/{key}", a.roomAccount)
 	mux.HandleFunc("GET /ui/accounts/{key}/lines/{line}", a.roomLine)
 	mux.HandleFunc("GET /ui/transfer", a.roomTransferForm)
@@ -83,7 +85,7 @@ func (a *App) roomRender(w http.ResponseWriter, r *http.Request, name string, st
 	data["Now"] = a.clock.Now()
 	data["Pace"] = st.Pace
 	data["Nav"] = nav
-	data["Banks"] = a.world.Institutions()
+	data["Banks"] = a.openInstitutions()
 	setPageHeaders(w)
 	w.WriteHeader(status)
 	if err := roomPages.ExecuteTemplate(w, name, data); err != nil {
@@ -611,7 +613,34 @@ func (a *App) roomBanks(w http.ResponseWriter, r *http.Request) {
 	for id, o := range owners {
 		byID[id].Customers = len(o)
 	}
-	a.roomRender(w, r, "banks", http.StatusOK, "banks", roomPage{"Title": "Banks", "Rows": rows, "CanCreate": len(a.cfg.Banks) > 0, "Warnings": a.BankWarnings()})
+	state := r.URL.Query().Get("state")
+	counts := map[string]int{}
+	shown := []*bankRow{}
+	for _, row := range rows {
+		if row.Phase == PhaseClosed {
+			row.URL = ""
+		}
+		counts[row.Phase]++
+		if state == "" || row.Phase == state {
+			shown = append(shown, row)
+		}
+	}
+	filters := []bankFilter{{Label: "All", Count: len(rows), On: state == ""}}
+	for _, p := range bankPhases {
+		if counts[p] > 0 || p == PhaseActive || p == PhaseSuspended || p == PhaseClosed {
+			filters = append(filters, bankFilter{State: p, Label: strings.ToUpper(p[:1]) + p[1:], Count: counts[p], On: state == p})
+		}
+	}
+	a.roomRender(w, r, "banks", http.StatusOK, "banks", roomPage{"Title": "Banks", "Rows": shown, "State": state, "Filters": filters, "CanCreate": len(a.cfg.Banks) > 0, "Warnings": a.BankWarnings()})
+}
+
+var bankPhases = []string{PhaseActive, PhaseSuspended, PhaseProvisioning, PhaseRepairing, PhaseClosed}
+
+type bankFilter struct {
+	State string
+	Label string
+	Count int
+	On    bool
 }
 
 func (a *App) orderedStatuses(m map[string]BankStatus) []BankStatus {
@@ -639,4 +668,52 @@ func (a *App) roomOpenAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/ui/accounts/"+url.PathEscape(acc.Key), http.StatusSeeOther)
+}
+
+func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	_ = r.ParseForm()
+	f := r.PostForm
+	status := http.StatusOK
+	msg := ""
+	if r.Method == http.MethodPost {
+		req := CloseRequest{Money: f.Get("money"), To: f.Get("to"), Customers: map[string]string{}}
+		for k, v := range f {
+			if p, ok := strings.CutPrefix(k, "c_"); ok && len(v) > 0 && v[0] != "" {
+				req.Customers[p] = v[0]
+			}
+		}
+		var err error
+		if strings.TrimSpace(f.Get("confirm")) != id {
+			err = invalid("type %s to confirm", id)
+		} else {
+			_, err = a.CloseBank(id, req)
+		}
+		if err == nil {
+			http.Redirect(w, r, "/ui/banks/"+url.PathEscape(id), http.StatusSeeOther)
+			return
+		}
+		if !errors.Is(err, errNotFound) {
+			status, msg = http.StatusUnprocessableEntity, strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": ")
+			msg = strings.ToUpper(msg[:1]) + msg[1:] + "."
+		}
+	}
+	imp, err := a.CloseImpact(id)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	inst, ok := a.world.Institution(id)
+	if err != nil || !ok {
+		a.roomNotFound(w, r)
+		return
+	}
+	targets := []world.Institution{}
+	for _, b := range a.openInstitutions() {
+		if b.ID != id && a.cfg.Bank(b.ID) != nil && !a.world.Down(b.ID, a.clock.Now()) {
+			targets = append(targets, b)
+		}
+	}
+	if f.Get("money") == "" {
+		f = url.Values{"money": {"transfer"}}
+	}
+	a.roomRender(w, r, "close_bank", status, "banks", roomPage{"Title": "Close " + inst.Name, "Bank": inst, "Impact": imp, "Targets": targets, "Form": f, "Error": msg})
 }

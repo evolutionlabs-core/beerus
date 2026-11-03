@@ -59,10 +59,18 @@ func (a *App) ControlHandler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "pending"})
 	})
 	mux.HandleFunc("GET /banks", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"data": a.BankStatuses(), "warnings": a.BankWarnings()})
+		data := []BankStatus{}
+		for _, st := range a.BankStatuses() {
+			if state := r.URL.Query().Get("state"); state == "" || st.Phase == state {
+				data = append(data, st)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": data, "warnings": a.BankWarnings()})
 	})
 	mux.HandleFunc("POST /banks", a.ctlCreateBank)
 	mux.HandleFunc("POST /banks/{id}/accounts", a.ctlOpenAccount)
+	mux.HandleFunc("GET /banks/{id}/close", a.ctlCloseImpact)
+	mux.HandleFunc("POST /banks/{id}/close", a.ctlCloseBank)
 	mux.HandleFunc("POST /banks/{id}/suspend", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, true) })
 	mux.HandleFunc("POST /banks/{id}/resume", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, false) })
 	mux.HandleFunc("GET /snapshots", a.ctlSnapshots)
@@ -329,6 +337,9 @@ func (a *App) ctlTransfer(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, world.ErrBankSuspended):
 		writeError(w, r, http.StatusConflict, "bank_suspended", transferMessage(err))
 		return
+	case errors.Is(err, world.ErrBankClosed):
+		writeError(w, r, http.StatusConflict, "bank_closed", transferMessage(err))
+		return
 	case errors.Is(err, world.ErrBankUnavailable):
 		writeError(w, r, http.StatusServiceUnavailable, "bank_unavailable", transferMessage(err))
 		return
@@ -477,6 +488,18 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	if f.Meta.Schema != schemaVersion || f.Meta.Seed != a.cfg.Seed {
 		return "", fmt.Errorf("snapshot %s was taken with schema %d and seed %d; this setup uses schema %d and seed %d", id, f.Meta.Schema, f.Meta.Seed, schemaVersion, a.cfg.Seed)
 	}
+	for _, b := range a.cfg.Banks {
+		if !b.Closed() {
+			continue
+		}
+		kept := false
+		for _, c := range f.State.World.Closed {
+			kept = kept || c.Institution == b.ID
+		}
+		if !kept {
+			return "", fmt.Errorf("snapshot %s was taken before %s closed, and closing a bank cannot be undone", id, b.Name)
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	taken := map[string]bool{}
@@ -580,7 +603,7 @@ func (a *App) ctlRestore(w http.ResponseWriter, r *http.Request) {
 
 func transferMessage(err error) string {
 	msg := err.Error()
-	for _, e := range []error{world.ErrBankSuspended, world.ErrBankUnavailable} {
+	for _, e := range []error{world.ErrBankSuspended, world.ErrBankClosed, world.ErrBankUnavailable} {
 		msg = strings.TrimPrefix(msg, e.Error()+": ")
 	}
 	if msg != "" {

@@ -140,7 +140,7 @@ func (g *dayGen) add(l *Line) {
 			}
 		}
 		for _, inst := range insts {
-			if g.w.suspendedAt(inst, start) {
+			if g.w.suspendedAt(inst, start) || g.w.closedAt(inst, l.BookedAt) {
 				g.skip = true
 			}
 			if end, down := g.w.outageAt(inst, start); down && end.Sub(start) > g.shift {

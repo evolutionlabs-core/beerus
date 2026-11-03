@@ -233,6 +233,12 @@ func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferRe
 }
 
 func (w *World) reachable(id, name string, at time.Time, rejected, kept string) error {
+	if w.Closed(id, at) {
+		if kept == "" {
+			return fmt.Errorf("%w: %s is closed, so its accounts are frozen", ErrBankClosed, name)
+		}
+		return fmt.Errorf("%w: %s is closed%s and nothing was debited", ErrBankClosed, name, rejected)
+	}
 	if w.Suspended(id, at) {
 		if kept == "" {
 			return fmt.Errorf("%w: %s is suspended by the CBN, so its accounts are frozen", ErrBankSuspended, name)

@@ -2,6 +2,7 @@ package world
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -180,4 +181,133 @@ func TestOpenAccountKeepsHistory(t *testing.T) {
 	if len(again.LinesFor(acc.Key, horizon)) != len(w.LinesFor(acc.Key, horizon)) {
 		t.Fatal("opened account is not rebuilt the same")
 	}
+}
+
+func TestCloseMovesMoneyAndFreezesTheBank(t *testing.T) {
+	plain, now := testWorld()
+	w, _ := testWorld()
+	accts := accountsAt(w, "bank-b")
+	if len(accts) < 3 {
+		t.Fatalf("bank-b has %d accounts", len(accts))
+	}
+	dest := map[string]string{}
+	for _, a := range w.Accounts() {
+		if a.Institution == "bank-a" {
+			dest[a.Owner] = a.Key
+		}
+	}
+	moved, paid, left := Account{}, Account{}, Account{}
+	for _, a := range accts {
+		bal, _ := w.LedgerAt(a.Key, now)
+		if bal <= 1000 {
+			continue
+		}
+		if dest[a.Owner] == "" {
+			opened, err := w.OpenAccount(a.Owner, "bank-a", "current", now)
+			if err != nil {
+				continue
+			}
+			dest[a.Owner] = opened.Key
+		}
+		switch {
+		case moved.Key == "":
+			moved = a
+		case paid.Key == "" && a.Owner != moved.Owner:
+			paid = a
+		case left.Key == "" && a.Owner != moved.Owner && a.Owner != paid.Owner:
+			left = a
+		}
+	}
+	if moved.Key == "" || paid.Key == "" || left.Key == "" {
+		t.Fatal("not enough funded bank-b customers with a bank-a account")
+	}
+	bal := func(w *World, k string, at time.Time) int64 {
+		v, err := w.LedgerAt(k, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	movedBal, paidBal, leftBal := bal(w, moved.Key, now), bal(w, paid.Key, now), bal(w, left.Key, now)
+	destBefore := bal(w, dest[moved.Owner], now)
+	half := paidBal / 2
+	err := w.Close("bank-b", now, []Move{{From: moved.Key, To: dest[moved.Owner], Amount: movedBal}, {From: paid.Key, To: dest[paid.Owner], Amount: half, Payout: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(30 * 24 * time.Hour)
+	if got := bal(w, moved.Key, later); got != 0 {
+		t.Fatalf("moved account keeps %d", got)
+	}
+	if got := bal(w, paid.Key, later); got != paidBal-half {
+		t.Fatalf("paid-out account has %d, want the uninsured %d", got, paidBal-half)
+	}
+	if got := bal(w, left.Key, later); got != leftBal {
+		t.Fatalf("left account has %d, want %d", got, leftBal)
+	}
+	if got := bal(w, dest[moved.Owner], now.Add(time.Second)); got != destBefore+movedBal {
+		t.Fatalf("destination has %d, want %d", got, destBefore+movedBal)
+	}
+	for _, a := range accts {
+		for _, l := range linesBetween(w, a.Key, now.Add(time.Second), later) {
+			t.Fatalf("%s moved after the close: %+v", a.Key, l)
+		}
+		for _, l := range w.LinesFor(a.Key, later) {
+			if l.BookedAt.After(now) && !strings.HasPrefix(l.Key, "close:") {
+				t.Fatalf("%s books a line after the close: %+v", a.Key, l)
+			}
+		}
+		before, want := w.LinesFor(a.Key, now.Add(-time.Second)), plain.LinesFor(a.Key, now.Add(-time.Second))
+		if len(before) != len(want) {
+			t.Fatalf("%s history changed", a.Key)
+		}
+	}
+	if w.Resume("bank-b", later); !w.Closed("bank-b", later) {
+		t.Fatal("resume reopened a closed bank")
+	}
+	if _, err := w.OpenAccount("tunde", "bank-b", "current", later); !errors.Is(err, ErrBankClosed) {
+		t.Fatalf("open account at a closed bank: %v", err)
+	}
+	if _, err := w.Transfer(later, TransferRequest{From: dest[moved.Owner], To: left.Key, Amount: 10000}); !errors.Is(err, ErrBankClosed) {
+		t.Fatalf("transfer into a closed bank: %v", err)
+	}
+	if err := w.Close("bank-b", later, nil); !errors.Is(err, ErrBankClosed) {
+		t.Fatalf("second close: %v", err)
+	}
+	again := New(w.Config(), w.Overrides())
+	if !again.Closed("bank-b", later) {
+		t.Fatal("closure is not rebuilt from overrides")
+	}
+	for _, a := range w.Accounts() {
+		if bal(w, a.Key, later) != bal(again, a.Key, later) {
+			t.Fatalf("%s is not rebuilt the same", a.Key)
+		}
+	}
+}
+
+func TestCloseReleasesPendingLines(t *testing.T) {
+	plain, now := testWorld()
+	for _, a := range accountsAt(plain, "bank-b") {
+		for _, l := range plain.LinesFor(a.Key, now) {
+			if !l.HasPending() || l.BookedAt.Sub(l.PendingAt) < time.Hour {
+				continue
+			}
+			at := l.PendingAt.Add(time.Minute)
+			w, _ := testWorld()
+			if err := w.Close("bank-b", at, nil); err != nil {
+				t.Fatal(err)
+			}
+			for _, x := range w.LinesFor(a.Key, now) {
+				if x.BookedAt.After(at) && !strings.HasPrefix(x.Key, "close:") {
+					t.Fatalf("line pending at the close still books afterwards: %+v", x)
+				}
+			}
+			before, _ := w.LedgerAt(a.Key, at)
+			if after, _ := w.LedgerAt(a.Key, now); after != before {
+				t.Fatalf("balance moved after the close: %d then %d", before, after)
+			}
+			return
+		}
+	}
+	t.Fatal("no pending line to close across")
 }

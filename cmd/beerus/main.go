@@ -10,8 +10,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -338,6 +340,14 @@ func cmdControl(cmd string, args []string) error {
 func cmdBank(c *ctl, args []string) (map[string]any, error) {
 	switch {
 	case len(args) == 0 || args[0] == "list":
+		fs := flag.NewFlagSet("bank list", flag.ExitOnError)
+		state := fs.String("state", "", "only banks in this state: active, suspended, provisioning, repairing or closed")
+		if len(args) > 0 {
+			fs.Parse(args[1:])
+		}
+		if *state != "" {
+			return c.do("GET", "/banks?state="+url.QueryEscape(*state), nil)
+		}
 		return c.do("GET", "/banks", nil)
 	case args[0] == "create":
 		fs := flag.NewFlagSet("bank create", flag.ExitOnError)
@@ -359,6 +369,33 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		return waitBank(c, fmt.Sprint(out["id"]))
 	case (args[0] == "suspend" || args[0] == "resume") && len(args) == 2:
 		return c.do("POST", "/banks/"+args[1]+"/"+args[0], nil)
+	case args[0] == "close" && len(args) >= 2:
+		fs := flag.NewFlagSet("bank close", flag.ExitOnError)
+		dry := fs.Bool("dry-run", false, "show what closing the bank would affect, without closing it")
+		money := fs.String("money", "transfer", "what happens to customers' money: transfer, payout or leave")
+		to := fs.String("to", "", "bank that receives transferred or paid-out money")
+		each := fs.String("customers", "", "choices for single customers, such as adaeze=payout,tunde=leave")
+		yes := fs.Bool("yes", false, "close the bank; this cannot be undone")
+		fs.Parse(args[2:])
+		if *dry || !*yes {
+			out, err := c.do("GET", "/banks/"+args[1]+"/close", nil)
+			if err == nil && !*dry {
+				out["next"] = "Nothing was closed. Run again with --yes to close the bank; closing cannot be undone."
+			}
+			return out, err
+		}
+		customers := map[string]string{}
+		for _, kv := range strings.Split(*each, ",") {
+			if kv == "" {
+				continue
+			}
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok {
+				return nil, errors.New("--customers takes persona=choice pairs, such as adaeze=payout")
+			}
+			customers[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+		return c.do("POST", "/banks/"+args[1]+"/close", map[string]any{"money": *money, "to": *to, "customers": customers})
 	case args[0] == "open-account" && len(args) >= 2:
 		fs := flag.NewFlagSet("bank open-account", flag.ExitOnError)
 		persona := fs.String("persona", "", "persona who opens the account")
@@ -369,7 +406,7 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		}
 		return c.do("POST", "/banks/"+args[1]+"/accounts", map[string]string{"persona": *persona, "type": *typ})
 	}
-	return nil, errors.New("usage: beerus bank [list | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID]")
+	return nil, errors.New("usage: beerus bank [list [--state STATE] | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID | close <id> --to BANK [--money transfer|payout|leave] --yes]")
 }
 
 func waitBank(c *ctl, id string) (map[string]any, error) {

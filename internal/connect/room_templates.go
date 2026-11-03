@@ -78,10 +78,11 @@ const roomTemplates = `
 <span class="grid size-11 place-items-center rounded-xl border border-line-strong bg-raised text-[17px] text-bank">{{initial .Bank.Name}}</span>
 <div><h1 class="text-[24px]">{{.Bank.Name}}</h1><p class="mt-1 text-[13.5px] text-muted">{{if eq .Bank.Type "digital"}}Digital bank{{else if eq .Bank.Type "microfinance"}}Microfinance bank{{else}}Commercial bank{{end}} · NIP code <span class="num">{{.Bank.NIPCode}}</span> · history kept {{.Bank.HistoryDays}} days</p></div>
 <div class="ml-auto flex items-center gap-2.5">
-{{if eq .Status.Phase "suspended"}}<span class="badge badge-warn">Suspended</span>{{else if .Down}}<span class="badge badge-bad">Unavailable</span>{{else}}<span class="badge badge-ok">Operational</span>{{end}}
-{{if .Managed}}{{if eq .Status.Phase "suspended"}}<form method="post" action="/ui/banks/{{.Bank.ID}}/resume"><button type="submit" class="btn btn-secondary btn-sm">Resume</button></form>{{else}}<form method="post" action="/ui/banks/{{.Bank.ID}}/suspend"><button type="submit" class="btn btn-secondary btn-sm">Suspend</button></form>{{end}}{{end}}
+{{if eq .Status.Phase "closed"}}<span class="badge">Closed</span>{{else if eq .Status.Phase "suspended"}}<span class="badge badge-warn">Suspended</span>{{else if .Down}}<span class="badge badge-bad">Unavailable</span>{{else}}<span class="badge badge-ok">Operational</span>{{end}}
+{{if and .Managed (ne .Status.Phase "closed")}}{{if eq .Status.Phase "suspended"}}<form method="post" action="/ui/banks/{{.Bank.ID}}/resume"><button type="submit" class="btn btn-secondary btn-sm">Resume</button></form>{{else}}<form method="post" action="/ui/banks/{{.Bank.ID}}/suspend"><button type="submit" class="btn btn-secondary btn-sm">Suspend</button></form>{{end}}<a href="/ui/banks/{{.Bank.ID}}/close" class="btn btn-danger btn-sm">Close bank</a>{{end}}
 </div>
 </div>
+{{if eq .Status.Phase "closed"}}<p class="mb-6 rounded-[10px] border border-line bg-panel px-4 py-3 text-[13px] text-muted">This bank is closed. Its online banking is off, its Connect consents were revoked, and nothing moves in its accounts again. Any balance left here is either money nobody claimed or the uninsured part of a deposit, which the customer can only recover from the bank's liquidation.</p>{{end}}
 {{if eq .Status.Phase "suspended"}}<p class="mb-6 rounded-[10px] border border-line bg-panel px-4 py-3 text-[13px] text-muted">The CBN has suspended this bank. Its accounts are frozen: transfers in and out are rejected, nothing new is posted, and connections report the bank as down until you resume it.</p>{{end}}
 <div class="grid grid-cols-2 gap-3 lg:grid-cols-3">
 {{template "stat" (list "Customer deposits" (naira .Total) "")}}
@@ -89,7 +90,7 @@ const roomTemplates = `
 </div>
 <section class="mt-8 rounded-2xl border border-line bg-panel">
 <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3.5"><h2 class="text-[15px]">Accounts</h2>
-{{if ne .Status.Phase "suspended"}}<form method="post" action="/ui/banks/{{.Bank.ID}}/accounts" class="flex flex-wrap items-center gap-2">
+{{if and (ne .Status.Phase "suspended") (ne .Status.Phase "closed")}}<form method="post" action="/ui/banks/{{.Bank.ID}}/accounts" class="flex flex-wrap items-center gap-2">
 <select name="persona" class="h-8 rounded-lg border border-line bg-raised px-2.5 text-[13px] text-ink" aria-label="Customer">{{range .Personas}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
 <select name="type" class="h-8 rounded-lg border border-line bg-raised px-2.5 text-[13px] text-ink" aria-label="Account type"><option value="current">Current</option><option value="savings">Savings</option></select>
 <button type="submit" class="btn btn-secondary btn-sm">Open account</button>
@@ -190,17 +191,19 @@ const roomTemplates = `
 {{define "banks"}}{{template "room_head" .}}
 <div class="mb-7 flex flex-wrap items-end justify-between gap-4"><div><h1 class="text-[24px]">Banks</h1><p class="mt-1.5 text-[13.5px] text-muted">Every bank in this setup, with its own ledger and online banking.</p></div>{{if .CanCreate}}<a href="/ui/banks/new" class="btn btn-primary btn-sm">New bank</a>{{end}}</div>
 {{range .Warnings}}<p class="mb-3 rounded-[10px] border border-warn/30 bg-warn/10 px-4 py-3 text-[13px] text-warn" role="alert">{{.}}</p>{{end}}
+<nav class="mb-4 flex flex-wrap gap-1.5" aria-label="Filter banks by state">{{range .Filters}}<a href="/ui/banks{{if .State}}?state={{.State}}{{end}}" class="flex h-8 items-center gap-2 rounded-lg border px-3 text-[13px] {{if .On}}border-line-strong bg-raised text-ink{{else}}border-transparent text-muted hover:bg-raised hover:text-ink{{end}}" {{if .On}}aria-current="page"{{end}}>{{.Label}}<span class="num text-faint">{{.Count}}</span></a>{{end}}</nav>
 <section class="rounded-2xl border border-line bg-panel">
 <div class="overflow-x-auto"><table class="w-full min-w-[760px] border-collapse text-[13.5px]">
 <thead><tr class="text-left text-[12px] whitespace-nowrap text-faint"><th class="border-b border-line px-5 py-2.5 font-normal">Bank</th><th class="border-b border-line px-5 py-2.5 font-normal">NIP code</th><th class="border-b border-line px-5 py-2.5 font-normal">State</th><th class="border-b border-line px-5 py-2.5 text-right font-normal">Customers</th><th class="border-b border-line px-5 py-2.5 text-right font-normal">Deposits</th><th class="border-b border-line px-5 py-2.5 font-normal">Online banking</th></tr></thead>
 <tbody>{{range .Rows}}<tr class="{{.ID}} group hover:bg-raised">
 <td class="border-b border-line px-5 py-3 group-last:border-b-0"><a href="/ui/banks/{{.ID}}" class="flex items-center gap-3"><span class="grid size-7 place-items-center rounded-lg border border-line-strong bg-raised text-[12px] text-bank">{{initial .Name}}</span><span><span class="block">{{.Name}}</span><span class="block text-[12.5px] text-muted">{{if eq .Type "digital"}}Digital{{else if eq .Type "microfinance"}}Microfinance{{else}}Commercial{{end}}</span></span></a></td>
 <td class="border-b border-line px-5 py-3 group-last:border-b-0"><span class="num text-muted">{{if .NIPCode}}{{.NIPCode}}{{else}}—{{end}}</span></td>
-<td class="border-b border-line px-5 py-3 group-last:border-b-0">{{if eq .Phase "provisioning"}}<span class="badge badge-warn">Provisioning</span>{{else if eq .Phase "repairing"}}<span class="badge badge-bad">Repairing</span>{{else if eq .Phase "suspended"}}<span class="badge badge-warn">Suspended</span>{{else}}<span class="badge badge-ok">Active</span>{{end}}</td>
+<td class="border-b border-line px-5 py-3 group-last:border-b-0">{{if eq .Phase "provisioning"}}<span class="badge badge-warn">Provisioning</span>{{else if eq .Phase "repairing"}}<span class="badge badge-bad">Repairing</span>{{else if eq .Phase "suspended"}}<span class="badge badge-warn">Suspended</span>{{else if eq .Phase "closed"}}<span class="badge">Closed</span>{{else}}<span class="badge badge-ok">Active</span>{{end}}</td>
 <td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><span class="num">{{.Customers}}</span></td>
 <td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><span class="num">{{naira .Deposits}}</span></td>
 <td class="border-b border-line px-5 py-3 group-last:border-b-0">{{if .URL}}<a href="{{.URL}}" target="_blank" rel="noopener" class="whitespace-nowrap text-muted hover:text-ink">{{trimScheme .URL}}</a>{{else}}<span class="text-faint">—</span>{{end}}</td>
 </tr>{{end}}</tbody></table></div>
+{{if not .Rows}}<p class="px-5 py-10 text-center text-muted">No {{.State}} banks.</p>{{end}}
 </section>
 {{template "room_foot" .}}{{end}}
 
@@ -212,6 +215,51 @@ const roomTemplates = `
 <div class="min-w-0"><p>{{.Name}}</p>{{if .Error}}<p class="mt-1 text-[12.5px] break-words text-neg">{{.Error}}</p>{{end}}</div>
 </li>{{end}}
 </ol>
+{{template "room_foot" .}}{{end}}
+
+{{define "close_bank"}}{{template "room_head" .}}
+<div class="{{.Bank.ID}} mb-7 flex items-center gap-4">
+<span class="grid size-11 place-items-center rounded-xl border border-line-strong bg-raised text-[17px] text-bank">{{initial .Bank.Name}}</span>
+<div><h1 class="text-[24px]">Close {{.Bank.Name}}</h1><p class="mt-1 text-[13.5px] text-muted">Closing is permanent. The bank's accounts freeze, its online banking goes off and every Connect consent at the bank is revoked.</p></div>
+</div>
+{{range .Impact.Blockers}}<p class="mb-3 rounded-[10px] border border-warn/30 bg-warn/10 px-4 py-3 text-[13px] text-warn" role="alert">This bank cannot be closed yet: {{.}}.</p>{{end}}
+{{if .Error}}<p class="mb-3 rounded-[10px] border border-neg/30 bg-neg/10 px-4 py-3 text-[13px] text-neg" role="alert">{{.Error}}</p>{{end}}
+<div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+{{template "stat" (list "Customers" (printf "%d" (len .Impact.Customers)) (printf "%d accounts" (len .Impact.Accounts)))}}
+{{template "stat" (list "Deposits" (naira .Impact.Deposits) "")}}
+{{template "stat" (list "Insured by NDIC" (naira .Impact.Insured) (printf "Up to %s per depositor" (naira .Impact.InsuredLimit)))}}
+{{template "stat" (list "Connect consents" (printf "%d" (len .Impact.Connections)) "Revoked when the bank closes")}}
+</div>
+<form method="post" action="/ui/banks/{{.Bank.ID}}/close" class="mt-8">
+<section class="rounded-2xl border border-line bg-panel p-6">
+<h2 class="text-[15px]">Customers' money</h2>
+<div class="mt-4 grid gap-4 sm:grid-cols-2">
+<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">For every customer</span><select name="money" class="field">
+<option value="transfer" {{if eq "transfer" (.Form.Get "money")}}selected{{end}}>Move the whole balance to another bank</option>
+<option value="payout" {{if eq "payout" (.Form.Get "money")}}selected{{end}}>NDIC pays the insured part; the rest is a claim</option>
+<option value="leave" {{if eq "leave" (.Form.Get "money")}}selected{{end}}>Leave it in the closed bank, unclaimed</option>
+</select></label>
+<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Receiving bank</span><select name="to" class="field">{{range .Targets}}<option value="{{.ID}}" {{if eq .ID ($.Form.Get "to")}}selected{{end}}>{{.Name}}</option>{{else}}<option value="">No other bank can receive money</option>{{end}}</select></label>
+</div>
+<p class="mt-3 text-[12.5px] text-faint">Customers without an account at the receiving bank get a new current account there.</p>
+</section>
+{{if .Impact.Customers}}<section class="mt-6 rounded-2xl border border-line bg-panel">
+<div class="border-b border-line px-5 py-3.5"><h2 class="text-[15px]">Each customer</h2></div>
+<div class="overflow-x-auto"><table class="w-full min-w-[640px] border-collapse text-[13.5px]">
+<thead><tr class="text-left text-[12px] text-faint"><th class="border-b border-line px-5 py-2.5 font-normal">Customer</th><th class="border-b border-line px-5 py-2.5 text-right font-normal">Deposits</th><th class="border-b border-line px-5 py-2.5 text-right font-normal">Insured</th><th class="border-b border-line px-5 py-2.5 text-right font-normal">Uninsured</th><th class="border-b border-line px-5 py-2.5 font-normal">Money</th></tr></thead>
+<tbody>{{range .Impact.Customers}}<tr class="group">
+<td class="border-b border-line px-5 py-3 group-last:border-b-0"><span class="block">{{.Name}}</span><span class="block text-[12.5px] text-muted">{{.Accounts}} account{{if ne .Accounts 1}}s{{end}}</span></td>
+<td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><span class="num">{{naira .Deposits}}</span></td>
+<td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><span class="num text-muted">{{naira .Insured}}</span></td>
+<td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><span class="num text-muted">{{naira .Uninsured}}</span></td>
+<td class="border-b border-line px-5 py-3 group-last:border-b-0">{{$c := $.Form.Get (printf "c_%s" .Persona)}}<select name="c_{{.Persona}}" class="h-8 rounded-lg border border-line bg-raised px-2.5 text-[13px] text-ink" aria-label="Money for {{.Name}}"><option value="">Same as above</option><option value="transfer" {{if eq $c "transfer"}}selected{{end}}>Move</option><option value="payout" {{if eq $c "payout"}}selected{{end}}>NDIC payout</option><option value="leave" {{if eq $c "leave"}}selected{{end}}>Leave</option></select></td>
+</tr>{{end}}</tbody></table></div>
+</section>{{end}}
+<section class="mt-6 rounded-2xl border border-line bg-panel p-6">
+<label class="block max-w-[360px]"><span class="mb-1.5 block text-[12.5px] text-muted">Type <span class="num text-ink">{{.Bank.ID}}</span> to confirm</span><input class="field font-mono" type="text" name="confirm" autocomplete="off" required></label>
+<div class="mt-6 flex items-center justify-end gap-2"><a href="/ui/banks/{{.Bank.ID}}" class="btn text-muted hover:text-ink">Cancel</a><button type="submit" class="btn btn-danger" {{if .Impact.Blockers}}disabled{{end}}>Close {{.Bank.Name}}</button></div>
+</section>
+</form>
 {{template "room_foot" .}}{{end}}
 
 {{define "new_bank"}}{{template "room_head" .}}
