@@ -114,6 +114,16 @@ func newStack(t *testing.T) *Stack {
 	return startStack(t, os.Getenv("BEERUS_CONTRACT_FULL") == "")
 }
 
+// newStackAllPersonas is newStack for tests that use personas beyond the four
+// the bank stack seeds for speed. The default world-only run already has them all.
+func newStackAllPersonas(t *testing.T) *Stack {
+	t.Helper()
+	if os.Getenv("BEERUS_CONTRACT_FULL") == "" {
+		return startStack(t, true)
+	}
+	return startStackWith(t, false, connect.Options{Personas: []string{}})
+}
+
 func newStubStack(t *testing.T) *Stack {
 	t.Helper()
 	if testingExternal() {
