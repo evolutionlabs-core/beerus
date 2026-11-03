@@ -77,7 +77,7 @@ func TestOnlineBanking(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
-	s := newStack(t)
+	s := newBankStack(t)
 	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-20))
 	current := fmt.Sprint(accountAt(t, conn, "current")["account_number"])
 	b := s.bankSignIn("adaeze")
@@ -150,7 +150,7 @@ func TestEveryDeclaredBankHasOnlineBanking(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
-	s := newStack(t)
+	s := newBankStack(t)
 	jar, _ := cookiejar.New(nil)
 	b := &bankBrowser{t: t, base: s.cfg.Bank("bank-b").URL(), c: &http.Client{Jar: jar, Timeout: 30 * time.Second}}
 	p := s.persona("ngozi")

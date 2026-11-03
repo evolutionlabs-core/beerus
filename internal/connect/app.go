@@ -38,6 +38,7 @@ type App struct {
 	sending   chan struct{}
 	swept     time.Time
 	ledgers   []*ledgerSource
+	worldOnly bool
 	lifeMu    sync.Mutex
 	recMu     sync.Mutex
 	status    map[string]*BankStatus
@@ -52,9 +53,10 @@ type App struct {
 }
 
 type Options struct {
-	Real   func() time.Time
-	Logger *slog.Logger
-	Client *http.Client
+	Real      func() time.Time
+	Logger    *slog.Logger
+	Client    *http.Client
+	WorldOnly bool
 }
 
 func New(cfg *config.Config, o Options) (*App, error) {
@@ -106,7 +108,11 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	a.st = st
 	a.clock = clock.New(st.Clock, o.Real)
 	a.world = world.New(a.worldConfig(genesis), st.World)
+	a.worldOnly = o.WorldOnly
 	for _, b := range cfg.Banks {
+		if a.worldOnly {
+			break
+		}
 		ls, err := openLedgerSource(context.Background(), cfg, b, a.world)
 		if err != nil {
 			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
