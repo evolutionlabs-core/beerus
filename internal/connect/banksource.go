@@ -134,7 +134,7 @@ func (s *ledgerSource) syncAccount(acc world.Account, at time.Time) error {
 		return err
 	}
 	for _, v := range vs {
-		l := bank.FeedLine{Key: v.Key, NUBAN: acc.NUBAN, Pending: v.Pending, Amount: v.Amount, At: v.At, BookedAt: v.BookedAt, ValueDate: v.ValueDate, Narration: v.Narration, SessionID: v.SessionID, BankRef: v.BankRef, Channel: v.Channel}
+		l := bank.FeedLine{Key: v.Key, NUBAN: acc.NUBAN, Pending: v.Pending, Amount: v.Amount, At: v.At, BookedAt: v.BookedAt, ValueDate: v.ValueDate, Narration: v.Narration, SessionID: v.SessionID, BankRef: v.BankRef, Channel: v.Channel, Category: v.Category}
 		if v.Counterparty != nil {
 			l.Counterparty = &bank.Counterparty{Name: v.Counterparty.Name, AccountNumber: v.Counterparty.AccountNumber, BankCode: v.Counterparty.BankCode, BankName: v.Counterparty.BankName}
 		}

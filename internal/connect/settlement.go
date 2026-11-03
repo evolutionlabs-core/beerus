@@ -3,6 +3,7 @@ package connect
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -12,15 +13,15 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
-	defaultNIPSessions = 4
-	cbnID              = "cbn"
-	cbnIssuance        = "ISSUANCE"
-	cbnCurrency        = "CURRENCY_IN_CIRCULATION"
-	outsideMember      = "OUTSIDE"
-	outsideFunding     = 10 * bank.GenesisSettlement
+	cbnID          = "cbn"
+	cbnIssuance    = "ISSUANCE"
+	cbnCurrency    = "CURRENCY_IN_CIRCULATION"
+	outsideMember  = "OUTSIDE"
+	outsideFunding = 10 * bank.GenesisSettlement
 )
 
 var reservedIDs = map[string]bool{cbnID: true, "nibss": true}
@@ -45,16 +46,23 @@ func (s schedule) next(after time.Time) time.Time {
 	}
 }
 
+func (s schedule) prev(at time.Time) time.Time {
+	d := clock.DateOf(at)
+	k := int(at.Sub(d.Start()) / s.every())
+	for {
+		if s.cal.IsBusinessDay(d) && k >= 1 {
+			return d.Start().Add(time.Duration(k) * s.every())
+		}
+		d, k = d.AddDays(-1), s.per
+	}
+}
+
 func (s schedule) key(cutoff time.Time) string {
 	return cutoff.In(clock.Lagos).Format("2006-01-02T15:04")
 }
 
 func (a *App) schedule() schedule {
-	n := a.cfg.NIPSessions
-	if n <= 0 || 24*time.Hour%time.Duration(n) != 0 {
-		n = defaultNIPSessions
-	}
-	return schedule{per: n, cal: a.cfg.Calendar()}
+	return schedule{per: a.cfg.Sessions(), cal: a.cfg.Calendar()}
 }
 
 func settlementAccount(member string) string {
@@ -88,7 +96,30 @@ func openRTGS(ctx context.Context, cfg *config.Config, genesis time.Time) (*rtgs
 	return r, nil
 }
 
+var errSessions = errors.New("nip_sessions changed")
+
+func (r *rtgs) keepSchedule() error {
+	pool := r.st.Pool
+	if _, err := pool.Exec(r.ctx, `CREATE TABLE IF NOT EXISTS nip_schedule (only_row boolean PRIMARY KEY DEFAULT true CHECK (only_row), sessions integer NOT NULL)`); err != nil {
+		return err
+	}
+	if _, err := pool.Exec(r.ctx, `INSERT INTO nip_schedule (sessions) VALUES ($1) ON CONFLICT DO NOTHING`, r.cfg.Sessions()); err != nil {
+		return err
+	}
+	var kept int
+	if err := pool.QueryRow(r.ctx, `SELECT sessions FROM nip_schedule`).Scan(&kept); err != nil {
+		return err
+	}
+	if kept != r.cfg.Sessions() {
+		return fmt.Errorf("%w: the CBN has settled with %d sessions a day, so nip_sessions must stay %d", errSessions, kept, kept)
+	}
+	return nil
+}
+
 func (r *rtgs) setup() error {
+	if err := r.keepSchedule(); err != nil {
+		return err
+	}
 	r.l = ledger.New(r.st.Pool, nil)
 	r.members = map[string]bool{}
 	r.through = time.Time{}
@@ -217,21 +248,63 @@ func (r *rtgs) Close() {
 	r.st.Close()
 }
 
-func (a *App) ensureRTGS() {
+func (a *App) ensureRTGS() error {
 	if a.rtgs != nil || a.worldOnly || len(a.cfg.Banks) == 0 || time.Since(a.rtgsTried) < 10*time.Second {
-		return
+		return nil
 	}
 	a.rtgsTried = time.Now()
 	r, err := openRTGS(context.Background(), a.cfg, a.world.Config().Genesis.Start())
+	if errors.Is(err, errSessions) {
+		return err
+	}
 	if err != nil {
 		a.log.Error("CBN ledger not ready; retrying", "err", err)
-		return
+		return nil
 	}
 	a.rtgs = r
+	return nil
 }
 
 type position struct {
 	outward, inward int64
+}
+
+func nipAmounts(v world.Presented) (int64, int64, error) {
+	return bank.NIPAmounts(bank.FeedLine{Key: v.Key, Pending: v.Pending, Amount: v.Amount, Channel: v.Channel, Category: v.Category})
+}
+
+func (a *App) accountsByBank() map[string][]world.Account {
+	out := map[string][]world.Account{}
+	for _, acc := range a.world.Accounts() {
+		out[acc.Institution] = append(out[acc.Institution], acc)
+	}
+	return out
+}
+
+func (a *App) openPositionLocked(bankID string, after, now time.Time) (position, error) {
+	sched := a.schedule()
+	since := sched.prev(after)
+	var open position
+	for _, acc := range a.world.Accounts() {
+		if acc.Institution != bankID {
+			continue
+		}
+		vs, err := a.world.Versions(acc.Key, since, now)
+		if err != nil {
+			return open, err
+		}
+		for _, v := range vs {
+			o, i, err := nipAmounts(v)
+			if err != nil {
+				return open, err
+			}
+			if (o != 0 || i != 0) && sched.next(v.BookedAt.Add(-time.Nanosecond)).After(after) {
+				open.outward += o
+				open.inward += i
+			}
+		}
+	}
+	return open, nil
 }
 
 func (a *App) settleLocked(now time.Time) error {
@@ -261,20 +334,21 @@ func (a *App) settleLocked(now time.Time) error {
 		return nil
 	}
 	sessions := map[time.Time]map[string]*position{}
+	accounts := a.accountsByBank()
 	for _, b := range a.cfg.Banks {
 		if err := a.rtgs.member(b.ID, bank.GenesisSettlement, bank.GenesisVault); err != nil {
 			return err
 		}
-		for _, acc := range a.world.Accounts() {
-			if acc.Institution != b.ID {
-				continue
-			}
+		for _, acc := range accounts[b.ID] {
 			vs, err := a.world.Versions(acc.Key, from, last)
 			if err != nil {
 				return err
 			}
 			for _, v := range vs {
-				out, in := bank.NIPAmounts(bank.FeedLine{Key: v.Key, Pending: v.Pending, Amount: v.Amount, Narration: v.Narration, Channel: v.Channel})
+				out, in, err := nipAmounts(v)
+				if err != nil {
+					return err
+				}
 				if out == 0 && in == 0 {
 					continue
 				}
@@ -373,7 +447,6 @@ func (a *App) CheckSettlement() (SettlementCheck, error) {
 	if err := a.settleLocked(now); err != nil {
 		return out, err
 	}
-	sched := a.schedule()
 	last := a.rtgs.through
 	out.SettledThrough = last
 	if err := a.rtgs.l.Pool().QueryRow(a.rtgs.ctx, `SELECT count(*) FROM journal_entries WHERE kind = 'session'`).Scan(&out.Sessions); err != nil {
@@ -386,21 +459,22 @@ func (a *App) CheckSettlement() (SettlementCheck, error) {
 	if c.TrialBalance != 0 || len(c.UnbalancedEntries) > 0 {
 		out.Problems = append(out.Problems, fmt.Sprintf("the CBN's books do not balance: %d", c.TrialBalance))
 	}
+	accounts := a.accountsByBank()
+	genesis := a.world.Config().Genesis.Start()
 	for _, l := range a.ledgers {
-		var open position
-		for _, acc := range a.world.Accounts() {
-			if acc.Institution != l.inst.ID {
-				continue
-			}
-			vs, err := a.world.Versions(acc.Key, last.Add(-24*time.Hour), now)
+		open, err := a.openPositionLocked(l.inst.ID, last, now)
+		if err != nil {
+			return out, err
+		}
+		var worldNet int64
+		for _, acc := range accounts[l.inst.ID] {
+			vs, err := a.world.Versions(acc.Key, genesis.Add(-time.Nanosecond), now)
 			if err != nil {
 				return out, err
 			}
 			for _, v := range vs {
-				o, i := bank.NIPAmounts(bank.FeedLine{Key: v.Key, Pending: v.Pending, Amount: v.Amount, Narration: v.Narration, Channel: v.Channel})
-				if sched.next(v.BookedAt.Add(-time.Nanosecond)).After(last) {
-					open.outward += o
-					open.inward += i
+				if !v.Pending && (v.Channel == "nip" || (v.Channel == "reversal" && v.Category == "")) {
+					worldNet += v.Amount
 				}
 			}
 		}
@@ -414,6 +488,13 @@ func (a *App) CheckSettlement() (SettlementCheck, error) {
 		}
 		if owe != open.outward || due != open.inward {
 			out.Problems = append(out.Problems, fmt.Sprintf("%s has NIP payable %d and receivable %d, but the unsettled transfers come to %d and %d", l.inst.ID, owe, due, open.outward, open.inward))
+		}
+		var settledNet int64
+		if err := l.b.L.Pool().QueryRow(l.ctx, `SELECT coalesce(sum(jl.amount), 0) FROM journal_lines jl JOIN journal_entries e ON e.id = jl.entry_id JOIN gl_accounts a ON a.id = jl.account_id WHERE e.kind = 'settlement' AND a.code = $1`, bank.Settlement).Scan(&settledNet); err != nil {
+			return out, err
+		}
+		if booked := settledNet + due - owe; booked != worldNet {
+			out.Problems = append(out.Problems, fmt.Sprintf("%s's customers moved %d through NIP, but its books settled and owe %d", l.inst.ID, worldNet, booked))
 		}
 		held, err := l.b.L.Balance(l.ctx, bank.Settlement)
 		if err != nil {

@@ -68,7 +68,7 @@ func TestIsBusinessDay(t *testing.T) {
 	}
 }
 
-var declared = map[int][3]string{
+var festival = map[int][3]string{
 	2023: {"2023-04-21", "2023-06-28", "2023-09-27"},
 	2024: {"2024-04-10", "2024-06-17", "2024-09-16"},
 	2025: {"2025-03-31", "2025-06-06", "2025-09-04"},
@@ -86,7 +86,7 @@ func hijriIn(y, month, day int) Date {
 
 func TestIslamicDatesAgainstDeclared(t *testing.T) {
 	exact, off, far := 0, 0, 0
-	for y, want := range declared {
+	for y, want := range festival {
 		got := [3]Date{hijriIn(y, 10, 1), hijriIn(y, 12, 10), hijriIn(y, 3, 12)}
 		for i, w := range want {
 			diff := DaysBetween(mustDate(t, w), got[i])
@@ -97,7 +97,7 @@ func TestIslamicDatesAgainstDeclared(t *testing.T) {
 				off++
 			default:
 				far++
-				t.Errorf("%d: %s computed %s, declared %s", y, []string{"Eid-el-Fitr", "Eid-el-Kabir", "Eid-el-Maulud"}[i], got[i], w)
+				t.Errorf("%d: %s computed %s, festival %s", y, []string{"Eid-el-Fitr", "Eid-el-Kabir", "Eid-el-Maulud"}[i], got[i], w)
 			}
 		}
 	}
@@ -161,5 +161,95 @@ func TestCalendarOverrides(t *testing.T) {
 	var none *Calendar
 	if !none.IsHoliday(base) {
 		t.Error("a nil calendar should follow the rules")
+	}
+}
+
+func holidaysOf(c *Calendar, y int, from, to time.Month) []string {
+	var out []string
+	for d := (Date{y, from, 1}); d.Y == y && d.M <= to; d = d.AddDays(1) {
+		if c.IsHoliday(d) {
+			out = append(out, d.String())
+		}
+	}
+	return out
+}
+
+func sameList(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestHolidayYears(t *testing.T) {
+	cases := map[int][]string{
+		2022: {"2022-01-03", "2022-04-15", "2022-04-18", "2022-05-02", "2022-05-03", "2022-06-13", "2022-07-11", "2022-07-12", "2022-10-03", "2022-10-10", "2022-12-26", "2022-12-27"},
+		2029: {"2029-01-01", "2029-02-15", "2029-02-16", "2029-03-30", "2029-04-02", "2029-04-24", "2029-04-25", "2029-05-01", "2029-06-12", "2029-07-24", "2029-10-01", "2029-12-25", "2029-12-26"},
+		2040: {"2040-01-02", "2040-03-26", "2040-03-30", "2040-04-02", "2040-05-01", "2040-06-12", "2040-10-01", "2040-10-08", "2040-10-09", "2040-12-17", "2040-12-18", "2040-12-25", "2040-12-26"},
+	}
+	for y, want := range cases {
+		if got := holidaysOf(NewCalendar(nil, nil), y, time.January, time.December); !sameList(got, want) {
+			t.Errorf("%d: got %v, want %v", y, got, want)
+		}
+	}
+}
+
+func TestWeekendQueue(t *testing.T) {
+	cases := []struct {
+		year       int
+		from, to   time.Month
+		want       []string
+		collisions string
+	}{
+		{2021, time.December, time.December, []string{"2021-12-27", "2021-12-28"}, "Christmas Saturday, Boxing Day Sunday"},
+		{2022, time.December, time.December, []string{"2022-12-26", "2022-12-27"}, "Christmas Sunday, Boxing Day Monday"},
+		{2033, time.January, time.January, []string{"2033-01-03", "2033-01-04", "2033-01-05"}, "New Year Saturday with Eid on Monday and Tuesday"},
+		{2039, time.December, time.December, []string{"2039-12-26", "2039-12-27", "2039-12-28", "2039-12-29"}, "Christmas Sunday with both Eid days behind Boxing Day"},
+		{2170, time.March, time.April, []string{"2170-03-30", "2170-04-02", "2170-04-03"}, "Eid on Good Friday queues behind Easter Monday"},
+	}
+	for _, c := range cases {
+		if got := holidaysOf(NewCalendar(nil, nil), c.year, c.from, c.to); !sameList(got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.collisions, got, c.want)
+		}
+	}
+}
+
+func TestDeclaredAdjustments(t *testing.T) {
+	p, err := newRules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.declared) < 5 {
+		t.Fatalf("only %d years of declared dates", len(p.declared))
+	}
+	c := NewCalendar(nil, nil)
+	for y, adj := range p.declared {
+		for _, d := range adj.add {
+			if !c.IsHoliday(d) {
+				t.Errorf("%d: declared %s is not a holiday", y, d)
+			}
+		}
+		for _, d := range adj.remove {
+			if c.IsHoliday(d) {
+				t.Errorf("%d: %s should not be a holiday", y, d)
+			}
+		}
+	}
+	if got, want := holidaysOf(c, 2023, time.April, time.April), []string{"2023-04-07", "2023-04-10", "2023-04-21", "2023-04-24"}; !sameList(got, want) {
+		t.Errorf("April 2023: got %v, want %v", got, want)
+	}
+	if got, want := holidaysOf(c, 2025, time.June, time.June), []string{"2025-06-06", "2025-06-09", "2025-06-12"}; !sameList(got, want) {
+		t.Errorf("June 2025: got %v, want %v", got, want)
+	}
+}
+
+func TestCalendarVersion(t *testing.T) {
+	if CalendarVersion() == "" {
+		t.Error("the calendar has no version")
 	}
 }
