@@ -13,8 +13,8 @@ import (
 var originalPersonas = []string{"adaeze", "tunde", "ngozi", "chidi"}
 
 var originalDigests = map[int64]string{
-	42:       "45743969ecaa29d799e04f0029be1734895fa55d1b6344a6bcb91976be572b15",
-	20261028: "ea1f2809fa32ca7ddd614d59af43076c9b03c5c7f7fd1fdd822eab31b641aad1",
+	42:       "94ad53226681578a2b42f704095a46dc84333211d1a8bf1f61453a5653cd7135",
+	20261028: "b5f355ae8f54f1e61a4818c43ba1f64f8d88afc6b0f720144598292d00d5c70b",
 }
 
 func originalsDigest(seed int64) (string, int) {
