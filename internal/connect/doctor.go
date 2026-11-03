@@ -35,6 +35,10 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		}
 	}
 	expected := map[string]bool{}
+	cbn := config.DatabaseName(c.Dir, cbnID)
+	if len(c.Banks) > 0 {
+		expected[cbn] = true
+	}
 	byID := map[string]*config.Bank{}
 	for _, b := range c.Banks {
 		expected[b.Database] = true
@@ -68,6 +72,9 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		}
 		for _, n := range copies {
 			expected[n] = true
+		}
+		if f.Meta.CBN {
+			expected[cbn+"_snap_"+snapID(f.Meta.ID)] = true
 		}
 	}
 	prefix := config.DatabaseName(c.Dir, "")

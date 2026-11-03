@@ -40,6 +40,8 @@ type App struct {
 	pmu       sync.RWMutex
 	swept     time.Time
 	ledgers   []*ledgerSource
+	rtgs      *rtgs
+	rtgsTried time.Time
 	worldOnly bool
 	lifeMu    sync.Mutex
 	recMu     sync.Mutex
@@ -109,14 +111,22 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New(st.Clock, o.Real)
-	purged := []string{}
+	purged, reserved := []string{}, []string{}
 	for _, p := range st.World.Purged {
 		if cfg.Bank(p.ID) != nil {
 			purged = append(purged, p.ID)
 			cfg.Banks = slices.DeleteFunc(cfg.Banks, func(b *config.Bank) bool { return b.ID == p.ID })
 		}
 	}
-	if len(purged) > 0 {
+	cbnDB := config.DatabaseName(cfg.Dir, cbnID)
+	cfg.Banks = slices.DeleteFunc(cfg.Banks, func(b *config.Bank) bool {
+		if reservedIDs[b.ID] || b.Database == cbnDB {
+			reserved = append(reserved, b.ID)
+			return true
+		}
+		return false
+	})
+	if len(purged)+len(reserved) > 0 {
 		if err := cfg.Save(); err != nil {
 			return nil, err
 		}
@@ -139,9 +149,16 @@ func New(cfg *config.Config, o Options) (*App, error) {
 			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
 		}
 	}
+	a.ensureRTGS()
+	if err := a.settleLocked(a.clock.Now()); err != nil {
+		a.log.Error("NIP settlement", "err", err)
+	}
 	a.initLifecycle()
 	for _, id := range purged {
 		a.warn("%s was purged and cannot come back; it was removed from beerus.yaml", id)
+	}
+	for _, id := range reserved {
+		a.warn("%s uses an id or database reserved for the CBN or NIBSS; it was removed from beerus.yaml", id)
 	}
 	return a, nil
 }
@@ -166,6 +183,9 @@ func (a *App) ledgerFor(institution string) *ledgerSource {
 func (a *App) closeLedgers() {
 	for _, l := range a.ledgers {
 		l.Close()
+	}
+	if a.rtgs != nil {
+		a.rtgs.Close()
 	}
 }
 
@@ -252,6 +272,10 @@ func (a *App) Step() {
 			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
 			a.driftDue.Store(true)
 		}
+	}
+	a.ensureRTGS()
+	if err := a.settleLocked(a.clock.Now()); err != nil {
+		a.log.Error("NIP settlement", "err", err)
 	}
 	a.runConnections()
 	a.runRefreshes()

@@ -124,6 +124,9 @@ func (a *App) PurgeBank(id string) (PurgeResult, error) {
 		for _, l := range others {
 			errs = append(errs, l.DropSnapshot(snap))
 		}
+		if a.rtgs != nil {
+			errs = append(errs, a.rtgs.DropSnapshot(snap))
+		}
 		if err := os.Remove(filepath.Join(a.snapshotDir(), snap+".json")); err != nil && !os.IsNotExist(err) {
 			errs = append(errs, err)
 		}

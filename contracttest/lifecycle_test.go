@@ -227,6 +227,7 @@ func TestBankRepairsDrift(t *testing.T) {
 	if _, err := db.Exec(context.Background(), "DROP DATABASE "+s.cfg.Bank("bank-b").Database+" WITH (FORCE)"); err != nil {
 		t.Fatal(err)
 	}
+	s.advance("24h")
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		st := s.waitPhase("bank-b", connect.PhaseActive, 30*time.Second)
@@ -252,6 +253,7 @@ func TestBankRepairsDrift(t *testing.T) {
 	if !strings.Contains(b.last, "verification code") {
 		t.Fatalf("sign-in after repair: %.300s", b.last)
 	}
+	checkSettled(t, s.app)
 }
 
 func TestBanksFollowConfigFile(t *testing.T) {
@@ -527,6 +529,7 @@ func TestCloseBank(t *testing.T) {
 	if v, _ := again.World().LedgerAt(bankA("adaeze").Key, s.app.Clock().Now()); v != balance(bankA("adaeze").Key) {
 		t.Fatalf("money moved again after restart: %d vs %d", v, balance(bankA("adaeze").Key))
 	}
+	checkSettled(t, s.app)
 }
 
 func TestClosePaysInsuredDeposits(t *testing.T) {
@@ -581,6 +584,7 @@ func TestClosePaysInsuredDeposits(t *testing.T) {
 	if imp := s.ctl("GET", "/banks/bank-a/close", nil); len(imp["blockers"].([]any)) != 0 {
 		t.Fatalf("bank-a still blocked after the microfinance bank closed: %v", imp["blockers"])
 	}
+	checkSettled(t, s.app)
 }
 
 func TestRestoreCannotReopenAClosedBank(t *testing.T) {

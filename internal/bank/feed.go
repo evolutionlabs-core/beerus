@@ -78,6 +78,19 @@ func counterpart(l FeedLine) string {
 	return NIPInward
 }
 
+func NIPAmounts(l FeedLine) (outward, inward int64) {
+	if l.Pending {
+		return 0, 0
+	}
+	switch counterpart(l) {
+	case NIPOutward:
+		return -l.Amount, 0
+	case NIPInward:
+		return 0, l.Amount
+	}
+	return 0, 0
+}
+
 func kindOf(l FeedLine) string {
 	switch l.Channel {
 	case "nip", "reversal", "charge", "internal":

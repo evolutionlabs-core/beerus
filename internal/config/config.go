@@ -91,6 +91,7 @@ type Config struct {
 	DatabaseURL string     `yaml:"database_url"`
 	Banks       []*Bank    `yaml:"banks,omitempty"`
 	MaxBanks    int        `yaml:"max_banks,omitempty"`
+	NIPSessions int        `yaml:"nip_sessions,omitempty"`
 	Seed        int64      `yaml:"seed"`
 	Genesis     string     `yaml:"genesis"`
 	Pace        float64    `yaml:"pace"`

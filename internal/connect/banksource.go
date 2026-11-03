@@ -17,14 +17,15 @@ import (
 )
 
 type ledgerSource struct {
-	mu    sync.Mutex
-	ctx   context.Context
-	st    *store.Store
-	b     *bank.Bank
-	w     *world.World
-	inst  world.Institution
-	marks map[string]time.Time
-	cfg   *config.Config
+	mu      sync.Mutex
+	ctx     context.Context
+	st      *store.Store
+	b       *bank.Bank
+	w       *world.World
+	inst    world.Institution
+	marks   map[string]time.Time
+	cfg     *config.Config
+	settled time.Time
 }
 
 func openLedgerSource(ctx context.Context, cfg *config.Config, b *config.Bank, w *world.World) (*ledgerSource, error) {
@@ -56,7 +57,7 @@ func (s *ledgerSource) setup() error {
 		return err
 	}
 	start := s.w.Config().Genesis.Start()
-	if err := s.b.Genesis(s.ctx, 1000000000000, 200000000000, start.Add(-time.Hour)); err != nil {
+	if err := s.b.Genesis(s.ctx, bank.GenesisSettlement, bank.GenesisVault, start.Add(-time.Hour)); err != nil {
 		return err
 	}
 	for _, acc := range s.w.Accounts() {
@@ -68,6 +69,7 @@ func (s *ledgerSource) setup() error {
 		}
 	}
 	s.marks = map[string]time.Time{}
+	s.settled = time.Time{}
 	return nil
 }
 
@@ -245,6 +247,7 @@ func (s *ledgerSource) Restore(id string, w *world.World) error {
 func (s *ledgerSource) reopen() error {
 	s.b = bank.New(ledger.New(s.st.Pool, nil), bank.Profile{ID: s.inst.ID, Name: s.inst.Name, NIPCode: s.inst.NIPCode, NUBANCode: s.inst.NUBANCode})
 	s.marks = map[string]time.Time{}
+	s.settled = time.Time{}
 	return nil
 }
 
@@ -254,6 +257,9 @@ func (a *App) DropBankDatabases() error {
 		if err := l.Drop(); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if a.rtgs != nil {
+		errs = append(errs, a.rtgs.Drop())
 	}
 	return errors.Join(errs...)
 }

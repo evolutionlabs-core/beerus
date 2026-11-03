@@ -427,6 +427,7 @@ type snapshotMeta struct {
 	Schema       int       `json:"schema"`
 	TakenReal    time.Time `json:"taken_real"`
 	Banks        []string  `json:"banks,omitempty"`
+	CBN          bool      `json:"cbn,omitempty"`
 }
 
 const schemaVersion = 1
@@ -469,6 +470,12 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 			return snapshotMeta{}, err
 		}
 		meta.Banks = append(meta.Banks, l.inst.ID)
+	}
+	if a.rtgs != nil {
+		if err := a.rtgs.Snapshot(meta.ID); err != nil {
+			return snapshotMeta{}, err
+		}
+		meta.CBN = true
 	}
 	if err := saveJSON(filepath.Join(a.snapshotDir(), meta.ID+".json"), snapshotFile{Meta: meta, State: cp}); err != nil {
 		return snapshotMeta{}, err
@@ -551,6 +558,14 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 		}
 		if err := l.Restore(id, a.world); err != nil {
 			return "", err
+		}
+	}
+	if a.rtgs != nil {
+		if err := a.rtgs.Restore(id); err != nil {
+			return "", err
+		}
+		if err := a.settleLocked(a.clock.Now()); err != nil {
+			a.log.Error("NIP settlement", "err", err)
 		}
 	}
 	for _, rec := range a.st.Accounts {

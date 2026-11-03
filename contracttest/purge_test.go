@@ -151,6 +151,8 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if ck, err := s.app.VerifyBank(); err != nil || !ck.Ledger.OK() || len(ck.Mismatches) > 0 {
 		t.Fatalf("bank ledgers after the purge: %v %v %v", err, ck.Ledger, ck.Mismatches)
 	}
+	s.advance("72h")
+	checkSettled(t, s.app)
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
