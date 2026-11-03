@@ -55,6 +55,10 @@ func TestScenarioFiles(t *testing.T) {
 	}
 	s.syncNow()
 
+	if people, _ := s.ctl("GET", "/personas", nil)["data"].([]any); len(people) != 20 {
+		t.Fatalf("%d personas", len(people))
+	}
+
 	if err := os.MkdirAll(s.cfg.Path("scenarios"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -103,15 +107,12 @@ func TestScenarioFiles(t *testing.T) {
 	if status != http.StatusBadRequest || !strings.Contains(errorMessage(out), "step 2") || !strings.Contains(errorMessage(out), "Steps 1 to 1 already ran") {
 		t.Errorf("failing step: HTTP %d %q", status, errorMessage(out))
 	}
-}
 
-func TestPersonaList(t *testing.T) {
-	s := newStack(t)
-	data, _ := s.ctl("GET", "/personas", nil)["data"].([]any)
-	if len(data) < 18 {
-		t.Fatalf("%d personas", len(data))
-	}
-	for _, id := range []string{"adaeze", "tunde", "ngozi", "chidi"} {
-		s.persona(id)
+	s.ctl("POST", "/banks/bank-b/close", map[string]any{"money": "leave"})
+	for _, step := range []string{"suspend", "resume"} {
+		status, out = s.runScenarioFile([]byte("name: x\nsteps:\n  - "+step+": bank-b\n"), "application/yaml", "")
+		if status != http.StatusBadRequest || !strings.Contains(errorMessage(out), "Bank B is closed; a closed bank cannot be suspended or resumed") {
+			t.Errorf("%s a closed bank: HTTP %d %q", step, status, errorMessage(out))
+		}
 	}
 }
