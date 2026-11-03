@@ -265,23 +265,23 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 	}
 	i := s.cfg.Issuer
 	writeJSON(w, http.StatusOK, map[string]any{
-		"bank_id":                               s.cfg.BankID,
-		"name":                                  s.cfg.BankName,
-		"issuer":                                i,
-		"authorization_endpoint":                s.cfg.AuthorizeURL,
-		"pushed_authorization_request_endpoint": i + "/par",
-		"require_pushed_authorization_requests": true,
-		"token_endpoint":                        i + "/token",
-		"accounts_endpoint":                     i + "/accounts",
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":      []string{"S256"},
-		"token_endpoint_auth_methods_supported": []string{"private_key_jwt"},
+		"bank_id":                                          s.cfg.BankID,
+		"name":                                             s.cfg.BankName,
+		"issuer":                                           i,
+		"authorization_endpoint":                           s.cfg.AuthorizeURL,
+		"pushed_authorization_request_endpoint":            i + "/par",
+		"require_pushed_authorization_requests":            true,
+		"token_endpoint":                                   i + "/token",
+		"accounts_endpoint":                                i + "/accounts",
+		"response_types_supported":                         []string{"code"},
+		"grant_types_supported":                            []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported":                 []string{"S256"},
+		"token_endpoint_auth_methods_supported":            []string{"private_key_jwt"},
 		"token_endpoint_auth_signing_alg_values_supported": []string{"ES256"},
 		"tls_client_certificate_bound_access_tokens":       true,
 		"authorization_response_iss_parameter_supported":   true,
-		"scopes_supported": Scopes,
-		"history_days":     s.cfg.HistoryDays,
+		"scopes_supported":                                 Scopes,
+		"history_days":                                     s.cfg.HistoryDays,
 	})
 }
 
