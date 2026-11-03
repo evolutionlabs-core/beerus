@@ -206,7 +206,15 @@ type ConsentRecord struct {
 	At        time.Time `json:"at"`
 }
 
+type PendingRevoke struct {
+	Bank      string    `json:"bank"`
+	ConsentID string    `json:"consent_id"`
+	Attempts  int       `json:"attempts"`
+	Next      time.Time `json:"next"`
+}
+
 type State struct {
+	Revokes        []PendingRevoke            `json:"revokes,omitempty"`
 	Registry       map[string]*RegistryClient `json:"registry"`
 	ConsentLedger  []ConsentRecord            `json:"consent_ledger"`
 	Access         []AccessEvent              `json:"access"`

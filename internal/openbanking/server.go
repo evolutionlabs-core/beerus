@@ -804,9 +804,10 @@ func (s *Server) refreshGrant(w http.ResponseWriter, r *http.Request, client *Cl
 func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clientID, thumb, parent, family string) {
 	now := s.cfg.Now()
 	access, refresh := random("oba_", 24), random("obr_", 24)
+	refreshUntil := now.AddDate(0, 0, s.cfg.RefreshDays)
 	for _, t := range []*Token{
 		{Hash: Hash(access), Kind: "access", ExpiresAt: now.Add(s.cfg.AccessLife)},
-		{Hash: Hash(refresh), Kind: "refresh", ExpiresAt: now.AddDate(0, 0, s.cfg.RefreshDays)},
+		{Hash: Hash(refresh), Kind: "refresh", ExpiresAt: refreshUntil},
 	} {
 		t.ConsentID, t.ClientID, t.Thumbprint, t.Family, t.Parent, t.CreatedAt = c.ID, clientID, thumb, family, parent, now
 		if err := s.cfg.Store.PutToken(r.Context(), t); err != nil {
@@ -815,12 +816,13 @@ func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clien
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"access_token":  access,
-		"token_type":    "Bearer",
-		"expires_in":    int(s.cfg.AccessLife.Seconds()),
-		"refresh_token": refresh,
-		"scope":         strings.Join(c.Scopes, " "),
-		"consent_id":    c.ID,
+		"access_token":       access,
+		"token_type":         "Bearer",
+		"expires_in":         int(s.cfg.AccessLife.Seconds()),
+		"refresh_token":      refresh,
+		"refresh_expires_in": int(refreshUntil.Sub(now).Seconds()),
+		"scope":              strings.Join(c.Scopes, " "),
+		"consent_id":         c.ID,
 	})
 }
 

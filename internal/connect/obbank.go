@@ -56,6 +56,12 @@ func (a *App) prepareOpenBanking() error {
 }
 
 func (a *App) ensureRegistry() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ensureRegistryLocked()
+}
+
+func (a *App) ensureRegistryLocked() error {
 	key, err := a.cfg.SigningKey()
 	if err != nil {
 		return err
@@ -72,8 +78,6 @@ func (a *App) ensureRegistry() error {
 		RedirectURIs: []string{a.cfg.WidgetURL() + "/bank/callback"},
 		RegisteredAt: a.clock.Real(),
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.regMu.Lock()
 	defer a.regMu.Unlock()
 	if old := a.st.Registry[c.ID]; old != nil {
@@ -231,7 +235,7 @@ func (l consentLedger) Record(e openbanking.ConsentEvent) {
 	l.a.regMu.Lock()
 	defer l.a.regMu.Unlock()
 	l.a.st.ConsentLedger = append(l.a.st.ConsentLedger, ConsentRecord{Seq: int64(len(l.a.st.ConsentLedger) + 1), ConsentID: e.ConsentID, Bank: e.Bank, ClientID: e.ClientID, PartnerID: e.PartnerID, Status: string(e.Status), Via: e.Via, At: e.At})
-	l.a.isDirty = true
+	l.a.isDirty.Store(true)
 }
 
 type bankData struct {

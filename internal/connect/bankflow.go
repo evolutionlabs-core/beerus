@@ -83,13 +83,13 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.st.LinkSessions[ls.ID] != ls || ls.Status != "at_bank" {
-		_ = a.bankRevoke(b, tok.ConsentID)
+		a.revokeOrQueue(b, tok.ConsentID)
 		a.vaultDrop(vid)
 		a.message(w, http.StatusConflict, "Already finished", "This sign-in is no longer needed. Go back to the app and start again.")
 		return
 	}
 	drop := func(code string) {
-		_ = a.bankRevoke(b, tok.ConsentID)
+		a.revokeOrQueue(b, tok.ConsentID)
 		a.vaultDrop(vid)
 		a.failSession(w, r, ls, code)
 	}

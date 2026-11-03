@@ -32,7 +32,7 @@ type App struct {
 	key        config.SigningKey
 	ctlToken   string
 	log        *slog.Logger
-	isDirty    bool
+	isDirty    atomic.Bool
 	limiters   map[string]*rate.Limiter
 	idemLock   sync.Map
 	client     *http.Client
@@ -258,7 +258,7 @@ func (a *App) Config() *config.Config {
 }
 
 func (a *App) dirty() {
-	a.isDirty = true
+	a.isDirty.Store(true)
 }
 
 func (a *App) poke() {
@@ -277,7 +277,7 @@ func (a *App) Save() error {
 func (a *App) saveLocked() error {
 	a.st.Clock = a.clock.State()
 	a.st.World = a.world.Overrides()
-	a.isDirty = false
+	a.isDirty.Store(false)
 	a.regMu.Lock()
 	defer a.regMu.Unlock()
 	return saveJSON(a.statePath, a.st)
@@ -309,7 +309,7 @@ func (a *App) Run(ctx context.Context) {
 			a.Step()
 		case <-save.C:
 			a.mu.Lock()
-			if a.isDirty {
+			if a.isDirty.Load() {
 				if err := a.saveLocked(); err != nil {
 					a.log.Error("save state", "err", err)
 				}
@@ -340,6 +340,7 @@ func (a *App) Step() {
 		a.log.Error("NIP settlement", "err", err)
 	}
 	a.refreshTokens()
+	a.retryRevokes()
 	a.runConnections()
 	a.runRefreshes()
 	a.sweep()

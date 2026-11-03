@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,6 +80,15 @@ type Stack struct {
 	validator  validator.Validator
 	vmu        sync.Mutex
 	violations []string
+	skew       atomic.Int64
+}
+
+func (s *Stack) realNow() time.Time {
+	return time.Now().Add(time.Duration(s.skew.Load()))
+}
+
+func (s *Stack) skewReal(by time.Duration) {
+	s.skew.Add(int64(by))
 }
 
 func specPath() string {
@@ -141,6 +151,9 @@ func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ..
 	opts.WorldOnly = worldOnly
 	opts.Personas = bankStackPersonas(worldOnly)
 	s := &Stack{t: t, worldOnly: worldOnly}
+	if opts.Real == nil {
+		opts.Real = s.realNow
+	}
 	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
 		cfg, err := config.Load(dir)
 		if err != nil {
