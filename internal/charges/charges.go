@@ -6,6 +6,13 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
+const (
+	CategoryFee   = "fee"
+	CategoryVAT   = "vat"
+	CategoryStamp = "stamp"
+	CategoryLevy  = "levy"
+)
+
 type Band struct {
 	UpTo int64
 	Fee  int64

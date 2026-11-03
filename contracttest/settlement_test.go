@@ -1,9 +1,16 @@
 package contracttest
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
+	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 )
 
@@ -73,5 +80,49 @@ func TestScenariosSettle(t *testing.T) {
 	s.advance("240h")
 	if c := checkSettled(t, s.app); ran == 0 || c.Sessions == 0 {
 		t.Fatalf("ran %d scenarios, %d sessions", ran, c.Sessions)
+	}
+}
+
+func TestNIPSessionsCannotChangeOnALiveSetup(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newBankStack(t)
+	checkSettled(t, s.app)
+	cfg, err := config.Load(s.cfg.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.NIPSessions = 12
+	if _, err := connect.New(cfg, connect.Options{}); err == nil || !strings.Contains(err.Error(), "nip_sessions must stay 4") {
+		t.Fatalf("starting with a different schedule: %v", err)
+	}
+}
+
+func TestSettlementCheckDoesNotTrustTheBooks(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newBankStack(t)
+	checkSettled(t, s.app)
+	st, err := store.Open(context.Background(), s.cfg.DatabaseURL, s.cfg.Bank("bank-a").Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	at := time.Now()
+	_, err = ledger.New(st.Pool, nil).Post(context.Background(), ledger.Entry{
+		Key: "tamper", Kind: "feed", PostingDate: clock.DateOf(at), PostedAt: at, Narration: "Tamper",
+		Lines: []ledger.Line{{Account: bank.Vault, Amount: 100}, {Account: bank.NIPInward, Amount: -100}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.app.CheckSettlement()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(c.Problems, ";"), "customers moved") {
+		t.Fatalf("problems: %v", c.Problems)
 	}
 }

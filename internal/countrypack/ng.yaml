@@ -1,0 +1,35 @@
+country: NG
+version: ng-1
+fixed:
+  - {name: New Year's Day, month: 1, day: 1}
+  - {name: Workers' Day, month: 5, day: 1}
+  - {name: Democracy Day, month: 6, day: 12}
+  - {name: Independence Day, month: 10, day: 1}
+  - {name: Christmas Day, month: 12, day: 25}
+  - {name: Boxing Day, month: 12, day: 26}
+easter:
+  - {name: Good Friday, offset: -2}
+  - {name: Easter Monday, offset: 1}
+islamic:
+  - {name: Eid-el-Fitr, month: 10, day: 1, days: 2}
+  - {name: Eid-el-Kabir, month: 12, day: 10, days: 2}
+  - {name: Eid-el-Maulud, month: 3, day: 12, days: 1}
+declared:
+  - year: 2022
+    remove: [2022-05-04]
+    source: Federal Ministry of Interior declared 2 and 3 May for Workers' Day and Eid-el-Fitr. https://nairametrics.com/2022/04/28/fg-declares-may-2-3-public-holidays-for-workers-day-sallah-celebrations/
+  - year: 2023
+    add: [2023-04-21, 2023-06-28]
+    remove: [2023-04-25, 2023-06-30]
+    source: Eid-el-Fitr declared as Friday 21 and Monday 24 April (https://nairametrics.com/2023/04/19/fg-declares-april-21-24th-public-holiday-to-mark-eid-el-fitr-celebrations/); Eid-el-Kabir declared as 28 and 29 June (https://www.channelstv.com/2023/06/26/breaking-fg-declares-wednesday-thursday-as-eid-el-kabir-holidays/amp/)
+  - year: 2024
+    add: [2024-04-09]
+    source: Eid-el-Fitr declared as 9 and 10 April, extended to 11 April. https://nairametrics.com/2024/04/09/fg-extends-public-holidays-for-eid-el-fitr-celebrations-to-thursday/
+  - year: 2025
+    add: [2025-06-06]
+    remove: [2025-06-10]
+    source: Eid-el-Kabir declared as Friday 6 and Monday 9 June. https://gazettengr.com/fg-declares-friday-monday-public-holidays-for-eid-el-kabir-celebrations/
+  - year: 2026
+    add: [2026-03-19, 2026-08-25]
+    remove: [2026-03-23, 2026-08-26]
+    source: Eid-el-Fitr declared as Thursday 19 and Friday 20 March (https://interior.gov.ng/?p=1661); Eid-el-Maulud declared as Tuesday 25 August (https://interior.gov.ng/?p=1773)

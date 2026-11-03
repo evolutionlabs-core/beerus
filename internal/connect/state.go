@@ -211,6 +211,7 @@ type State struct {
 	ConsentLedger  []ConsentRecord            `json:"consent_ledger"`
 	Access         []AccessEvent              `json:"access"`
 	WorldID        string                     `json:"world_id"`
+	Calendar       string                     `json:"calendar,omitempty"`
 	Clock          clock.State                `json:"clock"`
 	World          world.Overrides            `json:"world"`
 	LinkSessions   map[string]*LinkSession    `json:"link_sessions"`
@@ -238,7 +239,7 @@ func newState() *State {
 		Idem:           map[string]*IdemRec{},
 		Registry:       map[string]*RegistryClient{},
 		Vault:          map[string]*VaultEntry{},
-		NIP:            &NIPState{Transfers: map[string]*NIPTransfer{}, Keys: map[string]string{}},
+		NIP:            &NIPState{Failures: map[string]*NIPFailure{}},
 	}
 }
 

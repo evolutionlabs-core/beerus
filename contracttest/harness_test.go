@@ -119,6 +119,13 @@ func newBankStackWith(t *testing.T, edit func(*config.Config)) *Stack {
 
 const bankHistoryDays = 90
 
+func bankStackPersonas(worldOnly bool) []string {
+	if worldOnly {
+		return nil
+	}
+	return []string{"adaeze", "tunde", "ngozi", "chidi"}
+}
+
 func newBankStack(t *testing.T) *Stack {
 	t.Helper()
 	return startStack(t, false)
@@ -132,6 +139,9 @@ func startStack(t *testing.T, worldOnly bool, edits ...func(*config.Config)) *St
 func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ...func(*config.Config)) *Stack {
 	t.Helper()
 	opts.WorldOnly = worldOnly
+	if opts.Personas == nil {
+		opts.Personas = bankStackPersonas(worldOnly)
+	}
 	s := &Stack{t: t, worldOnly: worldOnly}
 	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
 		cfg, err := config.Load(dir)

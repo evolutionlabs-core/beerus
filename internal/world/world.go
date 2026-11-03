@@ -75,6 +75,7 @@ type Line struct {
 	SessionID     string        `json:"session_id"`
 	BankRef       string        `json:"bank_ref"`
 	Channel       string        `json:"channel"`
+	Category      string        `json:"category,omitempty"`
 	order         int
 	BalanceAfter  int64 `json:"-"`
 	PendingSeq    int64 `json:"-"`
@@ -127,6 +128,7 @@ type Config struct {
 	Genesis      clock.Date      `json:"genesis"`
 	Institutions []Institution   `json:"-"`
 	Calendar     *clock.Calendar `json:"-"`
+	Personas     []string        `json:"-"`
 }
 
 func DefaultInstitutions() []Institution {
@@ -199,21 +201,34 @@ func NUBAN(bankCode string, serial uint64) string {
 	return nubanCheck(bankCode, fmt.Sprintf("%09d", serial%1000000000))
 }
 
+func NormaliseBankCode(code string) (string, error) {
+	if strings.Trim(code, "0123456789") != "" {
+		return "", fmt.Errorf("bank code %q must be digits", code)
+	}
+	switch len(code) {
+	case 3:
+		return "000" + code, nil
+	case 5:
+		return "9" + code, nil
+	case 6:
+		return code, nil
+	}
+	return "", fmt.Errorf("bank code %q must have 3, 5 or 6 digits", code)
+}
+
 func ValidNUBAN(bankCode, nuban string) bool {
-	if len(nuban) != 10 {
+	if len(nuban) != 10 || strings.Trim(nuban, "0123456789") != "" {
 		return false
 	}
 	return nubanCheck(bankCode, nuban[:9]) == nuban
 }
 
 func nubanCheck(bankCode, serial string) string {
-	switch len(bankCode) {
-	case 3:
-		bankCode = "000" + bankCode
-	case 5:
-		bankCode = "9" + bankCode
+	code, err := NormaliseBankCode(bankCode)
+	if err != nil {
+		return ""
 	}
-	digits := bankCode + serial
+	digits := code + serial
 	w := []int{3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3}
 	sum := 0
 	for i, c := range digits {
@@ -254,6 +269,9 @@ func New(cfg Config, ov Overrides) *World {
 		w.purged[inst.ID] = true
 	}
 	add := func(p *Persona, accts ...Account) {
+		if len(cfg.Personas) > 0 && !slices.Contains(cfg.Personas, p.ID) {
+			return
+		}
 		for _, a := range accts {
 			inst, ok := w.institutions[a.Institution]
 			if !ok {

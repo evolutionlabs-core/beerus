@@ -42,6 +42,7 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /nip/settlement", a.ctlNIPSettlement)
 	mux.HandleFunc("GET /internal/replica", a.ctlReplica)
 	mux.HandleFunc("POST /internal/consents", a.ctlConsentRecord)
+	mux.HandleFunc("POST /banks/{id}/net-debit-cap", a.ctlNetDebitCap)
 	mux.HandleFunc("GET /nip/transfers/{session_id}", a.ctlNIPStatus)
 	mux.HandleFunc("GET /connections", a.ctlConnections)
 	mux.HandleFunc("POST /connections/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +155,33 @@ func parseDuration(s string) (time.Duration, error) {
 	return time.ParseDuration(s)
 }
 
+func (a *App) advanceClock(by, to string) error {
+	a.mu.Lock()
+	var err error
+	switch {
+	case by != "":
+		var d time.Duration
+		if d, err = parseDuration(by); err == nil {
+			_, err = a.clock.Advance(d)
+		}
+	case to != "":
+		var t time.Time
+		if t, err = time.Parse(time.RFC3339, to); err == nil {
+			_, err = a.clock.AdvanceTo(t)
+		}
+	default:
+		err = fmt.Errorf("by or to is required")
+	}
+	if err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	a.dirty()
+	a.mu.Unlock()
+	a.Step()
+	return nil
+}
+
 func (a *App) ctlAdvance(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		By string `json:"by"`
@@ -163,30 +191,10 @@ func (a *App) ctlAdvance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"by":"24h"}, {"by":"365d"} or {"to":"2027-01-01T09:00:00+01:00"}.`)
 		return
 	}
-	a.mu.Lock()
-	var err error
-	switch {
-	case body.By != "":
-		var d time.Duration
-		if d, err = parseDuration(body.By); err == nil {
-			_, err = a.clock.Advance(d)
-		}
-	case body.To != "":
-		var t time.Time
-		if t, err = time.Parse(time.RFC3339, body.To); err == nil {
-			_, err = a.clock.AdvanceTo(t)
-		}
-	default:
-		err = fmt.Errorf("by or to is required")
-	}
-	if err != nil {
-		a.mu.Unlock()
+	if err := a.advanceClock(body.By, body.To); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	a.dirty()
-	a.mu.Unlock()
-	a.Step()
 	a.ctlClock(w, r)
 }
 
@@ -218,58 +226,48 @@ func (a *App) resolveAccount(id string) (string, bool) {
 	return "", false
 }
 
-func (a *App) ctlScenario(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	var body struct {
-		AccountID    string `json:"account_id"`
-		Institution  string `json:"institution"`
-		Persona      string `json:"persona"`
-		ConnectionID string `json:"connection_id"`
-		Duration     string `json:"duration"`
-		Count        int    `json:"count"`
-	}
-	if r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object.")
-			return
-		}
-	}
+type scenarioParams struct {
+	AccountID    string `json:"account_id"`
+	Institution  string `json:"institution"`
+	Persona      string `json:"persona"`
+	ConnectionID string `json:"connection_id"`
+	Duration     string `json:"duration"`
+	Count        int    `json:"count"`
+}
+
+func (a *App) runScenario(name string, in scenarioParams) (string, error) {
 	switch name {
 	case "consent_revoked_mid_sync", "token_refresh_failed":
 		var err error
 		if name == "consent_revoked_mid_sync" {
-			err = a.ForceStatus(body.ConnectionID, "syncing", "")
+			err = a.ForceStatus(in.ConnectionID, "syncing", "")
 			if err == nil {
-				err = a.RevokeAtBank(body.ConnectionID)
+				err = a.RevokeAtBank(in.ConnectionID)
 			}
 		} else {
-			err = a.ForceStatus(body.ConnectionID, "reauth_required", "reauth_required")
+			err = a.ForceStatus(in.ConnectionID, "reauth_required", "reauth_required")
 		}
 		if err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "connection_id must name an existing connection.")
-			return
+			return "", errors.New("connection_id must name an existing connection.")
 		}
 		a.poke()
-		writeJSON(w, http.StatusOK, map[string]string{"scenario": name, "result": "connection " + body.ConnectionID + " updated"})
-		return
+		return "connection " + in.ConnectionID + " updated", nil
 	}
 	a.mu.Lock()
-	p := world.ScenarioParams{Institution: body.Institution, Persona: body.Persona, Count: body.Count}
-	if body.AccountID != "" {
-		key, ok := a.resolveAccount(body.AccountID)
+	p := world.ScenarioParams{Institution: in.Institution, Persona: in.Persona, Count: in.Count}
+	if in.AccountID != "" {
+		key, ok := a.resolveAccount(in.AccountID)
 		if !ok {
 			a.mu.Unlock()
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "account_id is not known.")
-			return
+			return "", errors.New("account_id is not known.")
 		}
 		p.Account = key
 	}
-	if body.Duration != "" {
-		d, err := parseDuration(body.Duration)
+	if in.Duration != "" {
+		d, err := parseDuration(in.Duration)
 		if err != nil {
 			a.mu.Unlock()
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "duration must look like 2h or 3d.")
-			return
+			return "", errors.New("duration must look like 2h or 3d.")
 		}
 		p.Duration = d
 	}
@@ -279,10 +277,26 @@ func (a *App) ctlScenario(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 	if err != nil {
+		return "", err
+	}
+	a.poke()
+	return result, nil
+}
+
+func (a *App) ctlScenario(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body scenarioParams
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object.")
+			return
+		}
+	}
+	result, err := a.runScenario(name, body)
+	if err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	a.poke()
 	writeJSON(w, http.StatusOK, map[string]string{"scenario": name, "result": result})
 }
 
@@ -317,75 +331,33 @@ func naira(minor int64) string {
 	return fmt.Sprintf("%s₦%s.%02d", sign, out, minor%100)
 }
 
+func (a *App) runTransfer(r *http.Request, body transferBody, key string) reply {
+	amount, err := parseNaira(body.Amount)
+	if err != nil {
+		return errReply(r, http.StatusBadRequest, "invalid_request", err.Error())
+	}
+	if body.SessionID != "" && !nip.ValidSessionID(body.SessionID) {
+		return errReply(r, http.StatusBadRequest, "invalid_request", "session_id must be 30 digits.")
+	}
+	if len(key) > 255 {
+		return errReply(r, http.StatusBadRequest, "invalid_request", "An Idempotency-Key must be 1 to 255 characters.")
+	}
+	a.mu.Lock()
+	rep := a.transferLocked(r, body, amount, key)
+	a.mu.Unlock()
+	if rep.synced {
+		a.SyncAll()
+	}
+	return rep
+}
+
 func (a *App) ctlTransfer(w http.ResponseWriter, r *http.Request) {
 	var body transferBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"...","to":"...","amount":"25000"}.`)
 		return
 	}
-	amount, err := parseNaira(body.Amount)
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if body.SessionID != "" && !nip.ValidSessionID(body.SessionID) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "session_id must be 30 digits.")
-		return
-	}
-	key := r.Header.Get("Idempotency-Key")
-	a.mu.Lock()
-	if a.replayLocked(w, r, key, body) {
-		a.mu.Unlock()
-		return
-	}
-	from, to := body.From, body.To
-	if k, ok := a.resolveAccount(from); ok {
-		from = k
-	}
-	if k, ok := a.resolveAccount(to); ok {
-		to = k
-	}
-	req := world.TransferRequest{From: from, To: to, ToBank: body.ToBank, ToName: body.ToName, Amount: amount, Narration: body.Narration, SessionID: body.SessionID}
-	if rt, rerr := a.world.Route(req); rerr == nil && rt.FromInst.ID != rt.ToInst.ID {
-		outcome := a.nipTransferLocked(w, r, body, req, rt, key)
-		a.mu.Unlock()
-		switch outcome {
-		case nip.Success:
-			a.SyncAll()
-			return
-		case nip.Failed:
-			return
-		}
-		a.mu.Lock()
-	}
-	res, err := a.world.Transfer(a.clock.Now(), req)
-	if err == nil {
-		a.dirty()
-	}
-	a.mu.Unlock()
-	switch {
-	case errors.Is(err, world.ErrBankSuspended):
-		writeError(w, r, http.StatusConflict, "bank_suspended", transferMessage(err))
-		return
-	case errors.Is(err, world.ErrBankClosed):
-		writeError(w, r, http.StatusConflict, "bank_closed", transferMessage(err))
-		return
-	case errors.Is(err, world.ErrBankUnavailable):
-		writeError(w, r, http.StatusServiceUnavailable, "bank_unavailable", transferMessage(err))
-		return
-	case err != nil:
-		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	a.SyncAll()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"result":        res,
-		"amount":        naira(res.Amount),
-		"charges":       naira(res.Fee + res.VAT + res.StampDuty),
-		"total_debit":   naira(res.TotalDebit),
-		"sender_after":  naira(res.BalanceAfter),
-		"business_time": ts(a.clock.Now()),
-	})
+	a.runTransfer(r, body, r.Header.Get("Idempotency-Key")).write(w)
 }
 
 func (a *App) ctlPersonas(w http.ResponseWriter, r *http.Request) {
