@@ -198,21 +198,34 @@ func NUBAN(bankCode string, serial uint64) string {
 	return nubanCheck(bankCode, fmt.Sprintf("%09d", serial%1000000000))
 }
 
+func NormaliseBankCode(code string) (string, error) {
+	if strings.Trim(code, "0123456789") != "" {
+		return "", fmt.Errorf("bank code %q must be digits", code)
+	}
+	switch len(code) {
+	case 3:
+		return "000" + code, nil
+	case 5:
+		return "9" + code, nil
+	case 6:
+		return code, nil
+	}
+	return "", fmt.Errorf("bank code %q must have 3, 5 or 6 digits", code)
+}
+
 func ValidNUBAN(bankCode, nuban string) bool {
-	if len(nuban) != 10 {
+	if len(nuban) != 10 || strings.Trim(nuban, "0123456789") != "" {
 		return false
 	}
 	return nubanCheck(bankCode, nuban[:9]) == nuban
 }
 
 func nubanCheck(bankCode, serial string) string {
-	switch len(bankCode) {
-	case 3:
-		bankCode = "000" + bankCode
-	case 5:
-		bankCode = "9" + bankCode
+	code, err := NormaliseBankCode(bankCode)
+	if err != nil {
+		return ""
 	}
-	digits := bankCode + serial
+	digits := code + serial
 	w := []int{3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3}
 	sum := 0
 	for i, c := range digits {

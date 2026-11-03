@@ -242,3 +242,22 @@ func TestNUBANSixDigitSeed(t *testing.T) {
 		}
 	}
 }
+
+func TestNormaliseBankCode(t *testing.T) {
+	for code, want := range map[string]string{"901": "000901", "000901": "000901", "50211": "950211", "950211": "950211"} {
+		if got, err := NormaliseBankCode(code); err != nil || got != want {
+			t.Errorf("%s: %q %v", code, got, err)
+		}
+	}
+	for _, code := range []string{"", "12", "1234", "1234567", "90a", "9 1"} {
+		if _, err := NormaliseBankCode(code); err == nil {
+			t.Errorf("%q was accepted", code)
+		}
+		if ValidNUBAN(code, "0123456789") {
+			t.Errorf("%q validated an account number", code)
+		}
+	}
+	if ValidNUBAN("901", "01234567x9") || ValidNUBAN("901", "012345678") {
+		t.Fatal("a malformed account number was accepted")
+	}
+}
