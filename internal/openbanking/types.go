@@ -17,7 +17,11 @@ const (
 	Rejected              Status = "Rejected"
 	Revoked               Status = "Revoked"
 	Expired               Status = "Expired"
+	Dormant               Status = "Dormant"
+	ReconsentRequired     Status = "ReconsentRequired"
 )
+
+var Scopes = []string{"accounts", "balances", "transactions"}
 
 var ErrNotFound = errors.New("not found")
 
@@ -30,6 +34,7 @@ type Consent struct {
 	Purpose         string
 	Customer        string
 	Status          Status
+	Scopes          []string
 	Accounts        []string
 	TransactionFrom clock.Date
 	Analytics       bool
@@ -74,6 +79,7 @@ type Store interface {
 	RecordAccess(ctx context.Context, a Access) error
 	MarkUsed(ctx context.Context, id string, at time.Time) error
 	AccessFor(ctx context.Context, customer string, limit int) ([]Access, error)
+	Awaiting(ctx context.Context) ([]*Consent, error)
 	Ping(ctx context.Context) error
 }
 

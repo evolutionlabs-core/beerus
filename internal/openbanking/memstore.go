@@ -22,6 +22,7 @@ func NewMemStore() *MemStore {
 func cloneConsent(c *Consent) *Consent {
 	x := *c
 	x.Accounts = slices.Clone(c.Accounts)
+	x.Scopes = slices.Clone(c.Scopes)
 	return &x
 }
 
@@ -154,4 +155,16 @@ func (m *MemStore) MarkUsed(_ context.Context, id string, at time.Time) error {
 		c.LastUsedAt = at
 	}
 	return nil
+}
+
+func (m *MemStore) Awaiting(context.Context) ([]*Consent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*Consent{}
+	for _, c := range m.consents {
+		if c.Status == AwaitingAuthorisation {
+			out = append(out, cloneConsent(c))
+		}
+	}
+	return out, nil
 }

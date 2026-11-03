@@ -1,5 +1,5 @@
 -- +goose Up
-CREATE TABLE ob_consents (
+CREATE TABLE IF NOT EXISTS ob_consents (
     id text PRIMARY KEY,
     client_id text NOT NULL,
     partner_id text NOT NULL DEFAULT '',
@@ -8,6 +8,7 @@ CREATE TABLE ob_consents (
     purpose text NOT NULL DEFAULT '',
     customer text NOT NULL DEFAULT '',
     status text NOT NULL,
+    scopes text[] NOT NULL DEFAULT '{}',
     accounts text[] NOT NULL DEFAULT '{}',
     transaction_from date,
     analytics boolean NOT NULL DEFAULT false,
@@ -18,9 +19,9 @@ CREATE TABLE ob_consents (
     revoked_via text NOT NULL DEFAULT ''
 );
 
-CREATE INDEX ob_consents_customer ON ob_consents (customer);
+CREATE INDEX IF NOT EXISTS ob_consents_customer ON ob_consents (customer);
 
-CREATE TABLE ob_tokens (
+CREATE TABLE IF NOT EXISTS ob_tokens (
     hash text PRIMARY KEY,
     kind text NOT NULL,
     consent_id text NOT NULL REFERENCES ob_consents (id),
@@ -34,18 +35,20 @@ CREATE TABLE ob_tokens (
     revoked_at timestamptz
 );
 
-CREATE INDEX ob_tokens_consent ON ob_tokens (consent_id);
-CREATE INDEX ob_tokens_parent ON ob_tokens (parent);
-CREATE INDEX ob_tokens_family ON ob_tokens (family);
+CREATE INDEX IF NOT EXISTS ob_tokens_consent ON ob_tokens (consent_id);
+CREATE INDEX IF NOT EXISTS ob_tokens_parent ON ob_tokens (parent);
+CREATE INDEX IF NOT EXISTS ob_tokens_family ON ob_tokens (family);
 
-CREATE TABLE ob_access (
+CREATE TABLE IF NOT EXISTS ob_access (
     id bigserial PRIMARY KEY,
     consent_id text NOT NULL REFERENCES ob_consents (id),
     account text NOT NULL,
     at timestamptz NOT NULL
 );
 
-CREATE INDEX ob_access_consent ON ob_access (consent_id, id);
+CREATE INDEX IF NOT EXISTS ob_access_consent ON ob_access (consent_id, id);
+
+ALTER TABLE ob_consents ADD COLUMN IF NOT EXISTS scopes text[] NOT NULL DEFAULT '{}';
 
 -- +goose Down
 DROP TABLE ob_access;

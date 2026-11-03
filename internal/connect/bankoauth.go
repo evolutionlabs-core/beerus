@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 )
@@ -62,6 +63,22 @@ func (a *bankSite) pendingRequest(w http.ResponseWriter, r *http.Request, s *ban
 	return req, v.Get("request_uri")
 }
 
+var scopeLabels = map[string]string{"accounts": "account details", "balances": "balances", "transactions": "transactions"}
+
+func sharedData(scopes []string) string {
+	labels := []string{}
+	for _, s := range scopes {
+		labels = append(labels, scopeLabels[s])
+	}
+	switch len(labels) {
+	case 0:
+		return "nothing"
+	case 1:
+		return labels[0]
+	}
+	return strings.Join(labels[:len(labels)-1], ", ") + " and " + labels[len(labels)-1]
+}
+
 type consentChoice struct {
 	ID, Name, Type string
 	Checked        bool
@@ -76,7 +93,7 @@ func (a *bankSite) consentPage(w http.ResponseWriter, s *bankSession, status int
 	c := req.Consent
 	data := roomPage{
 		"Title": "Share your account data", "Nav": "", "Req": req, "Client": req.Client, "Consent": c, "Choices": choices, "Error": errMsg,
-		"Start": c.TransactionFrom.String(), "Effective": req.Effective.String(), "Capped": req.Capped, "Until": req.Until.Format("2 January 2006"),
+		"Start": c.TransactionFrom.String(), "Effective": req.Effective.String(), "Capped": req.Capped, "Months": req.Months, "Until": req.Until.Format("2 January 2006"), "Shared": strings.ToUpper(sharedData(c.Scopes)[:1]) + sharedData(c.Scopes)[1:],
 		"Partner": c.PartnerName, "PartnerLegal": c.PartnerLegal, "Purpose": c.Purpose,
 	}
 	if c.PartnerName == "" {
@@ -86,7 +103,7 @@ func (a *bankSite) consentPage(w http.ResponseWriter, s *bankSession, status int
 		data["PartnerLegal"] = req.Client.LegalName
 	}
 	if c.Purpose == "" {
-		data["Purpose"] = "to read your account details, balances and transactions"
+		data["Purpose"] = "to read your " + sharedData(c.Scopes)
 	}
 	a.bankRender(w, "bank_consent", status, s, data)
 }

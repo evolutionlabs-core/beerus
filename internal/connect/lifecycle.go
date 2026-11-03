@@ -371,25 +371,15 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 			return nil, invalid("port %d is taken by another program", port)
 		}
 	} else {
-		for p := maxPort + 1; p < maxPort+60; p++ {
-			if !usedPort[p] && portFree(p) {
-				port = p
-				break
-			}
-		}
-		if port == 0 {
-			return nil, invalid("no free port near %d for online banking", maxPort)
+		var err error
+		if port, err = a.cfg.AllocatePort(maxPort+1, usedPort, portFree); err != nil {
+			return nil, invalid("online banking: %v", err)
 		}
 	}
-	apiPort := 0
-	for p := port + 1; p < port+200; p++ {
-		if !usedPort[p] && p != port && portFree(p) {
-			apiPort = p
-			break
-		}
-	}
-	if apiPort == 0 {
-		return nil, invalid("no free port near %d for the bank API", port)
+	usedPort[port] = true
+	apiPort, err := a.cfg.AllocatePort(port+a.cfg.APIPortOffset(), usedPort, portFree)
+	if err != nil {
+		return nil, invalid("bank API: %v", err)
 	}
 	if database == "" {
 		database = config.DatabaseName(a.cfg.Dir, id)

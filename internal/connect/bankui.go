@@ -508,6 +508,10 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 			status = "revoked"
 		case openbanking.Expired:
 			status = "expired"
+		case openbanking.Dormant:
+			status = "dormant"
+		case openbanking.ReconsentRequired:
+			status = "renew"
 		default:
 			continue
 		}

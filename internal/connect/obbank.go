@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -39,12 +40,11 @@ func (a *App) prepareOpenBanking() error {
 		if b.APIPort != 0 {
 			continue
 		}
-		for p := b.Port + 10; p < b.Port+300; p++ {
-			if !used[p] && portFree(p) {
-				b.APIPort, used[p], changed = p, true, true
-				break
-			}
+		p, err := a.cfg.AllocatePort(b.Port+a.cfg.APIPortOffset(), used, portFree)
+		if err != nil {
+			return fmt.Errorf("%s: bank API: %w", b.ID, err)
 		}
+		b.APIPort, used[p], changed = p, true, true
 	}
 	if changed {
 		if err := a.cfg.Save(); err != nil {
@@ -85,6 +85,10 @@ func (a *App) ensureRegistry() error {
 	return nil
 }
 
+func localHost(h string) bool {
+	return h == "localhost" || strings.HasSuffix(h, ".localhost") || net.ParseIP(h).IsLoopback()
+}
+
 var registryID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$`)
 
 type RegistryRequest struct {
@@ -121,8 +125,8 @@ func (a *App) AddRegistryClient(req RegistryRequest) (*RegistryClient, error) {
 	}
 	for _, u := range req.RedirectURIs {
 		p, err := url.Parse(u)
-		if err != nil || (p.Scheme != "https" && p.Scheme != "http") || p.Host == "" || p.Fragment != "" {
-			return nil, bad("%q is not an http or https URL", u)
+		if err != nil || p.Host == "" || p.Fragment != "" || (p.Scheme != "https" && !(p.Scheme == "http" && localHost(p.Hostname()))) {
+			return nil, bad("%q must be an https URL, or an http URL on localhost", u)
 		}
 	}
 	block, _ := pem.Decode([]byte(req.PublicKey))
@@ -264,14 +268,18 @@ func (d bankData) Account(nuban string) (openbanking.AccountInfo, error) {
 	return r.info(), err
 }
 
-func (d bankData) Balance(nuban string) (openbanking.Balance, error) {
+func (d bankData) lookup(nuban string) (accountRef, time.Time, error) {
 	d.a.mu.Lock()
 	defer d.a.mu.Unlock()
 	r, err := d.find(nuban)
+	return r, d.a.clock.Now(), err
+}
+
+func (d bankData) Balance(nuban string) (openbanking.Balance, error) {
+	r, now, err := d.lookup(nuban)
 	if err != nil {
 		return openbanking.Balance{}, err
 	}
-	now := d.a.clock.Now()
 	ledger, err := d.l.LedgerAt(r.Key, now)
 	if err != nil {
 		return openbanking.Balance{}, err
@@ -288,13 +296,11 @@ func (d bankData) Balance(nuban string) (openbanking.Balance, error) {
 }
 
 func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking.Txn, error) {
-	d.a.mu.Lock()
-	defer d.a.mu.Unlock()
-	r, err := d.find(nuban)
+	r, now, err := d.lookup(nuban)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := d.l.Fetch(r.Key, d.a.clock.Now(), from)
+	rows, err := d.l.Fetch(r.Key, now, from)
 	if err != nil {
 		return nil, err
 	}
@@ -332,18 +338,25 @@ func (a *App) openBanking(id string) *openbanking.Server {
 		return nil
 	}
 	s := openbanking.New(openbanking.Config{
-		BankID:       b.ID,
-		BankName:     b.Name,
-		Issuer:       b.APIURL(),
-		AuthorizeURL: b.URL() + "/authorize",
-		HistoryDays:  b.HistoryDays,
-		Store:        &openbanking.PGStore{Pool: func() *pgxpool.Pool { return l.st.Pool }},
-		Registry:     registryView{a},
-		Data:         bankData{a, b, l},
-		Ledger:       consentLedger{a},
-		Now:          a.clock.Real,
-		Biz:          a.clock.Now,
+		BankID:        b.ID,
+		BankName:      b.Name,
+		Issuer:        b.APIURL(),
+		AuthorizeURL:  b.URL() + "/authorize",
+		HistoryDays:   b.HistoryDays,
+		Store:         &openbanking.PGStore{Pool: func() *pgxpool.Pool { return l.st.Pool }},
+		Registry:      registryView{a},
+		Data:          bankData{a, b, l},
+		Ledger:        consentLedger{a},
+		Now:           a.clock.Real,
+		Biz:           a.clock.Now,
+		ConsentMonths: b.API.ConsentMonths,
+		RefreshDays:   b.API.RefreshDays,
+		DormantDays:   b.API.DormantDays,
+		AssertionLife: time.Duration(b.API.AssertionSeconds) * time.Second,
 	})
+	if err := s.Resume(context.Background()); err != nil {
+		a.log.Error("open banking requests not cleared", "bank", id, "err", err)
+	}
 	a.obs[id] = s
 	return s
 }
@@ -396,7 +409,7 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 		}
 		h.ServeHTTP(w, r)
 	})
-	srv := &http.Server{Handler: guarded, ReadHeaderTimeout: 10 * time.Second, ErrorLog: log.New(quietTLS{a}, "", 0)}
+	srv := &http.Server{Handler: guarded, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 2 * time.Minute, ErrorLog: log.New(quietTLS{a}, "", 0)}
 	for _, l := range ls {
 		go func(l net.Listener) { _ = srv.Serve(tls.NewListener(l, tc)) }(l)
 	}

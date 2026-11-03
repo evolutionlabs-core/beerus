@@ -53,19 +53,20 @@ type Connect struct {
 }
 
 type Bank struct {
-	ID             string `yaml:"id"`
-	Name           string `yaml:"name"`
-	Type           string `yaml:"type"`
-	NIPCode        string `yaml:"nip_code"`
-	NUBANCode      string `yaml:"nuban_code"`
-	HistoryDays    int    `yaml:"history_days"`
-	Port           int    `yaml:"port"`
-	APIPort        int    `yaml:"api_port,omitempty"`
-	Database       string `yaml:"database"`
-	SettlesThrough string `yaml:"settles_through,omitempty"`
-	State          string `yaml:"state,omitempty"`
-	NetDebitCap    int64  `yaml:"net_debit_cap,omitempty"`
-	Collateral     int64  `yaml:"collateral,omitempty"`
+	ID             string  `yaml:"id"`
+	Name           string  `yaml:"name"`
+	Type           string  `yaml:"type"`
+	NIPCode        string  `yaml:"nip_code"`
+	NUBANCode      string  `yaml:"nuban_code"`
+	HistoryDays    int     `yaml:"history_days"`
+	Port           int     `yaml:"port"`
+	APIPort        int     `yaml:"api_port,omitempty"`
+	Database       string  `yaml:"database"`
+	SettlesThrough string  `yaml:"settles_through,omitempty"`
+	State          string  `yaml:"state,omitempty"`
+	NetDebitCap    int64   `yaml:"net_debit_cap,omitempty"`
+	Collateral     int64   `yaml:"collateral,omitempty"`
+	API            BankAPI `yaml:"open_banking,omitempty"`
 }
 
 func (b *Bank) Cap() int64 {
@@ -120,6 +121,7 @@ type Config struct {
 	Banks       []*Bank    `yaml:"banks,omitempty"`
 	MaxBanks    int        `yaml:"max_banks,omitempty"`
 	NIPSessions int        `yaml:"nip_sessions,omitempty"`
+	Ports       Ports      `yaml:"ports,omitempty"`
 	Seed        int64      `yaml:"seed"`
 	Genesis     string     `yaml:"genesis"`
 	Pace        float64    `yaml:"pace"`
@@ -270,6 +272,9 @@ func Load(dir string) (*Config, error) {
 	if err := c.validateSessions(); err != nil {
 		return nil, err
 	}
+	if err := c.validatePorts(); err != nil {
+		return nil, err
+	}
 	if c.Pace <= 0 {
 		c.Pace = 1
 	}
@@ -361,7 +366,7 @@ func Init(dir string, o InitOptions) (*Config, error) {
 		c.Banks[0].Port, c.Banks[1].Port = o.BankPorts[0], o.BankPorts[1]
 	}
 	for i, b := range c.Banks {
-		b.APIPort = b.Port + 10
+		b.APIPort = b.Port + c.APIPortOffset()
 		if len(o.APIPorts) == len(c.Banks) {
 			b.APIPort = o.APIPorts[i]
 		}

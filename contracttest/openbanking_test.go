@@ -1,6 +1,7 @@
 package contracttest
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -20,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
@@ -99,6 +102,7 @@ func TestOpenBanking(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newBankStack(t)
+	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "before consent"})["id"].(string)
 	bank := s.cfg.Bank("bank-a")
 	o := &obClient{t: t, s: s, issuer: bank.APIURL(), c: s.mtls(s.cfg.Path("connect", "client.crt"), s.cfg.Path("connect", "client.key"))}
 
@@ -116,7 +120,7 @@ func TestOpenBanking(t *testing.T) {
 	push := func() map[string]any {
 		status, par := o.post("/par", url.Values{
 			"response_type": {"code"}, "client_id": {s.cfg.Connect.RegistryID}, "redirect_uri": {redirect}, "state": {"st-1"},
-			"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"},
+			"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"}, "scope": {"accounts balances transactions"},
 			"partner_id": {"balance"}, "partner_name": {"Balance"}, "partner_legal_name": {"Evolution Labs"},
 			"purpose": {"to keep your books in sync with this account"}, "transaction_from": {s.today().AddDays(-20).String()},
 		})
@@ -289,4 +293,73 @@ func TestOpenBanking(t *testing.T) {
 	if got := s.ctl("GET", "/registry/clients", nil)["data"].([]any); len(got) != 2 {
 		t.Fatalf("registry after add-client: %v", got)
 	}
+	insecure := map[string]any{"id": "OBR-T2-000003", "cert_cn": "other", "public_key_pem": string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub})), "redirect_uris": []string{"http://other.example.com/cb"}}
+	if _, err := s.ctlTry("POST", "/registry/clients", insecure); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Fatalf("http redirect on a public host: %v", err)
+	}
+	s.ctl("POST", "/snapshots/"+snap+"/restore", nil)
+	if got := s.ctl("GET", "/registry/clients", nil)["data"].([]any); len(got) != 2 {
+		t.Fatalf("registry after restore: %v", got)
+	}
+	kept := map[string]bool{}
+	for _, e := range s.ctl("GET", "/registry/consents?bank=bank-a", nil)["data"].([]any) {
+		m := e.(map[string]any)
+		kept[fmt.Sprint(m["status"])+"/"+fmt.Sprint(m["consent_id"])] = true
+	}
+	if !kept["Authorised/"+consentID] || !kept["Revoked/"+consentID] {
+		t.Fatalf("the consent ledger lost events to a restore: %v", kept)
+	}
+}
+
+func hasTable(t *testing.T, st *store.Store, name string) bool {
+	t.Helper()
+	var found *string
+	if err := st.Pool.QueryRow(context.Background(), `SELECT to_regclass($1)::text`, name).Scan(&found); err != nil {
+		t.Fatal(err)
+	}
+	return found != nil
+}
+
+func TestOpenBankingTablesStayOutOfTheCBN(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newBankStack(t)
+	ctx := context.Background()
+	for id, want := range map[string]bool{"bank-a": true, "cbn": false} {
+		name := s.cfg.Bank("bank-a").Database
+		if id == "cbn" {
+			name = config.DatabaseName(s.cfg.Dir, id)
+		}
+		st, err := store.Open(ctx, s.cfg.DatabaseURL, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := hasTable(t, st, "ob_consents"); got != want {
+			t.Errorf("%s has ob_consents: %v", id, got)
+		}
+		st.Close()
+	}
+	name := config.DatabaseName(s.cfg.Dir, "upgrade")
+	st, err := store.Open(ctx, s.cfg.DatabaseURL, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := st.Drop(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	if _, err := st.Pool.Exec(ctx, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (3, true)`); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	st, err = store.Open(ctx, s.cfg.DatabaseURL, name, openbanking.Migrate)
+	if err != nil {
+		t.Fatalf("a database that already ran the old shared migration: %v", err)
+	}
+	if !hasTable(t, st, "ob_consents") {
+		t.Fatal("no open banking tables after the upgrade")
+	}
+	st.Close()
 }

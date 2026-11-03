@@ -15,14 +15,14 @@ type PGStore struct {
 	Pool func() *pgxpool.Pool
 }
 
-const consentCols = `id, client_id, partner_id, partner_name, partner_legal, purpose, customer, status, accounts, transaction_from, analytics, created_at, authorised_at, expires_at, last_used_at, revoked_via`
+const consentCols = `id, client_id, partner_id, partner_name, partner_legal, purpose, customer, status, scopes, accounts, transaction_from, analytics, created_at, authorised_at, expires_at, last_used_at, revoked_via`
 
 func scanConsent(row pgx.Row) (*Consent, error) {
 	var c Consent
 	var status string
 	var from *time.Time
 	var auth, exp, used *time.Time
-	if err := row.Scan(&c.ID, &c.ClientID, &c.PartnerID, &c.PartnerName, &c.PartnerLegal, &c.Purpose, &c.Customer, &status, &c.Accounts, &from, &c.Analytics, &c.CreatedAt, &auth, &exp, &used, &c.RevokedVia); err != nil {
+	if err := row.Scan(&c.ID, &c.ClientID, &c.PartnerID, &c.PartnerName, &c.PartnerLegal, &c.Purpose, &c.Customer, &status, &c.Scopes, &c.Accounts, &from, &c.Analytics, &c.CreatedAt, &auth, &exp, &used, &c.RevokedVia); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -60,12 +60,15 @@ func nullDate(d clock.Date) *string {
 }
 
 func (s *PGStore) CreateConsent(ctx context.Context, c *Consent) error {
-	accounts := c.Accounts
+	accounts, scopes := c.Accounts, c.Scopes
 	if accounts == nil {
 		accounts = []string{}
 	}
-	_, err := s.Pool().Exec(ctx, `INSERT INTO ob_consents (`+consentCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::date,$11,$12,$13,$14,$15,$16)`,
-		c.ID, c.ClientID, c.PartnerID, c.PartnerName, c.PartnerLegal, c.Purpose, c.Customer, string(c.Status), accounts, nullDate(c.TransactionFrom), c.Analytics, c.CreatedAt, nullTime(c.AuthorisedAt), nullTime(c.ExpiresAt), nullTime(c.LastUsedAt), c.RevokedVia)
+	if scopes == nil {
+		scopes = []string{}
+	}
+	_, err := s.Pool().Exec(ctx, `INSERT INTO ob_consents (`+consentCols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::date,$12,$13,$14,$15,$16,$17)`,
+		c.ID, c.ClientID, c.PartnerID, c.PartnerName, c.PartnerLegal, c.Purpose, c.Customer, string(c.Status), scopes, accounts, nullDate(c.TransactionFrom), c.Analytics, c.CreatedAt, nullTime(c.AuthorisedAt), nullTime(c.ExpiresAt), nullTime(c.LastUsedAt), c.RevokedVia)
 	return err
 }
 
@@ -74,12 +77,15 @@ func (s *PGStore) Consent(ctx context.Context, id string) (*Consent, error) {
 }
 
 func (s *PGStore) UpdateConsent(ctx context.Context, c *Consent) error {
-	accounts := c.Accounts
+	accounts, scopes := c.Accounts, c.Scopes
 	if accounts == nil {
 		accounts = []string{}
 	}
-	tag, err := s.Pool().Exec(ctx, `UPDATE ob_consents SET customer=$2, status=$3, accounts=$4, transaction_from=$5::date, analytics=$6, authorised_at=$7, expires_at=$8, last_used_at=$9, revoked_via=$10 WHERE id=$1`,
-		c.ID, c.Customer, string(c.Status), accounts, nullDate(c.TransactionFrom), c.Analytics, nullTime(c.AuthorisedAt), nullTime(c.ExpiresAt), nullTime(c.LastUsedAt), c.RevokedVia)
+	if scopes == nil {
+		scopes = []string{}
+	}
+	tag, err := s.Pool().Exec(ctx, `UPDATE ob_consents SET customer=$2, status=$3, scopes=$4, accounts=$5, transaction_from=$6::date, analytics=$7, authorised_at=$8, expires_at=$9, last_used_at=$10, revoked_via=$11 WHERE id=$1`,
+		c.ID, c.Customer, string(c.Status), scopes, accounts, nullDate(c.TransactionFrom), c.Analytics, nullTime(c.AuthorisedAt), nullTime(c.ExpiresAt), nullTime(c.LastUsedAt), c.RevokedVia)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
@@ -176,4 +182,21 @@ func (s *PGStore) Ping(ctx context.Context) error {
 func (s *PGStore) MarkUsed(ctx context.Context, id string, at time.Time) error {
 	_, err := s.Pool().Exec(ctx, `UPDATE ob_consents SET last_used_at = $2 WHERE id = $1`, id, at)
 	return err
+}
+
+func (s *PGStore) Awaiting(ctx context.Context) ([]*Consent, error) {
+	rows, err := s.Pool().Query(ctx, `SELECT `+consentCols+` FROM ob_consents WHERE status = $1`, string(AwaitingAuthorisation))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Consent{}
+	for rows.Next() {
+		c, err := scanConsent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
