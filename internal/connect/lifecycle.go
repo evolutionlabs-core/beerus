@@ -22,6 +22,7 @@ const (
 	PhaseActive        = "active"
 	PhaseSuspended     = "suspended"
 	PhaseRepairing     = "repairing"
+	PhaseClosed        = "closed"
 	driftEvery         = 5 * time.Second
 	defaultMaxBanks    = 6
 	connectionsPerBank = 8
@@ -67,6 +68,9 @@ func newStatus(b *config.Bank, done bool) *BankStatus {
 			st.Phase = PhaseSuspended
 		}
 	}
+	if b.Closed() {
+		st.Phase = PhaseClosed
+	}
 	return st
 }
 
@@ -84,6 +88,9 @@ func (a *App) initLifecycle() {
 }
 
 func (a *App) alignSuspensionLocked(b *config.Bank) {
+	if b.Closed() {
+		return
+	}
 	now := a.clock.Now()
 	changed := false
 	if b.Suspended() {
@@ -318,8 +325,8 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 	}
 	if req.SettlesThrough != "" {
 		via := a.cfg.Bank(req.SettlesThrough)
-		if via == nil || via.Type == "microfinance" {
-			return nil, invalid("settles_through must name an existing commercial or digital bank")
+		if via == nil || via.Type == "microfinance" || via.Closed() {
+			return nil, invalid("settles_through must name an open commercial or digital bank")
 		}
 	} else if typ == "microfinance" {
 		for _, b := range a.cfg.Banks {
@@ -365,6 +372,10 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 	if b == nil || st == nil {
 		a.lifeMu.Unlock()
 		return errNotFound
+	}
+	if b.Closed() {
+		a.lifeMu.Unlock()
+		return invalid("%s is closed; a closed bank cannot be suspended or resumed", b.Name)
 	}
 	prev, prevPhase := b.State, st.Phase
 	b.State = ""
@@ -635,7 +646,14 @@ func (a *App) applyConfig(sum string) {
 			rewrite = true
 			continue
 		}
-		if cur.Suspended() != fb.Suspended() {
+		switch {
+		case cur.Closed() && !fb.Closed():
+			a.warn("%s is closed and cannot be reopened; the edit was undone", fb.ID)
+			rewrite = true
+		case !cur.Closed() && fb.Closed():
+			a.warn("%s cannot be closed from beerus.yaml; use beerus bank close, which decides what happens to its customers' money", fb.ID)
+			rewrite = true
+		case cur.Suspended() != fb.Suspended():
 			suspend[fb.ID] = fb.Suspended()
 		}
 		if fb.Name != cur.Name || fb.Type != cur.Type || fb.NIPCode != cur.NIPCode || fb.NUBANCode != cur.NUBANCode || fb.HistoryDays != cur.HistoryDays || fb.Port != cur.Port || fb.Database != cur.Database || fb.SettlesThrough != cur.SettlesThrough {

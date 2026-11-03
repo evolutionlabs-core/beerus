@@ -122,6 +122,10 @@
   @apply border-line bg-raised text-ink hover:bg-hover;
 }
 
+@utility btn-danger {
+  @apply border-neg/40 text-neg hover:bg-neg/10 disabled:cursor-not-allowed disabled:opacity-50;
+}
+
 @utility btn-sm {
   @apply h-7.5 px-3 text-[12.5px];
 }

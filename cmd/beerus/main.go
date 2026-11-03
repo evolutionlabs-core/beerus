@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -362,11 +363,30 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 	case args[0] == "close" && len(args) >= 2:
 		fs := flag.NewFlagSet("bank close", flag.ExitOnError)
 		dry := fs.Bool("dry-run", false, "show what closing the bank would affect, without closing it")
+		money := fs.String("money", "transfer", "what happens to customers' money: transfer, payout or leave")
+		to := fs.String("to", "", "bank that receives transferred or paid-out money")
+		each := fs.String("customers", "", "choices for single customers, such as adaeze=payout,tunde=leave")
+		yes := fs.Bool("yes", false, "close the bank; this cannot be undone")
 		fs.Parse(args[2:])
-		if !*dry {
-			return nil, errors.New("closing is not available yet; use beerus bank close <id> --dry-run to see the impact")
+		if *dry || !*yes {
+			out, err := c.do("GET", "/banks/"+args[1]+"/close", nil)
+			if err == nil && !*dry {
+				out["next"] = "Nothing was closed. Run again with --yes to close the bank; closing cannot be undone."
+			}
+			return out, err
 		}
-		return c.do("GET", "/banks/"+args[1]+"/close", nil)
+		customers := map[string]string{}
+		for _, kv := range strings.Split(*each, ",") {
+			if kv == "" {
+				continue
+			}
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok {
+				return nil, errors.New("--customers takes persona=choice pairs, such as adaeze=payout")
+			}
+			customers[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+		return c.do("POST", "/banks/"+args[1]+"/close", map[string]any{"money": *money, "to": *to, "customers": customers})
 	case args[0] == "open-account" && len(args) >= 2:
 		fs := flag.NewFlagSet("bank open-account", flag.ExitOnError)
 		persona := fs.String("persona", "", "persona who opens the account")
@@ -377,7 +397,7 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		}
 		return c.do("POST", "/banks/"+args[1]+"/accounts", map[string]string{"persona": *persona, "type": *typ})
 	}
-	return nil, errors.New("usage: beerus bank [list | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID | close <id> --dry-run]")
+	return nil, errors.New("usage: beerus bank [list | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID | close <id> --to BANK [--money transfer|payout|leave] --yes]")
 }
 
 func waitBank(c *ctl, id string) (map[string]any, error) {

@@ -205,7 +205,7 @@ func (a *App) widgetStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := a.base(ls, ws)
-	d["Institutions"] = a.world.Institutions()
+	d["Institutions"] = a.openInstitutions()
 	d["Title"] = "Connect your bank"
 	a.render(w, "choose", http.StatusOK, nil, d)
 }
@@ -219,7 +219,7 @@ func (a *App) widgetInstitution(w http.ResponseWriter, r *http.Request) {
 	}
 	if ls.Institution == "" {
 		id := r.PostForm.Get("institution")
-		if _, ok := a.world.Institution(id); !ok {
+		if _, ok := a.world.Institution(id); !ok || a.world.Closed(id, a.clock.Now()) {
 			a.message(w, http.StatusBadRequest, "Unknown bank", "Go back and choose a bank from the list.")
 			return
 		}
