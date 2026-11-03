@@ -126,6 +126,7 @@ type Config struct {
 	Seed         int64         `json:"seed"`
 	Genesis      clock.Date    `json:"genesis"`
 	Institutions []Institution `json:"-"`
+	Personas     []string      `json:"-"`
 }
 
 func DefaultInstitutions() []Institution {
@@ -255,6 +256,9 @@ func New(cfg Config, ov Overrides) *World {
 		w.purged[inst.ID] = true
 	}
 	add := func(p *Persona, accts ...Account) {
+		if len(cfg.Personas) > 0 && !slices.Contains(cfg.Personas, p.ID) {
+			return
+		}
 		for _, a := range accts {
 			inst, ok := w.institutions[a.Institution]
 			if !ok {
