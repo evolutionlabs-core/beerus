@@ -75,6 +75,7 @@ type Line struct {
 	SessionID     string        `json:"session_id"`
 	BankRef       string        `json:"bank_ref"`
 	Channel       string        `json:"channel"`
+	Category      string        `json:"category,omitempty"`
 	order         int
 	BalanceAfter  int64 `json:"-"`
 	PendingSeq    int64 `json:"-"`

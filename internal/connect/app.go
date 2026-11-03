@@ -152,7 +152,9 @@ func New(cfg *config.Config, o Options) (*App, error) {
 			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
 		}
 	}
-	a.ensureRTGS()
+	if err := a.ensureRTGS(); err != nil {
+		return nil, err
+	}
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}
@@ -276,7 +278,9 @@ func (a *App) Step() {
 			a.driftDue.Store(true)
 		}
 	}
-	a.ensureRTGS()
+	if err := a.ensureRTGS(); err != nil {
+		a.log.Error("CBN ledger", "err", err)
+	}
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}

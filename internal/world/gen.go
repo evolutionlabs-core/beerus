@@ -344,7 +344,7 @@ func (g *dayGen) inflow(a *Account, amt int64, kind string) {
 	}
 	g.add(&Line{Key: g.key("in"), Account: a.Key, Amount: amt, BookedAt: t, Narration: narr, Counterparty: cp, SessionID: sid, BankRef: ref, Channel: "nip"})
 	if levy := EMTL(amt, g.d); levy > 0 && kind != "salary" {
-		g.add(&Line{Key: g.key("emtl"), Account: a.Key, Amount: -levy, BookedAt: t.Add(time.Second), Narration: g.narr(inst, "emtl", sid[len(sid)-12:]), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge"})
+		g.add(&Line{Key: g.key("emtl"), Account: a.Key, Amount: -levy, BookedAt: t.Add(time.Second), Narration: g.narr(inst, "emtl", sid[len(sid)-12:]), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryLevy})
 	}
 }
 
@@ -373,10 +373,10 @@ func (g *dayGen) debitWithCharges(a *Account, amt int64, cp *Counterparty, t tim
 	fee, vat, stamp := g.charges(amt, exempt)
 	main := &Line{Key: g.key(kind), Account: a.Key, Amount: -amt, BookedAt: t, Narration: g.narr(inst, "out", cp.Name, cp.BankName, short), Counterparty: cp, SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "nip"}
 	lines := []*Line{main}
-	lines = append(lines, &Line{Key: g.key("fee"), Account: a.Key, Amount: -fee, BookedAt: t.Add(time.Second), Narration: g.narr(inst, "fee", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge"})
-	lines = append(lines, &Line{Key: g.key("vat"), Account: a.Key, Amount: -vat, BookedAt: t.Add(2 * time.Second), Narration: g.narr(inst, "vat", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge"})
+	lines = append(lines, &Line{Key: g.key("fee"), Account: a.Key, Amount: -fee, BookedAt: t.Add(time.Second), Narration: g.narr(inst, "fee", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryFee})
+	lines = append(lines, &Line{Key: g.key("vat"), Account: a.Key, Amount: -vat, BookedAt: t.Add(2 * time.Second), Narration: g.narr(inst, "vat", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryVAT})
 	if stamp > 0 {
-		lines = append(lines, &Line{Key: g.key("stamp"), Account: a.Key, Amount: -stamp, BookedAt: t.Add(3 * time.Second), Narration: g.narr(inst, "stamp", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge"})
+		lines = append(lines, &Line{Key: g.key("stamp"), Account: a.Key, Amount: -stamp, BookedAt: t.Add(3 * time.Second), Narration: g.narr(inst, "stamp", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryStamp})
 	}
 	return sid, lines
 }
@@ -424,6 +424,7 @@ func (g *dayGen) outflow(a *Account) {
 				SessionID:    l.SessionID,
 				BankRef:      g.bankRef(inst, back),
 				Channel:      "reversal",
+				Category:     l.Category,
 			})
 		}
 	default:
@@ -492,8 +493,8 @@ func (g *dayGen) monthEnd() {
 			if sms > 50000 {
 				sms = 50000
 			}
-			g.add(&Line{Key: g.key("sms"), Account: k, Amount: -sms, BookedAt: t, Narration: g.narr(inst, "sms", month), BankRef: g.bankRef(inst, t), Channel: "charge"})
-			g.add(&Line{Key: g.key("smsvat"), Account: k, Amount: -VAT(sms), BookedAt: t.Add(time.Second), Narration: g.narr(inst, "smsvat", month), BankRef: g.bankRef(inst, t), Channel: "charge"})
+			g.add(&Line{Key: g.key("sms"), Account: k, Amount: -sms, BookedAt: t, Narration: g.narr(inst, "sms", month), BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryFee})
+			g.add(&Line{Key: g.key("smsvat"), Account: k, Amount: -VAT(sms), BookedAt: t.Add(time.Second), Narration: g.narr(inst, "smsvat", month), BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryVAT})
 		}
 		if a.Type == "current" && st.debitTurn > 0 {
 			fee := (st.debitTurn + 500) / 1000
@@ -502,8 +503,8 @@ func (g *dayGen) monthEnd() {
 				fee = room
 			}
 			if fee > 0 {
-				g.add(&Line{Key: g.key("maint"), Account: k, Amount: -fee, BookedAt: t.Add(2 * time.Second), Narration: g.narr(inst, "maint", month), BankRef: g.bankRef(inst, t), Channel: "charge"})
-				g.add(&Line{Key: g.key("maintvat"), Account: k, Amount: -VAT(fee), BookedAt: t.Add(3 * time.Second), Narration: g.narr(inst, "maintvat", month), BankRef: g.bankRef(inst, t), Channel: "charge"})
+				g.add(&Line{Key: g.key("maint"), Account: k, Amount: -fee, BookedAt: t.Add(2 * time.Second), Narration: g.narr(inst, "maint", month), BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryFee})
+				g.add(&Line{Key: g.key("maintvat"), Account: k, Amount: -VAT(fee), BookedAt: t.Add(3 * time.Second), Narration: g.narr(inst, "maintvat", month), BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryVAT})
 			}
 		}
 		st.alerts = 0
