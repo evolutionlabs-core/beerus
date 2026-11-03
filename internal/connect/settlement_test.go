@@ -1,11 +1,13 @@
 package connect
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 func TestSessionSchedule(t *testing.T) {
@@ -98,5 +100,44 @@ func TestScheduleFollowsCalendar(t *testing.T) {
 	}
 	if got := closed.next(from); !got.Equal(friday.AddDays(4).Start().Add(2 * time.Hour)) {
 		t.Errorf("next session with the extra holiday %s", got)
+	}
+}
+
+func TestPreviousSession(t *testing.T) {
+	s := schedule{per: 4}
+	at := func(day string, hh, mm int) time.Time {
+		d, err := clock.ParseDate(day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.Start().Add(time.Duration(hh)*time.Hour + time.Duration(mm)*time.Minute)
+	}
+	for _, c := range []struct{ now, want time.Time }{
+		{at("2026-11-03", 10, 0), at("2026-11-03", 6, 0)},
+		{at("2026-11-03", 6, 0), at("2026-11-03", 6, 0)},
+		{at("2026-11-03", 0, 0), at("2026-11-03", 0, 0)},
+		{at("2026-11-03", 0, 1), at("2026-11-03", 0, 0)},
+		{at("2026-11-03", 5, 59), at("2026-11-03", 0, 0)},
+		{at("2026-11-07", 12, 0), at("2026-11-07", 0, 0)},
+		{at("2026-11-08", 12, 0), at("2026-11-07", 0, 0)},
+		{at("2026-11-09", 1, 0), at("2026-11-07", 0, 0)},
+	} {
+		got := s.prev(c.now)
+		if !got.Equal(c.want) {
+			t.Errorf("the session before %s is %s, want %s", c.now.Format(time.RFC3339), got.Format(time.RFC3339), c.want.Format(time.RFC3339))
+		}
+		if next := s.next(got.Add(-time.Nanosecond)); !next.Equal(got) {
+			t.Errorf("%s is not a session cutoff", got.Format(time.RFC3339))
+		}
+	}
+}
+
+func TestNoBankTakesTheCBNDatabase(t *testing.T) {
+	cfg := &config.Config{Dir: t.TempDir()}
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, clock.Lagos)
+	a := &App{cfg: cfg, world: world.New(world.Config{Seed: 42, Genesis: clock.DateOf(now).AddDays(-30)}, world.Overrides{})}
+	_, err := a.admit(BankRequest{Name: "Kano Digital"}, 7450, config.DatabaseName(cfg.Dir, cbnID))
+	if err == nil || !strings.Contains(err.Error(), "belongs to the CBN") {
+		t.Fatalf("a bank on the CBN database: %v", err)
 	}
 }

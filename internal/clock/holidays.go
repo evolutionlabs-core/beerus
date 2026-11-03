@@ -1,22 +1,77 @@
 package clock
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 )
 
-type Calendar struct {
-	mu     sync.Mutex
-	years  map[int]map[Date]bool
-	add    map[Date]bool
-	remove map[Date]bool
+type adjustments struct {
+	add    []Date
+	remove []Date
 }
 
-var rules = &Calendar{}
+type Calendar struct {
+	mu       sync.Mutex
+	pack     *countrypack.Pack
+	declared map[int]adjustments
+	years    map[int]map[Date]bool
+	add      map[Date]bool
+	remove   map[Date]bool
+}
+
+var rules = mustRules()
+
+func mustRules() *Calendar {
+	c, err := newRules()
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+func newRules() (*Calendar, error) {
+	p, err := countrypack.Nigeria()
+	if err != nil {
+		return nil, err
+	}
+	c := &Calendar{pack: p, declared: map[int]adjustments{}, add: map[Date]bool{}, remove: map[Date]bool{}}
+	parse := func(year int, list []string) ([]Date, error) {
+		var out []Date
+		for _, s := range list {
+			d, err := ParseDate(s)
+			if err != nil {
+				return nil, fmt.Errorf("country pack NG: declared %d: %q is not a date", year, s)
+			}
+			if d.Y != year {
+				return nil, fmt.Errorf("country pack NG: declared %d: %s is in another year", year, s)
+			}
+			out = append(out, d)
+		}
+		return out, nil
+	}
+	for _, e := range p.Declared {
+		var d adjustments
+		if d.add, err = parse(e.Year, e.Add); err != nil {
+			return nil, err
+		}
+		if d.remove, err = parse(e.Year, e.Remove); err != nil {
+			return nil, err
+		}
+		c.declared[e.Year] = d
+	}
+	return c, nil
+}
+
+func CalendarVersion() string {
+	return rules.pack.Version
+}
 
 func NewCalendar(add, remove []Date) *Calendar {
-	c := &Calendar{add: map[Date]bool{}, remove: map[Date]bool{}}
+	c := &Calendar{pack: rules.pack, declared: rules.declared, add: map[Date]bool{}, remove: map[Date]bool{}}
 	for _, d := range add {
 		c.add[d] = true
 	}
@@ -53,23 +108,34 @@ func (c *Calendar) year(y int) map[Date]bool {
 	if c.years == nil {
 		c.years = map[int]map[Date]bool{}
 	}
-	s := buildYear(y)
+	s := c.buildYear(y)
+	if d, ok := c.declared[y]; ok {
+		for _, r := range d.remove {
+			delete(s, r)
+		}
+		for _, a := range d.add {
+			s[a] = true
+		}
+	}
 	c.years[y] = s
 	return s
 }
 
-func buildYear(y int) map[Date]bool {
+func (c *Calendar) buildYear(y int) map[Date]bool {
 	placed := map[Date]bool{}
 	for _, ey := range []int{y - 1, y} {
 		e := easter(ey)
-		placed[e.AddDays(-2)] = true
-		placed[e.AddDays(1)] = true
+		for _, h := range c.pack.Easter {
+			placed[e.AddDays(h.Offset)] = true
+		}
 	}
 	var bases []Date
 	for _, by := range []int{y - 1, y} {
-		bases = append(bases, fixedHolidays(by)...)
+		for _, f := range c.pack.Fixed {
+			bases = append(bases, Date{by, time.Month(f.Month), f.Day})
+		}
 	}
-	bases = append(bases, islamicHolidays(y)...)
+	bases = append(bases, c.islamic(y)...)
 	sort.SliceStable(bases, func(i, j int) bool { return bases[i].Before(bases[j]) })
 	start := Date{y - 1, time.November, 1}
 	for _, d := range bases {
@@ -90,24 +156,16 @@ func buildYear(y int) map[Date]bool {
 	return out
 }
 
-func fixedHolidays(y int) []Date {
-	return []Date{
-		{y, time.January, 1},
-		{y, time.May, 1},
-		{y, time.June, 12},
-		{y, time.October, 1},
-		{y, time.December, 25},
-		{y, time.December, 26},
-	}
-}
-
-func islamicHolidays(y int) []Date {
+func (c *Calendar) islamic(y int) []Date {
 	var out []Date
 	approx := (y - 622) * 1030684 / 1000000
 	for hy := approx - 1; hy <= approx+2; hy++ {
-		fitr := FromHijri(Hijri{hy, 10, 1})
-		kabir := FromHijri(Hijri{hy, 12, 10})
-		out = append(out, fitr, fitr.AddDays(1), kabir, kabir.AddDays(1), FromHijri(Hijri{hy, 3, 12}))
+		for _, h := range c.pack.Islamic {
+			first := FromHijri(Hijri{hy, h.Month, h.Day})
+			for i := 0; i < h.Days; i++ {
+				out = append(out, first.AddDays(i))
+			}
+		}
 	}
 	return out
 }

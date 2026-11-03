@@ -44,6 +44,7 @@ type App struct {
 	rtgs      *rtgs
 	rtgsTried time.Time
 	worldOnly bool
+	personas  []string
 	lifeMu    sync.Mutex
 	recMu     sync.Mutex
 	status    map[string]*BankStatus
@@ -64,6 +65,7 @@ type Options struct {
 	Logger    *slog.Logger
 	Client    *http.Client
 	WorldOnly bool
+	Personas  []string
 }
 
 func New(cfg *config.Config, o Options) (*App, error) {
@@ -100,12 +102,19 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stub state: %w", err)
 	}
-	if st == nil {
+	fresh := st == nil
+	if fresh {
 		st = newState()
 		st.Clock = clock.State{Pace: cfg.Pace}
 	} else if _, err := os.Stat(a.runningPath()); err == nil {
 		a.log.Warn("the last run did not shut down cleanly; starting a new world so partners resync", "old_world", st.WorldID)
 		st.WorldID = newID("wld")
+	}
+	if st.Calendar != clock.CalendarVersion() {
+		if !fresh {
+			a.log.Warn("the holiday calendar changed since this setup last ran; past transaction history is regenerated with the new holiday dates", "from", st.Calendar, "to", clock.CalendarVersion())
+		}
+		st.Calendar = clock.CalendarVersion()
 	}
 	for _, d := range st.Deliveries {
 		if d.Status == "sending" {
@@ -134,6 +143,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 			return nil, err
 		}
 	}
+	a.personas = o.Personas
 	a.world = world.New(a.worldConfig(genesis), st.World)
 	a.worldOnly = o.WorldOnly
 	if err := a.prepareOpenBanking(); err != nil {
@@ -155,7 +165,9 @@ func New(cfg *config.Config, o Options) (*App, error) {
 			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
 		}
 	}
-	a.ensureRTGS()
+	if err := a.ensureRTGS(); err != nil {
+		return nil, err
+	}
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}
@@ -170,7 +182,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 }
 
 func (a *App) worldConfig(genesis clock.Date) world.Config {
-	wc := world.Config{Seed: a.cfg.Seed, Genesis: genesis, Calendar: a.cfg.Calendar()}
+	wc := world.Config{Seed: a.cfg.Seed, Genesis: genesis, Calendar: a.cfg.Calendar(), Personas: a.personas}
 	for _, b := range a.cfg.Banks {
 		wc.Institutions = append(wc.Institutions, world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: true, Style: b.Style()})
 	}
@@ -279,7 +291,9 @@ func (a *App) Step() {
 			a.driftDue.Store(true)
 		}
 	}
-	a.ensureRTGS()
+	if err := a.ensureRTGS(); err != nil {
+		a.log.Error("CBN ledger", "err", err)
+	}
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}
@@ -309,6 +323,7 @@ func (a *App) sweep() {
 			a.idemLock.Delete(k)
 		}
 	}
+	a.pruneNIPLocked(real)
 	for k, ls := range a.st.LinkSessions {
 		if real.Sub(ls.ExpiresReal) > 7*24*time.Hour {
 			delete(a.st.LinkSessions, k)
