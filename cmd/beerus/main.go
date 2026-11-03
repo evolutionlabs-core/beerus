@@ -209,6 +209,9 @@ func cmdUp(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := connect.CheckPorts(c); err != nil {
+		return err
+	}
 	if err := c.EnsureCertificates(); err != nil {
 		return err
 	}

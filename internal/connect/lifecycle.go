@@ -819,3 +819,24 @@ func (a *App) ctlOpenAccount(w http.ResponseWriter, r *http.Request) {
 	inst, _ := a.world.Institution(acc.Institution)
 	writeJSON(w, http.StatusCreated, map[string]any{"key": acc.Key, "bank": inst.Name, "nuban": acc.NUBAN, "name": acc.Name, "type": acc.Type, "owner": acc.Owner, "opened_at": ts(acc.OpenedAt)})
 }
+
+func CheckPorts(c *config.Config) error {
+	ports := []int{c.Connect.PartnerPort, c.Connect.WidgetPort, c.Connect.ControlPort}
+	for _, b := range c.Banks {
+		if !b.Closed() {
+			ports = append(ports, b.Port)
+		}
+	}
+	_, err := os.Stat(c.Path("running"))
+	running := err == nil
+	for _, p := range ports {
+		if portFree(p) {
+			continue
+		}
+		if running {
+			return fmt.Errorf("beerus is already running for %s; stop it (Ctrl+C in its terminal) before starting it again", c.Dir)
+		}
+		return fmt.Errorf("port %d is already in use by another program; free it or change it in beerus.yaml", p)
+	}
+	return nil
+}
