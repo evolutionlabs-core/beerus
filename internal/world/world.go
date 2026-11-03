@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -117,6 +118,7 @@ type Overrides struct {
 	Suspended  []Outage             `json:"suspended,omitempty"`
 	Closed     []Closure            `json:"closed,omitempty"`
 	Opened     []OpenedAccount      `json:"opened,omitempty"`
+	Purged     []Institution        `json:"purged,omitempty"`
 	UnstableAt map[string]time.Time `json:"unstable_at"`
 }
 
@@ -138,6 +140,7 @@ type World struct {
 	cfg          Config
 	institutions map[string]*Institution
 	instOrder    []string
+	purged       map[string]bool
 	accounts     map[string]*Account
 	personas     map[string]*Persona
 	order        []string
@@ -224,6 +227,7 @@ func New(cfg Config, ov Overrides) *World {
 	w := &World{
 		cfg:          cfg,
 		institutions: map[string]*Institution{},
+		purged:       map[string]bool{},
 		accounts:     map[string]*Account{},
 		personas:     map[string]*Persona{},
 		lines:        map[string][]*Line{},
@@ -234,13 +238,21 @@ func New(cfg Config, ov Overrides) *World {
 		w.ov.UnstableAt = map[string]time.Time{}
 	}
 	insts := cfg.Institutions
-	if len(insts) == 0 {
+	if len(insts) == 0 && len(ov.Purged) == 0 {
 		insts = DefaultInstitutions()
 	}
 	for _, in := range insts {
 		inst := in
 		w.institutions[inst.ID] = &inst
 		w.instOrder = append(w.instOrder, inst.ID)
+	}
+	for _, in := range ov.Purged {
+		if _, ok := w.institutions[in.ID]; ok {
+			continue
+		}
+		inst := in
+		w.institutions[inst.ID] = &inst
+		w.purged[inst.ID] = true
 	}
 	add := func(p *Persona, accts ...Account) {
 		for _, a := range accts {
@@ -296,9 +308,53 @@ func (w *World) Institutions() []Institution {
 	defer w.mu.Unlock()
 	out := []Institution{}
 	for _, id := range w.instOrder {
-		out = append(out, *w.institutions[id])
+		if !w.purged[id] {
+			out = append(out, *w.institutions[id])
+		}
 	}
 	return out
+}
+
+func (w *World) Purged(id string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.purged[id]
+}
+
+func (w *World) PurgedInstitutions() []Institution {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]Institution{}, w.ov.Purged...)
+}
+
+func (w *World) Purge(institution string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	inst := w.institutions[institution]
+	switch {
+	case inst == nil:
+		return fmt.Errorf("unknown bank %q", institution)
+	case w.purged[institution] || slices.ContainsFunc(w.ov.Purged, func(p Institution) bool { return p.ID == institution }):
+		return fmt.Errorf("%s is already purged", inst.Name)
+	}
+	if _, ok := w.closedSinceLocked(institution); !ok {
+		return fmt.Errorf("%s is not closed; close it before purging it", inst.Name)
+	}
+	next := make(map[string]bool, len(w.purged)+1)
+	for k, v := range w.purged {
+		next[k] = v
+	}
+	next[institution] = true
+	w.purged = next
+	order := []string{}
+	for _, id := range w.instOrder {
+		if id != institution {
+			order = append(order, id)
+		}
+	}
+	w.instOrder = order
+	w.ov.Purged = append(w.ov.Purged, *inst)
+	return nil
 }
 
 func (w *World) Institution(id string) (Institution, bool) {
@@ -322,7 +378,7 @@ func (w *World) Account(key string) (Account, bool) {
 func (w *World) Personas() []Persona {
 	out := []Persona{}
 	for _, id := range w.order {
-		out = append(out, *w.personas[id])
+		out = append(out, w.visible(w.personas[id]))
 	}
 	return out
 }
@@ -332,13 +388,30 @@ func (w *World) Persona(id string) (Persona, bool) {
 	if !ok {
 		return Persona{}, false
 	}
-	return *p, true
+	return w.visible(p), true
+}
+
+func (w *World) visible(p *Persona) Persona {
+	w.mu.Lock()
+	purged := w.purged
+	w.mu.Unlock()
+	cp := *p
+	if len(purged) == 0 {
+		return cp
+	}
+	cp.Accounts = []string{}
+	for _, k := range p.Accounts {
+		if !purged[w.accounts[k].Institution] {
+			cp.Accounts = append(cp.Accounts, k)
+		}
+	}
+	return cp
 }
 
 func (w *World) PersonaByUsername(u string) (Persona, bool) {
 	for _, p := range w.personas {
 		if p.Username == u {
-			return *p, true
+			return w.visible(p), true
 		}
 	}
 	return Persona{}, false
@@ -350,6 +423,9 @@ func (w *World) AccountsAt(personaID, institution string) []Account {
 		return nil
 	}
 	out := []Account{}
+	if w.Purged(institution) {
+		return out
+	}
 	for _, k := range p.Accounts {
 		if a := w.accounts[k]; a.Institution == institution {
 			out = append(out, *a)
@@ -368,6 +444,7 @@ func (w *World) Overrides() Overrides {
 	cp.Suspended = append(cp.Suspended, w.ov.Suspended...)
 	cp.Closed = append(cp.Closed, w.ov.Closed...)
 	cp.Opened = append(cp.Opened, w.ov.Opened...)
+	cp.Purged = append(cp.Purged, w.ov.Purged...)
 	for k, v := range w.ov.UnstableAt {
 		cp.UnstableAt[k] = v
 	}

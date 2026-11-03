@@ -311,3 +311,69 @@ func TestCloseReleasesPendingLines(t *testing.T) {
 	}
 	t.Fatal("no pending line to close across")
 }
+
+func TestPurgeHidesTheBankAndKeepsOtherHistories(t *testing.T) {
+	w, now := testWorld()
+	if err := w.Purge("bank-b"); err == nil {
+		t.Fatal("purged an open bank")
+	}
+	closedAt := now.AddDate(0, 0, -30)
+	if err := w.Close("bank-b", closedAt, nil); err != nil {
+		t.Fatal(err)
+	}
+	before := map[string][]Presented{}
+	for _, a := range accountsAt(w, "bank-a") {
+		ls, err := w.Statement(a.Key, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[a.Key] = ls
+	}
+	if err := w.Purge("bank-b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Purge("bank-b"); err == nil {
+		t.Fatal("purged twice")
+	}
+	keep := []Institution{}
+	for _, inst := range DefaultInstitutions() {
+		if inst.ID != "bank-b" {
+			keep = append(keep, inst)
+		}
+	}
+	again := New(Config{Seed: 42, Genesis: w.Config().Genesis, Institutions: keep}, w.Overrides())
+	for _, v := range []*World{w, again} {
+		for _, inst := range v.Institutions() {
+			if inst.ID == "bank-b" {
+				t.Fatal("purged bank is still listed")
+			}
+		}
+		if n := len(accountsAt(v, "bank-b")); n != 0 {
+			t.Fatalf("%d purged accounts are still listed", n)
+		}
+		if _, ok := v.Institution("bank-b"); !ok {
+			t.Fatal("purged bank can no longer be looked up")
+		}
+		if !v.Purged("bank-b") {
+			t.Fatal("bank-b is not marked purged")
+		}
+	}
+	for key, want := range before {
+		got, err := again.Statement(key, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s has %d lines after the purge, %d before", key, len(got), len(want))
+		}
+		for i := range got {
+			if got[i].Key != want[i].Key || got[i].Amount != want[i].Amount || got[i].Narration != want[i].Narration {
+				t.Fatalf("%s line %d changed after the purge", key, i)
+			}
+		}
+	}
+	only := New(Config{Seed: 42, Genesis: w.Config().Genesis}, Overrides{Purged: w.Overrides().Purged, Closed: w.Overrides().Closed})
+	if n := len(only.Institutions()); n != 0 {
+		t.Fatalf("a world with only a purged bank lists %d banks", n)
+	}
+}

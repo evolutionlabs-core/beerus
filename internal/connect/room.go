@@ -65,6 +65,8 @@ func (a *App) roomHandler() http.Handler {
 	mux.HandleFunc("POST /ui/banks/{id}/resume", func(w http.ResponseWriter, r *http.Request) { a.roomSuspend(w, r, false) })
 	mux.HandleFunc("GET /ui/banks/{id}/close", a.roomCloseBank)
 	mux.HandleFunc("POST /ui/banks/{id}/close", a.roomCloseBank)
+	mux.HandleFunc("GET /ui/banks/{id}/purge", a.roomPurgeBank)
+	mux.HandleFunc("POST /ui/banks/{id}/purge", a.roomPurgeBank)
 	mux.HandleFunc("GET /ui/accounts/{key}", a.roomAccount)
 	mux.HandleFunc("GET /ui/accounts/{key}/lines/{line}", a.roomLine)
 	mux.HandleFunc("GET /ui/transfer", a.roomTransferForm)
@@ -230,6 +232,7 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	inst, ok := a.world.Institution(r.PathValue("id"))
+	ok = ok && !a.world.Purged(inst.ID)
 	if managed && (status.Phase == PhaseProvisioning || status.Phase == PhaseRepairing) {
 		a.roomRender(w, r, "bank_provisioning", http.StatusOK, "banks", roomPage{"Title": status.Name, "Status": status, "Refresh": true})
 		return
@@ -716,4 +719,37 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 		f = url.Values{"money": {"transfer"}}
 	}
 	a.roomRender(w, r, "close_bank", status, "banks", roomPage{"Title": "Close " + inst.Name, "Bank": inst, "Impact": imp, "Targets": targets, "Form": f, "Error": msg})
+}
+
+func (a *App) roomPurgeBank(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	_ = r.ParseForm()
+	status := http.StatusOK
+	msg := ""
+	if r.Method == http.MethodPost {
+		var err error
+		if strings.TrimSpace(r.PostForm.Get("confirm")) != id {
+			err = invalid("type %s to confirm", id)
+		} else {
+			_, err = a.PurgeBank(id)
+		}
+		switch {
+		case err == nil:
+			http.Redirect(w, r, "/ui/banks?state=closed", http.StatusSeeOther)
+			return
+		case a.cfg.Bank(id) == nil:
+			http.Redirect(w, r, "/ui/banks?state=closed", http.StatusSeeOther)
+			return
+		case !errors.Is(err, errNotFound):
+			status, msg = http.StatusUnprocessableEntity, strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": ")
+			msg = strings.ToUpper(msg[:1]) + msg[1:] + "."
+		}
+	}
+	imp, err := a.PurgeImpact(id)
+	inst, ok := a.world.Institution(id)
+	if err != nil || !ok {
+		a.roomNotFound(w, r)
+		return
+	}
+	a.roomRender(w, r, "purge_bank", status, "banks", roomPage{"Title": "Purge " + inst.Name, "Bank": inst, "Impact": imp, "Error": msg})
 }

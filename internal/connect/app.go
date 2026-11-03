@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -108,6 +109,18 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New(st.Clock, o.Real)
+	purged := []string{}
+	for _, p := range st.World.Purged {
+		if cfg.Bank(p.ID) != nil {
+			purged = append(purged, p.ID)
+			cfg.Banks = slices.DeleteFunc(cfg.Banks, func(b *config.Bank) bool { return b.ID == p.ID })
+		}
+	}
+	if len(purged) > 0 {
+		if err := cfg.Save(); err != nil {
+			return nil, err
+		}
+	}
 	a.world = world.New(a.worldConfig(genesis), st.World)
 	a.worldOnly = o.WorldOnly
 	for _, b := range cfg.Banks {
@@ -127,6 +140,9 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		}
 	}
 	a.initLifecycle()
+	for _, id := range purged {
+		a.warn("%s was purged and cannot come back; it was removed from beerus.yaml", id)
+	}
 	return a, nil
 }
 

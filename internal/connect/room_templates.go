@@ -80,6 +80,7 @@ const roomTemplates = `
 <div class="ml-auto flex items-center gap-2.5">
 {{if eq .Status.Phase "closed"}}<span class="badge">Closed</span>{{else if eq .Status.Phase "suspended"}}<span class="badge badge-warn">Suspended</span>{{else if .Down}}<span class="badge badge-bad">Unavailable</span>{{else}}<span class="badge badge-ok">Operational</span>{{end}}
 {{if and .Managed (ne .Status.Phase "closed")}}{{if eq .Status.Phase "suspended"}}<form method="post" action="/ui/banks/{{.Bank.ID}}/resume"><button type="submit" class="btn btn-secondary btn-sm">Resume</button></form>{{else}}<form method="post" action="/ui/banks/{{.Bank.ID}}/suspend"><button type="submit" class="btn btn-secondary btn-sm">Suspend</button></form>{{end}}<a href="/ui/banks/{{.Bank.ID}}/close" class="btn btn-danger btn-sm">Close bank</a>{{end}}
+{{if and .Managed (eq .Status.Phase "closed")}}<a href="/ui/banks/{{.Bank.ID}}/purge" class="btn btn-danger btn-sm">Purge bank</a>{{end}}
 </div>
 </div>
 {{if eq .Status.Phase "closed"}}<p class="mb-6 rounded-[10px] border border-line bg-panel px-4 py-3 text-[13px] text-muted">This bank is closed. Its online banking is off, its Connect consents were revoked, and nothing moves in its accounts again. Any balance left here is either money nobody claimed or the uninsured part of a deposit, which the customer can only recover from the bank's liquidation.</p>{{end}}
@@ -258,6 +259,34 @@ const roomTemplates = `
 <section class="mt-6 rounded-2xl border border-line bg-panel p-6">
 <label class="block max-w-[360px]"><span class="mb-1.5 block text-[12.5px] text-muted">Type <span class="num text-ink">{{.Bank.ID}}</span> to confirm</span><input class="field font-mono" type="text" name="confirm" autocomplete="off" required></label>
 <div class="mt-6 flex items-center justify-end gap-2"><a href="/ui/banks/{{.Bank.ID}}" class="btn text-muted hover:text-ink">Cancel</a><button type="submit" class="btn btn-danger" {{if .Impact.Blockers}}disabled{{end}}>Close {{.Bank.Name}}</button></div>
+</section>
+</form>
+{{template "room_foot" .}}{{end}}
+
+{{define "purge_bank"}}{{template "room_head" .}}
+<div class="{{.Bank.ID}} mb-7 flex items-center gap-4">
+<span class="grid size-11 place-items-center rounded-xl border border-line-strong bg-raised text-[17px] text-bank">{{initial .Bank.Name}}</span>
+<div><h1 class="text-[24px]">Purge {{.Bank.Name}}</h1><p class="mt-1 text-[13.5px] text-muted">Purging deletes the bank from this setup for good. It cannot be undone.</p></div>
+</div>
+{{range .Impact.Blockers}}<p class="mb-3 rounded-[10px] border border-warn/30 bg-warn/10 px-4 py-3 text-[13px] text-warn" role="alert">This bank cannot be purged yet: {{.}}.</p>{{end}}
+{{if .Error}}<p class="mb-3 rounded-[10px] border border-neg/30 bg-neg/10 px-4 py-3 text-[13px] text-neg" role="alert">{{.Error}}</p>{{end}}
+<section class="rounded-2xl border border-line bg-panel p-6 text-[13.5px]">
+<h2 class="text-[15px]">What gets deleted</h2>
+<ul class="mt-3 list-disc space-y-1.5 pl-5 text-muted">
+<li>The ledger database <span class="num text-ink">{{.Impact.Database}}</span> and its snapshot copies</li>
+<li>{{with len .Impact.Snapshots}}{{.}} snapshot{{if ne . 1}}s{{end}} that include{{if eq . 1}}s{{end}} this bank, since they could no longer be restored{{else}}No snapshots include this bank{{end}}</li>
+<li>Its entry in beerus.yaml and its online banking port</li>
+</ul>
+<h2 class="mt-6 text-[15px]">What stays</h2>
+<ul class="mt-3 list-disc space-y-1.5 pl-5 text-muted">
+<li>Its id, name, NIP code and NUBAN code stay reserved, because the other banks' history still refers to it</li>
+<li>{{.Impact.Connections}} revoked Connect consent{{if ne .Impact.Connections 1}}s{{end}}, kept as history for partners</li>
+</ul>
+</section>
+<form method="post" action="/ui/banks/{{.Bank.ID}}/purge" class="mt-6">
+<section class="rounded-2xl border border-line bg-panel p-6">
+<label class="block max-w-[360px]"><span class="mb-1.5 block text-[12.5px] text-muted">Type <span class="num text-ink">{{.Bank.ID}}</span> to confirm</span><input class="field font-mono" type="text" name="confirm" autocomplete="off" required></label>
+<div class="mt-6 flex items-center justify-end gap-2"><a href="/ui/banks/{{.Bank.ID}}" class="btn text-muted hover:text-ink">Cancel</a><button type="submit" class="btn btn-danger" {{if .Impact.Blockers}}disabled{{end}}>Purge {{.Bank.Name}}</button></div>
 </section>
 </form>
 {{template "room_foot" .}}{{end}}
