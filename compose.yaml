@@ -8,12 +8,11 @@ x-beerus: &beerus
   environment: &env
     BEERUS_DIR: /state
     BEERUS_BIND: 0.0.0.0
-    BEERUS_CORE_URL: http://sim:${BEERUS_CONTROL_PORT:-7480}
-    BEERUS_PARTNER_PORT: ${BEERUS_PARTNER_PORT:-7443}
-    BEERUS_WIDGET_PORT: ${BEERUS_WIDGET_PORT:-7444}
-    BEERUS_CONTROL_PORT: ${BEERUS_CONTROL_PORT:-7480}
-    BEERUS_BANK_A_PORT: ${BEERUS_BANK_A_PORT:-7445}
-    BEERUS_BANK_B_PORT: ${BEERUS_BANK_B_PORT:-7446}
+    BEERUS_CORE_URL: http://sim:7480
+    BEERUS_PARTNER_PORT: "7443"
+    BEERUS_WIDGET_PORT: "7444"
+    BEERUS_CONTROL_PORT: "7480"
+    BEERUS_BANK_PORT: "7445"
   volumes:
     - ${BEERUS_STATE:-state}:/state
 
@@ -36,7 +35,11 @@ services:
     environment:
       <<: *env
       BEERUS_DATABASE_URL: postgres://postgres:beerus@postgres:5432/postgres?sslmode=disable
-      BEERUS_PARTNER_REDIRECT_URI: https://balance.localhost/bank_connections/callback
+      BEERUS_PARTNER_ID: ${BEERUS_PARTNER_ID:?set the partner app's ID}
+      BEERUS_PARTNER_NAME: ${BEERUS_PARTNER_NAME:?set the partner app's name}
+      BEERUS_PARTNER_LEGAL_NAME: ${BEERUS_PARTNER_LEGAL_NAME:?set the partner's legal name}
+      BEERUS_PARTNER_PURPOSE: ${BEERUS_PARTNER_PURPOSE:?say what the partner uses the data for}
+      BEERUS_PARTNER_REDIRECT_URI: ${BEERUS_PARTNER_REDIRECT_URI:?set the partner app's callback URL}
       BEERUS_PARTNER_WEBHOOK_URL: ${BEERUS_PARTNER_WEBHOOK_URL:-}
     ports:
       - "127.0.0.1:${BEERUS_CBN_PORT:-7490}:7490"
@@ -53,7 +56,7 @@ services:
     <<: *beerus
     command: ["run", "--participant", "bank-a"]
     ports:
-      - "127.0.0.1:${BEERUS_BANK_A_PORT:-7445}:${BEERUS_BANK_A_PORT:-7445}"
+      - "127.0.0.1:7445:7445"
     networks:
       default:
         aliases:
@@ -62,7 +65,7 @@ services:
       cbn:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "beerus", "health", "http://bank-a.localhost:${BEERUS_BANK_A_PORT:-7445}/health"]
+      test: ["CMD", "beerus", "health", "http://bank-a.localhost:7445/health"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -71,7 +74,7 @@ services:
     <<: *beerus
     command: ["run", "--participant", "bank-b"]
     ports:
-      - "127.0.0.1:${BEERUS_BANK_B_PORT:-7446}:${BEERUS_BANK_B_PORT:-7446}"
+      - "127.0.0.1:7446:7446"
     networks:
       default:
         aliases:
@@ -80,7 +83,7 @@ services:
       cbn:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "beerus", "health", "http://bank-b.localhost:${BEERUS_BANK_B_PORT:-7446}/health"]
+      test: ["CMD", "beerus", "health", "http://bank-b.localhost:7446/health"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -89,9 +92,9 @@ services:
     <<: *beerus
     command: ["run", "--participant", "sim"]
     ports:
-      - "127.0.0.1:${BEERUS_PARTNER_PORT:-7443}:${BEERUS_PARTNER_PORT:-7443}"
-      - "127.0.0.1:${BEERUS_WIDGET_PORT:-7444}:${BEERUS_WIDGET_PORT:-7444}"
-      - "127.0.0.1:${BEERUS_CONTROL_PORT:-7480}:${BEERUS_CONTROL_PORT:-7480}"
+      - "127.0.0.1:7443:7443"
+      - "127.0.0.1:7444:7444"
+      - "127.0.0.1:7480:7480"
     networks:
       default:
         aliases:
@@ -102,7 +105,7 @@ services:
       bank-b:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "beerus", "health", "--token-file", "/state/control-token", "http://127.0.0.1:${BEERUS_CONTROL_PORT:-7480}/health"]
+      test: ["CMD", "beerus", "health", "--token-file", "/state/control-token", "http://127.0.0.1:7480/health"]
       interval: 2s
       timeout: 3s
       retries: 60

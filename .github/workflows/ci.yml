@@ -68,6 +68,12 @@ jobs:
 
   multi-process:
     runs-on: ubuntu-latest
+    env:
+      BEERUS_PARTNER_ID: balance
+      BEERUS_PARTNER_NAME: Balance
+      BEERUS_PARTNER_LEGAL_NAME: Balance Test Limited
+      BEERUS_PARTNER_PURPOSE: to keep your books in sync with this account
+      BEERUS_PARTNER_REDIRECT_URI: https://balance.localhost/bank_connections/callback
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

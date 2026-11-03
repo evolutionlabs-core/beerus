@@ -48,7 +48,7 @@ func cmdRun(args []string) error {
 		if err != nil {
 			return err
 		}
-		app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleSim})
+		app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleSim, CoreURL: *core})
 		if err != nil {
 			return err
 		}
@@ -90,8 +90,7 @@ func runCBN(ctx context.Context, dir, bind string, port int, log *slog.Logger) e
 			}
 			return n
 		}
-		opts := config.InitOptions{Seed: seed, Today: clock.DateOf(time.Now()), PartnerPort: port("BEERUS_PARTNER_PORT", 7443), WidgetPort: port("BEERUS_WIDGET_PORT", 7444), ControlPort: port("BEERUS_CONTROL_PORT", 7480), BankPorts: []int{port("BEERUS_BANK_A_PORT", 7445), port("BEERUS_BANK_B_PORT", 7446)}}
-		opts.APIPorts = []int{opts.BankPorts[0] + 10, opts.BankPorts[1] + 10}
+		opts := config.InitOptions{Seed: seed, Today: clock.DateOf(time.Now()), PartnerPort: port("BEERUS_PARTNER_PORT", 0), WidgetPort: port("BEERUS_WIDGET_PORT", 0), ControlPort: port("BEERUS_CONTROL_PORT", 0), BankPort: port("BEERUS_BANK_PORT", 0)}
 		if _, err := config.Init(dir, opts); err != nil {
 			return err
 		}
@@ -105,7 +104,11 @@ func runCBN(ctx context.Context, dir, bind string, port int, log *slog.Logger) e
 	}
 	if len(c.Partners) == 0 {
 		if redirect := os.Getenv("BEERUS_PARTNER_REDIRECT_URI"); redirect != "" {
-			if _, err := c.AddPartner(config.PartnerOptions{ID: envOr("BEERUS_PARTNER_ID", "balance"), Name: "Balance", LegalName: "Evolution Labs", Purpose: "to keep your books in sync with this account", RedirectURIs: []string{redirect}, WebhookURL: os.Getenv("BEERUS_PARTNER_WEBHOOK_URL")}); err != nil {
+			p := config.PartnerOptions{ID: os.Getenv("BEERUS_PARTNER_ID"), Name: os.Getenv("BEERUS_PARTNER_NAME"), LegalName: os.Getenv("BEERUS_PARTNER_LEGAL_NAME"), Purpose: os.Getenv("BEERUS_PARTNER_PURPOSE"), RedirectURIs: []string{redirect}, WebhookURL: os.Getenv("BEERUS_PARTNER_WEBHOOK_URL")}
+			if p.ID == "" || p.Name == "" || p.LegalName == "" || p.Purpose == "" {
+				return errors.New("BEERUS_PARTNER_REDIRECT_URI needs BEERUS_PARTNER_ID, BEERUS_PARTNER_NAME, BEERUS_PARTNER_LEGAL_NAME and BEERUS_PARTNER_PURPOSE")
+			}
+			if _, err := c.AddPartner(p); err != nil {
 				return err
 			}
 		}

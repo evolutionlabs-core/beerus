@@ -31,6 +31,7 @@ Usage:
   beerus init [--dir .beerus] [--seed N] [--partner-port 7443] [--widget-port 7444] [--control-port 7480]
   beerus up [--dir .beerus]
   beerus run --participant cbn|sim|bank-a|bank-b [--dir .beerus] [--bind 0.0.0.0] [--core URL]
+  beerus compose [--dir .beerus]
   beerus health URL [--token-file FILE]
   beerus info [--dir .beerus]
   beerus partner add <id> --redirect-uri URL [--redirect-uri URL] [--webhook-url URL] [--name N] [--legal-name N] [--purpose P]
@@ -78,6 +79,8 @@ func main() {
 		err = cmdUp(args)
 	case "run":
 		err = cmdRun(args)
+	case "compose":
+		err = cmdCompose(args)
 	case "health":
 		err = cmdHealth(args)
 	case "info":
