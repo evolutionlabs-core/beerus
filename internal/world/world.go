@@ -123,9 +123,10 @@ type Overrides struct {
 }
 
 type Config struct {
-	Seed         int64         `json:"seed"`
-	Genesis      clock.Date    `json:"genesis"`
-	Institutions []Institution `json:"-"`
+	Seed         int64           `json:"seed"`
+	Genesis      clock.Date      `json:"genesis"`
+	Institutions []Institution   `json:"-"`
+	Calendar     *clock.Calendar `json:"-"`
 }
 
 func DefaultInstitutions() []Institution {
