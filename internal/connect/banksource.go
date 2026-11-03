@@ -13,6 +13,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -44,7 +45,7 @@ func openLedgerSource(ctx context.Context, cfg *config.Config, b *config.Bank, w
 			return nil, err
 		}
 	}
-	st, err := store.Open(ctx, cfg.DatabaseURL, b.Database)
+	st, err := store.Open(ctx, cfg.DatabaseURL, b.Database, openbanking.Migrate)
 	if err != nil {
 		return nil, err
 	}

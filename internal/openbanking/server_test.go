@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -104,7 +105,7 @@ func (e *env) clientFor(cn, role string) *http.Client {
 	return &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{pair}, RootCAs: pool}}}
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	t.Helper()
 	ca, err := pki.NewAuthority("Test CA", time.Hour)
 	if err != nil {
@@ -131,12 +132,16 @@ func newEnv(t *testing.T) *env {
 	e.ts.StartTLS()
 	t.Cleanup(e.ts.Close)
 	client := &Client{ID: "OBR-1", Name: "Connect", Role: "aggregator", CertCN: "connect", Keys: []*ecdsa.PublicKey{&key.PublicKey}, RedirectURIs: []string{"https://connect.localhost/cb"}}
-	e.srv = New(Config{
+	cfg := Config{
 		BankID: "bank-a", BankName: "Bank A", Issuer: e.ts.URL, AuthorizeURL: "http://bank-a.localhost/authorize", HistoryDays: 90,
 		Store: e.store, Registry: fakeRegistry{client}, Data: fakeData{}, Ledger: e.ledger,
 		Now: func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.now },
 		Biz: func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.biz },
-	})
+	}
+	for _, tweak := range tweaks {
+		tweak(&cfg)
+	}
+	e.srv = New(cfg)
 	h = e.srv.Handler()
 	e.good = e.clientFor("connect", "aggregator")
 	e.other = e.clientFor("connect", "aggregator")
@@ -198,12 +203,18 @@ func challenge(v string) string {
 	return b64.EncodeToString(sum[:])
 }
 
+const allScopes = "accounts balances transactions"
+
 func (e *env) pushed() (string, string) {
+	return e.pushedFor(allScopes)
+}
+
+func (e *env) pushedFor(scope string) (string, string) {
 	e.t.Helper()
 	status, body := e.post(e.good, "/par", url.Values{
 		"response_type": {"code"}, "client_id": {"OBR-1"}, "redirect_uri": {"https://connect.localhost/cb"}, "state": {"st1"},
 		"code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}, "partner_id": {"balance"}, "partner_name": {"Balance"},
-		"transaction_from": {"2026-02-01"},
+		"transaction_from": {"2026-02-01"}, "scope": {scope},
 	})
 	if status != http.StatusCreated {
 		e.t.Fatalf("par: %d %v", status, body)
@@ -212,8 +223,12 @@ func (e *env) pushed() (string, string) {
 }
 
 func (e *env) code() (string, string) {
+	return e.codeFor(allScopes)
+}
+
+func (e *env) codeFor(scope string) (string, string) {
 	e.t.Helper()
-	uri, id := e.pushed()
+	uri, id := e.pushedFor(scope)
 	loc, err := e.srv.Approve(context.Background(), uri, "adaeze", []string{"0123456789"}, false)
 	if err != nil {
 		e.t.Fatal(err)
@@ -230,8 +245,12 @@ func (e *env) exchange(c *http.Client, code, v string) (int, map[string]any) {
 }
 
 func (e *env) tokens() (map[string]any, string) {
+	return e.tokensFor(allScopes)
+}
+
+func (e *env) tokensFor(scope string) (map[string]any, string) {
 	e.t.Helper()
-	code, id := e.code()
+	code, id := e.codeFor(scope)
 	status, body := e.exchange(e.good, code, verifier)
 	if status != http.StatusOK {
 		e.t.Fatalf("token: %d %v", status, body)
@@ -250,7 +269,7 @@ func TestFullFlow(t *testing.T) {
 		t.Fatalf("balances: %d %v", status, body)
 	}
 	status, body := e.get(e.good, "/accounts/0123456789/transactions?page_size=2", access)
-	if status != 200 || len(body["data"].([]any)) != 2 || body["next_cursor"] != "2" {
+	if status != 200 || len(body["data"].([]any)) != 2 || body["next_cursor"] != "2026-01-05.1" {
 		t.Fatalf("transactions: %d %v", status, body)
 	}
 	if status, _ := e.get(e.good, "/accounts/0123456790/balances", access); status != http.StatusForbidden {
@@ -278,7 +297,7 @@ func TestFullFlow(t *testing.T) {
 func TestPAR(t *testing.T) {
 	e := newEnv(t)
 	base := func() url.Values {
-		return url.Values{"response_type": {"code"}, "redirect_uri": {"https://connect.localhost/cb"}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}}
+		return url.Values{"response_type": {"code"}, "redirect_uri": {"https://connect.localhost/cb"}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}, "scope": {allScopes}}
 	}
 	plain := base()
 	plain.Set("code_challenge_method", "plain")
@@ -460,14 +479,220 @@ func TestRevokedConsent(t *testing.T) {
 	}
 }
 
-func TestExpiredConsent(t *testing.T) {
+const day = 24 * time.Hour
+
+func TestConsentNeedsRenewalAfterAYear(t *testing.T) {
 	e := newEnv(t)
 	tok, id := e.tokens()
-	e.advance(0, 366*24*time.Hour)
-	if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != http.StatusForbidden || body["error"] != "consent_expired" {
+	e.advance(0, 366*day)
+	if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != http.StatusForbidden || body["error"] != "consent_reconsent_required" {
 		t.Fatalf("after a year: %d %v", status, body)
+	}
+	if c, _ := e.store.Consent(context.Background(), id); c.Status != ReconsentRequired {
+		t.Fatalf("status %s", c.Status)
+	}
+	if last := e.ledger.events[len(e.ledger.events)-1]; last.Status != ReconsentRequired {
+		t.Fatalf("ledger %+v", last)
+	}
+}
+
+func TestConsentLifetimeFollowsTheSetting(t *testing.T) {
+	e := newEnv(t, func(c *Config) { c.ConsentMonths = 6 })
+	_, id := e.tokens()
+	c, _ := e.store.Consent(context.Background(), id)
+	if want := c.AuthorisedAt.AddDate(0, 6, 0); !c.ExpiresAt.Equal(want) {
+		t.Fatalf("expires %s, want %s", c.ExpiresAt, want)
+	}
+	uri, _ := e.pushed()
+	req, err := e.srv.Request(context.Background(), uri, "OBR-1")
+	if err != nil || req.Months != 6 || !req.Until.Equal(e.biz.AddDate(0, 6, 0)) {
+		t.Fatalf("request %+v %v", req, err)
+	}
+}
+
+func TestDormantConsent(t *testing.T) {
+	e := newEnv(t, func(c *Config) { c.ConsentMonths = 24 })
+	tok, id := e.tokens()
+	access := tok["access_token"].(string)
+	e.advance(0, 179*day)
+	if status, body := e.get(e.good, "/accounts", access); status != 200 {
+		t.Fatalf("used within 180 days: %d %v", status, body)
+	}
+	e.advance(0, 179*day)
+	if status, body := e.get(e.good, "/accounts", access); status != 200 {
+		t.Fatalf("use should restart the 180 days: %d %v", status, body)
+	}
+	e.advance(0, 181*day)
+	if status, body := e.get(e.good, "/accounts", access); status != http.StatusForbidden || body["error"] != "consent_dormant" {
+		t.Fatalf("unused for 181 days: %d %v", status, body)
+	}
+	if c, _ := e.store.Consent(context.Background(), id); c.Status != Dormant {
+		t.Fatalf("status %s", c.Status)
+	}
+	if status, _ := e.post(e.good, "/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {tok["refresh_token"].(string)}}); status != http.StatusBadRequest {
+		t.Fatalf("refresh of a dormant consent: %d", status)
+	}
+	if last := e.ledger.events[len(e.ledger.events)-1]; last.Status != Dormant || last.ConsentID != id {
+		t.Fatalf("ledger %+v", last)
+	}
+}
+
+func TestDormancyFollowsTheSetting(t *testing.T) {
+	e := newEnv(t, func(c *Config) { c.DormantDays = 30 })
+	tok, _ := e.tokens()
+	e.advance(0, 31*day)
+	if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != http.StatusForbidden || body["error"] != "consent_dormant" {
+		t.Fatalf("unused for 31 days with a 30 day setting: %d %v", status, body)
+	}
+}
+
+func TestScopeNarrowsWhatIsShared(t *testing.T) {
+	e := newEnv(t)
+	for name, scope := range map[string]string{"none": "", "unknown": "accounts payments"} {
+		status, body := e.post(e.good, "/par", url.Values{"response_type": {"code"}, "redirect_uri": {"https://connect.localhost/cb"}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}, "scope": {scope}})
+		if status != http.StatusBadRequest || body["error"] != "invalid_scope" {
+			t.Errorf("%s scope: %d %v", name, status, body)
+		}
+	}
+	tok, id := e.tokensFor("balances accounts")
+	if tok["scope"] != "accounts balances" {
+		t.Fatalf("scope %v", tok["scope"])
+	}
+	access := tok["access_token"].(string)
+	if status, body := e.get(e.good, "/accounts/0123456789/balances", access); status != 200 {
+		t.Fatalf("balances: %d %v", status, body)
+	}
+	if status, body := e.get(e.good, "/accounts/0123456789/transactions", access); status != http.StatusForbidden || body["error"] != "insufficient_scope" {
+		t.Fatalf("transactions without the scope: %d %v", status, body)
+	}
+	if c, _ := e.store.Consent(context.Background(), id); strings.Join(c.Scopes, " ") != "accounts balances" {
+		t.Fatalf("stored scopes %v", c.Scopes)
+	}
+}
+
+func TestTransactionCursor(t *testing.T) {
+	e := newEnv(t)
+	tok, _ := e.tokens()
+	access := tok["access_token"].(string)
+	seen, cursor := []string{}, ""
+	for i := 0; i < 5; i++ {
+		path := "/accounts/0123456789/transactions?page_size=2"
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		status, body := e.get(e.good, path, access)
+		if status != 200 {
+			t.Fatalf("page %d: %d %v", i, status, body)
+		}
+		for _, row := range body["data"].([]any) {
+			seen = append(seen, row.(map[string]any)["id"].(string))
+		}
+		next, _ := body["next_cursor"].(string)
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	if strings.Join(seen, "") != "abcde" {
+		t.Fatalf("paged through %v", seen)
+	}
+	for _, bad := range []string{"9223372036854775807", "2026-01-05.99999999999999999999", "x.1", "2026-01-05"} {
+		if status, _ := e.get(e.good, "/accounts/0123456789/transactions?cursor="+url.QueryEscape(bad), access); status != http.StatusBadRequest {
+			t.Errorf("cursor %q: %d", bad, status)
+		}
+	}
+	if status, body := e.get(e.good, "/accounts/0123456789/transactions?cursor=2099-01-01.0", access); status != 200 || len(body["data"].([]any)) != 0 || body["next_cursor"] != nil {
+		t.Errorf("cursor past the end: %d %v", status, body)
+	}
+}
+
+func TestRevokeNeedsTheCustomer(t *testing.T) {
+	e := newEnv(t)
+	_, id := e.tokens()
+	if err := e.srv.Revoke(context.Background(), id, "", "bank"); err != ErrNotYours {
+		t.Fatalf("revoke without a customer: %v", err)
+	}
+	if c, _ := e.store.Consent(context.Background(), id); c.Status != Authorised {
+		t.Fatalf("status %s", c.Status)
+	}
+}
+
+func TestStaleRequestsAreDropped(t *testing.T) {
+	e := newEnv(t)
+	_, stale := e.pushed()
+	code, _ := e.code()
+	e.advance(11*time.Minute, 0)
+	e.pushed()
+	e.srv.mu.Lock()
+	pars, codes := len(e.srv.pars), len(e.srv.codes)
+	e.srv.mu.Unlock()
+	if pars != 1 || codes != 1 {
+		t.Fatalf("%d requests and %d codes kept", pars, codes)
+	}
+	if c, _ := e.store.Consent(context.Background(), stale); c.Status != Expired {
+		t.Fatalf("an abandoned request is %s", c.Status)
+	}
+	e.advance(11*time.Minute, 0)
+	if status, _ := e.post(e.good, "/token", url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {"https://connect.localhost/cb"}}); status != http.StatusBadRequest {
+		t.Fatalf("expired code: %d", status)
+	}
+	e.srv.mu.Lock()
+	codes = len(e.srv.codes)
+	e.srv.mu.Unlock()
+	if codes != 0 {
+		t.Fatalf("%d codes kept", codes)
+	}
+}
+
+func TestResumeExpiresLostRequests(t *testing.T) {
+	e := newEnv(t)
+	_, id := e.pushed()
+	restarted := New(e.srv.cfg)
+	if err := restarted.Resume(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	if c, _ := e.store.Consent(context.Background(), id); c.Status != Expired {
 		t.Fatalf("status %s", c.Status)
+	}
+}
+
+type failingStore struct {
+	*MemStore
+}
+
+func (failingStore) RecordAccess(context.Context, Access) error {
+	return errors.New("disk full")
+}
+
+func TestAccessLogFailureFailsTheRequest(t *testing.T) {
+	e := newEnv(t)
+	tok, _ := e.tokens()
+	e.srv.cfg.Store = failingStore{e.store}
+	if status, body := e.get(e.good, "/accounts/0123456789/balances", tok["access_token"].(string)); status != http.StatusInternalServerError || body["data"] != nil {
+		t.Fatalf("balances with a broken access log: %d %v", status, body)
+	}
+}
+
+func TestAssertionRules(t *testing.T) {
+	e := newEnv(t, func(c *Config) { c.AssertionLife = time.Minute })
+	sign := func(aud string, life time.Duration) string {
+		jwt, err := Sign(e.key, "k1", map[string]any{"iss": "OBR-1", "sub": "OBR-1", "aud": aud, "jti": random("j", 8), "exp": e.now.Add(life).Unix()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return jwt
+	}
+	push := func(assertion string) int {
+		status, _ := e.post(e.good, "/par", url.Values{"response_type": {"code"}, "redirect_uri": {"https://connect.localhost/cb"}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}, "scope": {allScopes}, "client_assertion": {assertion}, "client_assertion_type": {assertionType}})
+		return status
+	}
+	if status := push(sign(e.ts.URL, 30*time.Second)); status != http.StatusCreated {
+		t.Errorf("issuer audience: %d", status)
+	}
+	if status := push(sign(e.ts.URL+"/par", 30*time.Second)); status != http.StatusUnauthorized {
+		t.Errorf("endpoint as audience: %d", status)
+	}
+	if status := push(sign(e.ts.URL, 2*time.Minute)); status != http.StatusUnauthorized {
+		t.Errorf("assertion longer than the configured window: %d", status)
 	}
 }

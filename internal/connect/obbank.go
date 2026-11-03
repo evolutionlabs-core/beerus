@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -40,12 +41,11 @@ func (a *App) prepareOpenBanking() error {
 		if b.APIPort != 0 {
 			continue
 		}
-		for p := b.Port + 10; p < b.Port+300; p++ {
-			if !used[p] && portFree(p) {
-				b.APIPort, used[p], changed = p, true, true
-				break
-			}
+		p, err := a.cfg.AllocatePort(b.Port+a.cfg.APIPortOffset(), used, portFree)
+		if err != nil {
+			return fmt.Errorf("%s: bank API: %w", b.ID, err)
 		}
+		b.APIPort, used[p], changed = p, true, true
 	}
 	if changed {
 		if err := a.cfg.Save(); err != nil {
@@ -56,6 +56,12 @@ func (a *App) prepareOpenBanking() error {
 }
 
 func (a *App) ensureRegistry() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ensureRegistryLocked()
+}
+
+func (a *App) ensureRegistryLocked() error {
 	key, err := a.cfg.SigningKey()
 	if err != nil {
 		return err
@@ -72,8 +78,6 @@ func (a *App) ensureRegistry() error {
 		RedirectURIs: []string{a.cfg.WidgetURL() + "/bank/callback"},
 		RegisteredAt: a.clock.Real(),
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.regMu.Lock()
 	defer a.regMu.Unlock()
 	if old := a.st.Registry[c.ID]; old != nil {
@@ -86,6 +90,10 @@ func (a *App) ensureRegistry() error {
 	a.st.Registry[c.ID] = c
 	a.dirty()
 	return nil
+}
+
+func localHost(h string) bool {
+	return h == "localhost" || strings.HasSuffix(h, ".localhost") || net.ParseIP(h).IsLoopback()
 }
 
 var registryID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$`)
@@ -124,8 +132,8 @@ func (a *App) AddRegistryClient(req RegistryRequest) (*RegistryClient, error) {
 	}
 	for _, u := range req.RedirectURIs {
 		p, err := url.Parse(u)
-		if err != nil || (p.Scheme != "https" && p.Scheme != "http") || p.Host == "" || p.Fragment != "" {
-			return nil, bad("%q is not an http or https URL", u)
+		if err != nil || p.Host == "" || p.Fragment != "" || (p.Scheme != "https" && !(p.Scheme == "http" && localHost(p.Hostname()))) {
+			return nil, bad("%q must be an https URL, or an http URL on localhost", u)
 		}
 	}
 	block, _ := pem.Decode([]byte(req.PublicKey))
@@ -227,7 +235,7 @@ func (l consentLedger) Record(e openbanking.ConsentEvent) {
 	l.a.regMu.Lock()
 	defer l.a.regMu.Unlock()
 	l.a.st.ConsentLedger = append(l.a.st.ConsentLedger, ConsentRecord{Seq: int64(len(l.a.st.ConsentLedger) + 1), ConsentID: e.ConsentID, Bank: e.Bank, ClientID: e.ClientID, PartnerID: e.PartnerID, Status: string(e.Status), Via: e.Via, At: e.At})
-	l.a.isDirty = true
+	l.a.isDirty.Store(true)
 }
 
 type bankData struct {
@@ -373,14 +381,20 @@ func (a *App) openBanking(id string) *openbanking.Server {
 			}
 			return first
 		}},
-		Registry:  registryView{a},
-		Data:      bankData{a, b},
-		Ledger:    consentLedger{a},
-		Notify:    a.notifyConsent(b),
-		StableIDs: b.Stable(),
-		Now:       a.clock.Real,
-		Biz:       a.clock.Now,
+		Registry:      registryView{a},
+		Data:          bankData{a, b},
+		Ledger:        consentLedger{a},
+		StableIDs:     b.Stable(),
+		Now:           a.clock.Real,
+		Biz:           a.clock.Now,
+		ConsentMonths: b.API.ConsentMonths,
+		RefreshDays:   b.API.RefreshDays,
+		DormantDays:   b.API.DormantDays,
+		AssertionLife: time.Duration(b.API.AssertionSeconds) * time.Second,
 	})
+	if err := s.Resume(context.Background()); err != nil {
+		a.log.Error("open banking requests not cleared", "bank", id, "err", err)
+	}
 	a.obs[id] = s
 	return s
 }
@@ -433,7 +447,7 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 		}
 		h.ServeHTTP(w, r)
 	})
-	srv := &http.Server{Handler: guarded, ReadHeaderTimeout: 10 * time.Second, ErrorLog: log.New(quietTLS{a}, "", 0)}
+	srv := &http.Server{Handler: guarded, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 2 * time.Minute, ErrorLog: log.New(quietTLS{a}, "", 0)}
 	for _, l := range ls {
 		go func(l net.Listener) { _ = srv.Serve(tls.NewListener(l, tc)) }(l)
 	}

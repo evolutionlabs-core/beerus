@@ -259,7 +259,7 @@ func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
 	}
 	a.authorise(c, ls)
 	if b := a.cfg.Bank(c.Institution); a.live() && b != nil && oldConsent != "" && oldConsent != c.ConsentID {
-		_ = a.bankRevoke(b, oldConsent)
+		a.revokeOrQueue(b, oldConsent)
 	}
 	writeJSON(w, status, a.connectionJSON(c))
 }
@@ -320,7 +320,9 @@ func (a *App) authorise(c *Connection, ls *LinkSession) {
 		if !old[id] {
 			a.emit(c.PartnerID, "account.added", map[string]any{"connection_id": c.ID, "account_id": id})
 		}
-		_, _ = a.fetchAccount(c, rec, now)
+		if _, err := a.fetchAccount(c, rec, now); err != nil && !a.bankFailed(c, err) {
+			a.log.Warn("first sync after linking failed", "connection", c.ID, "account", id, "err", err)
+		}
 	}
 	c.EffectiveStart = nil
 	if earliest != nil && *earliest != c.StartDate {

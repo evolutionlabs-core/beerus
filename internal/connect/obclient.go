@@ -12,6 +12,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -90,7 +92,7 @@ func (a *App) bankClient() (*http.Client, error) {
 		},
 	}
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	a.obHTTP = &http.Client{Timeout: bankCallBudget, Transport: &http.Transport{
+	var rt http.RoundTripper = &http.Transport{
 		TLSClientConfig: tc,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
@@ -99,7 +101,11 @@ func (a *App) bankClient() (*http.Client, error) {
 			}
 			return dialer.DialContext(ctx, network, addr)
 		},
-	}}
+	}
+	if a.bankWrap != nil {
+		rt = a.bankWrap(rt)
+	}
+	a.obHTTP = &http.Client{Timeout: bankCallBudget, Transport: rt}
 	return a.obHTTP, nil
 }
 
@@ -141,12 +147,17 @@ func (a *App) bankDo(b *config.Bank, method, path string, form url.Values, token
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	a.mu.Unlock()
 	resp, err := cl.Do(req)
+	var raw []byte
+	if err == nil {
+		raw, _ = io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		resp.Body.Close()
+	}
+	a.mu.Lock()
 	if err != nil {
 		return &bankDown{err}
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusBadGateway {
 		return &bankDown{fmt.Errorf("HTTP %d", resp.StatusCode)}
 	}
@@ -178,15 +189,16 @@ func (a *App) callbackURL() string {
 }
 
 type tokenReply struct {
-	Access    string `json:"access_token"`
-	Refresh   string `json:"refresh_token"`
-	ExpiresIn int    `json:"expires_in"`
-	ConsentID string `json:"consent_id"`
+	Access           string `json:"access_token"`
+	Refresh          string `json:"refresh_token"`
+	ExpiresIn        int    `json:"expires_in"`
+	RefreshExpiresIn int    `json:"refresh_expires_in"`
+	ConsentID        string `json:"consent_id"`
 }
 
 func (a *App) toToken(r tokenReply) bankToken {
 	now := a.clock.Real()
-	return bankToken{Access: r.Access, Refresh: r.Refresh, AccessExpires: now.Add(time.Duration(r.ExpiresIn) * time.Second), RefreshExpires: now.AddDate(1, 0, 0), ConsentID: r.ConsentID}
+	return bankToken{Access: r.Access, Refresh: r.Refresh, AccessExpires: now.Add(time.Duration(r.ExpiresIn) * time.Second), RefreshExpires: now.Add(time.Duration(r.RefreshExpiresIn) * time.Second), ConsentID: r.ConsentID}
 }
 
 func (a *App) bankPAR(b *config.Bank, ls *LinkSession, state, challenge string) (string, error) {
@@ -197,6 +209,7 @@ func (a *App) bankPAR(b *config.Bank, ls *LinkSession, state, challenge string) 
 		"state":                 {state},
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
+		"scope":                 {strings.Join(openbanking.Scopes, " ")},
 		"partner_id":            {ls.PartnerID},
 		"transaction_from":      {ls.StartDate.String()},
 	}
@@ -238,7 +251,16 @@ func (a *App) refreshToken(vid string, b *config.Bank) error {
 		if err == nil || !isDown(err) || attempt == 1 {
 			break
 		}
+		a.mu.Unlock()
 		time.Sleep(100 * time.Millisecond)
+		a.mu.Lock()
+	}
+	cur := a.st.Vault[vid]
+	if cur == nil {
+		return errReauth
+	}
+	if err != nil && cur != e {
+		return nil
 	}
 	if err != nil {
 		var be *bankError
@@ -295,6 +317,42 @@ func (a *App) bankRevoke(b *config.Bank, consentID string) error {
 	return err
 }
 
+func (a *App) revokeOrQueue(b *config.Bank, consentID string) {
+	if consentID == "" {
+		return
+	}
+	if err := a.bankRevoke(b, consentID); err != nil {
+		a.log.Warn("consent not revoked at the bank; will retry", "bank", b.ID, "consent", consentID, "err", err)
+		a.st.Revokes = append(a.st.Revokes, PendingRevoke{Bank: b.ID, ConsentID: consentID, Attempts: 1, Next: a.clock.Real().Add(eventDelay(1))})
+		a.dirty()
+	}
+}
+
+func (a *App) retryRevokes() {
+	if !a.live() || len(a.st.Revokes) == 0 {
+		return
+	}
+	pending := a.st.Revokes
+	a.st.Revokes = nil
+	for _, p := range pending {
+		b := a.cfg.Bank(p.Bank)
+		if b == nil {
+			continue
+		}
+		if a.clock.Real().Before(p.Next) {
+			a.st.Revokes = append(a.st.Revokes, p)
+			continue
+		}
+		if err := a.bankRevoke(b, p.ConsentID); err != nil {
+			p.Attempts++
+			p.Next = a.clock.Real().Add(eventDelay(p.Attempts))
+			a.log.Warn("consent still not revoked at the bank", "bank", p.Bank, "consent", p.ConsentID, "attempt", p.Attempts, "err", err)
+			a.st.Revokes = append(a.st.Revokes, p)
+		}
+	}
+	a.dirty()
+}
+
 type bankMeta struct {
 	StableIDs bool `json:"stable_ids"`
 }
@@ -319,7 +377,16 @@ func (a *App) refreshTokens() {
 		return
 	}
 	real := a.clock.Real()
-	for _, c := range a.st.Connections {
+	ids := make([]string, 0, len(a.st.Connections))
+	for id := range a.st.Connections {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		c := a.st.Connections[id]
+		if c == nil {
+			continue
+		}
 		switch c.Status {
 		case "revoked", "expired", "reauth_required":
 			continue
@@ -335,20 +402,11 @@ func (a *App) refreshTokens() {
 	}
 }
 
-func (a *App) ExpireAccessTokens() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for _, e := range a.st.Vault {
-		e.AccessExpires = a.clock.Real().Add(-time.Minute)
-	}
-	a.dirty()
-}
-
 func (a *App) bankFailed(c *Connection, err error) bool {
 	switch {
 	case consentCode(err) == "consent_revoked":
 		a.setStatus(c, "revoked", "connection_revoked")
-	case consentCode(err) == "consent_expired":
+	case slices.Contains([]string{"consent_expired", "consent_reconsent_required", "consent_dormant"}, consentCode(err)):
 		a.setStatus(c, "expired", "reauth_required")
 	case consentCode(err) == "consent_not_authorised", errors.Is(err, errReauth):
 		a.setStatus(c, "reauth_required", "reauth_required")

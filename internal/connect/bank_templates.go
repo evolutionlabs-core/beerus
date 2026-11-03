@@ -187,7 +187,7 @@ const bankTemplates = `
 <div class="min-w-0 flex-1"><p class="text-[14px]">{{.Partner}} <span class="text-muted">via {{$.Via}}</span></p>
 <p class="mt-0.5 text-[12.5px] text-muted">{{range $i, $a := .Accounts}}{{if $i}}, {{end}}{{$a}}{{end}}</p>
 <p class="mt-0.5 text-[12.5px] text-faint">Allowed {{day .Since}}{{if not .Until.IsZero}} · until {{day .Until}}{{end}}{{if not .LastAccess.IsZero}} · last accessed {{when .LastAccess}}{{end}}</p></div>
-{{if eq .Status "revoked"}}<span class="badge badge-bad">Access withdrawn</span>{{else if eq .Status "expired"}}<span class="badge badge-bad">Expired</span>{{else}}<form method="post" action="/apps/{{.ID}}/revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-secondary btn-sm">Withdraw access</button></form>{{end}}
+{{if eq .Status "revoked"}}<span class="badge badge-bad">Access withdrawn</span>{{else if eq .Status "expired"}}<span class="badge badge-bad">Expired</span>{{else if eq .Status "dormant"}}<span class="badge badge-bad">Not used for a while</span>{{else if eq .Status "renew"}}<span class="badge badge-bad">Renewal needed</span>{{else}}<form method="post" action="/apps/{{.ID}}/revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-secondary btn-sm">Withdraw access</button></form>{{end}}
 </li>{{end}}</ul>{{else}}<p class="px-5 py-10 text-center text-muted">No apps are connected.</p>{{end}}
 </section>
 <section class="mt-8 rounded-2xl border border-line bg-panel">
@@ -211,9 +211,9 @@ const bankTemplates = `
 <dt class="text-muted">Registry number</dt><dd class="num">{{.Client.RegistryID}}</dd>
 <dt class="text-muted">CAC number</dt><dd class="num">{{.Client.CAC}}</dd>
 <dt class="text-muted">Acting for</dt><dd>{{.PartnerLegal}} ({{.Partner}})</dd>
-<dt class="text-muted">Access</dt><dd>Account details, balances and transactions. Read only.</dd>
+<dt class="text-muted">Access</dt><dd>{{.Shared}}. Read only.</dd>
 <dt class="text-muted">History from</dt><dd>{{.Start}}{{if .Capped}} <span class="text-muted">· {{$.Bank.Name}} shares history from {{.Effective}}</span>{{end}}</dd>
-<dt class="text-muted">Duration</dt><dd>12 months, until {{.Until}}</dd>
+<dt class="text-muted">Duration</dt><dd>{{.Months}} months, until {{.Until}}</dd>
 <dt class="text-muted">Frequency</dt><dd>Several times a day, and when {{.Partner}} asks</dd>
 </dl>
 </section>

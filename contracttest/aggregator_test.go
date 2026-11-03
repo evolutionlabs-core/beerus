@@ -3,6 +3,8 @@ package contracttest
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"regexp"
@@ -90,7 +92,7 @@ func TestRealAggregator(t *testing.T) {
 	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM ob_tokens WHERE kind = 'refresh'`).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	s.app.ExpireAccessTokens()
+	s.skewReal(15 * time.Minute)
 	s.syncNow()
 	var after int
 	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM ob_tokens WHERE kind = 'refresh'`).Scan(&after); err != nil {
@@ -103,7 +105,7 @@ func TestRealAggregator(t *testing.T) {
 		t.Fatalf("status after refresh: %v", got.JSON["status"])
 	}
 
-	forged, err := openbanking.Sign(mustSigningKey(t, s), "bank-a", map[string]any{"iss": s.cfg.Bank("bank-a").APIURL(), "aud": s.cfg.WidgetURL(), "jti": "x", "exp": time.Now().Add(time.Minute).Unix(), "consent_id": consentID, "status": "Revoked"})
+	forged, err := openbanking.Sign(mustSigningKey(t, s), "bank-a", map[string]any{"iss": s.cfg.Bank("bank-a").APIURL(), "aud": s.cfg.WidgetURL(), "jti": "x", "exp": s.realNow().Add(time.Minute).Unix(), "consent_id": consentID, "status": "Revoked"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +181,7 @@ func TestRealAggregator(t *testing.T) {
 	})) == 0 {
 		t.Fatal("no reauth_required webhook after the consent expired")
 	}
-	if !s.consentTrail("bank-a")[consentID+" Expired/bank"] {
+	if !s.consentTrail("bank-a")[consentID+" ReconsentRequired/bank"] {
 		t.Fatalf("NIBSS consent ledger after expiry: %v", s.consentTrail("bank-a"))
 	}
 
@@ -238,5 +240,108 @@ func TestUnstableIDsAreFingerprinted(t *testing.T) {
 			t.Fatalf("line appears twice: %s", key)
 		}
 		seen[key] = true
+	}
+}
+
+func TestConsentEventsAreSignedWithTheEventKey(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newBankStack(t)
+	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	var consentID string
+	if err := s.bankDB("bank-a").QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
+		t.Fatal(err)
+	}
+	tlsRaw, err := os.ReadFile(s.cfg.Path("banks", "bank-a", "server.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(tlsRaw)
+	k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged, err := openbanking.Sign(k.(*ecdsa.PrivateKey), "bank-a", map[string]any{"iss": s.cfg.Bank("bank-a").APIURL(), "aud": s.cfg.WidgetURL(), "jti": "tls-key", "exp": s.realNow().Add(time.Minute).Unix(), "consent_id": consentID, "status": "Revoked"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := s.raw.Post(s.cfg.WidgetURL()+"/consent-events", "application/secevent+jwt", strings.NewReader(forged))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode < 400 {
+		t.Fatalf("an event signed with the bank's TLS key was accepted: %d", resp.StatusCode)
+	}
+	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "active" {
+		t.Fatalf("status %v", got.JSON["status"])
+	}
+}
+
+func TestConsentEventsAreKeptAndRetried(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newBankStack(t)
+	db := s.bankDB("bank-a")
+	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	var consentID string
+	if err := db.QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
+		t.Fatal(err)
+	}
+	cert := s.cfg.Path("banks", "bank-a", "events.crt")
+	if err := os.Rename(cert, cert+".off"); err != nil {
+		t.Fatal(err)
+	}
+	b := s.bankSignIn("adaeze")
+	b.post("/apps/"+consentID+"/revoke", map[string][]string{})
+	var waiting, attempts int
+	if err := db.QueryRow(context.Background(), `SELECT count(*), coalesce(max(attempts), 0) FROM ob_events WHERE delivered_at IS NULL AND consent_id = $1 AND status = 'Revoked'`, consentID).Scan(&waiting, &attempts); err != nil || waiting != 1 || attempts != 1 {
+		t.Fatalf("the undelivered revoke event: %d waiting, %d attempts, %v", waiting, attempts, err)
+	}
+	if err := os.Rename(cert+".off", cert); err != nil {
+		t.Fatal(err)
+	}
+	s.skewReal(time.Hour)
+	s.app.Step()
+	var left, delivered int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE delivered_at IS NULL), count(*) FILTER (WHERE delivered_at IS NOT NULL) FROM ob_events WHERE consent_id = $1`, consentID).Scan(&left, &delivered); err != nil || left != 0 || delivered < 2 {
+		t.Fatalf("events after the retry: %d undelivered, %d delivered, %v", left, delivered, err)
+	}
+	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "revoked" {
+		t.Fatalf("status after the retried event: %v", got.JSON["status"])
+	}
+}
+
+func TestRestoreAsksForANewConsent(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newBankStack(t)
+	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	id := fmt.Sprint(accountAt(t, conn, "current")["id"])
+	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "linked"})["id"].(string)
+	raw, err := os.ReadFile(s.cfg.Path("snapshots", snap+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "oba_") || strings.Contains(string(raw), "obr_") || strings.Contains(string(raw), `"vault"`) {
+		t.Fatal("a snapshot holds bank tokens")
+	}
+	s.ctl("POST", "/snapshots/"+snap+"/restore", nil)
+	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "reauth_required" {
+		t.Fatalf("status after a restore: %v", got.JSON["status"])
+	}
+	s.syncNow()
+	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "reauth_required" {
+		t.Fatalf("status after a sync: %v", got.JSON["status"])
+	}
+	again := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	if fmt.Sprint(accountAt(t, again, "current")["id"]) != id {
+		t.Fatal("account ID changed across the reconnect")
+	}
+	if clients := s.ctl("GET", "/registry/clients", nil)["data"].([]any); len(clients) != 1 || clients[0].(map[string]any)["id"] != s.cfg.Connect.RegistryID {
+		t.Fatalf("registry after a restore: %v", clients)
 	}
 }

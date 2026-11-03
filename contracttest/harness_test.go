@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,6 +80,15 @@ type Stack struct {
 	validator  validator.Validator
 	vmu        sync.Mutex
 	violations []string
+	skew       atomic.Int64
+}
+
+func (s *Stack) realNow() time.Time {
+	return time.Now().Add(time.Duration(s.skew.Load()))
+}
+
+func (s *Stack) skewReal(by time.Duration) {
+	s.skew.Add(int64(by))
 }
 
 func specPath() string {
@@ -133,7 +143,17 @@ func newBankStack(t *testing.T) *Stack {
 
 func startStack(t *testing.T, worldOnly bool, edits ...func(*config.Config)) *Stack {
 	t.Helper()
+	return startStackWith(t, worldOnly, connect.Options{}, edits...)
+}
+
+func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ...func(*config.Config)) *Stack {
+	t.Helper()
+	opts.WorldOnly = worldOnly
+	opts.Personas = bankStackPersonas(worldOnly)
 	s := &Stack{t: t, worldOnly: worldOnly}
+	if opts.Real == nil {
+		opts.Real = s.realNow
+	}
 	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
 		cfg, err := config.Load(dir)
 		if err != nil {
@@ -182,7 +202,7 @@ func startStack(t *testing.T, worldOnly bool, edits ...func(*config.Config)) *St
 					t.Fatal(err)
 				}
 			}
-			app, err := connect.New(cfg, connect.Options{WorldOnly: worldOnly, Personas: bankStackPersonas(worldOnly)})
+			app, err := connect.New(cfg, opts)
 			if err != nil {
 				t.Fatal(err)
 			}

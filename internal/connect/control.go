@@ -455,6 +455,9 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 	}
 	cp.Deliveries = nil
 	cp.Vault = nil
+	cp.Registry = nil
+	cp.Revokes = nil
+	cp.ConsentLedger = nil
 	cp.Idem = map[string]*IdemRec{}
 	cp.WidgetSessions = map[string]*WidgetSession{}
 	for _, ls := range cp.LinkSessions {
@@ -520,6 +523,9 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	for a.settling {
+		a.settleDone.Wait()
+	}
 	taken := map[string]bool{}
 	for _, id := range f.Meta.Banks {
 		taken[id] = true
@@ -541,8 +547,22 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	st.fill()
 	st.WorldID = newID("wld")
 	st.Deliveries = a.st.Deliveries
-	st.Vault = a.st.Vault
+	st.Registry = a.st.Registry
+	st.Revokes = a.st.Revokes
+	st.ConsentLedger = a.st.ConsentLedger
 	a.st = st
+	if err := a.ensureRegistryLocked(); err != nil {
+		return "", err
+	}
+	if a.live() {
+		for _, c := range st.Connections {
+			switch c.Status {
+			case "revoked", "expired", "reauth_required":
+			default:
+				a.setStatus(c, "reauth_required", "reauth_required")
+			}
+		}
+	}
 	a.clock.Restore(st.Clock)
 	genesis, _ := a.cfg.GenesisDate()
 	a.world = world.New(a.worldConfig(genesis), st.World)
@@ -564,17 +584,17 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 		if err := a.rtgs.Restore(id); err != nil {
 			return "", err
 		}
-		if err := a.settleLocked(a.clock.Now()); err != nil {
-			a.log.Error("NIP settlement", "err", err)
-		}
 	}
 	for _, rec := range a.st.Accounts {
-		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed {
+		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed && c.Status != "reauth_required" {
 			a.emit(c.PartnerID, "sync.available", map[string]any{"connection_id": c.ID, "account_id": rec.ID, "world_id": st.WorldID})
 		}
 	}
 	a.dirty()
 	a.poke()
+	if err := a.settleLocked(a.clock.Now()); err != nil {
+		a.log.Error("NIP settlement", "err", err)
+	}
 	return st.WorldID, nil
 }
 
