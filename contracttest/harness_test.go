@@ -106,6 +106,9 @@ func newStack(t *testing.T) *Stack {
 
 func newStubStack(t *testing.T) *Stack {
 	t.Helper()
+	if testingExternal() {
+		t.Skip("needs the in-process stub")
+	}
 	return startStack(t, true)
 }
 
@@ -598,7 +601,7 @@ func (s *Stack) completeLink(widgetURL, institution, personaID string, accounts 
 	if b.result == nil && institution != "" && strings.Contains(b.last, `name="institution"`) {
 		b.post("/link/institution", url.Values{"institution": {institution}})
 	}
-	if b.result == nil && !s.worldOnly {
+	if b.result == nil && b.atBank() {
 		b.bankSignIn(personaID, accounts)
 	} else if b.result == nil {
 		p := s.persona(personaID)

@@ -163,6 +163,26 @@ func TestRealAggregator(t *testing.T) {
 		t.Fatalf("status after disconnect: %s", r.Body)
 	}
 
+	conn4 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	if err := db.QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(context.Background(), `UPDATE ob_consents SET expires_at = '2000-01-01' WHERE id = $1`, consentID); err != nil {
+		t.Fatal(err)
+	}
+	s.syncNow()
+	if r := s.call("GET", "/v1/connections/"+conn4.ConnectionID, nil); r.JSON["status"] != "expired" {
+		t.Fatalf("a consent that expired at the bank must expire the connection: %s", r.Body)
+	}
+	if len(s.eventsOf("connection.status_changed", func(d map[string]any) bool {
+		return d["connection_id"] == conn4.ConnectionID && d["status"] == "expired" && d["error_code"] == "reauth_required"
+	})) == 0 {
+		t.Fatal("no reauth_required webhook after the consent expired")
+	}
+	if !s.consentTrail("bank-a")[consentID+" Expired/bank"] {
+		t.Fatalf("NIBSS consent ledger after expiry: %v", s.consentTrail("bank-a"))
+	}
+
 	conn3 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
 	if _, err := db.Exec(context.Background(), `UPDATE ob_consents SET status = 'Revoked', revoked_via = 'bank' WHERE status = 'Authorised' AND partner_id = 'balance'`); err != nil {
 		t.Fatal(err)
