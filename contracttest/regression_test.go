@@ -138,7 +138,7 @@ func TestFrozenClockSurvivesRestart(t *testing.T) {
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
-	again, err := connect.New(s.cfg, connect.Options{})
+	again, err := connect.New(s.cfg, connect.Options{WorldOnly: s.worldOnly})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestBankLedgerStaysConsistent(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
-	s := newStack(t)
+	s := newBankStack(t)
 	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-40))
 	s.ctl("POST", "/scenarios/debit_then_reversal", map[string]any{"account_id": fmt.Sprint(accountAt(t, conn, "current")["id"])})
 	s.ctl("POST", "/scenarios/pending_amount_change", map[string]any{"account_id": fmt.Sprint(accountAt(t, conn, "current")["id"])})

@@ -78,7 +78,7 @@ func (a *App) initLifecycle() {
 	a.sites = map[string]*siteServer{}
 	a.strikes = map[string]int{}
 	for _, b := range a.cfg.Banks {
-		a.status[b.ID] = newStatus(b, a.ledgerFor(b.ID) != nil)
+		a.status[b.ID] = newStatus(b, a.worldOnly || a.ledgerFor(b.ID) != nil)
 		a.alignSuspensionLocked(b)
 	}
 }
@@ -410,6 +410,9 @@ func (a *App) step(st *BankStatus, i int, run func() error) bool {
 }
 
 func (a *App) reconcileBanks() {
+	if a.worldOnly {
+		return
+	}
 	a.watchConfig()
 	a.checkDrift()
 	a.lifeMu.Lock()

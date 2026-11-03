@@ -41,7 +41,7 @@ func TestCreateBank(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
-	s := newStack(t)
+	s := newBankStack(t)
 	snap := s.ctl("POST", "/snapshots", map[string]any{"name": "before"})
 	out := s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
 	if out["id"] != "abuja-digital" || out["phase"] != connect.PhaseProvisioning {
@@ -133,7 +133,7 @@ func TestSuspendBank(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
-	s := newStack(t)
+	s := newBankStack(t)
 	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
 	keys := map[string]string{}
 	for _, p := range s.ctl("GET", "/personas", nil)["data"].([]any) {
@@ -208,7 +208,7 @@ func TestBankRepairsDrift(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
-	s := newStack(t)
+	s := newBankStack(t)
 	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
 	before := s.must(s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+s.today().AddDays(-1).String(), nil), 200).JSON["ledger_balance"]
@@ -257,7 +257,7 @@ func TestBanksFollowConfigFile(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
-	s := newStack(t)
+	s := newBankStack(t)
 	edit := func(change func(c *config.Config)) {
 		t.Helper()
 		c, err := config.Load(s.cfg.Dir)
@@ -319,7 +319,7 @@ func TestOpenAccountAtNewBank(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
-	s := newStack(t)
+	s := newBankStack(t)
 	s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
 	s.waitPhase("abuja-digital", connect.PhaseActive, 60*time.Second)
 	acc := s.ctl("POST", "/banks/abuja-digital/accounts", map[string]any{"persona": "adaeze", "type": "current"})
