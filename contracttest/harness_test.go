@@ -104,6 +104,8 @@ func newStack(t *testing.T) *Stack {
 	return startStack(t, true)
 }
 
+const bankHistoryDays = 90
+
 func newBankStack(t *testing.T) *Stack {
 	t.Helper()
 	return startStack(t, false)
@@ -139,6 +141,15 @@ func startStack(t *testing.T, worldOnly bool) *Stack {
 				t.Fatal(err)
 			}
 			cfg.DatabaseURL = os.Getenv("BEERUS_TEST_DATABASE_URL")
+			if !worldOnly {
+				cfg.Genesis = clock.DateOf(time.Now()).AddDays(-bankHistoryDays).String()
+				for _, b := range cfg.Banks {
+					b.HistoryDays = min(b.HistoryDays, bankHistoryDays)
+				}
+				if err := cfg.Save(); err != nil {
+					t.Fatal(err)
+				}
+			}
 			app, err := connect.New(cfg, connect.Options{WorldOnly: worldOnly})
 			if err != nil {
 				t.Fatal(err)
