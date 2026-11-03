@@ -50,6 +50,7 @@ func TestDoneStory(t *testing.T) {
 	}
 	today := s.today()
 	start := today.AddDays(-365)
+	limited := start.Before(today.AddDays(-s.cfg.Bank("bank-a").HistoryDays))
 
 	step(1, "Adaeze's Bakery banks with Bank A and Bank B")
 	byBank := map[string][]map[string]any{}
@@ -91,7 +92,7 @@ func TestDoneStory(t *testing.T) {
 	for _, want := range []string{s.cfg.Connect.LegalName, s.cfg.Connect.RegistryID, s.cfg.Connect.CACNumber, "Evolution Labs", "to keep your books in sync", "Read only", "Anonymised analytics", "12 months", "Connected apps"} {
 		check(strings.Contains(b.last, want), "the consent screen is missing %q", want)
 	}
-	check(strings.Contains(b.last, "shares history from"), "the consent screen does not say the bank limits history")
+	check(!limited || strings.Contains(b.last, "shares history from"), "the consent screen does not say the bank limits history")
 	offered := []string{}
 	for _, m := range reAccount.FindAllStringSubmatch(b.last, -1) {
 		offered = append(offered, m[1])
@@ -112,7 +113,7 @@ func TestDoneStory(t *testing.T) {
 	step(4, "opening balance and history up to the bank's limit")
 	feedA, _ := s.syncAll(idA, "", 500)
 	eff := s.firstDate(idA, start)
-	check(eff.After(start), "history was not limited: effective start %s, asked %s", eff, start)
+	check(!limited || eff.After(start), "history was not limited: effective start %s, asked %s", eff, start)
 	opening := num(s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", idA, eff.AddDays(-1)), nil), 200).JSON["ledger_balance"].(map[string]any)["amount_minor"])
 	posted := []map[string]any{}
 	kinds, reversal := map[string]bool{}, false
@@ -213,27 +214,23 @@ func TestDoneStory(t *testing.T) {
 	}
 
 	step(6, "own-account transfer from Bank A to Bank B matched by session ID")
-	matches := func() int {
-		debits := map[string]int64{}
-		for _, l := range feedA.lines {
-			if l["channel"] == "nip" && num(l["amount_minor"]) == -10000000 {
-				debits[fmt.Sprint(l["references"].(map[string]any)["session_id"])] = num(l["amount_minor"])
-			}
-		}
-		n := 0
-		for _, l := range feedB.lines {
-			if amt, ok := debits[fmt.Sprint(l["references"].(map[string]any)["session_id"])]; ok && amt == -num(l["amount_minor"]) {
-				n++
-			}
-		}
-		return n
-	}
-	matchedBefore := matches()
-	s.ctl("POST", "/scenarios/own_account_transfer_across_banks", map[string]any{"persona": "adaeze"})
+	own := s.ctl("POST", "/scenarios/own_account_transfer_across_banks", map[string]any{"persona": "adaeze"})
+	ownSID := regexp.MustCompile(`session (\d{30})`).FindStringSubmatch(fmt.Sprint(own["result"]))
+	check(ownSID != nil, "the scenario did not report a session ID: %v", own)
 	s.advance("1m")
 	feedA, _ = s.syncMore(idA, feedA, 500)
 	feedB, _ = s.syncMore(idB, feedB, 500)
-	check(matches() == matchedBefore+1, "want the new Bank B credit matched to its Bank A debit by session ID: %d before, %d after", matchedBefore, matches())
+	bySession := func(st *feedState) []map[string]any {
+		out := []map[string]any{}
+		for _, l := range st.lines {
+			if l["channel"] == "nip" && l["references"].(map[string]any)["session_id"] == ownSID[1] {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	debit, credit := bySession(feedA), bySession(feedB)
+	check(len(debit) == 1 && len(credit) == 1 && num(debit[0]["amount_minor"]) == -num(credit[0]["amount_minor"]) && num(credit[0]["amount_minor"]) == 10000000, "session %s: Bank A %v, Bank B %v", ownSID[1], debit, credit)
 	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "done-story"})
 	atSnapA, atSnapB := idSet(feedA), idSet(feedB)
 
@@ -253,7 +250,7 @@ func TestDoneStory(t *testing.T) {
 			refChanged++
 		}
 	}
-	check(refChanged > 0, "the scenario changed no bank references, so nothing was tested")
+	check(refChanged > 0, "the scenario changed no bank references, so nothing was tested: %d lines in A, %d in B, %d and %d modified", len(feedA.lines), len(feedB.lines), len(feedA.modified), len(feedB.modified))
 	for name, pair := range map[string]struct {
 		st  *feedState
 		was []string
