@@ -65,6 +65,7 @@ func (s *sink) all() []hook {
 }
 
 type Stack struct {
+	worldOnly  bool
 	t          *testing.T
 	cfg        *config.Config
 	app        *connect.App
@@ -100,7 +101,17 @@ func freePorts(t *testing.T, n int) []int {
 
 func newStack(t *testing.T) *Stack {
 	t.Helper()
-	s := &Stack{t: t}
+	return startStack(t, true)
+}
+
+func newBankStack(t *testing.T) *Stack {
+	t.Helper()
+	return startStack(t, false)
+}
+
+func startStack(t *testing.T, worldOnly bool) *Stack {
+	t.Helper()
+	s := &Stack{t: t, worldOnly: worldOnly}
 	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
 		cfg, err := config.Load(dir)
 		if err != nil {
@@ -128,7 +139,7 @@ func newStack(t *testing.T) *Stack {
 				t.Fatal(err)
 			}
 			cfg.DatabaseURL = os.Getenv("BEERUS_TEST_DATABASE_URL")
-			app, err := connect.New(cfg, connect.Options{})
+			app, err := connect.New(cfg, connect.Options{WorldOnly: worldOnly})
 			if err != nil {
 				t.Fatal(err)
 			}

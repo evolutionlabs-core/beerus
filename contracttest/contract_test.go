@@ -101,7 +101,7 @@ func TestIdempotency(t *testing.T) {
 }
 
 func TestConnectAndSync(t *testing.T) {
-	s := newStack(t)
+	s := newBankStack(t)
 	today := s.today()
 	conn := s.connect("adaeze", "bank-a", today.AddDays(-60))
 	if len(conn.Accounts) != 2 {
