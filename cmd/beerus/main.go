@@ -39,6 +39,7 @@ Usage:
   beerus scenarios
   beerus scenario <name> [--account ID] [--institution bank-a] [--persona adaeze] [--connection ID] [--duration 2h] [--count N]
   beerus personas
+  beerus nip name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions
   beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA [--to-bank "Bank C"] [--to-name NAME] [--narration TEXT]
   beerus connections
   beerus revoke <connection-id>
@@ -335,11 +336,23 @@ func cmdControl(cmd string, args []string) error {
 		toBank := fs.String("to-bank", "", "bank of an outside account (Bank A, Bank B, Bank C, Bank D Microfinance)")
 		toName := fs.String("to-name", "", "name of an outside beneficiary")
 		narration := fs.String("narration", "", "narration for the debit")
+		sessionID := fs.String("session-id", "", "30-digit NIP session ID; sending the same one again returns the first answer")
 		fs.Parse(args)
 		if *from == "" || *to == "" || *amount == "" {
 			return errors.New("usage: beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA")
 		}
-		out, err = c.do("POST", "/transfers", map[string]string{"from": *from, "to": *to, "amount": *amount, "to_bank": *toBank, "to_name": *toName, "narration": *narration})
+		out, err = c.do("POST", "/transfers", map[string]string{"from": *from, "to": *to, "amount": *amount, "to_bank": *toBank, "to_name": *toName, "narration": *narration, "session_id": *sessionID})
+	case "nip":
+		switch {
+		case len(args) == 3 && args[0] == "name-enquiry":
+			out, err = c.do("GET", "/nip/name-enquiry?bank_code="+url.QueryEscape(args[1])+"&account_number="+url.QueryEscape(args[2]), nil)
+		case len(args) == 2 && args[0] == "status":
+			out, err = c.do("GET", "/nip/transfers/"+url.PathEscape(args[1]), nil)
+		case len(args) == 1 && (args[0] == "participants" || args[0] == "positions"):
+			out, err = c.do("GET", "/nip/"+args[0], nil)
+		default:
+			return errors.New("usage: beerus nip [name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions]")
+		}
 	case "connections":
 		out, err = c.do("GET", "/connections", nil)
 	case "revoke":

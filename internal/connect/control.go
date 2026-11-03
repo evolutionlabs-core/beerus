@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -34,6 +35,10 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("POST /scenarios/{name}", a.ctlScenario)
 	mux.HandleFunc("GET /personas", a.ctlPersonas)
 	mux.HandleFunc("POST /transfers", a.ctlTransfer)
+	mux.HandleFunc("GET /nip/name-enquiry", a.ctlNameEnquiry)
+	mux.HandleFunc("GET /nip/participants", a.ctlNIPParticipants)
+	mux.HandleFunc("GET /nip/positions", a.ctlNIPPositions)
+	mux.HandleFunc("GET /nip/transfers/{session_id}", a.ctlNIPStatus)
 	mux.HandleFunc("GET /connections", a.ctlConnections)
 	mux.HandleFunc("POST /connections/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.RevokeAtBank(r.PathValue("id")); err != nil {
@@ -306,14 +311,7 @@ func naira(minor int64) string {
 }
 
 func (a *App) ctlTransfer(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		From      string `json:"from"`
-		To        string `json:"to"`
-		ToBank    string `json:"to_bank"`
-		ToName    string `json:"to_name"`
-		Amount    string `json:"amount"`
-		Narration string `json:"narration"`
-	}
+	var body transferBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"...","to":"...","amount":"25000"}.`)
 		return
@@ -323,15 +321,37 @@ func (a *App) ctlTransfer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	if body.SessionID != "" && !nip.ValidSessionID(body.SessionID) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "session_id must be 30 digits.")
+		return
+	}
+	key := r.Header.Get("Idempotency-Key")
 	a.mu.Lock()
+	if a.replayLocked(w, r, key, body) {
+		a.mu.Unlock()
+		return
+	}
 	from, to := body.From, body.To
-	if key, ok := a.resolveAccount(from); ok {
-		from = key
+	if k, ok := a.resolveAccount(from); ok {
+		from = k
 	}
-	if key, ok := a.resolveAccount(to); ok {
-		to = key
+	if k, ok := a.resolveAccount(to); ok {
+		to = k
 	}
-	res, err := a.world.Transfer(a.clock.Now(), world.TransferRequest{From: from, To: to, ToBank: body.ToBank, ToName: body.ToName, Amount: amount, Narration: body.Narration})
+	req := world.TransferRequest{From: from, To: to, ToBank: body.ToBank, ToName: body.ToName, Amount: amount, Narration: body.Narration, SessionID: body.SessionID}
+	if rt, rerr := a.world.Route(req); rerr == nil && rt.FromInst.ID != rt.ToInst.ID {
+		outcome := a.nipTransferLocked(w, r, body, req, rt, key)
+		a.mu.Unlock()
+		switch outcome {
+		case nip.Success:
+			a.SyncAll()
+			return
+		case nip.Failed:
+			return
+		}
+		a.mu.Lock()
+	}
+	res, err := a.world.Transfer(a.clock.Now(), req)
 	if err == nil {
 		a.dirty()
 	}
@@ -372,7 +392,7 @@ func (a *App) ctlPersonas(w http.ResponseWriter, r *http.Request) {
 			inst, _ := a.world.Institution(acc.Institution)
 			accts = append(accts, map[string]any{"key": acc.Key, "institution": inst.ID, "bank": inst.Name, "nuban": acc.NUBAN, "name": acc.Name, "type": acc.Type})
 		}
-		out = append(out, map[string]any{"id": p.ID, "name": p.Name, "username": p.Username, "password": p.Password, "accounts": accts})
+		out = append(out, map[string]any{"id": p.ID, "name": p.Name, "username": p.Username, "password": p.Password, "bvn": nip.BVN(a.cfg.Seed, p.ID), "accounts": accts})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})
 }

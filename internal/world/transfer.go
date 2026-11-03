@@ -22,6 +22,7 @@ type TransferRequest struct {
 	ToName    string
 	Amount    int64
 	Narration string
+	SessionID string
 }
 
 type TransferResult struct {
@@ -77,23 +78,29 @@ func (w *World) Transfer(at time.Time, r TransferRequest) (TransferResult, error
 	return w.transfer(at, r, true)
 }
 
-func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferResult, error) {
-	if r.Amount <= 0 {
-		return TransferResult{}, errors.New("amount must be more than zero")
-	}
+type Route struct {
+	From     Account
+	FromInst Institution
+	To       *Account
+	ToInst   Institution
+	Cp       *Counterparty
+	Request  TransferRequest
+}
+
+func (w *World) Route(r TransferRequest) (Route, error) {
 	from, err := w.FindAccount(r.From)
 	if err != nil {
-		return TransferResult{}, fmt.Errorf("from account: %w", err)
+		return Route{}, fmt.Errorf("from account: %w", err)
 	}
 	fromInst := w.institutions[from.Institution]
 	var to *Account
 	if a, err := w.FindAccount(r.To); err == nil {
 		to = &a
 	} else if !errors.Is(err, ErrUnknownAccount) {
-		return TransferResult{}, fmt.Errorf("to account: %w", err)
+		return Route{}, fmt.Errorf("to account: %w", err)
 	}
 	if to != nil && to.Key == from.Key {
-		return TransferResult{}, errors.New("the from and to accounts are the same")
+		return Route{}, errors.New("the from and to accounts are the same")
 	}
 	cp := &Counterparty{AccountNumber: r.To, Name: strings.ToUpper(r.ToName)}
 	var toInst Institution
@@ -104,7 +111,7 @@ func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferRe
 		cp.Name = strings.ToUpper(w.personas[to.Owner].Name)
 	default:
 		if len(r.To) != 10 || strings.Trim(r.To, "0123456789") != "" {
-			return TransferResult{}, errors.New("to must be a known account or a 10-digit account number")
+			return Route{}, errors.New("to must be a known account or a 10-digit account number")
 		}
 		if r.ToBank == "" {
 			r.ToBank = "Bank C"
@@ -120,7 +127,7 @@ func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferRe
 				}
 			}
 			if !matched {
-				return TransferResult{}, fmt.Errorf("unknown bank %q; use Bank A, Bank B, Bank C or Bank D Microfinance", r.ToBank)
+				return Route{}, fmt.Errorf("unknown bank %q; use Bank A, Bank B, Bank C or Bank D Microfinance", r.ToBank)
 			}
 		}
 		if cp.Name == "" {
@@ -129,6 +136,18 @@ func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferRe
 	}
 	cp.BankCode = toInst.NIPCode
 	cp.BankName = toInst.Name
+	return Route{From: from, FromInst: *fromInst, To: to, ToInst: toInst, Cp: cp, Request: r}, nil
+}
+
+func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferResult, error) {
+	if r.Amount <= 0 {
+		return TransferResult{}, errors.New("amount must be more than zero")
+	}
+	rt, err := w.Route(r)
+	if err != nil {
+		return TransferResult{}, err
+	}
+	from, fromInst, to, toInst, cp := rt.From, &rt.FromInst, rt.To, rt.ToInst, rt.Cp
 	if err := w.reachable(fromInst.ID, fromInst.Name, at, "", ""); err != nil {
 		return TransferResult{}, err
 	}
@@ -202,6 +221,9 @@ func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferRe
 		}
 	} else {
 		sid := s.sid(fromInst.NIPCode, at)
+		if r.SessionID != "" {
+			sid = r.SessionID
+		}
 		res.SessionID = sid
 		short := sid[len(sid)-12:]
 		narr := r.Narration
