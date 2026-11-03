@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -308,23 +309,46 @@ func (a *App) openPositionLocked(bankID string, after, now time.Time) (position,
 }
 
 func (a *App) settleLocked(now time.Time) error {
+	for a.settling {
+		a.settleDone.Wait()
+	}
 	if a.rtgs == nil || len(a.cfg.Banks) == 0 {
 		return nil
 	}
+	a.settling = true
+	defer func() {
+		a.settling = false
+		a.settleDone.Broadcast()
+	}()
+	r := a.rtgs
+	ledgers := slices.Clone(a.ledgers)
+	banks := make([]string, 0, len(a.cfg.Banks))
+	for _, b := range a.cfg.Banks {
+		banks = append(banks, b.ID)
+	}
 	sched := a.schedule()
 	genesis := a.world.Config().Genesis.Start()
-	from, err := a.rtgs.settledThrough()
-	if err != nil {
-		return err
-	}
-	for _, l := range a.ledgers {
-		t, err := l.settledThrough(genesis)
+	a.mu.Unlock()
+	from, err := r.settledThrough()
+	for _, l := range ledgers {
 		if err != nil {
-			return err
+			break
 		}
-		if t.Before(from) {
+		var t time.Time
+		if t, err = l.settledThrough(genesis); err == nil && t.Before(from) {
 			from = t
 		}
+	}
+	if err == nil {
+		for _, id := range banks {
+			if err = r.member(id, bank.GenesisSettlement, bank.GenesisVault); err != nil {
+				break
+			}
+		}
+	}
+	a.mu.Lock()
+	if err != nil {
+		return err
 	}
 	last := time.Time{}
 	for c := sched.next(from); !c.After(now); c = sched.next(c) {
@@ -333,21 +357,36 @@ func (a *App) settleLocked(now time.Time) error {
 	if last.IsZero() {
 		return nil
 	}
+	sessions, err := a.sessionPositions(sched, banks, from, last)
+	if err != nil {
+		return err
+	}
+	a.mu.Unlock()
+	err = settleSessions(r, ledgers, sched, sessions)
+	a.mu.Lock()
+	if err != nil {
+		return err
+	}
+	r.through = last
+	for _, l := range ledgers {
+		l.settled = last
+	}
+	return nil
+}
+
+func (a *App) sessionPositions(sched schedule, banks []string, from, last time.Time) (map[time.Time]map[string]*position, error) {
 	sessions := map[time.Time]map[string]*position{}
 	accounts := a.accountsByBank()
-	for _, b := range a.cfg.Banks {
-		if err := a.rtgs.member(b.ID, bank.GenesisSettlement, bank.GenesisVault); err != nil {
-			return err
-		}
-		for _, acc := range accounts[b.ID] {
+	for _, id := range banks {
+		for _, acc := range accounts[id] {
 			vs, err := a.world.Versions(acc.Key, from, last)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			for _, v := range vs {
 				out, in, err := nipAmounts(v)
 				if err != nil {
-					return err
+					return nil, err
 				}
 				if out == 0 && in == 0 {
 					continue
@@ -356,16 +395,20 @@ func (a *App) settleLocked(now time.Time) error {
 				if sessions[c] == nil {
 					sessions[c] = map[string]*position{}
 				}
-				p := sessions[c][b.ID]
+				p := sessions[c][id]
 				if p == nil {
 					p = &position{}
-					sessions[c][b.ID] = p
+					sessions[c][id] = p
 				}
 				p.outward += out
 				p.inward += in
 			}
 		}
 	}
+	return sessions, nil
+}
+
+func settleSessions(r *rtgs, ledgers []*ledgerSource, sched schedule, sessions map[time.Time]map[string]*position) error {
 	cutoffs := make([]time.Time, 0, len(sessions))
 	for c := range sessions {
 		cutoffs = append(cutoffs, c)
@@ -374,12 +417,12 @@ func (a *App) settleLocked(now time.Time) error {
 	for _, c := range cutoffs {
 		key := sched.key(c)
 		ps := sessions[c]
-		if c.After(a.rtgs.through) {
-			if err := a.rtgs.settle(key, c, ps); err != nil {
+		if c.After(r.through) {
+			if err := r.settle(key, c, ps); err != nil {
 				return err
 			}
 		}
-		for _, l := range a.ledgers {
+		for _, l := range ledgers {
 			p := ps[l.inst.ID]
 			if p == nil || !c.After(l.settled) {
 				continue
@@ -391,10 +434,6 @@ func (a *App) settleLocked(now time.Time) error {
 				return fmt.Errorf("settling %s at %s: %w", key, l.inst.ID, err)
 			}
 		}
-	}
-	a.rtgs.through = last
-	for _, l := range a.ledgers {
-		l.settled = last
 	}
 	return nil
 }
