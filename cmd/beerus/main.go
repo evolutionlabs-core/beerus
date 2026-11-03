@@ -49,6 +49,9 @@ Usage:
   beerus bank create --name NAME [--type commercial|digital|microfinance] [--id ID] [--nip-code N] [--nuban-code N] [--history-days N] [--settles-through ID]
   beerus bank suspend|resume <id>
   beerus bank open-account <id> --persona ID [--type current|savings]
+  beerus bank close <id> --to BANK [--money transfer|payout|leave] [--customers a=payout,b=leave] [--dry-run] [--yes]
+  beerus bank purge <id> [--yes]
+  beerus doctor [--dir .beerus] [--fix]
   beerus trust [--dir .beerus]
   beerus untrust [--dir .beerus]
   beerus version
@@ -70,6 +73,8 @@ func main() {
 		err = cmdUp(args)
 	case "info":
 		err = cmdInfo(args)
+	case "doctor":
+		err = cmdDoctor(args)
 	case "partner":
 		err = cmdPartner(args)
 	case "trust":
@@ -150,6 +155,44 @@ func cmdInfo(args []string) error {
 		return err
 	}
 	return printInfo(c)
+}
+
+func cmdDoctor(args []string) error {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	dir := fs.String("dir", defaultDir(), "state directory")
+	fix := fs.Bool("fix", false, "drop leftover databases, delete snapshots that can no longer be restored and tidy the manifest")
+	fs.Parse(args)
+	c, err := config.Load(*dir)
+	if err != nil {
+		return err
+	}
+	rep, err := connect.Doctor(context.Background(), c, *fix)
+	if err != nil {
+		return err
+	}
+	list := func(title string, items []string) {
+		if len(items) == 0 {
+			return
+		}
+		fmt.Println(title)
+		for _, it := range items {
+			fmt.Println("  " + it)
+		}
+	}
+	fmt.Printf("%d databases belong to %s.\n", len(rep.Databases), c.Dir)
+	list("Leftover databases:", rep.Orphans)
+	list("Snapshots that can no longer be restored:", rep.DeadSnapshots)
+	list("Manifest entries for banks that no longer exist:", rep.StaleManifest)
+	list("Missing databases (beerus up recreates bank databases; missing snapshot copies cannot be restored):", rep.Missing)
+	switch {
+	case rep.Fixed:
+		fmt.Println("Fixed.")
+	case rep.Clean():
+		fmt.Println("Nothing is left behind.")
+	default:
+		fmt.Println("Run beerus doctor --fix to clean this up.")
+	}
+	return nil
 }
 
 func cmdUp(args []string) error {
@@ -396,6 +439,18 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 			customers[strings.TrimSpace(k)] = strings.TrimSpace(v)
 		}
 		return c.do("POST", "/banks/"+args[1]+"/close", map[string]any{"money": *money, "to": *to, "customers": customers})
+	case args[0] == "purge" && len(args) >= 2:
+		fs := flag.NewFlagSet("bank purge", flag.ExitOnError)
+		yes := fs.Bool("yes", false, "purge the bank; this cannot be undone")
+		fs.Parse(args[2:])
+		if !*yes {
+			out, err := c.do("GET", "/banks/"+args[1]+"/purge", nil)
+			if err == nil {
+				out["next"] = "Nothing was purged. Run again with --yes to delete the bank's database, its snapshot copies and its beerus.yaml entry; purging cannot be undone."
+			}
+			return out, err
+		}
+		return c.do("POST", "/banks/"+args[1]+"/purge", nil)
 	case args[0] == "open-account" && len(args) >= 2:
 		fs := flag.NewFlagSet("bank open-account", flag.ExitOnError)
 		persona := fs.String("persona", "", "persona who opens the account")
@@ -406,7 +461,7 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		}
 		return c.do("POST", "/banks/"+args[1]+"/accounts", map[string]string{"persona": *persona, "type": *typ})
 	}
-	return nil, errors.New("usage: beerus bank [list [--state STATE] | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID | close <id> --to BANK [--money transfer|payout|leave] --yes]")
+	return nil, errors.New("usage: beerus bank [list [--state STATE] | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID | close <id> --to BANK [--money transfer|payout|leave] --yes | purge <id> --yes]")
 }
 
 func waitBank(c *ctl, id string) (map[string]any, error) {

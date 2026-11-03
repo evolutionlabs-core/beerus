@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,6 +72,8 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("POST /banks/{id}/accounts", a.ctlOpenAccount)
 	mux.HandleFunc("GET /banks/{id}/close", a.ctlCloseImpact)
 	mux.HandleFunc("POST /banks/{id}/close", a.ctlCloseBank)
+	mux.HandleFunc("GET /banks/{id}/purge", a.ctlPurgeImpact)
+	mux.HandleFunc("POST /banks/{id}/purge", a.ctlPurgeBank)
 	mux.HandleFunc("POST /banks/{id}/suspend", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, true) })
 	mux.HandleFunc("POST /banks/{id}/resume", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, false) })
 	mux.HandleFunc("GET /snapshots", a.ctlSnapshots)
@@ -487,6 +490,15 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	}
 	if f.Meta.Schema != schemaVersion || f.Meta.Seed != a.cfg.Seed {
 		return "", fmt.Errorf("snapshot %s was taken with schema %d and seed %d; this setup uses schema %d and seed %d", id, f.Meta.Schema, f.Meta.Seed, schemaVersion, a.cfg.Seed)
+	}
+	for _, p := range a.world.PurgedInstitutions() {
+		kept := false
+		for _, q := range f.State.World.Purged {
+			kept = kept || q.ID == p.ID
+		}
+		if !kept && (slices.Contains(f.Meta.Banks, p.ID) || slices.ContainsFunc(f.State.World.Closed, func(c world.Closure) bool { return c.Institution == p.ID })) {
+			return "", fmt.Errorf("snapshot %s was taken before %s was purged, and purging a bank cannot be undone", id, p.Name)
+		}
 	}
 	for _, b := range a.cfg.Banks {
 		if !b.Closed() {

@@ -209,6 +209,16 @@ func (s *ledgerSource) Snapshot(id string) error {
 	return s.reopen()
 }
 
+func (s *ledgerSource) DropSnapshot(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	name := s.st.Name() + "_snap_" + snapID(id)
+	if err := store.DropDatabases(s.ctx, s.st.URL(), []string{name}); err != nil {
+		return err
+	}
+	return s.cfg.Release("database_snapshot", name)
+}
+
 func (s *ledgerSource) HasSnapshot(id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

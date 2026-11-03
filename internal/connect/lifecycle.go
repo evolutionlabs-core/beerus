@@ -268,6 +268,15 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 		return nil, invalid("this setup already has %d banks, the limit set by max_banks", max)
 	}
 	usedNIP, usedNUBAN := map[string]bool{}, map[string]bool{}
+	for _, p := range a.world.PurgedInstitutions() {
+		if strings.EqualFold(p.Name, name) {
+			return nil, invalid("%q was the name of a purged bank, and it stays reserved", name)
+		}
+		if p.ID == id {
+			return nil, invalid("%q was the id of a purged bank, and it stays reserved", id)
+		}
+		usedNIP[p.NIPCode], usedNUBAN[p.NUBANCode] = true, true
+	}
 	declared := map[string]bool{}
 	for _, b := range a.cfg.Banks {
 		declared[b.NIPCode] = true
@@ -663,7 +672,7 @@ func (a *App) applyConfig(sum string) {
 	}
 	for _, b := range a.cfg.Banks {
 		if !seen[b.ID] {
-			a.warn("%s was removed from beerus.yaml, but banks cannot be removed yet; it was put back", b.ID)
+			a.warn("%s was removed from beerus.yaml, but banks are removed with beerus bank purge; it was put back", b.ID)
 			rewrite = true
 		}
 	}
@@ -771,7 +780,7 @@ func (a *App) detach(b *config.Bank, redo []int) {
 }
 
 func (a *App) OpenAccount(bankID, persona, typ string) (world.Account, error) {
-	if _, ok := a.world.Institution(bankID); !ok {
+	if _, ok := a.world.Institution(bankID); !ok || a.world.Purged(bankID) {
 		return world.Account{}, errNotFound
 	}
 	if phase := a.bankPhase(bankID); phase == PhaseProvisioning || phase == PhaseRepairing {
