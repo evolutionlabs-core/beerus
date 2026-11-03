@@ -30,6 +30,8 @@ const usage = `Beerus simulates a Nigerian banking ecosystem on your machine.
 Usage:
   beerus init [--dir .beerus] [--seed N] [--partner-port 7443] [--widget-port 7444] [--control-port 7480]
   beerus up [--dir .beerus]
+  beerus run --participant cbn|sim|bank-a|bank-b [--dir .beerus] [--bind 0.0.0.0] [--core URL]
+  beerus health URL [--token-file FILE]
   beerus info [--dir .beerus]
   beerus partner add <id> --redirect-uri URL [--redirect-uri URL] [--webhook-url URL] [--name N] [--legal-name N] [--purpose P]
   beerus partner list
@@ -74,6 +76,10 @@ func main() {
 		err = cmdInit(args)
 	case "up":
 		err = cmdUp(args)
+	case "run":
+		err = cmdRun(args)
+	case "health":
+		err = cmdHealth(args)
 	case "info":
 		err = cmdInfo(args)
 	case "doctor":

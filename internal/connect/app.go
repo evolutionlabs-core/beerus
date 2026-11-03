@@ -24,51 +24,60 @@ import (
 )
 
 type App struct {
-	mu        sync.Mutex
-	cfg       *config.Config
-	clock     *clock.Clock
-	world     *world.World
-	st        *State
-	key       config.SigningKey
-	ctlToken  string
-	log       *slog.Logger
-	isDirty   bool
-	limiters  map[string]*rate.Limiter
-	idemLock  sync.Map
-	client    *http.Client
-	wake      chan struct{}
-	statePath string
-	sending   chan struct{}
-	pmu       sync.RWMutex
-	swept     time.Time
-	ledgers   []*ledgerSource
-	rtgs      *rtgs
-	rtgsTried time.Time
-	worldOnly bool
-	lifeMu    sync.Mutex
-	recMu     sync.Mutex
-	stepMu    sync.Mutex
-	status    map[string]*BankStatus
-	sites     map[string]*siteServer
-	serving   bool
-	cfgSum    string
-	warnings  []string
-	watched   time.Time
-	driftAt   time.Time
-	driftDue  atomic.Bool
-	strikes   map[string]int
-	obMu      sync.Mutex
-	obs       map[string]*openbanking.Server
-	regMu     sync.Mutex
-	poolMu    sync.RWMutex
-	pools     map[string]*ledgerSource
-	events    inflight
-	vault     *vault
-	obHTTP    *http.Client
-	bankWrap  func(http.RoundTripper) http.RoundTripper
-	obKey     *ecdsa.PrivateKey
-	metas     map[string]bankMeta
-	seenJTI   map[string]time.Time
+	mu         sync.Mutex
+	cfg        *config.Config
+	clock      *clock.Clock
+	world      *world.World
+	st         *State
+	key        config.SigningKey
+	ctlToken   string
+	log        *slog.Logger
+	isDirty    bool
+	limiters   map[string]*rate.Limiter
+	idemLock   sync.Map
+	client     *http.Client
+	wake       chan struct{}
+	statePath  string
+	sending    chan struct{}
+	pmu        sync.RWMutex
+	swept      time.Time
+	ledgers    []*ledgerSource
+	rtgs       *rtgs
+	rtgsTried  time.Time
+	worldOnly  bool
+	lifeMu     sync.Mutex
+	recMu      sync.Mutex
+	stepMu     sync.Mutex
+	status     map[string]*BankStatus
+	sites      map[string]*siteServer
+	serving    bool
+	cfgSum     string
+	warnings   []string
+	watched    time.Time
+	driftAt    time.Time
+	driftDue   atomic.Bool
+	strikes    map[string]int
+	obMu       sync.Mutex
+	obs        map[string]*openbanking.Server
+	regMu      sync.Mutex
+	poolMu     sync.RWMutex
+	pools      map[string]*ledgerSource
+	events     inflight
+	vault      *vault
+	obHTTP     *http.Client
+	role       string
+	bankID     string
+	coreURL    string
+	worldSum   string
+	replicated bool
+	synced     atomic.Bool
+	paused     atomic.Bool
+	pullMu     sync.Mutex
+	pulledAt   time.Time
+	bankWrap   func(http.RoundTripper) http.RoundTripper
+	obKey      *ecdsa.PrivateKey
+	metas      map[string]bankMeta
+	seenJTI    map[string]time.Time
 }
 
 type Options struct {
@@ -76,10 +85,16 @@ type Options struct {
 	Logger    *slog.Logger
 	Client    *http.Client
 	WorldOnly bool
+	Role      string
+	BankID    string
+	CoreURL   string
 	BankWrap  func(http.RoundTripper) http.RoundTripper
 }
 
 func New(cfg *config.Config, o Options) (*App, error) {
+	if o.Role == RoleBank {
+		return newBankRole(cfg, o)
+	}
 	genesis, err := cfg.GenesisDate()
 	if err != nil {
 		return nil, err
@@ -100,6 +115,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		limiters:  map[string]*rate.Limiter{},
 		client:    o.Client,
 		bankWrap:  o.BankWrap,
+		role:      o.Role,
 		wake:      make(chan struct{}, 1),
 		statePath: cfg.Path("stub-state.json"),
 		sending:   make(chan struct{}, 4),
@@ -637,6 +653,12 @@ func (a *App) RevokeAtBank(connID string) error {
 	}
 	bank, consent := c.Institution, c.ConsentID
 	a.mu.Unlock()
+	if b := a.cfg.Bank(bank); a.role == RoleSim && b != nil && consent != "" {
+		if err := a.revokeRemote(b, consent); err != nil {
+			return err
+		}
+		return nil
+	}
 	ob := a.openBanking(bank)
 	if ob == nil || consent == "" {
 		return errNotFound

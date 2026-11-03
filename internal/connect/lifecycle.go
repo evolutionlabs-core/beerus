@@ -506,7 +506,7 @@ func (a *App) provision(b *config.Bank) {
 			return nil
 		}
 		c := &http.Client{Timeout: 5 * time.Second}
-		resp, err := c.Get(fmt.Sprintf("http://127.0.0.1:%d/login", b.Port))
+		resp, err := c.Get(a.siteProbeURL(b))
 		if err != nil {
 			return err
 		}
@@ -534,7 +534,7 @@ func (a *App) startBankSite(b *config.Bank) error {
 	serving := a.serving
 	_, running := a.sites[b.ID]
 	a.lifeMu.Unlock()
-	if !serving || running {
+	if !serving || running || a.role == RoleSim {
 		return nil
 	}
 	a.forgetOpenBanking(b.ID)
@@ -776,7 +776,7 @@ func (a *App) probe(b *config.Bank) (string, []int) {
 		return "its database cannot be reached: " + err.Error(), []int{2, 4}
 	}
 	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get(fmt.Sprintf("http://127.0.0.1:%d/login", b.Port))
+	resp, err := c.Get(a.siteProbeURL(b))
 	if err == nil {
 		resp.Body.Close()
 		return "", nil
@@ -873,4 +873,11 @@ func CheckPorts(c *config.Config) error {
 		return fmt.Errorf("port %d is already in use by another program; free it or change it in beerus.yaml", p)
 	}
 	return nil
+}
+
+func (a *App) siteProbeURL(b *config.Bank) string {
+	if a.role == RoleSim {
+		return b.URL() + "/health"
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d/login", b.Port)
 }

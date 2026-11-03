@@ -40,6 +40,8 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /nip/participants", a.ctlNIPParticipants)
 	mux.HandleFunc("GET /nip/positions", a.ctlNIPPositions)
 	mux.HandleFunc("GET /nip/settlement", a.ctlNIPSettlement)
+	mux.HandleFunc("GET /internal/replica", a.ctlReplica)
+	mux.HandleFunc("POST /internal/consents", a.ctlConsentRecord)
 	mux.HandleFunc("GET /nip/transfers/{session_id}", a.ctlNIPStatus)
 	mux.HandleFunc("GET /connections", a.ctlConnections)
 	mux.HandleFunc("POST /connections/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
@@ -110,11 +112,11 @@ func (a *App) localOnly(next http.Handler) http.Handler {
 	port := strconv.Itoa(a.cfg.Connect.ControlPort)
 	hosts := map[string]bool{"127.0.0.1:" + port: true, "localhost:" + port: true, "[::1]:" + port: true}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err != nil || !net.ParseIP(host).IsLoopback() {
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); !multiProcess() && (err != nil || !net.ParseIP(host).IsLoopback()) {
 			writeError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
 			return
 		}
-		if !hosts[r.Host] {
+		if !multiProcess() && !hosts[r.Host] {
 			writeError(w, r, http.StatusForbidden, "forbidden", "Unexpected Host header.")
 			return
 		}
@@ -433,6 +435,9 @@ func (a *App) ctlDeliveries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) SyncAll() {
+	if a.role == RoleBank {
+		return
+	}
 	a.mu.Lock()
 	now := a.clock.Now()
 	for _, c := range a.st.Connections {
@@ -488,6 +493,7 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 	for _, ls := range cp.LinkSessions {
 		ls.OTP, ls.Verifier, ls.BankState = "", "", ""
 	}
+	defer a.pauseBanks()()
 	meta := snapshotMeta{ID: newID("snap"), Name: name, BusinessTime: ts(a.clock.Now()), Seed: a.cfg.Seed, Schema: schemaVersion, TakenReal: a.clock.Real()}
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {
@@ -548,6 +554,7 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	defer a.pauseBanks()()
 	taken := map[string]bool{}
 	for _, id := range f.Meta.Banks {
 		taken[id] = true
