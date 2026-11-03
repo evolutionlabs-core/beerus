@@ -156,6 +156,8 @@ func changeReason(old, cur Txn) string {
 	return ""
 }
 
+var errStale = errors.New("the connection changed during the sync")
+
 type fetchResult struct {
 	added, modified, removed int
 }
@@ -199,7 +201,11 @@ func (a *App) fetchAccount(c *Connection, acct *AccountRec, at time.Time) (fetch
 	var in pulled
 	var err error
 	if a.live() {
+		consent := c.ConsentID
 		in, err = a.pullBank(c, acct, at)
+		if err == nil && (a.st.Connections[c.ID] != c || a.st.Accounts[acct.ID] != acct || c.ConsentID != consent || c.Status == "revoked" || acct.Removed) {
+			err = errStale
+		}
 	} else {
 		in, err = a.pullWorld(acct, at)
 	}
