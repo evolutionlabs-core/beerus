@@ -31,13 +31,69 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Resolve connect.localhost
-        run: echo "127.0.0.1 connect.localhost" | sudo tee -a /etc/hosts
+        run: echo "127.0.0.1 connect.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: go vet
         run: go vet ./...
       - name: go test
         run: go test -race -count=1 -timeout 25m ./...
+
+  contract-full:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BEERUS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+      BEERUS_CONTRACT_FULL: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Resolve local names
+        run: echo "127.0.0.1 connect.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
+      - name: Contract suite on the full stack
+        run: go test -count=1 -timeout 25m ./contracttest
+
+  multi-process:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Resolve local names
+        run: echo "127.0.0.1 connect.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
+      - name: Start the stack
+        run: |
+          mkdir -p "$RUNNER_TEMP/beerus-state"
+          {
+            echo "BEERUS_STATE=$RUNNER_TEMP/beerus-state"
+            echo "BEERUS_UID=$(id -u)"
+            echo "BEERUS_GID=$(id -g)"
+          } >> "$GITHUB_ENV"
+          BEERUS_STATE="$RUNNER_TEMP/beerus-state" BEERUS_UID="$(id -u)" BEERUS_GID="$(id -g)" docker compose up -d --build --wait --wait-timeout 300
+      - name: Done test against the containers
+        env:
+          BEERUS_CONTRACT_DIR: ${{ runner.temp }}/beerus-state
+        run: go test -count=1 -timeout 15m -v -run TestDoneStory ./contracttest
+      - name: Container logs
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v
 
   openapi:
     runs-on: ubuntu-latest
