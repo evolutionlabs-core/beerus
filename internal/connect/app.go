@@ -114,6 +114,11 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		}
 		a.ledgers = append(a.ledgers, ls)
 	}
+	for _, l := range a.ledgers {
+		if err := l.Sync(a.clock.Now()); err != nil {
+			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
+		}
+	}
 	a.initLifecycle()
 	return a, nil
 }
