@@ -210,14 +210,14 @@ func (g *dayGen) amount(min, max, step int) int64 {
 }
 
 func (g *dayGen) payday() bool {
-	if clock.IsHoliday(g.d) {
+	if g.w.cfg.Calendar.IsHoliday(g.d) {
 		return false
 	}
 	if g.d.D == 25 {
 		return true
 	}
 	n := g.d.AddDays(1)
-	for clock.IsHoliday(n) {
+	for g.w.cfg.Calendar.IsHoliday(n) {
 		if n.D == 25 {
 			return true
 		}
@@ -227,7 +227,7 @@ func (g *dayGen) payday() bool {
 }
 
 func (g *dayGen) run() {
-	weekend := g.d.Weekday() == time.Saturday || g.d.Weekday() == time.Sunday || clock.IsHoliday(g.d)
+	weekend := g.d.Weekday() == time.Saturday || g.d.Weekday() == time.Sunday || g.w.cfg.Calendar.IsHoliday(g.d)
 	scale := g.p.rate
 	if weekend {
 		scale /= 3
