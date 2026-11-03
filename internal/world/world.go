@@ -195,15 +195,7 @@ func hash64(parts ...string) uint64 {
 }
 
 func NUBAN(bankCode string, serial uint64) string {
-	s := fmt.Sprintf("%09d", serial%1000000000)
-	digits := bankCode + s
-	w := []int{3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3}
-	sum := 0
-	for i, c := range digits {
-		sum += int(c-'0') * w[i]
-	}
-	check := (10 - sum%10) % 10
-	return s + fmt.Sprint(check)
+	return nubanCheck(bankCode, fmt.Sprintf("%09d", serial%1000000000))
 }
 
 func ValidNUBAN(bankCode, nuban string) bool {
@@ -214,8 +206,14 @@ func ValidNUBAN(bankCode, nuban string) bool {
 }
 
 func nubanCheck(bankCode, serial string) string {
+	switch len(bankCode) {
+	case 3:
+		bankCode = "000" + bankCode
+	case 5:
+		bankCode = "9" + bankCode
+	}
 	digits := bankCode + serial
-	w := []int{3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3}
+	w := []int{3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3}
 	sum := 0
 	for i, c := range digits {
 		sum += int(c-'0') * w[i]

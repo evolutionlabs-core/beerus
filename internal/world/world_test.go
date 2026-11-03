@@ -228,3 +228,17 @@ func TestTransfers(t *testing.T) {
 		t.Fatalf("sender lines for the session sum to %d", bal)
 	}
 }
+
+func TestNUBANSixDigitSeed(t *testing.T) {
+	for _, serial := range []uint64{0, 1, 123456789, 987654321} {
+		if NUBAN("901", serial) != NUBAN("000901", serial) {
+			t.Fatalf("3-digit code %d differs from its 6-digit seed", serial)
+		}
+		if NUBAN("50211", serial) != NUBAN("950211", serial) {
+			t.Fatalf("5-digit code %d differs from its 6-digit seed", serial)
+		}
+		if n := NUBAN("950211", serial); !ValidNUBAN("950211", n) || len(n) != 10 {
+			t.Fatalf("6-digit code gave %s", n)
+		}
+	}
+}
