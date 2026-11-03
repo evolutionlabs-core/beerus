@@ -1,8 +1,10 @@
 package contracttest
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -160,7 +162,27 @@ func TestDoneStory(t *testing.T) {
 	}
 	check(chidiB != "", "no Bank B account for the customer")
 	before := s.ctl("GET", "/nip/settlement", nil)
-	hooksBefore := len(s.eventsOf("sync.available", func(d map[string]any) bool { return d["account_id"] == idA }))
+	delivered := func(typ string, match func(map[string]any) bool) int {
+		if s.sink == nil {
+			return len(s.eventsOf(typ, match))
+		}
+		pub := s.publicKey()
+		n := 0
+		for _, h := range s.sink.all() {
+			var ev struct {
+				Type string         `json:"type"`
+				Data map[string]any `json:"data"`
+			}
+			if err := json.Unmarshal(h.Body, &ev); err != nil || ev.Type != typ || !match(ev.Data) {
+				continue
+			}
+			check(verifyV1a(pub, h) == nil, "webhook signature")
+			n++
+		}
+		return n
+	}
+	isA := func(d map[string]any) bool { return d["account_id"] == idA }
+	hooksBefore := delivered("sync.available", isA)
 	pay, err := s.ctlTry("POST", "/transfers", map[string]any{"from": chidiB, "to": fmt.Sprint(bankACurrent["key"]), "amount": "2500", "narration": "Cake order"})
 	check(err == nil, "payment: %v", err)
 	sid := fmt.Sprint(pay["session_id"])
@@ -176,7 +198,7 @@ func TestDoneStory(t *testing.T) {
 		return nil
 	}
 	check(findBySession(feedA) != nil, "the payment did not reach Balance by sync")
-	check(len(s.eventsOf("sync.available", func(d map[string]any) bool { return d["account_id"] == idA })) > hooksBefore, "no sync.available webhook for the payment")
+	check(delivered("sync.available", isA) > hooksBefore, "no sync.available webhook for the payment")
 	s.advance("24h")
 	after := s.ctl("GET", "/nip/settlement", nil)
 	check(num(after["sessions"]) > num(before["sessions"]), "no settlement session ran: %v then %v", before["sessions"], after["sessions"])
@@ -216,6 +238,7 @@ func TestDoneStory(t *testing.T) {
 	atSnapA, atSnapB := idSet(feedA), idSet(feedB)
 
 	step(7, "unstable_ids on: every transaction exactly once")
+	changedBefore := len(feedA.modified) + len(feedB.modified)
 	for _, inst := range []string{"bank-a", "bank-b"} {
 		s.ctl("POST", "/scenarios/unstable_ids", map[string]any{"institution": inst})
 	}
@@ -224,6 +247,13 @@ func TestDoneStory(t *testing.T) {
 		feedA, _ = s.syncMore(idA, feedA, 500)
 		feedB, _ = s.syncMore(idB, feedB, 500)
 	}
+	refChanged := 0
+	for _, m := range append(append([]map[string]any{}, feedA.modified...), feedB.modified...)[changedBefore:] {
+		if m["modification_reason"] == "bank_reference_changed" {
+			refChanged++
+		}
+	}
+	check(refChanged > 0, "the scenario changed no bank references, so nothing was tested")
 	for name, pair := range map[string]struct {
 		st  *feedState
 		was []string
@@ -239,7 +269,9 @@ func TestDoneStory(t *testing.T) {
 	app := s.bankSignIn("adaeze")
 	app.get("/apps")
 	check(strings.Contains(app.last, "Balance") && strings.Contains(app.last, "via Beerus Connect"), "connected apps page: %.300s", app.last)
-	app.post("/apps/"+connA+"/revoke", url.Values{})
+	consent := regexp.MustCompile(`/apps/(obc_[A-Za-z0-9]+)/revoke`).FindStringSubmatch(app.last)
+	check(consent != nil, "the connected apps page has no consent to revoke: %.300s", app.last)
+	app.post("/apps/"+consent[1]+"/revoke", url.Values{})
 	check(strings.Contains(app.last, "Access withdrawn"), "revoke page: %.300s", app.last)
 	check(s.must(s.call("GET", "/v1/connections/"+connA, nil), 200).JSON["status"] == "revoked", "Balance does not show the revoke")
 	check(len(s.eventsOf("connection.status_changed", func(d map[string]any) bool {
