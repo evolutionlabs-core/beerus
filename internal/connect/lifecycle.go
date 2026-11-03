@@ -246,8 +246,14 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 	if !idRe.MatchString(id) {
 		return nil, invalid("id %q must be lowercase letters, digits and dashes", id)
 	}
+	if id == cbnID {
+		return nil, invalid("id %q is reserved for the CBN", id)
+	}
 	if reservedIDs[id] {
-		return nil, invalid("id %q is reserved for the %s", id, map[string]string{cbnID: "CBN", "nibss": "NIBSS"}[id])
+		return nil, invalid("id %q is reserved for NIBSS", id)
+	}
+	if database != "" && database == config.DatabaseName(a.cfg.Dir, cbnID) {
+		return nil, invalid("database %q belongs to the CBN", database)
 	}
 	typ := req.Type
 	if typ == "" {
@@ -309,9 +315,6 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 		}
 		if b.ID == id {
 			return nil, invalid("a bank with id %q already exists", id)
-		}
-		if database != "" && database == config.DatabaseName(a.cfg.Dir, cbnID) {
-			return nil, invalid("database %q belongs to the CBN", database)
 		}
 		if database != "" && b.Database == database {
 			return nil, invalid("database %q is already used by %s", database, b.ID)

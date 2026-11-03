@@ -43,6 +43,7 @@ type App struct {
 	rtgs      *rtgs
 	rtgsTried time.Time
 	worldOnly bool
+	personas  []string
 	lifeMu    sync.Mutex
 	recMu     sync.Mutex
 	status    map[string]*BankStatus
@@ -61,6 +62,7 @@ type Options struct {
 	Logger    *slog.Logger
 	Client    *http.Client
 	WorldOnly bool
+	Personas  []string
 }
 
 func New(cfg *config.Config, o Options) (*App, error) {
@@ -131,6 +133,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 			return nil, err
 		}
 	}
+	a.personas = o.Personas
 	a.world = world.New(a.worldConfig(genesis), st.World)
 	a.worldOnly = o.WorldOnly
 	for _, b := range cfg.Banks {
@@ -149,7 +152,9 @@ func New(cfg *config.Config, o Options) (*App, error) {
 			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
 		}
 	}
-	a.ensureRTGS()
+	if err := a.ensureRTGS(); err != nil {
+		return nil, err
+	}
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}
@@ -164,7 +169,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 }
 
 func (a *App) worldConfig(genesis clock.Date) world.Config {
-	wc := world.Config{Seed: a.cfg.Seed, Genesis: genesis}
+	wc := world.Config{Seed: a.cfg.Seed, Genesis: genesis, Personas: a.personas}
 	for _, b := range a.cfg.Banks {
 		wc.Institutions = append(wc.Institutions, world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: true, Style: b.Style()})
 	}
@@ -273,7 +278,9 @@ func (a *App) Step() {
 			a.driftDue.Store(true)
 		}
 	}
-	a.ensureRTGS()
+	if err := a.ensureRTGS(); err != nil {
+		a.log.Error("CBN ledger", "err", err)
+	}
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}

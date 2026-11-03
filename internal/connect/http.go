@@ -27,6 +27,9 @@ const (
 )
 
 func requestID(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
 	if v, ok := r.Context().Value(ctxRequestID).(string); ok {
 		return v
 	}

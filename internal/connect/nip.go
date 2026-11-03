@@ -18,7 +18,7 @@ import (
 const nipRetention = 7 * 24 * time.Hour
 
 type NIPFailure struct {
-	SessionID   string    `json:"session_id"`
+	SessionID   string    `json:"session_id" yaml:"session_id"`
 	FromBank    string    `json:"from_bank"`
 	ToCode      string    `json:"to_code"`
 	Amount      int64     `json:"amount_minor"`
@@ -291,13 +291,13 @@ func (a *App) statusLocked(sid string) reply {
 }
 
 type transferBody struct {
-	From      string `json:"from"`
-	To        string `json:"to"`
-	ToBank    string `json:"to_bank"`
-	ToName    string `json:"to_name"`
-	Amount    string `json:"amount"`
-	Narration string `json:"narration"`
-	SessionID string `json:"session_id"`
+	From      string `json:"from" yaml:"from"`
+	To        string `json:"to" yaml:"to"`
+	ToBank    string `json:"to_bank" yaml:"to_bank"`
+	ToName    string `json:"to_name" yaml:"to_name"`
+	Amount    string `json:"amount" yaml:"amount"`
+	Narration string `json:"narration" yaml:"narration"`
+	SessionID string `json:"session_id" yaml:"session_id"`
 }
 
 func (b transferBody) hash() string {

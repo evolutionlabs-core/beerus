@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,8 +14,8 @@ import (
 var originalPersonas = []string{"adaeze", "tunde", "ngozi", "chidi"}
 
 var originalDigests = map[int64]string{
-	42:       "45743969ecaa29d799e04f0029be1734895fa55d1b6344a6bcb91976be572b15",
-	20261028: "ea1f2809fa32ca7ddd614d59af43076c9b03c5c7f7fd1fdd822eab31b641aad1",
+	42:       "c234e0a92104aeb077c6bb5070b97ef24bc6adf66bb6ef8a86eaa9d97dace9a5",
+	20261028: "6961fdb8266fa51722bed302d50e52cc192d27841457cd703753bb6cc695e6b7",
 }
 
 func originalsDigest(seed int64) (string, int) {
@@ -55,7 +56,7 @@ func TestOriginalPersonasUnchanged(t *testing.T) {
 func TestPersonaCount(t *testing.T) {
 	w, _ := testWorld()
 	ps := w.Personas()
-	if len(ps) < 18 || len(ps) > 22 {
+	if len(ps) != 20 {
 		t.Fatalf("%d personas", len(ps))
 	}
 	ids, names, users, nubans := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -73,6 +74,23 @@ func TestPersonaCount(t *testing.T) {
 				t.Fatalf("duplicate NUBAN %s", a.NUBAN)
 			}
 			nubans[a.NUBAN] = true
+		}
+	}
+}
+
+func TestPersonaFilterKeepsAccounts(t *testing.T) {
+	full, _ := testWorld()
+	cfg := full.Config()
+	cfg.Personas = originalPersonas
+	small := New(cfg, Overrides{})
+	if got := len(small.Personas()); got != len(originalPersonas) {
+		t.Fatalf("%d personas", got)
+	}
+	for _, id := range originalPersonas {
+		want, _ := full.Persona(id)
+		got, ok := small.Persona(id)
+		if !ok || !slices.Equal(got.Accounts, want.Accounts) {
+			t.Fatalf("%s accounts changed: %v vs %v", id, got.Accounts, want.Accounts)
 		}
 	}
 }

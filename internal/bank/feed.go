@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
@@ -37,6 +37,7 @@ type FeedLine struct {
 	SessionID    string
 	BankRef      string
 	Channel      string
+	Category     string
 	BalanceAfter int64
 	Seq          int64
 }
@@ -54,41 +55,50 @@ func (b *Bank) EnsureCustomer(ctx context.Context, nuban, name, product, owner s
 	return err
 }
 
-func counterpart(l FeedLine) string {
-	n := strings.ToUpper(l.Narration)
-	n = strings.TrimPrefix(n, "REV/")
-	n = strings.TrimPrefix(n, "REVERSAL: ")
+func chargeAccount(l FeedLine) (string, error) {
+	switch l.Category {
+	case charges.CategoryFee:
+		return FeeIncome, nil
+	case charges.CategoryVAT:
+		return VATPayable, nil
+	case charges.CategoryStamp, charges.CategoryLevy:
+		return StampPayable, nil
+	}
+	return "", fmt.Errorf("bank: charge line %s has no known category", l.Key)
+}
+
+func counterpart(l FeedLine) (string, error) {
 	switch {
-	case strings.Contains(n, "VAT"):
-		return VATPayable
-	case strings.Contains(n, "STAMP DUTY"), strings.HasPrefix(n, "EMTL"), strings.Contains(n, "ELECTRONIC MONEY TRANSFER LEVY"):
-		return StampPayable
-	case strings.Contains(n, "NIP CHARGE"), strings.Contains(n, "TRANSFER FEE"), strings.Contains(n, "SMS"), strings.Contains(n, "MAINT"):
-		return FeeIncome
-	case l.Channel == "internal", strings.HasPrefix(n, "TRF TO"), strings.HasPrefix(n, "TRF FRM"), strings.Contains(n, "SAVINGS"), strings.Contains(n, "CURRENT ACCOUNT"):
-		return TransferClearing
+	case l.Channel == "internal":
+		return TransferClearing, nil
+	case l.Channel == "charge", l.Channel == "reversal" && l.Category != "":
+		return chargeAccount(l)
 	}
 	original := l.Amount
 	if l.Channel == "reversal" {
 		original = -l.Amount
 	}
 	if original < 0 {
-		return NIPOutward
+		return NIPOutward, nil
 	}
-	return NIPInward
+	return NIPInward, nil
 }
 
-func NIPAmounts(l FeedLine) (outward, inward int64) {
+func NIPAmounts(l FeedLine) (outward, inward int64, err error) {
 	if l.Pending {
-		return 0, 0
+		return 0, 0, nil
 	}
-	switch counterpart(l) {
+	account, err := counterpart(l)
+	if err != nil {
+		return 0, 0, err
+	}
+	switch account {
 	case NIPOutward:
-		return -l.Amount, 0
+		return -l.Amount, 0, nil
 	case NIPInward:
-		return 0, l.Amount
+		return 0, l.Amount, nil
 	}
-	return 0, 0
+	return 0, 0, nil
 }
 
 func kindOf(l FeedLine) string {
@@ -169,11 +179,15 @@ func (b *Bank) RecordLine(ctx context.Context, l FeedLine) error {
 	if amt < 0 {
 		amt = -amt
 	}
+	other, err := counterpart(l)
+	if err != nil {
+		return err
+	}
 	var lines []ledger.Line
 	if l.Amount > 0 {
-		lines = []ledger.Line{dr(counterpart(l), amt, l.Narration), cr(Customer(l.NUBAN), amt, l.Narration)}
+		lines = []ledger.Line{dr(other, amt, l.Narration), cr(Customer(l.NUBAN), amt, l.Narration)}
 	} else {
-		lines = []ledger.Line{dr(Customer(l.NUBAN), amt, l.Narration), cr(counterpart(l), amt, l.Narration)}
+		lines = []ledger.Line{dr(Customer(l.NUBAN), amt, l.Narration), cr(other, amt, l.Narration)}
 	}
 	e := ledger.Entry{Key: "line:" + l.Key, Kind: kindOf(l), PostingDate: clock.DateOf(l.BookedAt), ValueDate: l.ValueDate, PostedAt: l.BookedAt, Narration: l.Narration, SessionID: l.SessionID, Lines: lines, AllowOverdraft: true}
 	p, err := b.L.Post(ctx, e)

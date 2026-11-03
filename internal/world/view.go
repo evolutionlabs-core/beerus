@@ -24,6 +24,7 @@ type Presented struct {
 	SessionID    string
 	BankRef      string
 	Channel      string
+	Category     string
 	BalanceAfter int64
 	Seq          int64
 }
@@ -69,6 +70,7 @@ func (w *World) fetch(account string, at time.Time, from clock.Date, decorate bo
 		p.SessionID = l.SessionID
 		p.BankRef = l.BankRef
 		p.Channel = l.Channel
+		p.Category = l.Category
 		if l.Counterparty != nil {
 			cp := *l.Counterparty
 			p.Counterparty = &cp
@@ -248,7 +250,7 @@ func (w *World) Versions(account string, after, through time.Time) ([]Presented,
 	w.ensureFor(through)
 	out := []Presented{}
 	for _, l := range w.lines[account] {
-		base := Presented{Key: l.Key, ValueDate: l.ValueDate, Narration: l.Narration, SessionID: l.SessionID, BankRef: l.BankRef, Channel: l.Channel}
+		base := Presented{Key: l.Key, ValueDate: l.ValueDate, Narration: l.Narration, SessionID: l.SessionID, BankRef: l.BankRef, Channel: l.Channel, Category: l.Category}
 		if l.Counterparty != nil {
 			cp := *l.Counterparty
 			base.Counterparty = &cp

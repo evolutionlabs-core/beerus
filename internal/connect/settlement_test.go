@@ -1,11 +1,13 @@
 package connect
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 func TestSessionSchedule(t *testing.T) {
@@ -85,5 +87,15 @@ func TestPreviousSession(t *testing.T) {
 		if next := s.next(got.Add(-time.Nanosecond)); !next.Equal(got) {
 			t.Errorf("%s is not a session cutoff", got.Format(time.RFC3339))
 		}
+	}
+}
+
+func TestNoBankTakesTheCBNDatabase(t *testing.T) {
+	cfg := &config.Config{Dir: t.TempDir()}
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, clock.Lagos)
+	a := &App{cfg: cfg, world: world.New(world.Config{Seed: 42, Genesis: clock.DateOf(now).AddDays(-30)}, world.Overrides{})}
+	_, err := a.admit(BankRequest{Name: "Kano Digital"}, 7450, config.DatabaseName(cfg.Dir, cbnID))
+	if err == nil || !strings.Contains(err.Error(), "belongs to the CBN") {
+		t.Fatalf("a bank on the CBN database: %v", err)
 	}
 }
