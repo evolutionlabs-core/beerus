@@ -1,0 +1,1420 @@
+openapi: 3.1.0
+info:
+  title: Beerus Connect Partner API
+  version: 0.1.0
+  summary: The API partner apps such as Balance use to get a bank feed from Beerus Connect.
+  description: |
+    Beerus Connect is the aggregator in the Beerus simulator. Partner apps reach bank data only through this API. Beerus is a simulator: no real money or real bank data moves through it.
+
+    ## Flow
+
+    1. The partner's server creates a link session with a start date and gets a short-lived link token.
+    2. The partner opens the Connect widget in the customer's browser with that link token.
+    3. The customer picks a bank, signs in at the bank with 2FA and chooses the accounts to share.
+    4. The widget redirects the browser to the partner's `redirect_uri` with `code`, `link_session_id` and the partner's `state`. If the customer cancels or the session fails, it redirects with `error` (`access_denied`, `link_session_expired` or `institution_down`), `link_session_id` and `state` instead.
+    5. The partner's server exchanges the code and the link session ID for a permanent connection ID. If the response is lost, `GET /v1/link_sessions/{id}` shows the `connection_id`.
+    6. Connect syncs the accounts and sends webhooks. The partner always pulls data through `/transactions/sync`.
+
+    ## Guarantees
+
+    - A transaction `id` never changes. It stays the same across re-connects and new consents.
+    - An `account_id` stays the same across re-connects and new consents. It is keyed by partner, bank and NUBAN.
+    - The opening balance plus every posted line equals the ledger balance. The opening balance is the ledger balance at the end of the business day before the account's `effective_start_date`, or before `start_date` when it is null, from `/balance?as_of=`. Read `effective_start_date` from `historical_sync.completed` or `/balance`; it is per account. Both the feed window and `as_of` use the booking date, the business date of `booked_at`.
+    - An account's feed never shrinks. If an earlier consent for the same account already shared older lines, the feed keeps them and `effective_start_date` is earlier than `start_date`.
+    - An account stays readable while any active consent of the partner covers it. Revoking one connection leaves other connections to the same account working.
+    - A posted line's amount never changes. Corrections arrive as new lines, such as reversals.
+    - Only pending lines are ever removed. A change to a posted line arrives in `modified` with a `modification_reason`.
+    - When a pending line posts, the pending line is removed and the posted line is added with `pending_transaction_id` set to the pending line's `id`.
+    - A cursor belongs to one account and one world.
+    - Every write is idempotent. A replay with the same `Idempotency-Key` returns the same response, byte for byte.
+
+    ## Time
+
+    Dates such as `start_date`, `as_of` and `value_date` are business dates in Africa/Lagos, in ISO 8601 `YYYY-MM-DD` form. Timestamps are ISO 8601 with an offset. Amounts are signed integers in minor units (kobo for NGN) with an ISO 4217 currency code.
+
+    ## Webhooks
+
+    Webhooks only notify. The partner always pulls data through the read endpoints. They follow Standard Webhooks and are signed with ed25519 (`v1a`). Connect holds the secret key; the partner holds only the public key, in the `whpk_` format.
+
+    To verify a webhook:
+
+    1. Read the raw body before parsing it.
+    2. Check that `webhook-timestamp` is within 5 minutes of the current real time.
+    3. Verify each `v1a` signature in `webhook-signature` over `webhook-id.webhook-timestamp.body`. Accept if any one verifies. Ignore other prefixes.
+
+    The public keys are listed by `GET /v1/webhook_keys`. During key rotation, `webhook-signature` carries signatures from both the old and new keys.
+
+    Delivery is at least once. Deduplicate by `webhook-id`. Respond with any 2xx within 15 seconds and do the work afterwards. Anything else is retried with exponential backoff and jitter over about three days, in real time. Events can arrive out of order, so treat them as hints and read the current state through the API. Failed webhooks can be replayed. The payload `timestamp` is business time.
+
+    ## Errors
+
+    Every error has a stable `code`. Partners should branch on `code`, never on `message`. New codes may be added; treat an unknown code as its HTTP status.
+  contact:
+    name: Evolution Labs
+    url: https://github.com/evolutionlabs-core/beerus
+  license:
+    name: GNU Affero General Public License v3.0 only
+    identifier: AGPL-3.0-only
+servers:
+  - url: https://connect.localhost:7443
+    description: Beerus Connect on the local machine
+tags:
+  - name: Link sessions
+    description: Start the Connect widget and exchange its one-time code.
+  - name: Connections
+    description: A partner's link to one customer's bank, backed by one consent.
+  - name: Accounts
+    description: Accounts and balances shared under a connection.
+  - name: Transactions
+    description: The bank feed, read with a cursor.
+security:
+  - mutualTLS: []
+    apiKey: []
+paths:
+  /v1/link_sessions:
+    post:
+      tags: [Link sessions]
+      operationId: createLinkSession
+      summary: Create a link session
+      description: Creates a link session and returns a short-lived link token for the Connect widget. The session moves through `created`, `bank_chosen`, `at_bank`, `authorised` and `exchanged`, or ends `expired`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LinkSessionCreate'
+            example:
+              start_date: '2026-07-01'
+              workspace_id: ws_adaeze_bakery
+              redirect_uri: http://localhost:3000/bank_connections/callback
+              state: 9f86d081884c7d65
+      responses:
+        '201':
+          description: The link session was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/link_sessions/{link_session_id}:
+    parameters:
+      - name: link_session_id
+        in: path
+        required: true
+        description: The link session ID.
+        schema:
+          type: string
+        example: lks_01JBC7Q2W8M4
+    get:
+      tags: [Link sessions]
+      operationId: getLinkSession
+      summary: Get a link session
+      description: Returns a link session and its status. Use it to recover the `connection_id` if an exchange response was lost. The `link_token` is not returned again.
+      responses:
+        '200':
+          description: The link session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkSessionView'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/webhook_keys:
+    get:
+      tags: [Link sessions]
+      operationId: listWebhookKeys
+      summary: List webhook public keys
+      description: Returns the ed25519 public keys Connect signs webhooks with, in the Standard Webhooks `whpk_` format.
+      responses:
+        '200':
+          description: The keys.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookKeyList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/connections/exchange:
+    post:
+      tags: [Link sessions]
+      operationId: exchangeCode
+      summary: Exchange a one-time code for a connection
+      description: Exchanges the widget's one-time code for a permanent connection ID. The request must carry the link session ID. Connect checks that the code belongs to that session and that the session was created by the same partner, so a code cannot be injected into another session. A code can be exchanged once. A new connection returns 201; a reauthorised connection returns 200.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeExchange'
+            example:
+              code: oc_8f2e61b0c4d94a57
+              link_session_id: lks_01JBC7Q2W8M4
+      responses:
+        '200':
+          description: The existing connection was reauthorised.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Connection'
+        '201':
+          description: The connection was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Connection'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/connections/{connection_id}:
+    parameters:
+      - $ref: '#/components/parameters/ConnectionId'
+    get:
+      tags: [Connections]
+      operationId: getConnection
+      summary: Get a connection
+      description: Returns a connection and its status.
+      responses:
+        '200':
+          description: The connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Connection'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [Connections]
+      operationId: deleteConnection
+      summary: Disconnect
+      description: Disconnects the connection. Connect revokes the consent at the bank, which records it at NIBSS. The connection's status becomes `revoked`. Deleting a revoked connection succeeds again with no change.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204':
+          description: The connection is revoked.
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/InstitutionDown'
+  /v1/connections/{connection_id}/accounts:
+    parameters:
+      - $ref: '#/components/parameters/ConnectionId'
+    get:
+      tags: [Connections]
+      operationId: listConnectionAccounts
+      summary: List a connection's accounts
+      description: Returns the accounts the customer shared under this connection.
+      responses:
+        '200':
+          description: The accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/connections/{connection_id}/reauth:
+    parameters:
+      - $ref: '#/components/parameters/ConnectionId'
+    post:
+      tags: [Connections]
+      operationId: reauthConnection
+      summary: Start reauthorisation
+      description: Creates a link session for the customer to consent again, for example after `reauth_required` or `expired`. The partner opens the Connect widget with its link token and exchanges the returned code as usual. The connection ID and account IDs stay the same. A revoked connection cannot be reauthorised; create a new link session instead.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReauthRequest'
+            example:
+              redirect_uri: http://localhost:3000/bank_connections/callback
+              state: 4b227777d4dd1fc6
+      responses:
+        '201':
+          description: A link session for reauthorisation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkSession'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/accounts/{account_id}:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    get:
+      tags: [Accounts]
+      operationId: getAccount
+      summary: Get an account
+      description: Returns an account with its current and available balances.
+      responses:
+        '200':
+          description: The account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/accounts/{account_id}/balance:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    get:
+      tags: [Accounts]
+      operationId: getBalanceAsOf
+      summary: Get the ledger balance at the end of a business day
+      description: Returns the ledger balance at the end of the business day `as_of`, in Africa/Lagos. If the bank's history limit cut the history, `effective_start_date` is the first date Connect holds lines for; otherwise it is null.
+      parameters:
+        - name: as_of
+          in: query
+          required: true
+          description: A business date in Africa/Lagos, `YYYY-MM-DD`.
+          schema:
+            type: string
+            format: date
+          example: '2026-06-30'
+      responses:
+        '200':
+          description: The balance.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceAsOf'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/accounts/{account_id}/transactions/sync:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    get:
+      tags: [Transactions]
+      operationId: syncTransactions
+      summary: Sync transactions
+      description: |
+        Returns the lines added, modified and removed since `cursor`. Call with no cursor to start from the beginning. Keep calling with `next_cursor` while `has_more` is true, then store `next_cursor` for the next sync.
+
+        Lines in `added` and `modified` are ordered by `sequence`. Upsert by `id`. Only pending lines appear in `removed`.
+
+        A cursor belongs to one world. When the world is restored from a snapshot, an old cursor returns `409 cursor_reset`. Start again with no cursor and replace the account's feed with the rebuilt one. Upserting by `id` gives no duplicates.
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: The `next_cursor` from the previous call. Opaque.
+          schema:
+            type: string
+          example: cur_eyJ3IjoiMDFKQjAwIiwicyI6MTI0fQ
+        - name: limit
+          in: query
+          required: false
+          description: The most lines to return across `added`, `modified` and `removed`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: The changes since the cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionSync'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/CursorReset'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/accounts/{account_id}/refresh:
+    parameters:
+      - $ref: '#/components/parameters/AccountId'
+    post:
+      tags: [Accounts]
+      operationId: refreshAccount
+      summary: Request a refresh
+      description: Queues a job that fetches the latest data from the bank. The job runs asynchronously and ends with the `refresh.completed` webhook, then `sync.available` if anything changed. Refreshes are rate-limited per account in real time; past the limit the response is `429 rate_limited` with `Retry-After`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: The refresh job is queued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Refresh'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+webhooks:
+  sync.available:
+    post:
+      tags: [Transactions]
+      operationId: onSyncAvailable
+      security: []
+      summary: New data is ready
+      description: New, modified or removed lines are ready for an account. Call `/transactions/sync`.
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/WebhookTimestamp'
+        - $ref: '#/components/parameters/WebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncAvailableEvent'
+      responses:
+        '200':
+          $ref: '#/components/responses/WebhookAccepted'
+  historical_sync.completed:
+    post:
+      tags: [Transactions]
+      operationId: onHistoricalSyncCompleted
+      security: []
+      summary: History is loaded
+      description: Connect has loaded an account's history from the start date, or from `effective_start_date` if the bank's history limit cut it.
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/WebhookTimestamp'
+        - $ref: '#/components/parameters/WebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HistoricalSyncCompletedEvent'
+      responses:
+        '200':
+          $ref: '#/components/responses/WebhookAccepted'
+  connection.status_changed:
+    post:
+      tags: [Connections]
+      operationId: onConnectionStatusChanged
+      security: []
+      summary: A connection's status changed
+      description: A connection moved to a new status, for example `revoked` after the customer revoked consent at the bank.
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/WebhookTimestamp'
+        - $ref: '#/components/parameters/WebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectionStatusChangedEvent'
+      responses:
+        '200':
+          $ref: '#/components/responses/WebhookAccepted'
+  account.added:
+    post:
+      tags: [Accounts]
+      operationId: onAccountAdded
+      security: []
+      summary: An account was added
+      description: An account was added to a connection.
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/WebhookTimestamp'
+        - $ref: '#/components/parameters/WebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountEvent'
+      responses:
+        '200':
+          $ref: '#/components/responses/WebhookAccepted'
+  account.removed:
+    post:
+      tags: [Accounts]
+      operationId: onAccountRemoved
+      security: []
+      summary: An account was removed
+      description: An account is no longer shared under a connection.
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/WebhookTimestamp'
+        - $ref: '#/components/parameters/WebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountEvent'
+      responses:
+        '200':
+          $ref: '#/components/responses/WebhookAccepted'
+  refresh.completed:
+    post:
+      tags: [Accounts]
+      operationId: onRefreshCompleted
+      security: []
+      summary: A refresh finished
+      description: A refresh job finished, with or without new data.
+      parameters:
+        - $ref: '#/components/parameters/WebhookId'
+        - $ref: '#/components/parameters/WebhookTimestamp'
+        - $ref: '#/components/parameters/WebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshCompletedEvent'
+      responses:
+        '200':
+          $ref: '#/components/responses/WebhookAccepted'
+components:
+  securitySchemes:
+    mutualTLS:
+      type: mutualTLS
+      description: The partner presents a client certificate issued by the Connect CA. Connect authorises the caller by the certificate's identity, not only by a valid chain.
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: The partner's secret API key. It must belong to the same partner as the client certificate.
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: A unique key per write, chosen by the partner. Keys are scoped by partner, endpoint and key. A replay with the same key and body returns the original response, byte for byte. The same key with a different body returns `422 idempotency_key_reused`.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+      example: 5c0d8a3e-7a1f-4f7e-9d0b-2a4c6e8f1b3d
+    ConnectionId:
+      name: connection_id
+      in: path
+      required: true
+      description: The connection ID.
+      schema:
+        type: string
+      example: con_01JBC8A5T3ZK
+    AccountId:
+      name: account_id
+      in: path
+      required: true
+      description: The account ID.
+      schema:
+        type: string
+      example: acc_01JBC8B2N7QX
+    WebhookId:
+      name: webhook-id
+      in: header
+      required: true
+      description: The message ID. It is the same on every retry. Deduplicate by it.
+      schema:
+        type: string
+      example: msg_01JBD0F4R6VY
+    WebhookTimestamp:
+      name: webhook-timestamp
+      in: header
+      required: true
+      description: Seconds since the Unix epoch, in real time, when this attempt was signed.
+      schema:
+        type: string
+        pattern: '^[0-9]+$'
+      example: '1793180000'
+    WebhookSignature:
+      name: webhook-signature
+      in: header
+      required: true
+      description: A space-separated list of `v1a,<base64 ed25519 signature>` over `webhook-id.webhook-timestamp.body`.
+      schema:
+        type: string
+      example: v1a,hnO3f9T8Ytu9HwrXslvumlUpqtNVqkhqw/enGzPCXe5BdqzCInXqYXFymVJaA7AZdpXwVLPo3mNl8EM+m7TBAg==
+  responses:
+    BadRequest:
+      description: The request is malformed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invalid_request
+              message: start_date must be a date in YYYY-MM-DD form.
+              request_id: req_01JBC9X1
+    Unauthenticated:
+      description: The client certificate or API key is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unauthenticated
+              message: The API key is not valid.
+              request_id: req_01JBC9X2
+    Forbidden:
+      description: The caller may not do this.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: forbidden
+              message: The API key does not belong to the client certificate's partner.
+              request_id: req_01JBC9X3
+    NotFound:
+      description: The resource does not exist or belongs to another partner.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_found
+              message: No such connection.
+              request_id: req_01JBC9X4
+    Conflict:
+      description: The resource is not in a state that allows this request, for example `connection_revoked` or `reauth_required` when no active consent covers the account.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: connection_revoked
+              message: The connection was revoked. Create a new link session.
+              request_id: req_01JBC9X5
+    CursorReset:
+      description: The cursor belongs to a world that was replaced by a snapshot restore (`cursor_reset`); start again with no cursor. The same status is used when no consent covers the account any more (`connection_revoked` or `reauth_required`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: cursor_reset
+              message: The world was restored from a snapshot.
+              request_id: req_01JBC9X6
+    Unprocessable:
+      description: The request is well formed but cannot be processed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: idempotency_key_reused
+              message: This Idempotency-Key was used with a different body.
+              request_id: req_01JBC9X7
+    RateLimited:
+      description: Too many requests. Retry after the number of seconds in `Retry-After`.
+      headers:
+        Retry-After:
+          description: Seconds to wait, in real time.
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: rate_limited
+              message: Too many refresh requests for this account.
+              request_id: req_01JBC9X8
+    InternalError:
+      description: Something went wrong inside Connect.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: internal_error
+              message: Something went wrong.
+              request_id: req_01JBC9X9
+    InstitutionDown:
+      description: The bank cannot be reached. Retry later.
+      headers:
+        Retry-After:
+          description: Seconds to wait, in real time.
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: institution_down
+              message: Bank A cannot be reached.
+              request_id: req_01JBC9XA
+    WebhookAccepted:
+      description: Any 2xx status means the event was received. Anything else is retried.
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+              description: For people. Do not parse it.
+            request_id:
+              type: string
+              description: Quote this when reporting a problem.
+    ErrorCode:
+      type: string
+      description: |
+        A stable error code. The list below is not closed; treat an unknown code as its HTTP status.
+
+        - `invalid_request` (400): the request is malformed.
+        - `invalid_cursor` (400): the cursor cannot be read.
+        - `unauthenticated` (401): the certificate or API key is missing or invalid.
+        - `forbidden` (403): the caller may not do this.
+        - `not_found` (404): the resource does not exist for this partner.
+        - `invalid_code` (404): the one-time code is unknown, used or expired.
+        - `cursor_reset` (409): the world was restored from a snapshot.
+        - `connection_revoked` (409): the connection was revoked.
+        - `reauth_required` (409): the customer must consent again.
+        - `link_session_expired` (409): the link session expired.
+        - `link_session_mismatch` (403): the code or session belongs to another partner or workspace.
+        - `idempotency_key_reused` (422): the key was used with a different body.
+        - `as_of_out_of_range` (422): `as_of` is outside the dates Connect holds.
+        - `rate_limited` (429): too many requests.
+        - `institution_down` (503): the bank cannot be reached. Also sent in `refresh.completed` and `connection.status_changed`.
+        - `internal_error` (500): something went wrong inside Connect.
+      examples:
+        - cursor_reset
+    LinkSessionCreate:
+      type: object
+      required: [start_date, workspace_id, redirect_uri]
+      properties:
+        redirect_uri:
+          type: string
+          format: uri
+          description: Where the widget sends the browser when it finishes. It must exactly match one of the partner's registered redirect URIs.
+        state:
+          type: string
+          maxLength: 512
+          description: An opaque value returned unchanged on the redirect. Use it to protect against cross-site request forgery.
+        start_date:
+          type: string
+          format: date
+          description: The first business date of history the partner wants. The bank's history limit may cut it.
+        workspace_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The partner's own ID for the workspace, such as a Balance business. The code exchange is checked against it.
+    LinkSessionStatus:
+      type: string
+      enum: [created, bank_chosen, at_bank, authorised, exchanged, expired]
+    LinkSessionView:
+      type: object
+      required: [id, status, start_date, workspace_id, connection_id, created_at]
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/LinkSessionStatus'
+        start_date:
+          type: string
+          format: date
+        workspace_id:
+          type: string
+        connection_id:
+          type: [string, 'null']
+          description: Set once the session reauthorises a connection or its code is exchanged.
+        created_at:
+          type: string
+          format: date-time
+      example:
+        id: lks_01JBC7Q2W8M4
+        status: exchanged
+        start_date: '2026-07-01'
+        workspace_id: ws_adaeze_bakery
+        connection_id: con_01JBC8A5T3ZK
+        created_at: '2026-10-28T12:00:00+01:00'
+    LinkSession:
+      type: object
+      required: [id, status, link_token, link_token_expires_at, widget_url, start_date, workspace_id, connection_id, created_at]
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/LinkSessionStatus'
+        link_token:
+          type: string
+          description: Opens the Connect widget. Short-lived. It is swapped for a widget session on first use.
+        link_token_expires_at:
+          type: string
+          format: date-time
+        widget_url:
+          type: string
+          format: uri
+          description: Open this URL in the customer's browser. It already carries the link token.
+        start_date:
+          type: string
+          format: date
+        workspace_id:
+          type: string
+        connection_id:
+          type: [string, 'null']
+          description: Set when the session reauthorises an existing connection.
+        created_at:
+          type: string
+          format: date-time
+      example:
+        id: lks_01JBC7Q2W8M4
+        status: created
+        link_token: lt_7c1e9a2f5b8d4e60
+        link_token_expires_at: '2026-10-28T12:30:00+01:00'
+        widget_url: https://connect.localhost:7444/link?token=lt_7c1e9a2f5b8d4e60
+        start_date: '2026-07-01'
+        workspace_id: ws_adaeze_bakery
+        connection_id: null
+        created_at: '2026-10-28T12:00:00+01:00'
+    WebhookKey:
+      type: object
+      required: [key_id, public_key, status]
+      properties:
+        key_id:
+          type: string
+        public_key:
+          type: string
+          pattern: '^whpk_'
+        status:
+          type: string
+          enum: [active, retiring]
+    WebhookKeyList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookKey'
+      example:
+        data:
+          - key_id: whk_01JB00K2
+            public_key: whpk_MCowBQYDK2VwAyEAhnO3f9T8Ytu9HwrXslvumlUpqtNVqkhq
+            status: active
+    ReauthRequest:
+      type: object
+      properties:
+        redirect_uri:
+          type: string
+          format: uri
+          description: Where the widget sends the browser when it finishes. Defaults to the partner's first registered redirect URI.
+        state:
+          type: string
+          maxLength: 512
+          description: An opaque value returned unchanged on the redirect.
+    CodeExchange:
+      type: object
+      required: [code, link_session_id]
+      properties:
+        code:
+          type: string
+          description: The one-time code the widget returned.
+        link_session_id:
+          type: string
+    ConnectionStatus:
+      type: string
+      description: |
+        - `active`: the consent is valid and data is flowing.
+        - `syncing`: Connect is fetching data, for example the first history load.
+        - `reauth_required`: the customer must consent again before data can flow.
+        - `revoked`: the customer or partner revoked the consent.
+        - `expired`: the consent reached its end date.
+        - `institution_down`: the bank cannot be reached.
+        - `error`: something else stopped the connection.
+      enum: [active, syncing, reauth_required, revoked, expired, institution_down, error]
+    Institution:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+    Connection:
+      type: object
+      required: [id, status, institution, workspace_id, start_date, effective_start_date, consent_expires_at, last_synced_at, created_at]
+      properties:
+        id:
+          type: string
+        status:
+          $ref: '#/components/schemas/ConnectionStatus'
+        institution:
+          $ref: '#/components/schemas/Institution'
+        workspace_id:
+          type: string
+        start_date:
+          type: string
+          format: date
+          description: The start date the partner asked for.
+        effective_start_date:
+          type: [string, 'null']
+          format: date
+          description: The first date of history, when it differs from `start_date`. It is later when the bank's history limit cut `start_date`, and earlier when an earlier consent already shared older lines. Per-account values in `/balance` and `historical_sync.completed` are authoritative.
+        consent_expires_at:
+          type: [string, 'null']
+          format: date-time
+        last_synced_at:
+          type: [string, 'null']
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+      example:
+        id: con_01JBC8A5T3ZK
+        status: syncing
+        institution:
+          id: bank-a
+          name: Bank A
+        workspace_id: ws_adaeze_bakery
+        start_date: '2026-07-01'
+        effective_start_date: null
+        consent_expires_at: '2027-10-28T12:04:00+01:00'
+        last_synced_at: null
+        created_at: '2026-10-28T12:04:10+01:00'
+    Money:
+      type: object
+      required: [amount_minor, currency]
+      properties:
+        amount_minor:
+          type: integer
+          format: int64
+          description: Signed amount in minor units.
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          description: ISO 4217 code.
+    Account:
+      type: object
+      required: [id, connection_id, institution, name, account_number, type, currency, balances]
+      properties:
+        id:
+          type: string
+          description: Stable across re-connects and new consents. Keyed by partner, bank and NUBAN.
+        connection_id:
+          type: string
+        institution:
+          $ref: '#/components/schemas/Institution'
+        name:
+          type: string
+        account_number:
+          type: string
+          pattern: '^[0-9]{10}$'
+          description: The 10-digit NUBAN.
+        type:
+          type: string
+          enum: [savings, current]
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        balances:
+          type: object
+          required: [current, available, as_at]
+          properties:
+            current:
+              $ref: '#/components/schemas/Money'
+            available:
+              $ref: '#/components/schemas/Money'
+            as_at:
+              type: string
+              format: date-time
+              description: When Connect last read the balances from the bank.
+      example:
+        id: acc_01JBC8B2N7QX
+        connection_id: con_01JBC8A5T3ZK
+        institution:
+          id: bank-a
+          name: Bank A
+        name: ADAEZE'S BAKERY LTD
+        account_number: '0123456789'
+        type: current
+        currency: NGN
+        balances:
+          current:
+            amount_minor: 125034000
+            currency: NGN
+          available:
+            amount_minor: 124534000
+            currency: NGN
+          as_at: '2026-10-28T12:05:00+01:00'
+    AccountList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Account'
+    BalanceAsOf:
+      type: object
+      required: [account_id, as_of, ledger_balance, effective_start_date]
+      properties:
+        account_id:
+          type: string
+        as_of:
+          type: string
+          format: date
+        ledger_balance:
+          $ref: '#/components/schemas/Money'
+        effective_start_date:
+          type: [string, 'null']
+          format: date
+          description: The first date Connect holds lines for this account, when it differs from the consent's `start_date`. Null otherwise.
+      example:
+        account_id: acc_01JBC8B2N7QX
+        as_of: '2026-06-30'
+        ledger_balance:
+          amount_minor: 98000000
+          currency: NGN
+        effective_start_date: null
+    Counterparty:
+      type: object
+      required: [name, account_number, bank_code, bank_name]
+      properties:
+        name:
+          type: [string, 'null']
+        account_number:
+          type: [string, 'null']
+        bank_code:
+          type: [string, 'null']
+        bank_name:
+          type: [string, 'null']
+    References:
+      type: object
+      required: [session_id, bank_reference]
+      properties:
+        session_id:
+          type: [string, 'null']
+          pattern: '^[0-9]{30}$'
+          description: The 30-digit NIP session ID. It matches own-account transfers across banks.
+        bank_reference:
+          type: [string, 'null']
+          description: The bank's own reference. It may change between syncs at banks without stable IDs.
+    Transaction:
+      type: object
+      required: [id, account_id, sequence, amount_minor, currency, status, pending_transaction_id, booked_at, value_date, description_raw, description, counterparty, references, channel, balance_after_minor]
+      properties:
+        id:
+          type: string
+          description: Stable Beerus ID. It never changes.
+        account_id:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Order within the account, for lines with the same timestamp.
+        amount_minor:
+          type: integer
+          format: int64
+          description: Signed amount in minor units. Negative is money out.
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+        status:
+          type: string
+          enum: [pending, posted]
+        pending_transaction_id:
+          type: [string, 'null']
+          description: On a posted line, the `id` of the pending line it replaces.
+        booked_at:
+          type: [string, 'null']
+          format: date-time
+          description: The posting time. Null while the line is pending.
+        value_date:
+          type: string
+          format: date
+        description_raw:
+          type: string
+          description: The bank's narration, untouched.
+        description:
+          type: string
+          description: The normalised narration.
+        counterparty:
+          oneOf:
+            - $ref: '#/components/schemas/Counterparty'
+            - type: 'null'
+        references:
+          $ref: '#/components/schemas/References'
+        channel:
+          type: string
+          description: How the line came about, for example `nip`, `internet_banking`, `branch` or `charge`.
+        balance_after_minor:
+          type: [integer, 'null']
+          format: int64
+          description: The running ledger balance after this line. Null while the line is pending.
+      example:
+        id: txn_01JBCA0H9E2P
+        account_id: acc_01JBC8B2N7QX
+        sequence: 1042
+        amount_minor: -10000000
+        currency: NGN
+        status: posted
+        pending_transaction_id: null
+        booked_at: '2026-10-23T23:50:04+01:00'
+        value_date: '2026-10-23'
+        description_raw: NIP TRF TO CHIDI OKAFOR/BANK B/REF 000001261023235004
+        description: Transfer to Chidi Okafor
+        counterparty:
+          name: CHIDI OKAFOR
+          account_number: '9876543210'
+          bank_code: '999002'
+          bank_name: Bank B
+        references:
+          session_id: '999001261023235004000000000417'
+          bank_reference: FT26296ABC12
+        channel: nip
+        balance_after_minor: 125034000
+    ModifiedTransaction:
+      allOf:
+        - $ref: '#/components/schemas/Transaction'
+        - type: object
+          required: [modification_reason]
+          properties:
+            modification_reason:
+              type: string
+              description: |
+                Why the line changed.
+
+                - `description_changed`: the bank changed the narration.
+                - `bank_reference_changed`: the bank changed its reference.
+                - `counterparty_changed`: counterparty details changed.
+                - `pending_updated`: a pending line changed, for example its amount.
+              enum: [description_changed, bank_reference_changed, counterparty_changed, pending_updated]
+    RemovedTransaction:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          description: The `id` of a pending line that no longer exists.
+    TransactionSync:
+      type: object
+      required: [added, modified, removed, next_cursor, has_more, world_id]
+      properties:
+        added:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+        modified:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModifiedTransaction'
+        removed:
+          type: array
+          items:
+            $ref: '#/components/schemas/RemovedTransaction'
+        next_cursor:
+          type: string
+        has_more:
+          type: boolean
+        world_id:
+          type: string
+          description: The world this feed belongs to. It changes when the world is restored from a snapshot.
+    Refresh:
+      type: object
+      required: [id, account_id, status, requested_at]
+      properties:
+        id:
+          type: string
+        account_id:
+          type: string
+        status:
+          type: string
+          enum: [queued]
+        requested_at:
+          type: string
+          format: date-time
+      example:
+        id: ref_01JBCB7M3K9D
+        account_id: acc_01JBC8B2N7QX
+        status: queued
+        requested_at: '2026-10-28T12:10:00+01:00'
+    EventEnvelope:
+      type: object
+      required: [type, timestamp, data]
+      properties:
+        type:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+          description: When the event happened.
+        data:
+          type: object
+    SyncAvailableEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          properties:
+            type:
+              const: sync.available
+            data:
+              type: object
+              required: [connection_id, account_id, world_id]
+              properties:
+                connection_id:
+                  type: string
+                account_id:
+                  type: string
+                world_id:
+                  type: string
+      example:
+        type: sync.available
+        timestamp: '2026-10-28T12:06:00+01:00'
+        data:
+          connection_id: con_01JBC8A5T3ZK
+          account_id: acc_01JBC8B2N7QX
+          world_id: wld_01JB00K2
+    HistoricalSyncCompletedEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          properties:
+            type:
+              const: historical_sync.completed
+            data:
+              type: object
+              required: [connection_id, account_id, start_date, effective_start_date]
+              properties:
+                connection_id:
+                  type: string
+                account_id:
+                  type: string
+                start_date:
+                  type: string
+                  format: date
+                effective_start_date:
+                  type: [string, 'null']
+                  format: date
+      example:
+        type: historical_sync.completed
+        timestamp: '2026-10-28T12:07:30+01:00'
+        data:
+          connection_id: con_01JBC8A5T3ZK
+          account_id: acc_01JBC8B2N7QX
+          start_date: '2026-07-01'
+          effective_start_date: null
+    ConnectionStatusChangedEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          properties:
+            type:
+              const: connection.status_changed
+            data:
+              type: object
+              required: [connection_id, previous_status, status, error_code]
+              properties:
+                connection_id:
+                  type: string
+                previous_status:
+                  $ref: '#/components/schemas/ConnectionStatus'
+                status:
+                  $ref: '#/components/schemas/ConnectionStatus'
+                error_code:
+                  oneOf:
+                    - $ref: '#/components/schemas/ErrorCode'
+                    - type: 'null'
+      example:
+        type: connection.status_changed
+        timestamp: '2026-10-28T15:20:00+01:00'
+        data:
+          connection_id: con_01JBC8A5T3ZK
+          previous_status: active
+          status: revoked
+          error_code: connection_revoked
+    AccountEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          properties:
+            type:
+              enum: [account.added, account.removed]
+            data:
+              type: object
+              required: [connection_id, account_id]
+              properties:
+                connection_id:
+                  type: string
+                account_id:
+                  type: string
+      example:
+        type: account.added
+        timestamp: '2026-10-28T12:05:00+01:00'
+        data:
+          connection_id: con_01JBC8A5T3ZK
+          account_id: acc_01JBC8B2N7QX
+    RefreshCompletedEvent:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          properties:
+            type:
+              const: refresh.completed
+            data:
+              type: object
+              required: [refresh_id, connection_id, account_id, outcome, error_code]
+              properties:
+                refresh_id:
+                  type: string
+                connection_id:
+                  type: string
+                account_id:
+                  type: string
+                outcome:
+                  type: string
+                  enum: [succeeded, failed]
+                error_code:
+                  oneOf:
+                    - $ref: '#/components/schemas/ErrorCode'
+                    - type: 'null'
+      example:
+        type: refresh.completed
+        timestamp: '2026-10-28T12:10:20+01:00'
+        data:
+          refresh_id: ref_01JBCB7M3K9D
+          connection_id: con_01JBC8A5T3ZK
+          account_id: acc_01JBC8B2N7QX
+          outcome: succeeded
+          error_code: null
