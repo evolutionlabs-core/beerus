@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -339,6 +340,14 @@ func cmdControl(cmd string, args []string) error {
 func cmdBank(c *ctl, args []string) (map[string]any, error) {
 	switch {
 	case len(args) == 0 || args[0] == "list":
+		fs := flag.NewFlagSet("bank list", flag.ExitOnError)
+		state := fs.String("state", "", "only banks in this state: active, suspended, provisioning, repairing or closed")
+		if len(args) > 0 {
+			fs.Parse(args[1:])
+		}
+		if *state != "" {
+			return c.do("GET", "/banks?state="+url.QueryEscape(*state), nil)
+		}
 		return c.do("GET", "/banks", nil)
 	case args[0] == "create":
 		fs := flag.NewFlagSet("bank create", flag.ExitOnError)
@@ -397,7 +406,7 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		}
 		return c.do("POST", "/banks/"+args[1]+"/accounts", map[string]string{"persona": *persona, "type": *typ})
 	}
-	return nil, errors.New("usage: beerus bank [list | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID | close <id> --to BANK [--money transfer|payout|leave] --yes]")
+	return nil, errors.New("usage: beerus bank [list [--state STATE] | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID | close <id> --to BANK [--money transfer|payout|leave] --yes]")
 }
 
 func waitBank(c *ctl, id string) (map[string]any, error) {

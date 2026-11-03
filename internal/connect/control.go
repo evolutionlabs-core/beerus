@@ -59,7 +59,13 @@ func (a *App) ControlHandler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "pending"})
 	})
 	mux.HandleFunc("GET /banks", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"data": a.BankStatuses(), "warnings": a.BankWarnings()})
+		data := []BankStatus{}
+		for _, st := range a.BankStatuses() {
+			if state := r.URL.Query().Get("state"); state == "" || st.Phase == state {
+				data = append(data, st)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": data, "warnings": a.BankWarnings()})
 	})
 	mux.HandleFunc("POST /banks", a.ctlCreateBank)
 	mux.HandleFunc("POST /banks/{id}/accounts", a.ctlOpenAccount)

@@ -598,4 +598,20 @@ func TestRestoreCannotReopenAClosedBank(t *testing.T) {
 	if !s.app.World().Closed("bank-b", s.app.Clock().Now()) {
 		t.Fatal("bank-b reopened in the world")
 	}
+	ids := func(state string) []string {
+		out := []string{}
+		for _, d := range s.ctl("GET", "/banks?state="+state, nil)["data"].([]any) {
+			out = append(out, fmt.Sprint(d.(map[string]any)["id"]))
+		}
+		return out
+	}
+	if got := fmt.Sprint(ids("closed")); got != "[bank-b]" {
+		t.Fatalf("closed banks: %s", got)
+	}
+	if got := fmt.Sprint(ids("active")); got != "[bank-a]" {
+		t.Fatalf("active banks: %s", got)
+	}
+	if got := len(s.ctl("GET", "/banks", nil)["data"].([]any)); got != 2 {
+		t.Fatalf("all banks: %d", got)
+	}
 }

@@ -613,7 +613,34 @@ func (a *App) roomBanks(w http.ResponseWriter, r *http.Request) {
 	for id, o := range owners {
 		byID[id].Customers = len(o)
 	}
-	a.roomRender(w, r, "banks", http.StatusOK, "banks", roomPage{"Title": "Banks", "Rows": rows, "CanCreate": len(a.cfg.Banks) > 0, "Warnings": a.BankWarnings()})
+	state := r.URL.Query().Get("state")
+	counts := map[string]int{}
+	shown := []*bankRow{}
+	for _, row := range rows {
+		if row.Phase == PhaseClosed {
+			row.URL = ""
+		}
+		counts[row.Phase]++
+		if state == "" || row.Phase == state {
+			shown = append(shown, row)
+		}
+	}
+	filters := []bankFilter{{Label: "All", Count: len(rows), On: state == ""}}
+	for _, p := range bankPhases {
+		if counts[p] > 0 || p == PhaseActive || p == PhaseSuspended || p == PhaseClosed {
+			filters = append(filters, bankFilter{State: p, Label: strings.ToUpper(p[:1]) + p[1:], Count: counts[p], On: state == p})
+		}
+	}
+	a.roomRender(w, r, "banks", http.StatusOK, "banks", roomPage{"Title": "Banks", "Rows": shown, "State": state, "Filters": filters, "CanCreate": len(a.cfg.Banks) > 0, "Warnings": a.BankWarnings()})
+}
+
+var bankPhases = []string{PhaseActive, PhaseSuspended, PhaseProvisioning, PhaseRepairing, PhaseClosed}
+
+type bankFilter struct {
+	State string
+	Label string
+	Count int
+	On    bool
 }
 
 func (a *App) orderedStatuses(m map[string]BankStatus) []BankStatus {
