@@ -370,8 +370,15 @@ func TestSnapshotRestoreResetsCursor(t *testing.T) {
 		t.Fatal("restore kept the world ID")
 	}
 	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync?cursor="+first.cursor, nil)
-	if r.Status != 409 || r.Code() != "cursor_reset" {
+	want := "cursor_reset"
+	if !s.worldOnly {
+		want = "reauth_required"
+	}
+	if r.Status != 409 || r.Code() != want {
 		t.Fatalf("old cursor after restore: %d %s", r.Status, r.Body)
+	}
+	if !s.worldOnly {
+		s.connect("tunde", "bank-a", s.today().AddDays(-30))
 	}
 	s.syncNow()
 	again, _ := s.syncAll(id, "", 100)
