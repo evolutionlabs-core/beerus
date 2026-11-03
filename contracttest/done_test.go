@@ -266,7 +266,7 @@ func TestDoneStory(t *testing.T) {
 	app := s.bankSignIn("adaeze")
 	app.get("/apps")
 	check(strings.Contains(app.last, "Balance") && strings.Contains(app.last, "via Beerus Connect"), "connected apps page: %.300s", app.last)
-	consent := regexp.MustCompile(`/apps/(obc_[A-Za-z0-9]+)/revoke`).FindStringSubmatch(app.last)
+	consent := regexp.MustCompile(`/apps/(obc_[^/"]+)/revoke`).FindStringSubmatch(app.last)
 	check(consent != nil, "the connected apps page has no consent to revoke: %.300s", app.last)
 	app.post("/apps/"+consent[1]+"/revoke", url.Values{})
 	check(strings.Contains(app.last, "Access withdrawn"), "revoke page: %.300s", app.last)
