@@ -1,0 +1,12 @@
+{
+  "name": "beerus-web",
+  "private": true,
+  "scripts": {
+    "css": "tailwindcss -i beerus.css -o ../internal/connect/assets/beerus.css --minify",
+    "css:watch": "tailwindcss -i beerus.css -o ../internal/connect/assets/beerus.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "tailwindcss": "4.3.3"
+  }
+}

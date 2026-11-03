@@ -3,6 +3,7 @@ package connect
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -31,6 +32,7 @@ func (a *App) ControlHandler() http.Handler {
 	})
 	mux.HandleFunc("POST /scenarios/{name}", a.ctlScenario)
 	mux.HandleFunc("GET /personas", a.ctlPersonas)
+	mux.HandleFunc("POST /transfers", a.ctlTransfer)
 	mux.HandleFunc("GET /connections", a.ctlConnections)
 	mux.HandleFunc("POST /connections/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.RevokeAtBank(r.PathValue("id")); err != nil {
@@ -56,6 +58,13 @@ func (a *App) ControlHandler() http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "pending"})
 	})
+	mux.HandleFunc("GET /banks", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"data": a.BankStatuses(), "warnings": a.BankWarnings()})
+	})
+	mux.HandleFunc("POST /banks", a.ctlCreateBank)
+	mux.HandleFunc("POST /banks/{id}/accounts", a.ctlOpenAccount)
+	mux.HandleFunc("POST /banks/{id}/suspend", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, true) })
+	mux.HandleFunc("POST /banks/{id}/resume", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, false) })
 	mux.HandleFunc("GET /snapshots", a.ctlSnapshots)
 	mux.HandleFunc("POST /snapshots", a.ctlTakeSnapshot)
 	mux.HandleFunc("POST /snapshots/{id}/restore", a.ctlRestore)
@@ -66,7 +75,14 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "No such endpoint.")
 	})
-	return a.withRequestID(a.localOnly(mux))
+	api := a.withRequestID(a.localOnly(mux))
+	room := a.roomHandler()
+	top := http.NewServeMux()
+	top.Handle("/ui", room)
+	top.Handle("/ui/", room)
+	top.Handle("/assets/", room)
+	top.Handle("/", api)
+	return top
 }
 
 func (a *App) localOnly(next http.Handler) http.Handler {
@@ -247,6 +263,90 @@ func (a *App) ctlScenario(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"scenario": name, "result": result})
 }
 
+func parseNaira(s string) (int64, error) {
+	whole, frac, _ := strings.Cut(strings.ReplaceAll(strings.TrimSpace(s), ",", ""), ".")
+	if whole == "" || len(frac) > 2 || strings.Trim(whole, "0123456789") != "" || strings.Trim(frac, "0123456789") != "" {
+		return 0, fmt.Errorf("amount %q must look like 25000 or 25000.50 (naira)", s)
+	}
+	for len(frac) < 2 {
+		frac += "0"
+	}
+	n, err := strconv.ParseInt(whole+frac, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("amount %q must be a positive naira amount", s)
+	}
+	return n, nil
+}
+
+func naira(minor int64) string {
+	sign := ""
+	if minor < 0 {
+		sign, minor = "-", -minor
+	}
+	n := strconv.FormatInt(minor/100, 10)
+	out := ""
+	for i, c := range n {
+		if i > 0 && (len(n)-i)%3 == 0 {
+			out += ","
+		}
+		out += string(c)
+	}
+	return fmt.Sprintf("%s₦%s.%02d", sign, out, minor%100)
+}
+
+func (a *App) ctlTransfer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		From      string `json:"from"`
+		To        string `json:"to"`
+		ToBank    string `json:"to_bank"`
+		ToName    string `json:"to_name"`
+		Amount    string `json:"amount"`
+		Narration string `json:"narration"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"...","to":"...","amount":"25000"}.`)
+		return
+	}
+	amount, err := parseNaira(body.Amount)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	a.mu.Lock()
+	from, to := body.From, body.To
+	if key, ok := a.resolveAccount(from); ok {
+		from = key
+	}
+	if key, ok := a.resolveAccount(to); ok {
+		to = key
+	}
+	res, err := a.world.Transfer(a.clock.Now(), world.TransferRequest{From: from, To: to, ToBank: body.ToBank, ToName: body.ToName, Amount: amount, Narration: body.Narration})
+	if err == nil {
+		a.dirty()
+	}
+	a.mu.Unlock()
+	switch {
+	case errors.Is(err, world.ErrBankSuspended):
+		writeError(w, r, http.StatusConflict, "bank_suspended", transferMessage(err))
+		return
+	case errors.Is(err, world.ErrBankUnavailable):
+		writeError(w, r, http.StatusServiceUnavailable, "bank_unavailable", transferMessage(err))
+		return
+	case err != nil:
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	a.SyncAll()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"result":        res,
+		"amount":        naira(res.Amount),
+		"charges":       naira(res.Fee + res.VAT + res.StampDuty),
+		"total_debit":   naira(res.TotalDebit),
+		"sender_after":  naira(res.BalanceAfter),
+		"business_time": ts(a.clock.Now()),
+	})
+}
+
 func (a *App) ctlPersonas(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -312,6 +412,7 @@ type snapshotMeta struct {
 	Seed         int64     `json:"seed"`
 	Schema       int       `json:"schema"`
 	TakenReal    time.Time `json:"taken_real"`
+	Banks        []string  `json:"banks,omitempty"`
 }
 
 const schemaVersion = 1
@@ -346,6 +447,15 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 		ls.OTP = ""
 	}
 	meta := snapshotMeta{ID: newID("snap"), Name: name, BusinessTime: ts(a.clock.Now()), Seed: a.cfg.Seed, Schema: schemaVersion, TakenReal: a.clock.Real()}
+	for _, l := range a.ledgers {
+		if err := l.Sync(a.clock.Now()); err != nil {
+			return snapshotMeta{}, err
+		}
+		if err := l.Snapshot(meta.ID); err != nil {
+			return snapshotMeta{}, err
+		}
+		meta.Banks = append(meta.Banks, l.inst.ID)
+	}
 	if err := saveJSON(filepath.Join(a.snapshotDir(), meta.ID+".json"), snapshotFile{Meta: meta, State: cp}); err != nil {
 		return snapshotMeta{}, err
 	}
@@ -369,6 +479,23 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	taken := map[string]bool{}
+	for _, id := range f.Meta.Banks {
+		taken[id] = true
+	}
+	restore := map[string]bool{}
+	for _, l := range a.ledgers {
+		ok, err := l.HasSnapshot(id)
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case ok:
+			restore[l.inst.ID] = true
+		case taken[l.inst.ID] || f.Meta.Banks == nil:
+			return "", fmt.Errorf("snapshot %s has no copy of %s", id, l.inst.Name)
+		}
+	}
 	st := f.State
 	st.fill()
 	st.WorldID = newID("wld")
@@ -376,7 +503,21 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	a.st = st
 	a.clock.Restore(st.Clock)
 	genesis, _ := a.cfg.GenesisDate()
-	a.world = world.New(world.Config{Seed: a.cfg.Seed, Genesis: genesis}, st.World)
+	a.world = world.New(a.worldConfig(genesis), st.World)
+	for _, b := range a.cfg.Banks {
+		a.alignSuspensionLocked(b)
+	}
+	for _, l := range a.ledgers {
+		if !restore[l.inst.ID] {
+			if err := l.Keep(a.world); err != nil {
+				return "", err
+			}
+			continue
+		}
+		if err := l.Restore(id, a.world); err != nil {
+			return "", err
+		}
+	}
 	for _, rec := range a.st.Accounts {
 		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed {
 			a.emit(c.PartnerID, "sync.available", map[string]any{"connection_id": c.ID, "account_id": rec.ID, "world_id": st.WorldID})
@@ -435,4 +576,15 @@ func (a *App) ctlRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"world_id": wid, "business_time": ts(a.clock.Now()), "business_date": clock.DateOf(a.clock.Now()).String()})
+}
+
+func transferMessage(err error) string {
+	msg := err.Error()
+	for _, e := range []error{world.ErrBankSuspended, world.ErrBankUnavailable} {
+		msg = strings.TrimPrefix(msg, e.Error()+": ")
+	}
+	if msg != "" {
+		msg = strings.ToUpper(msg[:1]) + strings.TrimSuffix(msg[1:], ".") + "."
+	}
+	return msg
 }

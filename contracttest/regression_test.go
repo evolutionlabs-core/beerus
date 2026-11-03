@@ -2,6 +2,7 @@ package contracttest
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,5 +149,44 @@ func TestFrozenClockSurvivesRestart(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if !again.Clock().Now().Equal(before) {
 		t.Fatal("a frozen clock moved after restart")
+	}
+}
+
+func TestSignInWithoutAccountsAtThatBank(t *testing.T) {
+	s := newStack(t)
+	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
+	b := s.browser()
+	b.get(fmt.Sprint(ls.JSON["widget_url"]))
+	b.post("/link/institution", map[string][]string{"institution": {"bank-a"}})
+	p := s.persona("chidi")
+	b.post("/bank/login", map[string][]string{"username": {p.Username}, "password": {p.Password}})
+	if !strings.Contains(b.last, "has no accounts at Bank A") {
+		t.Fatalf("expected a no-accounts message: %.300s", b.last)
+	}
+}
+
+func TestBankLedgerStaysConsistent(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newStack(t)
+	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-40))
+	s.ctl("POST", "/scenarios/debit_then_reversal", map[string]any{"account_id": fmt.Sprint(accountAt(t, conn, "current")["id"])})
+	s.ctl("POST", "/scenarios/pending_amount_change", map[string]any{"account_id": fmt.Sprint(accountAt(t, conn, "current")["id"])})
+	s.advance("40d")
+	c, err := s.app.VerifyBank()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Ledger.OK() || len(c.Mismatches) > 0 {
+		t.Fatalf("bank ledger: %v %v", c.Ledger, c.Mismatches)
+	}
+	if len(c.ChargeMonths) == 0 {
+		t.Fatal("no month-end charges were posted")
+	}
+	for k, n := range c.ChargeMonths {
+		if n != 1 {
+			t.Fatalf("%s charged %d times", k, n)
+		}
 	}
 }

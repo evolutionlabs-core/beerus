@@ -113,17 +113,19 @@ func newStack(t *testing.T) *Stack {
 		t.Cleanup(s.sink.srv.Close)
 		var lastErr error
 		for attempt := 0; attempt < 5 && s.app == nil; attempt++ {
-			ports := freePorts(t, 3)
+			ports := freePorts(t, 5)
 			cfg, err := config.Init(t.TempDir(), config.InitOptions{
 				Seed:        20261028,
 				Today:       clock.DateOf(time.Now()),
 				PartnerPort: ports[0],
 				WidgetPort:  ports[1],
 				ControlPort: ports[2],
+				BankPorts:   []int{ports[3], ports[4]},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
+			cfg.DatabaseURL = os.Getenv("BEERUS_TEST_DATABASE_URL")
 			if _, err := cfg.AddPartner(config.PartnerOptions{
 				ID:           "balance",
 				Name:         "Balance",
@@ -155,6 +157,9 @@ func newStack(t *testing.T) *Stack {
 				cancel()
 				if err := <-done; err != nil {
 					t.Errorf("serve: %v", err)
+				}
+				if err := app.DropBankDatabases(); err != nil {
+					t.Errorf("drop bank database: %v", err)
 				}
 			})
 		}
@@ -433,7 +438,7 @@ func (s *Stack) persona(id string) persona {
 
 var (
 	reCSRF    = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
-	reOTP     = regexp.MustCompile(`your code is <strong>(\d{6})</strong>`)
+	reOTP     = regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`)
 	reAccount = regexp.MustCompile(`name="account" value="([^"]+)"`)
 )
 

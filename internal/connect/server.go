@@ -91,6 +91,23 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 		servers = append(servers, srv{s: &http.Server{Handler: sp.h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: log.New(quietTLS{a}, "", 0)}, tls: sp.tls, ls: ls})
 	}
+	a.lifeMu.Lock()
+	a.serving = true
+	a.lifeMu.Unlock()
+	for _, b := range a.cfg.Banks {
+		if !a.bankReady(b.ID) {
+			continue
+		}
+		if err := a.startBankSite(b); err != nil {
+			for _, s := range servers {
+				for _, l := range s.ls {
+					l.Close()
+				}
+			}
+			a.stopBankSites(context.Background())
+			return err
+		}
+	}
 	errc := make(chan error, 8)
 	for _, s := range servers {
 		for _, l := range s.ls {
@@ -121,8 +138,10 @@ func (a *App) Serve(ctx context.Context) error {
 	for _, s := range servers {
 		_ = s.s.Shutdown(shut)
 	}
+	a.stopBankSites(shut)
 	cancel()
 	<-done
+	a.closeLedgers()
 	return serr
 }
 

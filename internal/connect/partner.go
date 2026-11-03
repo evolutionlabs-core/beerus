@@ -527,7 +527,7 @@ func (a *App) getBalance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "as_of_out_of_range", "as_of must be between "+min.String()+" and "+max.String()+", the day before the first date Connect holds and the last completed business day.")
 		return
 	}
-	bal, err := a.world.EndOfDay(rec.WorldKey, d)
+	bal, err := a.src(rec.WorldKey).EndOfDay(rec.WorldKey, d)
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Something went wrong.")
 		return

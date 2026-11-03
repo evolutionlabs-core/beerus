@@ -47,13 +47,52 @@ type Connect struct {
 	RefreshEvery string `yaml:"refresh_min_interval"`
 }
 
+type Bank struct {
+	ID             string `yaml:"id"`
+	Name           string `yaml:"name"`
+	Type           string `yaml:"type"`
+	NIPCode        string `yaml:"nip_code"`
+	NUBANCode      string `yaml:"nuban_code"`
+	HistoryDays    int    `yaml:"history_days"`
+	Port           int    `yaml:"port"`
+	Database       string `yaml:"database"`
+	SettlesThrough string `yaml:"settles_through,omitempty"`
+	State          string `yaml:"state,omitempty"`
+}
+
+func (b *Bank) Suspended() bool {
+	return b.State == "suspended"
+}
+
+func (b *Bank) URL() string {
+	return fmt.Sprintf("http://%s.localhost:%d", b.ID, b.Port)
+}
+
+func (b *Bank) Style() string {
+	if b.Type == "digital" {
+		return "digital"
+	}
+	return "traditional"
+}
+
+func DatabaseName(dir, bankID string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = dir
+	}
+	return "beerus_" + HashKey(abs)[:12] + "_" + strings.ReplaceAll(bankID, "-", "_")
+}
+
 type Config struct {
-	Seed     int64      `yaml:"seed"`
-	Genesis  string     `yaml:"genesis"`
-	Pace     float64    `yaml:"pace"`
-	Connect  Connect    `yaml:"connect"`
-	Partners []*Partner `yaml:"partners"`
-	Dir      string     `yaml:"-"`
+	DatabaseURL string     `yaml:"database_url"`
+	Banks       []*Bank    `yaml:"banks,omitempty"`
+	MaxBanks    int        `yaml:"max_banks,omitempty"`
+	Seed        int64      `yaml:"seed"`
+	Genesis     string     `yaml:"genesis"`
+	Pace        float64    `yaml:"pace"`
+	Connect     Connect    `yaml:"connect"`
+	Partners    []*Partner `yaml:"partners"`
+	Dir         string     `yaml:"-"`
 }
 
 func (c *Config) Path(parts ...string) string {
@@ -108,6 +147,15 @@ func (c *Config) WidgetURL() string {
 		scheme = "https"
 	}
 	return fmt.Sprintf("%s://%s:%d", scheme, c.Connect.Host, c.Connect.WidgetPort)
+}
+
+func (c *Config) Bank(id string) *Bank {
+	for _, b := range c.Banks {
+		if b.ID == id {
+			return b
+		}
+	}
+	return nil
 }
 
 func (c *Config) ControlURL() string {
@@ -168,6 +216,8 @@ type InitOptions struct {
 	PartnerPort int
 	WidgetPort  int
 	ControlPort int
+	BankPort    int
+	BankPorts   []int
 }
 
 func Init(dir string, o InitOptions) (*Config, error) {
@@ -191,6 +241,9 @@ func Init(dir string, o InitOptions) (*Config, error) {
 	if o.ControlPort == 0 {
 		o.ControlPort = 7480
 	}
+	if o.BankPort == 0 {
+		o.BankPort = 7445
+	}
 	c := &Config{
 		Dir:     dir,
 		Seed:    o.Seed,
@@ -208,6 +261,13 @@ func Init(dir string, o InitOptions) (*Config, error) {
 			SyncInterval: "1m",
 			RefreshEvery: "1m",
 		},
+	}
+	c.Banks = []*Bank{
+		{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "999001", NUBANCode: "901", HistoryDays: 730, Port: o.BankPort, Database: DatabaseName(dir, "bank-a")},
+		{ID: "bank-b", Name: "Bank B", Type: "digital", NIPCode: "999002", NUBANCode: "902", HistoryDays: 180, Port: o.BankPort + 1, Database: DatabaseName(dir, "bank-b")},
+	}
+	if len(o.BankPorts) == 2 {
+		c.Banks[0].Port, c.Banks[1].Port = o.BankPorts[0], o.BankPorts[1]
 	}
 	if err := c.EnsureCertificates(); err != nil {
 		return nil, err

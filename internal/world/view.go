@@ -33,22 +33,20 @@ func (w *World) ensureFor(at time.Time) {
 }
 
 func (w *World) Fetch(account string, at time.Time, from clock.Date) ([]Presented, error) {
+	return w.fetch(account, at, from, true)
+}
+
+func (w *World) Raw(account string, at time.Time, from clock.Date) ([]Presented, error) {
+	return w.fetch(account, at, from, false)
+}
+
+func (w *World) fetch(account string, at time.Time, from clock.Date, decorate bool) ([]Presented, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	acct, ok := w.accounts[account]
-	if !ok {
+	if _, ok := w.accounts[account]; !ok {
 		return nil, ErrUnknownAccount
 	}
 	w.ensureFor(at)
-	inst := w.institutions[acct.Institution]
-	muts := map[string][]Mutation{}
-	for _, m := range w.ov.Mutations {
-		if m.Account == account && !m.EffectiveAt.After(at) {
-			muts[m.Key] = append(muts[m.Key], m)
-		}
-	}
-	unstableAt, unstable := w.ov.UnstableAt[acct.Institution]
-	unstable = unstable || !inst.StableIDs
 	out := []Presented{}
 	for _, l := range w.lines[account] {
 		var p Presented
@@ -75,11 +73,42 @@ func (w *World) Fetch(account string, at time.Time, from clock.Date) ([]Presente
 			cp := *l.Counterparty
 			p.Counterparty = &cp
 		}
-		if unstable && !p.Pending && at.After(unstableAt) && at.Sub(l.BookedAt) < 7*24*time.Hour {
-			epoch := int(at.Sub(unstableAt) / (24 * time.Hour))
-			p.BankRef = fmt.Sprintf("%s-%d", ID("r", l.Key, fmt.Sprint(epoch))[2:12], epoch)
+		out = append(out, p)
+	}
+	if decorate {
+		w.decorate(account, out, at)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	return out, nil
+}
+
+func (w *World) Decorate(account string, ps []Presented, at time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.decorate(account, ps, at)
+}
+
+func (w *World) decorate(account string, ps []Presented, at time.Time) {
+	acct, ok := w.accounts[account]
+	if !ok {
+		return
+	}
+	inst := w.institutions[acct.Institution]
+	muts := map[string][]Mutation{}
+	for _, m := range w.ov.Mutations {
+		if m.Account == account && !m.EffectiveAt.After(at) {
+			muts[m.Key] = append(muts[m.Key], m)
 		}
-		for _, m := range muts[l.Key] {
+	}
+	unstableAt, unstable := w.ov.UnstableAt[acct.Institution]
+	unstable = unstable || !inst.StableIDs
+	for i := range ps {
+		p := &ps[i]
+		if unstable && !p.Pending && at.After(unstableAt) && at.Sub(p.BookedAt) < 7*24*time.Hour {
+			epoch := int(at.Sub(unstableAt) / (24 * time.Hour))
+			p.BankRef = fmt.Sprintf("%s-%d", ID("r", p.Key, fmt.Sprint(epoch))[2:12], epoch)
+		}
+		for _, m := range muts[p.Key] {
 			switch m.Field {
 			case "narration":
 				p.Narration = m.Value
@@ -88,14 +117,14 @@ func (w *World) Fetch(account string, at time.Time, from clock.Date) ([]Presente
 			case "counterparty_name":
 				if p.Counterparty == nil {
 					p.Counterparty = &Counterparty{}
+				} else {
+					cp := *p.Counterparty
+					p.Counterparty = &cp
 				}
 				p.Counterparty.Name = m.Value
 			}
 		}
-		out = append(out, p)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
-	return out, nil
 }
 
 func (w *World) LedgerAt(account string, at time.Time) (int64, error) {
@@ -135,8 +164,12 @@ func (w *World) EndOfDay(account string, d clock.Date) (int64, error) {
 }
 
 func (w *World) Opened(account string) (clock.Date, error) {
-	if _, ok := w.accounts[account]; !ok {
+	a, ok := w.accounts[account]
+	if !ok {
 		return clock.Date{}, ErrUnknownAccount
+	}
+	if !a.OpenedAt.IsZero() {
+		return clock.DateOf(a.OpenedAt), nil
 	}
 	return w.cfg.Genesis, nil
 }
@@ -152,4 +185,85 @@ func (w *World) LinesFor(account string, through time.Time) []Line {
 		}
 	}
 	return out
+}
+
+type Traced struct {
+	Account Account
+	Line    Presented
+}
+
+func (w *World) Accounts() []Account {
+	out := []Account{}
+	for _, p := range w.Personas() {
+		for _, k := range p.Accounts {
+			a, _ := w.Account(k)
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func (w *World) Statement(account string, at time.Time) ([]Presented, error) {
+	return w.Fetch(account, at, w.cfg.Genesis)
+}
+
+func (w *World) Line(account, key string, pending bool, at time.Time) (Presented, bool) {
+	ls, err := w.Statement(account, at)
+	if err != nil {
+		return Presented{}, false
+	}
+	for _, l := range ls {
+		if l.Key == key && l.Pending == pending {
+			return l, true
+		}
+	}
+	return Presented{}, false
+}
+
+func (w *World) Trace(sessionID string, at time.Time) []Traced {
+	out := []Traced{}
+	if sessionID == "" {
+		return out
+	}
+	for _, a := range w.Accounts() {
+		ls, err := w.Statement(a.Key, at)
+		if err != nil {
+			continue
+		}
+		for _, l := range ls {
+			if l.SessionID == sessionID {
+				out = append(out, Traced{Account: a, Line: l})
+			}
+		}
+	}
+	return out
+}
+
+func (w *World) Versions(account string, after, through time.Time) ([]Presented, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, ok := w.accounts[account]; !ok {
+		return nil, ErrUnknownAccount
+	}
+	w.ensureFor(through)
+	out := []Presented{}
+	for _, l := range w.lines[account] {
+		base := Presented{Key: l.Key, ValueDate: l.ValueDate, Narration: l.Narration, SessionID: l.SessionID, BankRef: l.BankRef, Channel: l.Channel}
+		if l.Counterparty != nil {
+			cp := *l.Counterparty
+			base.Counterparty = &cp
+		}
+		if l.HasPending() && l.PendingAt.After(after) && !l.PendingAt.After(through) {
+			p := base
+			p.Pending, p.Amount, p.At, p.Seq = true, l.PendingAmount, l.PendingAt, l.PendingSeq
+			out = append(out, p)
+		}
+		if l.BookedAt.After(after) && !l.BookedAt.After(through) {
+			p := base
+			p.HadPending, p.Amount, p.At, p.BookedAt, p.BalanceAfter, p.Seq = l.HasPending(), l.Amount, l.BookedAt, l.BookedAt, l.BalanceAfter, l.PostedSeq
+			out = append(out, p)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	return out, nil
 }

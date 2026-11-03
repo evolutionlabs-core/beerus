@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -37,6 +38,18 @@ type App struct {
 	sending   chan struct{}
 	pmu       sync.RWMutex
 	swept     time.Time
+	ledgers   []*ledgerSource
+	lifeMu    sync.Mutex
+	recMu     sync.Mutex
+	status    map[string]*BankStatus
+	sites     map[string]*siteServer
+	serving   bool
+	cfgSum    string
+	warnings  []string
+	watched   time.Time
+	driftAt   time.Time
+	driftDue  atomic.Bool
+	strikes   map[string]int
 }
 
 type Options struct {
@@ -93,8 +106,40 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New(st.Clock, o.Real)
-	a.world = world.New(world.Config{Seed: cfg.Seed, Genesis: genesis}, st.World)
+	a.world = world.New(a.worldConfig(genesis), st.World)
+	for _, b := range cfg.Banks {
+		ls, err := openLedgerSource(context.Background(), cfg, b, a.world)
+		if err != nil {
+			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
+			continue
+		}
+		a.ledgers = append(a.ledgers, ls)
+	}
+	a.initLifecycle()
 	return a, nil
+}
+
+func (a *App) worldConfig(genesis clock.Date) world.Config {
+	wc := world.Config{Seed: a.cfg.Seed, Genesis: genesis}
+	for _, b := range a.cfg.Banks {
+		wc.Institutions = append(wc.Institutions, world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: true, Style: b.Style()})
+	}
+	return wc
+}
+
+func (a *App) ledgerFor(institution string) *ledgerSource {
+	for _, l := range a.ledgers {
+		if l.inst.ID == institution {
+			return l
+		}
+	}
+	return nil
+}
+
+func (a *App) closeLedgers() {
+	for _, l := range a.ledgers {
+		l.Close()
+	}
 }
 
 func (a *App) Clock() *clock.Clock {
@@ -170,7 +215,17 @@ func (a *App) Run(ctx context.Context) {
 }
 
 func (a *App) Step() {
+	if a.recMu.TryLock() {
+		a.reconcileBanks()
+		a.recMu.Unlock()
+	}
 	a.mu.Lock()
+	for _, l := range a.ledgers {
+		if err := l.Sync(a.clock.Now()); err != nil {
+			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
+			a.driftDue.Store(true)
+		}
+	}
 	a.runConnections()
 	a.runRefreshes()
 	a.sweep()
@@ -344,6 +399,7 @@ func (a *App) syncConnection(c *Connection, at time.Time) bool {
 			a.setStatus(c, "error", "internal_error")
 			return false
 		}
+		a.recordAccess(c, acct, at)
 		if res.changed() {
 			changed[accID] = true
 		}
@@ -376,6 +432,22 @@ func (a *App) syncConnection(c *Connection, at time.Time) bool {
 	}
 	a.dirty()
 	return true
+}
+
+func (a *App) recordAccess(c *Connection, acct *AccountRec, at time.Time) {
+	for i := len(a.st.Access) - 1; i >= 0; i-- {
+		e := a.st.Access[i]
+		if e.ConnectionID == c.ID && e.AccountID == acct.ID {
+			if at.Sub(e.At) < time.Hour {
+				return
+			}
+			break
+		}
+	}
+	a.st.Access = append(a.st.Access, AccessEvent{ConnectionID: c.ID, PartnerID: c.PartnerID, AccountID: acct.ID, WorldKey: acct.WorldKey, At: at})
+	if len(a.st.Access) > 1000 {
+		a.st.Access = a.st.Access[len(a.st.Access)-1000:]
+	}
 }
 
 func (a *App) runRefreshes() {

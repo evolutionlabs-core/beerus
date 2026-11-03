@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="web/brand/mark-dark.svg">
+  <img src="web/brand/mark-light.svg" alt="" width="88">
+</picture>
+
 # Beerus
 
 Beerus is a full simulation of the Nigerian banking system that runs on your own infrastructure. It lets developers send transfers, post charges, settle between banks and share account data through open banking, with each step behaving the way it does in production.

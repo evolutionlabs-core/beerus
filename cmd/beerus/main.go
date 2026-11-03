@@ -37,11 +37,16 @@ Usage:
   beerus scenarios
   beerus scenario <name> [--account ID] [--institution bank-a] [--persona adaeze] [--connection ID] [--duration 2h] [--count N]
   beerus personas
+  beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA [--to-bank "Bank C"] [--to-name NAME] [--narration TEXT]
   beerus connections
   beerus revoke <connection-id>
   beerus sync
   beerus webhooks [replay <delivery-id>]
   beerus snapshot [take [name] | restore <id>]
+  beerus bank [list]
+  beerus bank create --name NAME [--type commercial|digital|microfinance] [--id ID] [--nip-code N] [--nuban-code N] [--history-days N] [--settles-through ID]
+  beerus bank suspend|resume <id>
+  beerus bank open-account <id> --persona ID [--type current|savings]
   beerus trust [--dir .beerus]
   beerus untrust [--dir .beerus]
   beerus version
@@ -96,8 +101,9 @@ func cmdInit(args []string) error {
 	pp := fs.Int("partner-port", 7443, "partner API port")
 	wp := fs.Int("widget-port", 7444, "widget port")
 	cp := fs.Int("control-port", 7480, "control API port")
+	bp := fs.Int("bank-port", 7445, "first online banking port; each bank takes the next one")
 	fs.Parse(args)
-	c, err := config.Init(*dir, config.InitOptions{Seed: *seed, Today: clock.DateOf(time.Now()), PartnerPort: *pp, WidgetPort: *wp, ControlPort: *cp})
+	c, err := config.Init(*dir, config.InitOptions{Seed: *seed, Today: clock.DateOf(time.Now()), PartnerPort: *pp, WidgetPort: *wp, ControlPort: *cp, BankPort: *bp})
 	if err != nil {
 		return err
 	}
@@ -114,6 +120,9 @@ func printInfo(c *config.Config) error {
 	fmt.Fprintf(w, "Partner API\t%s\t(mTLS + X-Api-Key)\n", c.PartnerURL())
 	fmt.Fprintf(w, "Connect widget\t%s\n", c.WidgetURL())
 	fmt.Fprintf(w, "Customer page\t%s/customer\n", c.WidgetURL())
+	for _, b := range c.Banks {
+		fmt.Fprintf(w, "%s online banking\t%s\t(database %s)\n", b.Name, b.URL(), b.Database)
+	}
 	fmt.Fprintf(w, "Control API\t%s\t(Bearer token in %s)\n", c.ControlURL(), c.Path("control-token"))
 	fmt.Fprintf(w, "Webhook public key\t%s\n", k.PublicWH())
 	if err := w.Flush(); err != nil {
@@ -172,6 +181,7 @@ func cmdUp(args []string) error {
 	if err := printInfo(c); err != nil {
 		return err
 	}
+	fmt.Printf("\nControl room        %s\n", app.RoomURL())
 	fmt.Println("\nPersonas (username / password):")
 	for _, p := range app.World().Personas() {
 		fmt.Printf("  %-8s %s  %s\n", p.Username, p.Password, p.Name)
@@ -269,6 +279,19 @@ func cmdControl(cmd string, args []string) error {
 		out, err = c.do("POST", "/scenarios/"+args[0], map[string]any{"account_id": *acc, "institution": *inst, "persona": *persona, "connection_id": *conn, "duration": *dur, "count": *count})
 	case "personas":
 		out, err = c.do("GET", "/personas", nil)
+	case "transfer":
+		fs := flag.NewFlagSet("transfer", flag.ExitOnError)
+		from := fs.String("from", "", "account number, bank:number or acc_ ID to pay from")
+		to := fs.String("to", "", "account number, bank:number or acc_ ID to pay to")
+		amount := fs.String("amount", "", "amount in naira, such as 25000 or 2500.50")
+		toBank := fs.String("to-bank", "", "bank of an outside account (Bank A, Bank B, Bank C, Bank D Microfinance)")
+		toName := fs.String("to-name", "", "name of an outside beneficiary")
+		narration := fs.String("narration", "", "narration for the debit")
+		fs.Parse(args)
+		if *from == "" || *to == "" || *amount == "" {
+			return errors.New("usage: beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA")
+		}
+		out, err = c.do("POST", "/transfers", map[string]string{"from": *from, "to": *to, "amount": *amount, "to_bank": *toBank, "to_name": *toName, "narration": *narration})
 	case "connections":
 		out, err = c.do("GET", "/connections", nil)
 	case "revoke":
@@ -284,6 +307,8 @@ func cmdControl(cmd string, args []string) error {
 		} else {
 			out, err = c.do("GET", "/webhooks/deliveries?limit=20", nil)
 		}
+	case "bank":
+		out, err = cmdBank(c, args)
 	case "snapshot":
 		switch {
 		case len(args) == 0:
@@ -308,4 +333,65 @@ func cmdControl(cmd string, args []string) error {
 	}
 	pretty(out)
 	return nil
+}
+
+func cmdBank(c *ctl, args []string) (map[string]any, error) {
+	switch {
+	case len(args) == 0 || args[0] == "list":
+		return c.do("GET", "/banks", nil)
+	case args[0] == "create":
+		fs := flag.NewFlagSet("bank create", flag.ExitOnError)
+		name := fs.String("name", "", "bank name")
+		typ := fs.String("type", "commercial", "commercial, digital or microfinance")
+		id := fs.String("id", "", "bank ID, derived from the name when empty")
+		nip := fs.String("nip-code", "", "6-digit NIP institution code, assigned when empty")
+		nuban := fs.String("nuban-code", "", "3-digit NUBAN bank code, assigned when empty")
+		days := fs.Int("history-days", 0, "days of history the bank serves")
+		via := fs.String("settles-through", "", "bank a microfinance bank settles through")
+		fs.Parse(args[1:])
+		if *name == "" {
+			return nil, errors.New("usage: beerus bank create --name NAME")
+		}
+		out, err := c.do("POST", "/banks", map[string]any{"name": *name, "type": *typ, "id": *id, "nip_code": *nip, "nuban_code": *nuban, "history_days": *days, "settles_through": *via})
+		if err != nil {
+			return nil, err
+		}
+		return waitBank(c, fmt.Sprint(out["id"]))
+	case (args[0] == "suspend" || args[0] == "resume") && len(args) == 2:
+		return c.do("POST", "/banks/"+args[1]+"/"+args[0], nil)
+	case args[0] == "open-account" && len(args) >= 2:
+		fs := flag.NewFlagSet("bank open-account", flag.ExitOnError)
+		persona := fs.String("persona", "", "persona who opens the account")
+		typ := fs.String("type", "current", "current or savings")
+		fs.Parse(args[2:])
+		if *persona == "" {
+			return nil, errors.New("usage: beerus bank open-account <id> --persona ID [--type current|savings]")
+		}
+		return c.do("POST", "/banks/"+args[1]+"/accounts", map[string]string{"persona": *persona, "type": *typ})
+	}
+	return nil, errors.New("usage: beerus bank [list | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID]")
+}
+
+func waitBank(c *ctl, id string) (map[string]any, error) {
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		out, err := c.do("GET", "/banks", nil)
+		if err != nil {
+			return nil, err
+		}
+		data, _ := out["data"].([]any)
+		for _, d := range data {
+			st, _ := d.(map[string]any)
+			if st["id"] != id {
+				continue
+			}
+			if st["phase"] != "provisioning" || time.Now().After(deadline) {
+				return st, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return out, nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }

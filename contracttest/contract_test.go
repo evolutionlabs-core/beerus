@@ -358,6 +358,8 @@ func TestSnapshotRestoreResetsCursor(t *testing.T) {
 	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "before"})
 	first, _ := s.syncAll(id, "", 100)
 	s.advance("48h")
+	s.ctl("POST", "/scenarios/fee_vat_levy_lines", map[string]any{"account_id": id})
+	s.advance("1m")
 	first, _ = s.syncMore(id, first, 100)
 	restored := s.ctl("POST", "/snapshots/"+fmt.Sprint(snap["id"])+"/restore", nil)
 	if restored["world_id"] == first.worldID {
@@ -508,6 +510,9 @@ func TestBankOutage(t *testing.T) {
 	r := s.call("DELETE", "/v1/connections/"+conn.ConnectionID, nil)
 	if r.Status != 503 || r.Code() != "institution_down" {
 		t.Fatalf("delete during outage: %d %s", r.Status, r.Body)
+	}
+	if _, err := s.ctlTry("POST", "/transfers", map[string]any{"from": fmt.Sprint(conn.Accounts[0]["account_number"]), "to": "0123456789", "to_bank": "Bank C", "amount": "1000"}); err == nil || !strings.Contains(err.Error(), "bank_unavailable") {
+		t.Fatalf("transfer from a bank that is down: %v", err)
 	}
 	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
 	b := s.browser()
