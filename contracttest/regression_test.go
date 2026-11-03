@@ -190,3 +190,22 @@ func TestBankLedgerStaysConsistent(t *testing.T) {
 		}
 	}
 }
+
+func TestRestoreKeepsBankTokensInStep(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newBankStack(t)
+	conn := s.connect("tunde", "bank-a", s.today().AddDays(-20))
+	id := fmt.Sprint(conn.Accounts[0]["id"])
+	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "tokens"})
+	s.app.ExpireAccessTokens()
+	s.advance("2h")
+	s.ctl("POST", "/snapshots/"+fmt.Sprint(snap["id"])+"/restore", nil)
+	s.app.ExpireAccessTokens()
+	s.syncNow()
+	if c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); c.JSON["status"] != "active" {
+		t.Fatalf("status after restore: %v", c.JSON["status"])
+	}
+	s.must(s.call("GET", "/v1/accounts/"+id+"/transactions/sync", nil), 200)
+}

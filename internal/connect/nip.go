@@ -168,6 +168,15 @@ func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
+func (a *App) ctlNIPSettlement(w http.ResponseWriter, r *http.Request) {
+	c, err := a.CheckSettlement()
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
 func nipView(t *NIPTransfer) map[string]any {
 	return map[string]any{"session_id": t.SessionID, "status": t.Status, "response_code": t.Code, "message": t.Message, "amount_minor": t.Amount, "amount": naira(t.Amount), "from_bank": t.FromBank, "to_bank_code": t.ToCode, "initiated_at": ts(t.At)}
 }

@@ -39,6 +39,7 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /nip/name-enquiry", a.ctlNameEnquiry)
 	mux.HandleFunc("GET /nip/participants", a.ctlNIPParticipants)
 	mux.HandleFunc("GET /nip/positions", a.ctlNIPPositions)
+	mux.HandleFunc("GET /nip/settlement", a.ctlNIPSettlement)
 	mux.HandleFunc("GET /nip/transfers/{session_id}", a.ctlNIPStatus)
 	mux.HandleFunc("GET /connections", a.ctlConnections)
 	mux.HandleFunc("POST /connections/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
@@ -482,7 +483,6 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 		return snapshotMeta{}, err
 	}
 	cp.Deliveries = nil
-	cp.Vault = nil
 	cp.Idem = map[string]*IdemRec{}
 	cp.WidgetSessions = map[string]*WidgetSession{}
 	for _, ls := range cp.LinkSessions {
@@ -565,11 +565,14 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 			return "", fmt.Errorf("snapshot %s has no copy of %s", id, l.inst.Name)
 		}
 	}
+	hadVault := f.State.Vault != nil
 	st := f.State
 	st.fill()
 	st.WorldID = newID("wld")
 	st.Deliveries = a.st.Deliveries
-	st.Vault = a.st.Vault
+	if !hadVault {
+		st.Vault = a.st.Vault
+	}
 	a.st = st
 	a.clock.Restore(st.Clock)
 	genesis, _ := a.cfg.GenesisDate()
