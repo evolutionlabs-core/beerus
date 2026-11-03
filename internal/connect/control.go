@@ -63,6 +63,7 @@ func (a *App) ControlHandler() http.Handler {
 	})
 	mux.HandleFunc("POST /banks", a.ctlCreateBank)
 	mux.HandleFunc("POST /banks/{id}/accounts", a.ctlOpenAccount)
+	mux.HandleFunc("GET /banks/{id}/close", a.ctlCloseImpact)
 	mux.HandleFunc("POST /banks/{id}/suspend", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, true) })
 	mux.HandleFunc("POST /banks/{id}/resume", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, false) })
 	mux.HandleFunc("GET /snapshots", a.ctlSnapshots)

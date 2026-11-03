@@ -359,6 +359,14 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		return waitBank(c, fmt.Sprint(out["id"]))
 	case (args[0] == "suspend" || args[0] == "resume") && len(args) == 2:
 		return c.do("POST", "/banks/"+args[1]+"/"+args[0], nil)
+	case args[0] == "close" && len(args) >= 2:
+		fs := flag.NewFlagSet("bank close", flag.ExitOnError)
+		dry := fs.Bool("dry-run", false, "show what closing the bank would affect, without closing it")
+		fs.Parse(args[2:])
+		if !*dry {
+			return nil, errors.New("closing is not available yet; use beerus bank close <id> --dry-run to see the impact")
+		}
+		return c.do("GET", "/banks/"+args[1]+"/close", nil)
 	case args[0] == "open-account" && len(args) >= 2:
 		fs := flag.NewFlagSet("bank open-account", flag.ExitOnError)
 		persona := fs.String("persona", "", "persona who opens the account")
@@ -369,7 +377,7 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		}
 		return c.do("POST", "/banks/"+args[1]+"/accounts", map[string]string{"persona": *persona, "type": *typ})
 	}
-	return nil, errors.New("usage: beerus bank [list | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID]")
+	return nil, errors.New("usage: beerus bank [list | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID | close <id> --dry-run]")
 }
 
 func waitBank(c *ctl, id string) (map[string]any, error) {

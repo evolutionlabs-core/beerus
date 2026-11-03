@@ -358,3 +358,54 @@ func TestOpenAccountAtNewBank(t *testing.T) {
 		t.Fatalf("connected accounts: %v", conn.Accounts)
 	}
 }
+
+func TestCloseImpact(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newBankStack(t)
+	s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
+	s.waitPhase("abuja-digital", connect.PhaseActive, 60*time.Second)
+	empty := s.ctl("GET", "/banks/abuja-digital/close", nil)
+	if len(empty["customers"].([]any)) != 0 || empty["deposits_minor"] != float64(0) {
+		t.Fatalf("new bank impact: %v", empty)
+	}
+	acc := s.ctl("POST", "/banks/abuja-digital/accounts", map[string]any{"persona": "adaeze", "type": "current"})
+	from := ""
+	for _, p := range s.ctl("GET", "/personas", nil)["data"].([]any) {
+		for _, a := range p.(map[string]any)["accounts"].([]any) {
+			m := a.(map[string]any)
+			if p.(map[string]any)["id"] == "adaeze" && m["institution"] == "bank-a" && m["type"] == "current" {
+				from = fmt.Sprint(m["key"])
+			}
+		}
+	}
+	s.ctl("POST", "/transfers", map[string]any{"from": from, "to": fmt.Sprint(acc["key"]), "amount": "25000"})
+	s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
+	imp := s.ctl("GET", "/banks/abuja-digital/close", nil)
+	if imp["insured_limit_minor"] != float64(500_000_000) || len(imp["blockers"].([]any)) != 0 {
+		t.Fatalf("impact: %v", imp)
+	}
+	customers := imp["customers"].([]any)
+	if len(customers) != 1 || customers[0].(map[string]any)["persona"] != "adaeze" || customers[0].(map[string]any)["deposits_minor"] != float64(2_500_000) {
+		t.Fatalf("customers: %v", customers)
+	}
+	accounts := imp["accounts"].([]any)
+	if len(accounts) != 1 || accounts[0].(map[string]any)["connected"] != true {
+		t.Fatalf("accounts: %v", accounts)
+	}
+	if conns := imp["connections"].([]any); len(conns) != 1 || conns[0].(map[string]any)["partner"] != "balance" {
+		t.Fatalf("connections: %v", conns)
+	}
+	if st := s.ctl("GET", "/banks", nil); !strings.Contains(fmt.Sprint(st["data"]), "abuja-digital") {
+		t.Fatalf("banks: %v", st)
+	}
+	s.waitPhase("abuja-digital", connect.PhaseActive, time.Second)
+	big := s.ctl("GET", "/banks/bank-a/close", nil)
+	if big["insured_minor"].(float64)+big["uninsured_minor"].(float64) != big["deposits_minor"].(float64) || len(big["customers"].([]any)) == 0 {
+		t.Fatalf("bank-a impact: %v", big)
+	}
+	if _, err := s.ctlTry("GET", "/banks/nope/close", nil); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("unknown bank: %v", err)
+	}
+}
