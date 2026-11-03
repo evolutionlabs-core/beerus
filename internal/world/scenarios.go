@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
@@ -64,10 +65,10 @@ func (s *scn) transfer(a Account, amt int64, t time.Time, cp *Counterparty, kind
 	fee, vat := NIPFee(amt), VAT(NIPFee(amt))
 	stamp := StampDuty(amt, clock.DateOf(t), false)
 	out := []Line{{Key: s.key(a.Key), Account: a.Key, Amount: -amt, BookedAt: t, Narration: g.narr(inst, "out", cp.Name, cp.BankName, short), Counterparty: cp, SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "nip"}}
-	out = append(out, Line{Key: s.key(a.Key), Account: a.Key, Amount: -fee, BookedAt: t.Add(time.Second), Narration: g.narr(inst, "fee", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge"})
-	out = append(out, Line{Key: s.key(a.Key), Account: a.Key, Amount: -vat, BookedAt: t.Add(2 * time.Second), Narration: g.narr(inst, "vat", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge"})
+	out = append(out, Line{Key: s.key(a.Key), Account: a.Key, Amount: -fee, BookedAt: t.Add(time.Second), Narration: g.narr(inst, "fee", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryFee})
+	out = append(out, Line{Key: s.key(a.Key), Account: a.Key, Amount: -vat, BookedAt: t.Add(2 * time.Second), Narration: g.narr(inst, "vat", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryVAT})
 	if stamp > 0 {
-		out = append(out, Line{Key: s.key(a.Key), Account: a.Key, Amount: -stamp, BookedAt: t.Add(3 * time.Second), Narration: g.narr(inst, "stamp", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge"})
+		out = append(out, Line{Key: s.key(a.Key), Account: a.Key, Amount: -stamp, BookedAt: t.Add(3 * time.Second), Narration: g.narr(inst, "stamp", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryStamp})
 	}
 	return out
 }
@@ -77,7 +78,7 @@ func (s *scn) reversal(a Account, lines []Line, t time.Time) []Line {
 	g := &dayGen{w: s.w, d: clock.DateOf(t), rng: s.rng}
 	out := []Line{}
 	for i, l := range lines {
-		out = append(out, Line{Key: s.key(a.Key), Account: a.Key, Amount: -l.Amount, BookedAt: t.Add(time.Duration(i) * time.Second), ValueDate: clock.DateOf(l.BookedAt), Narration: g.narr(inst, "rev", l.Narration), Counterparty: l.Counterparty, SessionID: l.SessionID, BankRef: g.bankRef(inst, t), Channel: "reversal"})
+		out = append(out, Line{Key: s.key(a.Key), Account: a.Key, Amount: -l.Amount, BookedAt: t.Add(time.Duration(i) * time.Second), ValueDate: clock.DateOf(l.BookedAt), Narration: g.narr(inst, "rev", l.Narration), Counterparty: l.Counterparty, SessionID: l.SessionID, BankRef: g.bankRef(inst, t), Channel: "reversal", Category: l.Category})
 	}
 	return out
 }
@@ -130,8 +131,8 @@ func (w *World) RunScenario(name string, at time.Time, p ScenarioParams) (string
 		g := &dayGen{w: w, d: clock.DateOf(at), rng: s.rng}
 		narr := g.narr(inst, "fee", "")
 		lines := []Line{
-			{Key: s.key(acct.Key), Account: acct.Key, Amount: -5000, BookedAt: at, Narration: strings.TrimSpace(narr), BankRef: "", Channel: "charge"},
-			{Key: s.key(acct.Key), Account: acct.Key, Amount: -5000, BookedAt: at.Add(time.Minute), Narration: strings.TrimSpace(narr), BankRef: "", Channel: "charge"},
+			{Key: s.key(acct.Key), Account: acct.Key, Amount: -5000, BookedAt: at, Narration: strings.TrimSpace(narr), BankRef: "", Channel: "charge", Category: charges.CategoryFee},
+			{Key: s.key(acct.Key), Account: acct.Key, Amount: -5000, BookedAt: at.Add(time.Minute), Narration: strings.TrimSpace(narr), BankRef: "", Channel: "charge", Category: charges.CategoryFee},
 		}
 		return "two identical ₦50 fee lines", w.Inject(at, lines)
 	case "pending_amount_change":

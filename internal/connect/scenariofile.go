@@ -3,10 +3,10 @@ package connect
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,19 +34,10 @@ type scenarioStep struct {
 	Connection  string        `yaml:"connection"`
 	Duration    string        `yaml:"duration"`
 	Count       int           `yaml:"count"`
-	Transfer    *transferStep `yaml:"transfer"`
+	Transfer    *transferBody `yaml:"transfer"`
 	Advance     string        `yaml:"advance"`
 	Suspend     string        `yaml:"suspend"`
 	Resume      string        `yaml:"resume"`
-}
-
-type transferStep struct {
-	From      string `yaml:"from"`
-	To        string `yaml:"to"`
-	Amount    string `yaml:"amount"`
-	ToBank    string `yaml:"to_bank"`
-	ToName    string `yaml:"to_name"`
-	Narration string `yaml:"narration"`
 }
 
 var unknownFieldRe = regexp.MustCompile(`line (\d+): field (\S+) not found`)
@@ -175,28 +166,11 @@ func (a *App) resolveRef(ref string) (string, error) {
 	return "", fmt.Errorf("%s has no matching account at %s", who, bank)
 }
 
-func callHandler(h http.HandlerFunc, path string, body any, vals map[string]string) (map[string]any, error) {
-	var rd io.Reader
-	if body != nil {
-		b, _ := json.Marshal(body)
-		rd = bytes.NewReader(b)
+func bankMessage(err error) string {
+	if errors.Is(err, errNotFound) {
+		return "no such bank"
 	}
-	req := httptest.NewRequest(http.MethodPost, path, rd)
-	req.Header.Set("Content-Type", "application/json")
-	for k, v := range vals {
-		req.SetPathValue(k, v)
-	}
-	rec := httptest.NewRecorder()
-	h(rec, req)
-	out := map[string]any{}
-	_ = json.Unmarshal(rec.Body.Bytes(), &out)
-	if rec.Code >= 300 {
-		if e, ok := out["error"].(map[string]any); ok {
-			return nil, fmt.Errorf("%v", e["message"])
-		}
-		return nil, fmt.Errorf("HTTP %d", rec.Code)
-	}
-	return out, nil
+	return strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": ")
 }
 
 func (a *App) runScenarioStep(s scenarioStep) (string, string, error) {
@@ -210,40 +184,51 @@ func (a *App) runScenarioStep(s scenarioStep) (string, string, error) {
 				return s.Run, "", err
 			}
 		}
-		out, err := callHandler(a.ctlScenario, "/scenarios/"+s.Run, map[string]any{"account_id": account, "institution": s.Institution, "persona": s.Persona, "connection_id": s.Connection, "duration": s.Duration, "count": s.Count}, map[string]string{"name": s.Run})
+		result, err := a.runScenario(s.Run, scenarioParams{AccountID: account, Institution: s.Institution, Persona: s.Persona, ConnectionID: s.Connection, Duration: s.Duration, Count: s.Count})
 		if err != nil {
 			return s.Run, "", err
 		}
-		return s.Run, fmt.Sprint(out["result"]), nil
+		return s.Run, result, nil
 	case "transfer":
-		t := s.Transfer
-		from, err := a.resolveRef(t.From)
-		if err != nil {
+		t := *s.Transfer
+		var err error
+		if t.From, err = a.resolveRef(t.From); err != nil {
 			return "transfer", "", err
 		}
-		to, err := a.resolveRef(t.To)
-		if err != nil {
+		if t.To, err = a.resolveRef(t.To); err != nil {
 			return "transfer", "", err
 		}
-		out, err := callHandler(a.ctlTransfer, "/transfers", map[string]string{"from": from, "to": to, "amount": t.Amount, "to_bank": t.ToBank, "to_name": t.ToName, "narration": t.Narration}, nil)
-		if err != nil {
+		rep := a.runTransfer(nil, t, "")
+		if rep.status != http.StatusOK {
+			var failed struct {
+				Error apiError `json:"error"`
+			}
+			if json.Unmarshal(rep.body, &failed) != nil || failed.Error.Message == "" {
+				return "transfer", "", errors.New("The transfer failed.")
+			}
+			return "transfer", "", errors.New(failed.Error.Message)
+		}
+		var done struct {
+			Result world.TransferResult `json:"result"`
+		}
+		if err := json.Unmarshal(rep.body, &done); err != nil {
 			return "transfer", "", err
 		}
-		return "transfer", fmt.Sprintf("%v moved, %v in charges", out["amount"], out["charges"]), nil
+		res := done.Result
+		return "transfer", fmt.Sprintf("%s moved, %s in charges", naira(res.Amount), naira(res.Fee+res.VAT+res.StampDuty)), nil
 	case "advance":
-		out, err := callHandler(a.ctlAdvance, "/clock/advance", map[string]string{"by": s.Advance}, nil)
-		if err != nil {
+		if err := a.advanceClock(s.Advance, ""); err != nil {
 			return "advance " + s.Advance, "", err
 		}
-		return "advance " + s.Advance, "clock at " + fmt.Sprint(out["business_time"]), nil
+		return "advance " + s.Advance, "clock at " + ts(a.clock.Now()), nil
 	case "suspend":
 		if err := a.SetBankSuspended(s.Suspend, true); err != nil {
-			return "suspend " + s.Suspend, "", fmt.Errorf("%s could not be suspended", s.Suspend)
+			return "suspend " + s.Suspend, "", errors.New(bankMessage(err))
 		}
 		return "suspend " + s.Suspend, s.Suspend + " is suspended", nil
 	default:
 		if err := a.SetBankSuspended(s.Resume, false); err != nil {
-			return "resume " + s.Resume, "", fmt.Errorf("%s could not be resumed", s.Resume)
+			return "resume " + s.Resume, "", errors.New(bankMessage(err))
 		}
 		return "resume " + s.Resume, s.Resume + " is back", nil
 	}
