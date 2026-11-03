@@ -10,6 +10,7 @@ const roomTemplates = `
 <title>{{.Title}} · Beerus</title>
 {{if .Refresh}}<meta http-equiv="refresh" content="2">{{end}}
 <link rel="stylesheet" href="{{css}}">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
 </head>
 <body class="min-h-screen">
 <div class="grid min-h-screen grid-cols-1 content-start lg:grid-cols-[236px_1fr]">
@@ -282,7 +283,7 @@ const roomTemplates = `
 {{template "room_foot" .}}{{end}}
 
 {{define "room_login"}}<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · Beerus</title><link rel="stylesheet" href="{{css}}"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · Beerus</title><link rel="stylesheet" href="{{css}}"><link rel="icon" href="/assets/icon.svg" type="image/svg+xml"></head>
 <body class="min-h-screen"><main class="flex min-h-screen items-center justify-center px-4">
 <form method="post" action="/ui/login" class="w-full max-w-[380px] rounded-2xl border border-line bg-panel p-7">
 <div class="mb-6 flex items-center gap-2.5 text-[14px]">{{logo}}<span>Beerus</span></div>

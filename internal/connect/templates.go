@@ -2,7 +2,7 @@ package connect
 
 import "html/template"
 
-const logoSVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true" class="size-[18px]"><path d="M12 2.5 20.5 7.4v9.2L12 21.5l-8.5-4.9V7.4L12 2.5Z" stroke="currentColor" stroke-width="1.5"/><path d="M12 7.2 16.3 9.7v4.6L12 16.8l-4.3-2.5V9.7L12 7.2Z" fill="currentColor"/></svg>`
+const logoSVG = `<svg viewBox="0 0 24 24" aria-hidden="true" class="size-[18px]"><defs><linearGradient id="bm-top" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="mark-top-1"/><stop offset="1" class="mark-top-2"/></linearGradient><linearGradient id="bm-left" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="mark-left-1"/><stop offset="1" class="mark-left-2"/></linearGradient><linearGradient id="bm-right" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="mark-right-1"/><stop offset="1" class="mark-right-2"/></linearGradient></defs><path d="M6.09 10.68L12.00 14.09L12.00 20.92L6.09 17.50Z" fill="url(#bm-left)"/><path d="M17.91 10.68L12.00 14.09L12.00 20.92L17.91 17.50Z" fill="url(#bm-right)"/><path d="M12.00 7.26L17.91 10.68L12.00 14.09L6.09 10.68Z" fill="url(#bm-top)"/><path d="M13.83 15.15L16.11 16.46L16.11 18.92L13.83 17.61Z" fill="url(#bm-left)"/><path d="M18.24 15.23L16.11 16.46L16.11 18.92L18.24 17.69Z" fill="url(#bm-right)"/><path d="M15.96 13.92L18.24 15.23L16.11 16.46L13.83 15.15Z" fill="url(#bm-top)"/><path d="M5.76 15.23L7.89 16.46L7.89 18.92L5.76 17.69Z" fill="url(#bm-left)"/><path d="M10.17 15.15L7.89 16.46L7.89 18.92L10.17 17.61Z" fill="url(#bm-right)"/><path d="M8.04 13.92L10.17 15.15L7.89 16.46L5.76 15.23Z" fill="url(#bm-top)"/><path d="M9.87 8.12L12.00 9.35L12.00 11.97L9.87 10.75Z" fill="url(#bm-left)"/><path d="M14.13 8.12L12.00 9.35L12.00 11.97L14.13 10.75Z" fill="url(#bm-right)"/><path d="M12.00 6.89L14.13 8.12L12.00 9.35L9.87 8.12Z" fill="url(#bm-top)"/><path d="M14.99 15.81L19.24 18.27L19.24 23.19L14.99 20.73Z" fill="url(#bm-left)"/><path d="M23.50 15.81L19.24 18.27L19.24 23.19L23.50 20.73Z" fill="url(#bm-right)"/><path d="M19.24 13.36L23.50 15.81L19.24 18.27L14.99 15.81Z" fill="url(#bm-top)"/><path d="M0.50 15.81L4.76 18.27L4.76 23.19L0.50 20.73Z" fill="url(#bm-left)"/><path d="M9.01 15.81L4.76 18.27L4.76 23.19L9.01 20.73Z" fill="url(#bm-right)"/><path d="M4.76 13.36L9.01 15.81L4.76 18.27L0.50 15.81Z" fill="url(#bm-top)"/><path d="M7.74 3.27L12.00 5.73L12.00 10.64L7.74 8.19Z" fill="url(#bm-left)"/><path d="M16.26 3.27L12.00 5.73L12.00 10.64L16.26 8.19Z" fill="url(#bm-right)"/><path d="M12.00 0.81L16.26 3.27L12.00 5.73L7.74 3.27Z" fill="url(#bm-top)"/></svg>`
 
 var pages = template.Must(template.New("").Funcs(uiFuncs).Funcs(template.FuncMap{
 	"logo": func() template.HTML { return template.HTML(logoSVG) },
@@ -15,6 +15,7 @@ var pages = template.Must(template.New("").Funcs(uiFuncs).Funcs(template.FuncMap
 <meta name="color-scheme" content="dark light">
 <title>{{.Title}}</title>
 <link rel="stylesheet" href="{{css}}">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
 </head>
 <body class="min-h-screen">
 <main class="flex min-h-screen flex-col items-center px-4 pt-14 pb-10 sm:pt-20 {{.BankClass}}">
