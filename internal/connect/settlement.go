@@ -34,7 +34,7 @@ func (s schedule) every() time.Duration {
 }
 
 func businessDay(d clock.Date) bool {
-	return d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
+	return clock.IsBusinessDay(d)
 }
 
 func (s schedule) next(after time.Time) time.Time {

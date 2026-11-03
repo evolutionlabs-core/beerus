@@ -1,0 +1,19 @@
+name: month-end-crunch
+description: Suppliers get paid across banks at month end, with fee-heavy transfers and duplicate fee lines.
+steps:
+  - transfer:
+      from: emeka@bank-a
+      to: bola@bank-b
+      amount: "50000"
+  - transfer:
+      from: fatima@bank-a
+      to: kemi@bank-b
+      amount: "10000"
+      narration: Invoice settlement
+  - run: fee_vat_levy_lines
+    account: ifeanyi@bank-a
+  - run: identical_same_day_fees
+    account: sade@bank-b
+  - run: pending_amount_change
+    account: musa@bank-a
+  - advance: 1d

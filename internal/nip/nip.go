@@ -14,7 +14,7 @@ const (
 	OK             = "00"
 	InvalidAccount = "07"
 	NoRecord       = "25"
-	OverCap        = "51"
+	OverCap        = "61"
 	Unavailable    = "91"
 	SystemError    = "96"
 

@@ -89,10 +89,10 @@ func TestNIPSwitch(t *testing.T) {
 
 	s.cfg.Bank("bank-a").NetDebitCap = 200000
 	over, err := s.ctlTry("POST", "/transfers", map[string]any{"from": from.Key, "to": to.Key, "amount": "1500"})
-	if err == nil || over["response_code"] != "51" {
+	if err == nil || over["response_code"] != "61" {
 		t.Fatalf("over the cap: %v %v", over, err)
 	}
-	if tsq := s.ctl("GET", "/nip/transfers/"+fmt.Sprint(over["session_id"]), nil); tsq["status"] != "failed" || tsq["response_code"] != "51" {
+	if tsq := s.ctl("GET", "/nip/transfers/"+fmt.Sprint(over["session_id"]), nil); tsq["status"] != "failed" || tsq["response_code"] != "61" {
 		t.Fatalf("status of the rejected transfer: %v", tsq)
 	}
 	s.advance("72h")

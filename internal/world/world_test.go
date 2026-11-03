@@ -2,6 +2,7 @@ package world
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -226,5 +227,47 @@ func TestTransfers(t *testing.T) {
 	}
 	if bal != -2507688 {
 		t.Fatalf("sender lines for the session sum to %d", bal)
+	}
+}
+
+func TestNUBANSixDigitSeed(t *testing.T) {
+	for _, serial := range []uint64{0, 1, 123456789, 987654321} {
+		if NUBAN("901", serial) != NUBAN("000901", serial) {
+			t.Fatalf("3-digit code %d differs from its 6-digit seed", serial)
+		}
+		if NUBAN("50211", serial) != NUBAN("950211", serial) {
+			t.Fatalf("5-digit code %d differs from its 6-digit seed", serial)
+		}
+		if n := NUBAN("950211", serial); !ValidNUBAN("950211", n) || len(n) != 10 {
+			t.Fatalf("6-digit code gave %s", n)
+		}
+	}
+}
+
+func TestNoPaydayOnHoliday(t *testing.T) {
+	w, now := testWorld()
+	salaries, onEve := 0, 0
+	for _, p := range w.Personas() {
+		for _, k := range p.Accounts {
+			for _, l := range w.LinesFor(k, now) {
+				n := strings.ToLower(l.Narration)
+				if !strings.Contains(n, "salary") && !strings.Contains(n, "to savings") {
+					continue
+				}
+				d := clock.DateOf(l.BookedAt)
+				if clock.IsHoliday(d) {
+					t.Fatalf("%s: %q booked on the holiday %s", k, l.Narration, d)
+				}
+				if strings.Contains(n, "salary") {
+					salaries++
+					if d.D == 24 && d.M == time.December {
+						onEve++
+					}
+				}
+			}
+		}
+	}
+	if salaries == 0 || onEve == 0 {
+		t.Fatalf("salaries %d, paid on Christmas Eve %d", salaries, onEve)
 	}
 }

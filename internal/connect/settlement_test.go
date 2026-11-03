@@ -58,3 +58,32 @@ func TestSessionSchedule(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionScheduleSkipsHolidays(t *testing.T) {
+	s := schedule{per: 12}
+	day := func(v string) clock.Date {
+		d, err := clock.ParseDate(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	if got := s.next(day("2026-09-30").Start().Add(23 * time.Hour)); !got.Equal(day("2026-10-01").Start()) {
+		t.Errorf("last session of 30 Sep closes at %s", got)
+	}
+	if got := s.next(day("2026-10-01").Start().Add(-time.Nanosecond)); !got.Equal(day("2026-10-01").Start()) {
+		t.Errorf("midnight session closes at %s", got)
+	}
+	if got := s.next(day("2026-10-01").Start()); !got.Equal(day("2026-10-02").Start().Add(2 * time.Hour)) {
+		t.Errorf("first session after Independence Day closes at %s", got)
+	}
+	if got := s.next(day("2026-10-01").Start().Add(10 * time.Hour)); !got.Equal(day("2026-10-02").Start().Add(2 * time.Hour)) {
+		t.Errorf("a transfer on Independence Day settles at %s", got)
+	}
+	if got := s.next(day("2026-04-02").Start().Add(23 * time.Hour)); !got.Equal(day("2026-04-03").Start()) {
+		t.Errorf("last session before Good Friday closes at %s", got)
+	}
+	if got := s.next(day("2026-04-03").Start()); !got.Equal(day("2026-04-07").Start().Add(2 * time.Hour)) {
+		t.Errorf("first session after Easter Monday closes at %s", got)
+	}
+}

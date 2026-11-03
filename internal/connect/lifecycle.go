@@ -336,8 +336,8 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 				break
 			}
 		}
-	} else if !regexp.MustCompile(`^\d{3}$`).MatchString(nuban) || usedNUBAN[nuban] {
-		return nil, invalid("nuban_code %q must be 3 digits and not already used", nuban)
+	} else if !regexp.MustCompile(`^(\d{3}|\d{5,6})$`).MatchString(nuban) || usedNUBAN[nuban] {
+		return nil, invalid("nuban_code %q must be 3, 5 or 6 digits and not already used", nuban)
 	}
 	if req.SettlesThrough != "" {
 		via := a.cfg.Bank(req.SettlesThrough)
