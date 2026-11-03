@@ -14,8 +14,8 @@ import (
 var originalPersonas = []string{"adaeze", "tunde", "ngozi", "chidi"}
 
 var originalDigests = map[int64]string{
-	42:       "c234e0a92104aeb077c6bb5070b97ef24bc6adf66bb6ef8a86eaa9d97dace9a5",
-	20261028: "6961fdb8266fa51722bed302d50e52cc192d27841457cd703753bb6cc695e6b7",
+	42:       "d3b52459209951e68c6d3ae27a5602e3837069ea1440483997fcbe8bc8711a5d",
+	20261028: "324a575b99954a9b4d7650cac3f1316f9b5c67b5e4189e89b0fdc314cb1782d3",
 }
 
 func originalsDigest(seed int64) (string, int) {
@@ -104,5 +104,26 @@ func BenchmarkWorldGeneration(b *testing.B) {
 				w.LinesFor(k, now)
 			}
 		}
+	}
+}
+
+func TestCounterpartyAccountsAreValidNUBANs(t *testing.T) {
+	w, now := testWorld()
+	seen := 0
+	for _, p := range w.Personas() {
+		for _, k := range p.Accounts {
+			for _, l := range w.LinesFor(k, now) {
+				if l.Counterparty == nil {
+					continue
+				}
+				seen++
+				if !ValidNUBAN(l.Counterparty.BankCode, l.Counterparty.AccountNumber) {
+					t.Fatalf("%s: %s at %s fails its check digit", l.Key, l.Counterparty.AccountNumber, l.Counterparty.BankCode)
+				}
+			}
+		}
+	}
+	if seen < 100 {
+		t.Fatalf("only %d counterparty lines", seen)
 	}
 }

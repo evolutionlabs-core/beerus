@@ -194,7 +194,7 @@ func (g *dayGen) counterparty(exclude string) *Counterparty {
 	bank := counterpartyBanks[g.rng.IntN(len(counterpartyBanks))]
 	return &Counterparty{
 		Name:          name,
-		AccountNumber: fmt.Sprintf("%010d", g.rng.Uint64N(10000000000)),
+		AccountNumber: NUBAN(bank.code, g.rng.Uint64N(1000000000)),
 		BankCode:      bank.code,
 		BankName:      bank.name,
 	}
