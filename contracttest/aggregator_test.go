@@ -1,0 +1,222 @@
+package contracttest
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"fmt"
+	"os"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/openbanking"
+)
+
+func (s *Stack) bankDB(bank string) *pgx.Conn {
+	s.t.Helper()
+	pc, err := pgx.ParseConfig(s.cfg.DatabaseURL)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	pc.Database = s.cfg.Bank(bank).Database
+	db, err := pgx.ConnectConfig(context.Background(), pc)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	s.t.Cleanup(func() { db.Close(context.Background()) })
+	return db
+}
+
+func (s *Stack) consentTrail(bank string) map[string]bool {
+	seen := map[string]bool{}
+	for _, e := range s.ctl("GET", "/registry/consents?bank="+bank, nil)["data"].([]any) {
+		m := e.(map[string]any)
+		seen[fmt.Sprint(m["consent_id"])+" "+fmt.Sprint(m["status"])+"/"+fmt.Sprint(m["via"])] = true
+	}
+	return seen
+}
+
+func (s *Stack) hasRevoked(connID string) bool {
+	return len(s.eventsOf("connection.status_changed", func(d map[string]any) bool {
+		return d["connection_id"] == connID && d["status"] == "revoked"
+	})) > 0
+}
+
+func TestRealAggregator(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newBankStack(t)
+	db := s.bankDB("bank-a")
+	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	id := fmt.Sprint(accountAt(t, conn, "current")["id"])
+
+	var consentID string
+	if err := db.QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
+		t.Fatalf("the bank holds no consent for the connection: %v", err)
+	}
+	if !s.consentTrail("bank-a")[consentID+" Authorised/bank"] {
+		t.Fatalf("NIBSS consent ledger: %v", s.consentTrail("bank-a"))
+	}
+
+	st, _ := s.syncAll(id, "", 500)
+	if len(st.lines) < 10 {
+		t.Fatalf("only %d lines synced over the bank API", len(st.lines))
+	}
+	var used int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM ob_consents WHERE id = $1 AND last_used_at IS NOT NULL`, consentID).Scan(&used); err != nil || used != 1 {
+		t.Fatalf("the bank never saw a resource call: %d %v", used, err)
+	}
+
+	if err := s.app.Save(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := os.ReadFile(s.cfg.Path("stub-state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(state), "oba_") || strings.Contains(string(state), "obr_") || !strings.Contains(string(state), `"vault"`) {
+		t.Fatal("bank tokens must be in the vault, encrypted")
+	}
+	if info, err := os.Stat(s.cfg.Path("connect", "vault.key")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("vault master key: %v %v", info, err)
+	}
+
+	var before int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM ob_tokens WHERE kind = 'refresh'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	s.app.ExpireAccessTokens()
+	s.syncNow()
+	var after int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM ob_tokens WHERE kind = 'refresh'`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before+1 {
+		t.Fatalf("expired access token was not refreshed: %d refresh tokens before, %d after", before, after)
+	}
+	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "active" {
+		t.Fatalf("status after refresh: %v", got.JSON["status"])
+	}
+
+	forged, err := openbanking.Sign(mustSigningKey(t, s), "bank-a", map[string]any{"iss": s.cfg.Bank("bank-a").APIURL(), "aud": s.cfg.WidgetURL(), "jti": "x", "exp": time.Now().Add(time.Minute).Unix(), "consent_id": consentID, "status": "Revoked"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{"nonsense", forged} {
+		resp, err := s.raw.Post(s.cfg.WidgetURL()+"/consent-events", "application/secevent+jwt", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode < 400 {
+			t.Fatalf("an event not signed by the bank was accepted: %d", resp.StatusCode)
+		}
+	}
+	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "active" {
+		t.Fatalf("forged event changed the connection to %v", got.JSON["status"])
+	}
+
+	b := s.bankSignIn("adaeze")
+	b.get("/apps")
+	m := regexp.MustCompile(`/apps/(obc_[A-Za-z0-9_-]+)/revoke`).FindStringSubmatch(b.last)
+	if m == nil || m[1] != consentID {
+		t.Fatalf("connected apps page does not offer to revoke %s: %.500s", consentID, b.last)
+	}
+	b.post("/apps/"+consentID+"/revoke", map[string][]string{})
+	if !strings.Contains(b.last, "Access withdrawn") {
+		t.Fatalf("revoke page: %.300s", b.last)
+	}
+	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "revoked" {
+		t.Fatalf("status after the customer revoked at the bank: %v", got.JSON["status"])
+	}
+	if !s.hasRevoked(conn.ConnectionID) {
+		t.Fatal("no reconnect-needed webhook after the bank's consent event")
+	}
+	if !s.consentTrail("bank-a")[consentID+" Revoked/bank"] {
+		t.Fatalf("NIBSS consent ledger after revoke: %v", s.consentTrail("bank-a"))
+	}
+	if r := s.call("GET", "/v1/accounts/"+id, nil); r.Status != 409 || r.Code() != "connection_revoked" {
+		t.Fatalf("account after revoke: %d %s", r.Status, r.Body)
+	}
+
+	conn2 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	if fmt.Sprint(accountAt(t, conn2, "current")["id"]) != id {
+		t.Fatal("account ID changed across the reconnect")
+	}
+	if err := db.QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
+		t.Fatal(err)
+	}
+	s.must(s.call("DELETE", "/v1/connections/"+conn2.ConnectionID, nil), 204)
+	var status, via string
+	if err := db.QueryRow(context.Background(), `SELECT status, revoked_via FROM ob_consents WHERE id = $1`, consentID).Scan(&status, &via); err != nil || status != "Revoked" || via != "aggregator" {
+		t.Fatalf("consent at the bank after the partner disconnected: %s %s %v", status, via, err)
+	}
+	if !s.consentTrail("bank-a")[consentID+" Revoked/aggregator"] {
+		t.Fatalf("NIBSS consent ledger after disconnect: %v", s.consentTrail("bank-a"))
+	}
+	if r := s.call("GET", "/v1/connections/"+conn2.ConnectionID, nil); r.JSON["status"] != "revoked" {
+		t.Fatalf("status after disconnect: %s", r.Body)
+	}
+
+	conn3 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	if _, err := db.Exec(context.Background(), `UPDATE ob_consents SET status = 'Revoked', revoked_via = 'bank' WHERE status = 'Authorised' AND partner_id = 'balance'`); err != nil {
+		t.Fatal(err)
+	}
+	s.syncNow()
+	if r := s.call("GET", "/v1/connections/"+conn3.ConnectionID, nil); r.JSON["status"] != "revoked" {
+		t.Fatalf("a consent_revoked answer on a resource call must revoke the connection: %s", r.Body)
+	}
+	if !s.hasRevoked(conn3.ConnectionID) {
+		t.Fatal("no reconnect-needed webhook after consent_revoked on a resource call")
+	}
+}
+
+func mustSigningKey(t *testing.T, s *Stack) *ecdsa.PrivateKey {
+	t.Helper()
+	k, err := s.cfg.SigningKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+func TestUnstableIDsAreFingerprinted(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	no := false
+	s := newBankStackWith(t, func(cfg *config.Config) { cfg.Bank("bank-b").StableIDs = &no })
+	conn := s.connect("ngozi", "bank-b", s.today().AddDays(-20))
+	id := fmt.Sprint(conn.Accounts[0]["id"])
+	st, _ := s.syncAll(id, "", 500)
+	if len(st.lines) < 5 {
+		t.Fatalf("only %d lines", len(st.lines))
+	}
+	first := map[string]bool{}
+	for k := range st.lines {
+		first[k] = true
+	}
+	s.advance("50h")
+	st, _ = s.syncMore(id, st, 500)
+	for k := range first {
+		if _, ok := st.lines[k]; !ok {
+			t.Fatalf("line %s changed identity when the bank rotated its ids", k)
+		}
+	}
+	seen := map[string]bool{}
+	for _, l := range st.lines {
+		if l["status"] != "posted" {
+			continue
+		}
+		key := fmt.Sprint(l["value_date"], "|", l["amount_minor"], "|", l["description_raw"], "|", l["balance_after_minor"])
+		if seen[key] {
+			t.Fatalf("line appears twice: %s", key)
+		}
+		seen[key] = true
+	}
+}

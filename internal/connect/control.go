@@ -471,7 +471,9 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 	defer a.mu.Unlock()
 	a.st.Clock = a.clock.State()
 	a.st.World = a.world.Overrides()
+	a.regMu.Lock()
 	b, err := json.Marshal(a.st)
+	a.regMu.Unlock()
 	if err != nil {
 		return snapshotMeta{}, err
 	}
@@ -480,10 +482,11 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 		return snapshotMeta{}, err
 	}
 	cp.Deliveries = nil
+	cp.Vault = nil
 	cp.Idem = map[string]*IdemRec{}
 	cp.WidgetSessions = map[string]*WidgetSession{}
 	for _, ls := range cp.LinkSessions {
-		ls.OTP = ""
+		ls.OTP, ls.Verifier, ls.BankState = "", "", ""
 	}
 	meta := snapshotMeta{ID: newID("snap"), Name: name, BusinessTime: ts(a.clock.Now()), Seed: a.cfg.Seed, Schema: schemaVersion, TakenReal: a.clock.Real()}
 	for _, l := range a.ledgers {
@@ -566,6 +569,7 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	st.fill()
 	st.WorldID = newID("wld")
 	st.Deliveries = a.st.Deliveries
+	st.Vault = a.st.Vault
 	a.st = st
 	a.clock.Restore(st.Clock)
 	genesis, _ := a.cfg.GenesisDate()

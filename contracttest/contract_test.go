@@ -222,8 +222,12 @@ func TestBalanceRangeAndHistoryLimit(t *testing.T) {
 	id := fmt.Sprint(conn.Accounts[0]["id"])
 	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
 	eff := fmt.Sprint(c.JSON["effective_start_date"])
-	if eff != today.AddDays(-180).String() {
-		t.Fatalf("effective_start_date %s, want %s", eff, today.AddDays(-180))
+	want := today.AddDays(-s.cfg.Bank("bank-b").HistoryDays)
+	if genesis, err := s.cfg.GenesisDate(); err == nil && genesis.AddDays(1).After(want) {
+		want = genesis.AddDays(1)
+	}
+	if eff != want.String() {
+		t.Fatalf("effective_start_date %s, want %s", eff, want)
 	}
 	effDate, _ := clock.ParseDate(eff)
 	ok := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, effDate.AddDays(-1)), nil), 200)

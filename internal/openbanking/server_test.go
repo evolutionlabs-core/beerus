@@ -47,6 +47,10 @@ func (fakeData) Balance(string) (Balance, error) {
 	return Balance{Ledger: 5000, Available: 4000, Currency: "NGN"}, nil
 }
 
+func (fakeData) BalanceOn(string, clock.Date) (int64, error) {
+	return 4200, nil
+}
+
 func (fakeData) Transactions(string, clock.Date, clock.Date) ([]Txn, error) {
 	d, _ := clock.ParseDate("2026-01-05")
 	out := []Txn{}

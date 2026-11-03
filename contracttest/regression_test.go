@@ -153,7 +153,7 @@ func TestFrozenClockSurvivesRestart(t *testing.T) {
 }
 
 func TestSignInWithoutAccountsAtThatBank(t *testing.T) {
-	s := newStack(t)
+	s := newStubStack(t)
 	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
 	b := s.browser()
 	b.get(fmt.Sprint(ls.JSON["widget_url"]))

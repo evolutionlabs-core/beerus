@@ -118,3 +118,18 @@ func Verify(token string, keys []*ecdsa.PublicKey) (map[string]any, error) {
 	}
 	return claims, nil
 }
+
+func Peek(token string) (map[string]any, map[string]any, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, nil, errors.New("not a signed token")
+	}
+	out := [2]map[string]any{{}, {}}
+	for i := range out {
+		raw, err := b64.DecodeString(parts[i])
+		if err != nil || json.Unmarshal(raw, &out[i]) != nil {
+			return nil, nil, errors.New("unreadable token")
+		}
+	}
+	return out[0], out[1], nil
+}

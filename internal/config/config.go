@@ -61,6 +61,7 @@ type Bank struct {
 	HistoryDays    int    `yaml:"history_days"`
 	Port           int    `yaml:"port"`
 	APIPort        int    `yaml:"api_port,omitempty"`
+	StableIDs      *bool  `yaml:"stable_ids,omitempty"`
 	Database       string `yaml:"database"`
 	SettlesThrough string `yaml:"settles_through,omitempty"`
 	State          string `yaml:"state,omitempty"`
@@ -76,6 +77,10 @@ func (b *Bank) Cap() int64 {
 
 func (b *Bank) Suspended() bool {
 	return b.State == "suspended"
+}
+
+func (b *Bank) Stable() bool {
+	return b.StableIDs == nil || *b.StableIDs
 }
 
 func (b *Bank) Closed() bool {

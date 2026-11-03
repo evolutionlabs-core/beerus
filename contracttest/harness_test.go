@@ -101,7 +101,17 @@ func freePorts(t *testing.T, n int) []int {
 
 func newStack(t *testing.T) *Stack {
 	t.Helper()
+	return startStack(t, os.Getenv("BEERUS_CONTRACT_FULL") == "")
+}
+
+func newStubStack(t *testing.T) *Stack {
+	t.Helper()
 	return startStack(t, true)
+}
+
+func newBankStackWith(t *testing.T, edit func(*config.Config)) *Stack {
+	t.Helper()
+	return startStack(t, false, edit)
 }
 
 const bankHistoryDays = 90
@@ -111,7 +121,7 @@ func newBankStack(t *testing.T) *Stack {
 	return startStack(t, false)
 }
 
-func startStack(t *testing.T, worldOnly bool) *Stack {
+func startStack(t *testing.T, worldOnly bool, edits ...func(*config.Config)) *Stack {
 	t.Helper()
 	s := &Stack{t: t, worldOnly: worldOnly}
 	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
@@ -149,6 +159,9 @@ func startStack(t *testing.T, worldOnly bool) *Stack {
 				WebhookURL:   s.sink.srv.URL + "/webhooks",
 			}); err != nil {
 				t.Fatal(err)
+			}
+			for _, edit := range edits {
+				edit(cfg)
 			}
 			if !worldOnly {
 				cfg.Genesis = clock.DateOf(time.Now()).AddDays(-bankHistoryDays).String()
@@ -478,19 +491,20 @@ type browser struct {
 	c      *http.Client
 	last   string
 	result *url.URL
+	cur    *url.URL
 }
 
 func (s *Stack) browser() *browser {
 	jar, _ := cookiejar.New(nil)
 	b := &browser{s: s}
-	wu, _ := url.Parse(s.cfg.WidgetURL())
-	widgetHost := wu.Host
+	pu, _ := url.Parse(s.redirect)
+	partnerHost := pu.Host
 	b.c = &http.Client{
 		Jar:       jar,
 		Timeout:   30 * time.Second,
 		Transport: s.raw.Transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if req.URL.Host != widgetHost {
+			if req.URL.Host == partnerHost {
 				b.result = req.URL
 				return http.ErrUseLastResponse
 			}
@@ -509,17 +523,23 @@ func (b *browser) get(u string) int {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	b.last = string(body)
+	b.cur = resp.Request.URL
 	return resp.StatusCode
 }
 
 func (b *browser) post(path string, form url.Values) int {
 	b.s.t.Helper()
+	return b.postTo(b.s.cfg.WidgetURL(), path, form)
+}
+
+func (b *browser) postTo(base, path string, form url.Values) int {
+	b.s.t.Helper()
 	if m := reCSRF.FindStringSubmatch(b.last); m != nil && form.Get("csrf") == "" {
 		form.Set("csrf", m[1])
 	}
-	req, _ := http.NewRequest("POST", b.s.cfg.WidgetURL()+path, strings.NewReader(form.Encode()))
+	req, _ := http.NewRequest("POST", base+path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Origin", b.s.cfg.WidgetURL())
+	req.Header.Set("Origin", base)
 	resp, err := b.c.Do(req)
 	if err != nil {
 		b.s.t.Fatal(err)
@@ -527,7 +547,44 @@ func (b *browser) post(path string, form url.Values) int {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	b.last = string(body)
+	b.cur = resp.Request.URL
 	return resp.StatusCode
+}
+
+func (b *browser) atBank() bool {
+	return b.cur != nil && b.cur.Host != "" && b.cur.Host != mustHost(b.s.cfg.WidgetURL())
+}
+
+func mustHost(raw string) string {
+	u, _ := url.Parse(raw)
+	return u.Host
+}
+
+func (b *browser) bankSignIn(personaID string, accounts func([]string) []string) {
+	b.s.t.Helper()
+	base := b.cur.Scheme + "://" + b.cur.Host
+	p := b.s.persona(personaID)
+	b.postTo(base, "/login", url.Values{"username": {p.Username}, "password": {p.Password}})
+	if b.result != nil {
+		return
+	}
+	m := reOTP.FindStringSubmatch(b.last)
+	if m == nil {
+		b.s.t.Fatalf("no OTP on the bank page: %.400s", b.last)
+	}
+	b.postTo(base, "/verify", url.Values{"otp": {m[1]}})
+	all := []string{}
+	for _, m := range reAccount.FindAllStringSubmatch(b.last, -1) {
+		all = append(all, m[1])
+	}
+	if len(all) == 0 {
+		b.s.t.Fatalf("no accounts on the bank's consent page: %.400s", b.last)
+	}
+	pick := all
+	if accounts != nil {
+		pick = accounts(all)
+	}
+	b.postTo(base, "/authorize/consent", url.Values{"account": pick, "action": {"approve"}})
 }
 
 type linkResult struct {
@@ -541,7 +598,9 @@ func (s *Stack) completeLink(widgetURL, institution, personaID string, accounts 
 	if b.result == nil && institution != "" && strings.Contains(b.last, `name="institution"`) {
 		b.post("/link/institution", url.Values{"institution": {institution}})
 	}
-	if b.result == nil {
+	if b.result == nil && !s.worldOnly {
+		b.bankSignIn(personaID, accounts)
+	} else if b.result == nil {
 		p := s.persona(personaID)
 		b.post("/bank/login", url.Values{"username": {p.Username}, "password": {p.Password}})
 		if b.result != nil {

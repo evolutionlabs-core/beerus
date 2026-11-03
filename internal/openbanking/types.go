@@ -21,6 +21,8 @@ const (
 
 var ErrNotFound = errors.New("not found")
 
+const ViaAggregator = "aggregator"
+
 type Consent struct {
 	ID              string
 	ClientID        string
@@ -134,6 +136,7 @@ type Txn struct {
 	Channel      string
 	BalanceAfter int64
 	Seq          int64
+	HadPending   bool
 }
 
 type Counterparty struct {
@@ -147,6 +150,7 @@ type Data interface {
 	Accounts(customer string) ([]AccountInfo, error)
 	Account(nuban string) (AccountInfo, error)
 	Balance(nuban string) (Balance, error)
+	BalanceOn(nuban string, d clock.Date) (int64, error)
 	Transactions(nuban string, from, to clock.Date) ([]Txn, error)
 	Ping() error
 }

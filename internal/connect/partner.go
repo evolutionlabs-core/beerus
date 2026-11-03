@@ -249,7 +249,18 @@ func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
 		a.st.Connections[c.ID] = c
 		ls.ConnectionID = c.ID
 	}
+	oldConsent := c.ConsentID
+	if a.live() {
+		if err := a.vaultMove(linkVaultPrefix+ls.ID, c.ID); err != nil {
+			a.dirty()
+			writeError(w, r, http.StatusInternalServerError, "internal_error", "The bank tokens could not be stored.")
+			return
+		}
+	}
 	a.authorise(c, ls)
+	if b := a.cfg.Bank(c.Institution); a.live() && b != nil && oldConsent != "" && oldConsent != c.ConsentID {
+		_ = a.bankRevoke(b, oldConsent)
+	}
 	writeJSON(w, status, a.connectionJSON(c))
 }
 
@@ -259,6 +270,12 @@ func (a *App) authorise(c *Connection, ls *LinkSession) {
 	c.ConsentID = newID("cns")
 	c.AuthorisedAt = now
 	c.ExpiresAt = now.AddDate(1, 0, 0)
+	if a.live() && ls.BankConsentID != "" {
+		c.ConsentID, c.ExpiresAt = ls.BankConsentID, ls.ConsentEnds
+		if !ls.BankFrom.IsZero() && ls.BankFrom.After(eff) {
+			eff = ls.BankFrom
+		}
+	}
 	c.PersonaID = ls.PersonaID
 	old := map[string]bool{}
 	for _, id := range c.AccountIDs {
@@ -281,6 +298,14 @@ func (a *App) authorise(c *Connection, ls *LinkSession) {
 		} else if eff.Before(rec.From) {
 			rec.From = eff
 		}
+		if a.live() {
+			rec.NUBAN = wa.NUBAN
+			for _, ba := range ls.BankAccounts {
+				if ba.ID == wa.NUBAN {
+					rec.Name, rec.Type, rec.Currency = ba.Name, ba.Type, ba.Currency
+				}
+			}
+		}
 		rec.Cut = rec.From != c.StartDate
 		rec.HistoryDone = false
 		rec.ConnectionID = c.ID
@@ -295,7 +320,7 @@ func (a *App) authorise(c *Connection, ls *LinkSession) {
 		if !old[id] {
 			a.emit(c.PartnerID, "account.added", map[string]any{"connection_id": c.ID, "account_id": id})
 		}
-		_, _ = a.fetchAccount(c.PartnerID, rec, now)
+		_, _ = a.fetchAccount(c, rec, now)
 	}
 	c.EffectiveStart = nil
 	if earliest != nil && *earliest != c.StartDate {
@@ -374,7 +399,17 @@ func (a *App) deleteConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.Status != "revoked" {
-		if a.world.Down(c.Institution, a.clock.Now()) {
+		if a.live() {
+			if err := a.revokeAtBank(c); err != nil {
+				w.Header().Set("Retry-After", "60")
+				if isDown(err) {
+					writeError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached to revoke the consent.")
+				} else {
+					writeError(w, r, http.StatusBadGateway, "bank_error", "The bank did not accept the revocation.")
+				}
+				return
+			}
+		} else if a.world.Down(c.Institution, a.clock.Now()) {
 			w.Header().Set("Retry-After", "60")
 			writeError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached to revoke the consent.")
 			return
@@ -384,8 +419,22 @@ func (a *App) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (a *App) revokeAtBank(c *Connection) error {
+	b := a.cfg.Bank(c.Institution)
+	if b != nil && c.ConsentID != "" {
+		if err := a.bankRevoke(b, c.ConsentID); err != nil {
+			return err
+		}
+	}
+	a.vaultDrop(c.ID)
+	return nil
+}
+
 func (a *App) accountJSON(rec *AccountRec, connID string) map[string]any {
 	wa, _ := a.world.Account(rec.WorldKey)
+	if rec.NUBAN != "" && rec.Name != "" {
+		wa.NUBAN, wa.Name, wa.Type, wa.Currency = rec.NUBAN, rec.Name, rec.Type, rec.Currency
+	}
 	inst, _ := a.world.Institution(wa.Institution)
 	asAt := rec.AsAt
 	if asAt.IsZero() {
@@ -512,7 +561,7 @@ func (a *App) getAccount(w http.ResponseWriter, r *http.Request) {
 func (a *App) getBalance(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	rec, _ := a.accountFor(w, r)
+	rec, conn := a.accountFor(w, r)
 	if rec == nil {
 		return
 	}
@@ -527,7 +576,16 @@ func (a *App) getBalance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "as_of_out_of_range", "as_of must be between "+min.String()+" and "+max.String()+", the day before the first date Connect holds and the last completed business day.")
 		return
 	}
-	bal, err := a.src(rec.WorldKey).EndOfDay(rec.WorldKey, d)
+	var bal int64
+	if a.live() {
+		bal, err = a.bankBalanceOn(conn, rec, d)
+		if err != nil && a.bankFailed(conn, err) {
+			a.connUnavailable(w, r, conn)
+			return
+		}
+	} else {
+		bal, err = a.src(rec.WorldKey).EndOfDay(rec.WorldKey, d)
+	}
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Something went wrong.")
 		return
@@ -634,4 +692,16 @@ func (a *App) refresh(w http.ResponseWriter, r *http.Request) {
 	a.dirty()
 	a.poke()
 	writeJSON(w, http.StatusAccepted, map[string]any{"id": rf.ID, "account_id": rf.AccountID, "status": "queued", "requested_at": ts(rf.RequestedAt)})
+}
+
+func (a *App) connUnavailable(w http.ResponseWriter, r *http.Request, c *Connection) {
+	switch c.Status {
+	case "revoked":
+		writeError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
+	case "institution_down":
+		w.Header().Set("Retry-After", "60")
+		writeError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached.")
+	default:
+		writeError(w, r, http.StatusConflict, "reauth_required", "The customer must consent again.")
+	}
 }

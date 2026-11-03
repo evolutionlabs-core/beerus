@@ -480,7 +480,7 @@ func (a *App) provision(b *config.Bank) {
 	}) && a.step(st, 1, func() error {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return a.world.AddInstitution(world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: true, Style: b.Style()})
+		return a.world.AddInstitution(world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: b.Stable(), Style: b.Style()})
 	}) && a.step(st, 2, func() error {
 		a.mu.Lock()
 		have := a.ledgerFor(b.ID) != nil
@@ -493,7 +493,7 @@ func (a *App) provision(b *config.Bank) {
 			return err
 		}
 		a.mu.Lock()
-		a.ledgers = append(a.ledgers, ls)
+		a.addLedger(ls)
 		a.mu.Unlock()
 		return nil
 	}) && a.step(st, 3, func() error {
@@ -792,6 +792,9 @@ func (a *App) detach(b *config.Bank, redo []int) {
 			if l.inst.ID == b.ID {
 				ls = l
 				a.ledgers = append(a.ledgers[:i:i], a.ledgers[i+1:]...)
+				a.poolMu.Lock()
+				delete(a.pools, b.ID)
+				a.poolMu.Unlock()
 				break
 			}
 		}

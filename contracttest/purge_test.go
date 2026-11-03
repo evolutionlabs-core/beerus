@@ -188,7 +188,7 @@ func TestPurgeRules(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
-	s := newStack(t)
+	s := newStubStack(t)
 	if imp := s.ctl("GET", "/banks/bank-a/purge", nil); !strings.Contains(fmt.Sprint(imp["blockers"]), "close it before purging") {
 		t.Fatalf("purge preview of an open bank: %v", imp)
 	}
