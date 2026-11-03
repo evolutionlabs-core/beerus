@@ -60,13 +60,18 @@ type Bank struct {
 	SettlesThrough string `yaml:"settles_through,omitempty"`
 	State          string `yaml:"state,omitempty"`
 	NetDebitCap    int64  `yaml:"net_debit_cap,omitempty"`
+	Collateral     int64  `yaml:"collateral,omitempty"`
 }
 
 func (b *Bank) Cap() int64 {
 	if b.NetDebitCap > 0 {
 		return b.NetDebitCap
 	}
-	return nip.DefaultCap(b.Type)
+	return nip.SimulatorDefaultCap(b.Type)
+}
+
+func (b *Bank) CapIsDefault() bool {
+	return b.NetDebitCap <= 0
 }
 
 func (b *Bank) Suspended() bool {

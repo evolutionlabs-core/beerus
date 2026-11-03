@@ -12,6 +12,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
@@ -45,6 +46,17 @@ func (s schedule) next(after time.Time) time.Time {
 			return d.Start().Add(time.Duration(k) * s.every())
 		}
 		d, k = d.AddDays(1), 1
+	}
+}
+
+func (s schedule) prev(at time.Time) time.Time {
+	d := clock.DateOf(at)
+	k := int(at.Sub(d.Start()) / s.every())
+	for {
+		if businessDay(d) && k >= 1 {
+			return d.Start().Add(time.Duration(k) * s.every())
+		}
+		d, k = d.AddDays(-1), s.per
 	}
 }
 
@@ -237,6 +249,33 @@ type position struct {
 	outward, inward int64
 }
 
+func nipAmounts(v world.Presented) (outward, inward int64) {
+	return bank.NIPAmounts(bank.FeedLine{Key: v.Key, Pending: v.Pending, Amount: v.Amount, Narration: v.Narration, Channel: v.Channel})
+}
+
+func (a *App) openPositionLocked(bankID string, after, now time.Time) (position, error) {
+	sched := a.schedule()
+	since := sched.prev(after)
+	var open position
+	for _, acc := range a.world.Accounts() {
+		if acc.Institution != bankID {
+			continue
+		}
+		vs, err := a.world.Versions(acc.Key, since, now)
+		if err != nil {
+			return open, err
+		}
+		for _, v := range vs {
+			o, i := nipAmounts(v)
+			if (o != 0 || i != 0) && sched.next(v.BookedAt.Add(-time.Nanosecond)).After(after) {
+				open.outward += o
+				open.inward += i
+			}
+		}
+	}
+	return open, nil
+}
+
 func (a *App) settleLocked(now time.Time) error {
 	if a.rtgs == nil || len(a.cfg.Banks) == 0 {
 		return nil
@@ -277,7 +316,7 @@ func (a *App) settleLocked(now time.Time) error {
 				return err
 			}
 			for _, v := range vs {
-				out, in := bank.NIPAmounts(bank.FeedLine{Key: v.Key, Pending: v.Pending, Amount: v.Amount, Narration: v.Narration, Channel: v.Channel})
+				out, in := nipAmounts(v)
 				if out == 0 && in == 0 {
 					continue
 				}
@@ -376,7 +415,6 @@ func (a *App) CheckSettlement() (SettlementCheck, error) {
 	if err := a.settleLocked(now); err != nil {
 		return out, err
 	}
-	sched := a.schedule()
 	last := a.rtgs.through
 	out.SettledThrough = last
 	if err := a.rtgs.l.Pool().QueryRow(a.rtgs.ctx, `SELECT count(*) FROM journal_entries WHERE kind = 'session'`).Scan(&out.Sessions); err != nil {
@@ -390,22 +428,9 @@ func (a *App) CheckSettlement() (SettlementCheck, error) {
 		out.Problems = append(out.Problems, fmt.Sprintf("the CBN's books do not balance: %d", c.TrialBalance))
 	}
 	for _, l := range a.ledgers {
-		var open position
-		for _, acc := range a.world.Accounts() {
-			if acc.Institution != l.inst.ID {
-				continue
-			}
-			vs, err := a.world.Versions(acc.Key, last.Add(-24*time.Hour), now)
-			if err != nil {
-				return out, err
-			}
-			for _, v := range vs {
-				o, i := bank.NIPAmounts(bank.FeedLine{Key: v.Key, Pending: v.Pending, Amount: v.Amount, Narration: v.Narration, Channel: v.Channel})
-				if sched.next(v.BookedAt.Add(-time.Nanosecond)).After(last) {
-					open.outward += o
-					open.inward += i
-				}
-			}
+		open, err := a.openPositionLocked(l.inst.ID, last, now)
+		if err != nil {
+			return out, err
 		}
 		owe, err := l.b.L.Balance(l.ctx, bank.NIPOutward)
 		if err != nil {

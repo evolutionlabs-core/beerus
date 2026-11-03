@@ -271,6 +271,11 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 		return nil, invalid("this setup already has %d banks, the limit set by max_banks", max)
 	}
 	usedNIP, usedNUBAN := map[string]bool{}, map[string]bool{}
+	markNUBAN := func(code string) {
+		if n, err := world.NormaliseBankCode(code); err == nil {
+			usedNUBAN[n] = true
+		}
+	}
 	for _, p := range a.world.PurgedInstitutions() {
 		if strings.EqualFold(p.Name, name) {
 			return nil, invalid("%q was the name of a purged bank, and it stays reserved", name)
@@ -278,7 +283,8 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 		if p.ID == id {
 			return nil, invalid("%q was the id of a purged bank, and it stays reserved", id)
 		}
-		usedNIP[p.NIPCode], usedNUBAN[p.NUBANCode] = true, true
+		usedNIP[p.NIPCode] = true
+		markNUBAN(p.NUBANCode)
 	}
 	declared := map[string]bool{}
 	for _, b := range a.cfg.Banks {
@@ -290,6 +296,7 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 			continue
 		}
 		reservedNIP[o.NIPCode] = true
+		markNUBAN(o.NIPCode)
 		if strings.EqualFold(o.Name, name) || strings.Trim(slugRe.ReplaceAllString(strings.ToLower(o.Name), "-"), "-") == id {
 			return nil, invalid("%q is the name of an outside bank that transfers already use", o.Name)
 		}
@@ -309,7 +316,8 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 		if database != "" && b.Database == database {
 			return nil, invalid("database %q is already used by %s", database, b.ID)
 		}
-		usedNIP[b.NIPCode], usedNUBAN[b.NUBANCode], usedPort[b.Port] = true, true, true
+		usedNIP[b.NIPCode], usedPort[b.Port] = true, true
+		markNUBAN(b.NUBANCode)
 		if b.Port > maxPort {
 			maxPort = b.Port
 		}
@@ -330,13 +338,13 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 	if nuban == "" {
 		for n := 903; n < 999; n++ {
 			c := strconv.Itoa(n)
-			if !usedNUBAN[c] {
+			if norm, _ := world.NormaliseBankCode(c); !usedNUBAN[norm] {
 				nuban = c
 				break
 			}
 		}
-	} else if !regexp.MustCompile(`^(\d{3}|\d{5,6})$`).MatchString(nuban) || usedNUBAN[nuban] {
-		return nil, invalid("nuban_code %q must be 3, 5 or 6 digits and not already used", nuban)
+	} else if norm, err := world.NormaliseBankCode(nuban); err != nil || (len(nuban) == 6 && nuban[0] != '9') || usedNUBAN[norm] {
+		return nil, invalid("nuban_code %q must be 3 digits, or 5 or 6 digits starting with 9, and not already used", nuban)
 	}
 	if req.SettlesThrough != "" {
 		via := a.cfg.Bank(req.SettlesThrough)
@@ -670,6 +678,11 @@ func (a *App) applyConfig(sum string) {
 			rewrite = true
 		case cur.Suspended() != fb.Suspended():
 			suspend[fb.ID] = fb.Suspended()
+		}
+		if fb.NetDebitCap != cur.NetDebitCap || fb.Collateral != cur.Collateral {
+			a.mu.Lock()
+			cur.NetDebitCap, cur.Collateral = fb.NetDebitCap, fb.Collateral
+			a.mu.Unlock()
 		}
 		if fb.Name != cur.Name || fb.Type != cur.Type || fb.NIPCode != cur.NIPCode || fb.NUBANCode != cur.NUBANCode || fb.HistoryDays != cur.HistoryDays || fb.Port != cur.Port || fb.Database != cur.Database || fb.SettlesThrough != cur.SettlesThrough {
 			a.warn("only the state of %s can be changed in beerus.yaml; other edits were undone", fb.ID)

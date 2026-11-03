@@ -303,6 +303,7 @@ func (a *App) sweep() {
 			a.idemLock.Delete(k)
 		}
 	}
+	a.pruneNIPLocked(real)
 	for k, ls := range a.st.LinkSessions {
 		if real.Sub(ls.ExpiresReal) > 7*24*time.Hour {
 			delete(a.st.LinkSessions, k)

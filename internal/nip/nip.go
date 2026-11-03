@@ -20,21 +20,22 @@ const (
 
 	BVNPrefix = "229"
 
-	Success = "success"
-	Failed  = "failed"
-	Pending = "pending"
+	Success  = "success"
+	Failed   = "failed"
+	Reversed = "reversed"
+	Pending  = "pending"
 )
 
 const (
-	capCommercial   int64 = 500_000_000_000
-	capMicrofinance int64 = 50_000_000_000
+	simulatorCapCommercial   int64 = 500_000_000_000
+	simulatorCapMicrofinance int64 = 50_000_000_000
 )
 
-func DefaultCap(bankType string) int64 {
+func SimulatorDefaultCap(bankType string) int64 {
 	if bankType == "microfinance" {
-		return capMicrofinance
+		return simulatorCapMicrofinance
 	}
-	return capCommercial
+	return simulatorCapCommercial
 }
 
 type Participant struct {

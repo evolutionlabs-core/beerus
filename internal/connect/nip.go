@@ -10,40 +10,70 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
-type NIPTransfer struct {
-	SessionID string          `json:"session_id"`
-	Key       string          `json:"key,omitempty"`
-	Hash      string          `json:"hash"`
-	From      string          `json:"from"`
-	To        string          `json:"to"`
-	FromBank  string          `json:"from_bank"`
-	ToBank    string          `json:"to_bank"`
-	ToCode    string          `json:"to_code"`
-	Amount    int64           `json:"amount_minor"`
-	Status    string          `json:"status"`
-	Code      string          `json:"response_code"`
-	Message   string          `json:"message"`
-	At        time.Time       `json:"at"`
-	HTTP      int             `json:"http_status"`
-	Response  json.RawMessage `json:"response"`
+const nipRetention = 7 * 24 * time.Hour
+
+type NIPFailure struct {
+	SessionID   string    `json:"session_id"`
+	FromBank    string    `json:"from_bank"`
+	ToCode      string    `json:"to_code"`
+	Amount      int64     `json:"amount_minor"`
+	Code        string    `json:"response_code"`
+	Message     string    `json:"message"`
+	At          time.Time `json:"at"`
+	CreatedReal time.Time `json:"created_real"`
 }
 
 type NIPState struct {
-	Transfers map[string]*NIPTransfer `json:"transfers"`
-	Keys      map[string]string       `json:"keys"`
+	Failures map[string]*NIPFailure `json:"failures"`
+	Sessions int64                  `json:"sessions"`
 }
 
 func (n *NIPState) fill() {
-	if n.Transfers == nil {
-		n.Transfers = map[string]*NIPTransfer{}
+	if n.Failures == nil {
+		n.Failures = map[string]*NIPFailure{}
 	}
-	if n.Keys == nil {
-		n.Keys = map[string]string{}
+}
+
+func (a *App) pruneNIPLocked(real time.Time) {
+	for sid, f := range a.st.NIP.Failures {
+		if real.Sub(f.CreatedReal) > nipRetention {
+			delete(a.st.NIP.Failures, sid)
+		}
 	}
+}
+
+type reply struct {
+	status   int
+	body     []byte
+	replayed bool
+	synced   bool
+	session  string
+}
+
+func jsonReply(status int, v any) reply {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return reply{status: http.StatusInternalServerError, body: []byte(`{"error":{"code":"internal_error","message":"The response could not be built."}}`)}
+	}
+	return reply{status: status, body: b}
+}
+
+func errReply(r *http.Request, status int, code, msg string) reply {
+	return jsonReply(status, map[string]apiError{"error": {Code: code, Message: msg, RequestID: requestID(r)}})
+}
+
+func (p reply) write(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	if p.replayed {
+		w.Header().Set("Idempotent-Replayed", "true")
+	}
+	w.WriteHeader(p.status)
+	_, _ = w.Write(p.body)
 }
 
 func (a *App) directoryLocked() *nip.Directory {
@@ -84,6 +114,10 @@ func (a *App) nameEnquiryLocked(code, nuban string, at time.Time) nameEnquiry {
 		return out
 	}
 	if p.Outside {
+		if !world.ValidNUBAN(p.Code, nuban) {
+			out.Code, out.Message = nip.InvalidAccount, "That is not a valid account number."
+			return out
+		}
 		out.Code, out.Message, out.AccountName = nip.OK, "Successful.", "BENEFICIARY "+nuban[6:]
 		return out
 	}
@@ -93,8 +127,7 @@ func (a *App) nameEnquiryLocked(code, nuban string, at time.Time) nameEnquiry {
 	}
 	for _, acc := range a.world.Accounts() {
 		if acc.Institution == p.BankID && acc.NUBAN == nuban {
-			pr, _ := a.world.Persona(acc.Owner)
-			out.Code, out.Message, out.AccountName = nip.OK, "Successful.", strings.ToUpper(pr.Name)
+			out.Code, out.Message, out.AccountName = nip.OK, "Successful.", strings.ToUpper(acc.Name)
 			return out
 		}
 	}
@@ -116,7 +149,6 @@ func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	now := a.clock.Now()
 	out := []map[string]any{}
 	for _, p := range a.directoryLocked().List() {
@@ -130,63 +162,132 @@ func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, map[string]any{"nip_code": p.Code, "name": p.Name, "bank_id": p.BankID, "outside": p.Outside, "status": status})
 	}
+	a.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
-func (a *App) openCutoff(t *NIPTransfer) time.Time {
-	return a.schedule().next(t.At.Add(-time.Nanosecond))
+func (p position) netDebit() int64 {
+	return max(p.outward-p.inward, 0)
 }
 
-func (a *App) netDebitLocked(bankID string, now time.Time) int64 {
-	var net int64
-	for _, t := range a.st.NIP.Transfers {
-		if t.Status == nip.Failed || !a.openCutoff(t).After(now) {
-			continue
-		}
-		if t.FromBank == bankID {
-			net += t.Amount
-		}
-		if t.ToBank == bankID && t.Status == nip.Success {
-			net -= t.Amount
-		}
+func (a *App) positionLocked(b *config.Bank, now time.Time) (map[string]any, error) {
+	open, err := a.openPositionLocked(b.ID, now, now)
+	if err != nil {
+		return nil, err
 	}
-	if net < 0 {
-		return 0
+	pos := open.netDebit()
+	source := "configured"
+	if b.CapIsDefault() {
+		source = "simulator_default"
 	}
-	return net
+	var collateral any
+	if b.Collateral > 0 {
+		collateral = b.Collateral
+	}
+	return map[string]any{"bank_id": b.ID, "nip_code": b.NIPCode, "net_debit_cap_minor": b.Cap(), "cap_source": source, "collateral_minor": collateral, "open_outward_minor": open.outward, "open_inward_minor": open.inward, "position_minor": pos, "headroom_minor": b.Cap() - pos, "next_session": ts(a.schedule().next(now))}, nil
 }
 
 func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	now := a.clock.Now()
 	out := []map[string]any{}
+	var err error
 	for _, b := range a.cfg.Banks {
-		pos := a.netDebitLocked(b.ID, now)
-		out = append(out, map[string]any{"bank_id": b.ID, "nip_code": b.NIPCode, "net_debit_cap_minor": b.Cap(), "collateral_minor": b.Cap(), "position_minor": pos, "headroom_minor": b.Cap() - pos, "next_session": ts(a.schedule().next(now))})
+		var row map[string]any
+		if row, err = a.positionLocked(b, now); err != nil {
+			break
+		}
+		out = append(out, row)
+	}
+	a.mu.Unlock()
+	if err != nil {
+		a.log.Error("NIP positions", "err", err)
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "The positions could not be worked out.")
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
-func nipView(t *NIPTransfer) map[string]any {
-	return map[string]any{"session_id": t.SessionID, "status": t.Status, "response_code": t.Code, "message": t.Message, "amount_minor": t.Amount, "amount": naira(t.Amount), "from_bank": t.FromBank, "to_bank_code": t.ToCode, "initiated_at": ts(t.At)}
+func (a *App) SetNetDebitCap(id string, cap, collateral int64) error {
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	b := a.cfg.Bank(id)
+	if b == nil {
+		return errNotFound
+	}
+	a.mu.Lock()
+	prevCap, prevCollateral := b.NetDebitCap, b.Collateral
+	b.NetDebitCap, b.Collateral = cap, collateral
+	a.mu.Unlock()
+	if err := a.saveBanksLocked(); err != nil {
+		a.mu.Lock()
+		b.NetDebitCap, b.Collateral = prevCap, prevCollateral
+		a.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Cap        string `json:"cap"`
+		Collateral string `json:"collateral"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"cap":"5000000","collateral":"5000000"}.`)
+		return
+	}
+	capMinor, err := parseNaira(body.Cap)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "cap: "+err.Error())
+		return
+	}
+	var collateral int64
+	if body.Collateral != "" {
+		if collateral, err = parseNaira(body.Collateral); err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "collateral: "+err.Error())
+			return
+		}
+	}
+	id := r.PathValue("id")
+	if err := a.SetNetDebitCap(id, capMinor, collateral); err != nil {
+		a.bankError(w, r, err)
+		return
+	}
+	a.mu.Lock()
+	row, err := a.positionLocked(a.cfg.Bank(id), a.clock.Now())
+	a.mu.Unlock()
+	if err != nil {
+		a.log.Error("NIP positions", "err", err)
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "The position could not be worked out.")
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
 }
 
 func (a *App) ctlNIPStatus(w http.ResponseWriter, r *http.Request) {
 	sid := r.PathValue("session_id")
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if t := a.st.NIP.Transfers[sid]; t != nil {
-		writeJSON(w, http.StatusOK, nipView(t))
-		return
+	rep := a.statusLocked(sid)
+	a.mu.Unlock()
+	rep.write(w)
+}
+
+func (a *App) statusLocked(sid string) reply {
+	if f := a.st.NIP.Failures[sid]; f != nil {
+		return jsonReply(http.StatusOK, map[string]any{"session_id": sid, "status": nip.Failed, "response_code": f.Code, "message": f.Message, "amount_minor": f.Amount, "amount": naira(f.Amount), "from_bank": f.FromBank, "to_bank_code": f.ToCode, "initiated_at": ts(f.At)})
 	}
 	if nip.ValidSessionID(sid) {
 		if tr := a.world.Trace(sid, a.clock.Now()); len(tr) > 0 {
-			writeJSON(w, http.StatusOK, map[string]any{"session_id": sid, "status": nip.Success, "response_code": nip.OK, "message": "Successful."})
-			return
+			for _, t := range tr {
+				if t.Line.Channel == "reversal" {
+					return jsonReply(http.StatusOK, map[string]any{"session_id": sid, "status": nip.Reversed, "response_code": nip.SystemError, "message": "The transfer was reversed and the money went back to the sender.", "reversed_at": ts(t.Line.BookedAt)})
+				}
+			}
+			return jsonReply(http.StatusOK, map[string]any{"session_id": sid, "status": nip.Success, "response_code": nip.OK, "message": "Successful."})
 		}
 	}
-	writeJSON(w, http.StatusNotFound, map[string]any{"session_id": sid, "status": nip.Failed, "response_code": nip.NoRecord, "message": "No transfer has that session ID."})
+	return jsonReply(http.StatusNotFound, map[string]any{"session_id": sid, "status": nip.Failed, "response_code": nip.NoRecord, "message": "No transfer has that session ID."})
 }
 
 type transferBody struct {
@@ -204,26 +305,74 @@ func (b transferBody) hash() string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (a *App) replayLocked(w http.ResponseWriter, r *http.Request, key string, b transferBody) bool {
-	var t *NIPTransfer
-	if b.SessionID != "" {
-		t = a.st.NIP.Transfers[b.SessionID]
+func transferScopes(key, sid string) []string {
+	out := []string{}
+	if sid != "" {
+		out = append(out, "control POST /transfers session "+sid)
 	}
-	if t == nil && key != "" {
-		t = a.st.NIP.Transfers[a.st.NIP.Keys[key]]
+	if key != "" {
+		out = append(out, "control POST /transfers key "+key)
 	}
-	if t == nil {
-		return false
+	return out
+}
+
+func (a *App) transferLocked(r *http.Request, body transferBody, amount int64, key string) reply {
+	hash := body.hash()
+	for _, scope := range transferScopes(key, body.SessionID) {
+		if rec := a.idemGetLocked(scope); rec != nil {
+			if rec.Hash != hash {
+				return errReply(r, http.StatusUnprocessableEntity, "idempotency_key_reused", "That session ID or Idempotency-Key was used with a different transfer.")
+			}
+			return reply{status: rec.Status, body: rec.Body, replayed: true}
+		}
 	}
-	if t.Hash != b.hash() {
-		writeError(w, r, http.StatusUnprocessableEntity, "idempotency_key_reused", "That session ID or Idempotency-Key was used with a different transfer.")
-		return true
+	if body.SessionID != "" && len(a.world.Trace(body.SessionID, a.clock.Now())) > 0 {
+		return errReply(r, http.StatusConflict, "duplicate_session", "That session ID is already used by another transfer.")
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Idempotent-Replayed", "true")
-	w.WriteHeader(t.HTTP)
-	_, _ = w.Write(t.Response)
-	return true
+	rep := a.runTransferLocked(r, body, amount)
+	if rep.status < http.StatusInternalServerError {
+		for _, scope := range transferScopes(key, rep.session) {
+			a.idemPutLocked(scope, hash, rep.status, "application/json", rep.body)
+		}
+		a.dirty()
+	}
+	return rep
+}
+
+func (a *App) runTransferLocked(r *http.Request, body transferBody, amount int64) reply {
+	from, to := body.From, body.To
+	if k, ok := a.resolveAccount(from); ok {
+		from = k
+	}
+	if k, ok := a.resolveAccount(to); ok {
+		to = k
+	}
+	req := world.TransferRequest{From: from, To: to, ToBank: body.ToBank, ToName: body.ToName, Amount: amount, Narration: body.Narration, SessionID: body.SessionID}
+	if rt, err := a.world.Route(req); err == nil && rt.FromInst.ID != rt.ToInst.ID {
+		if rep, handled := a.nipTransferLocked(r, req, rt); handled {
+			return rep
+		}
+	}
+	now := a.clock.Now()
+	res, err := a.world.Transfer(now, req)
+	if err != nil {
+		f := transferFailure(err)
+		return errReply(r, f.status, f.errCode, f.message)
+	}
+	rep := jsonReply(http.StatusOK, transferView(res, now))
+	rep.synced, rep.session = true, body.SessionID
+	return rep
+}
+
+func transferView(res world.TransferResult, at time.Time) map[string]any {
+	return map[string]any{
+		"result":        res,
+		"amount":        naira(res.Amount),
+		"charges":       naira(res.Fee + res.VAT + res.StampDuty),
+		"total_debit":   naira(res.TotalDebit),
+		"sender_after":  naira(res.BalanceAfter),
+		"business_time": ts(at),
+	}
 }
 
 type nipFailure struct {
@@ -233,21 +382,13 @@ type nipFailure struct {
 	message string
 }
 
-func (a *App) recordLocked(t *NIPTransfer, status int, body any) {
-	b, _ := json.Marshal(body)
-	a.st.NIP.Transfers[t.SessionID] = t
-	t.HTTP, t.Response = status, b
-	if t.Key != "" {
-		a.st.NIP.Keys[t.Key] = t.SessionID
-	}
+func (a *App) failNIPLocked(r *http.Request, t NIPFailure, f nipFailure) reply {
+	t.Code, t.Message, t.CreatedReal = f.code, f.message, a.clock.Real()
+	a.st.NIP.Failures[t.SessionID] = &t
 	a.dirty()
-}
-
-func (a *App) failNIPLocked(w http.ResponseWriter, r *http.Request, t *NIPTransfer, f nipFailure) {
-	t.Status, t.Code, t.Message = nip.Failed, f.code, f.message
-	body := map[string]any{"error": apiError{Code: f.errCode, Message: f.message, RequestID: requestID(r)}, "response_code": f.code, "session_id": t.SessionID, "status": nip.Failed}
-	a.recordLocked(t, f.status, body)
-	writeJSON(w, f.status, body)
+	rep := jsonReply(f.status, map[string]any{"error": apiError{Code: f.errCode, Message: f.message, RequestID: requestID(r)}, "response_code": f.code, "session_id": t.SessionID, "status": nip.Failed})
+	rep.session = t.SessionID
+	return rep
 }
 
 func bankFailure(err error) nipFailure {
@@ -263,18 +404,23 @@ func bankFailure(err error) nipFailure {
 	return f
 }
 
-func (a *App) nipTransferLocked(w http.ResponseWriter, r *http.Request, body transferBody, req world.TransferRequest, rt world.Route, key string) string {
+func transferFailure(err error) nipFailure {
+	if errors.Is(err, world.ErrBankSuspended) || errors.Is(err, world.ErrBankClosed) || errors.Is(err, world.ErrBankUnavailable) {
+		return bankFailure(err)
+	}
+	return nipFailure{status: http.StatusBadRequest, code: nip.SystemError, errCode: "invalid_request", message: err.Error()}
+}
+
+func (a *App) nipTransferLocked(r *http.Request, req world.TransferRequest, rt world.Route) (reply, bool) {
 	now := a.clock.Now()
-	sid := body.SessionID
+	sid := req.SessionID
 	if sid == "" {
-		sid = nip.SessionID(a.cfg.Seed, rt.FromInst.NIPCode, now, len(a.st.NIP.Transfers))
+		a.st.NIP.Sessions++
+		sid = nip.SessionID(a.cfg.Seed, rt.FromInst.NIPCode, now, int(a.st.NIP.Sessions))
 	}
-	t := &NIPTransfer{SessionID: sid, Key: key, Hash: body.hash(), From: rt.From.Key, To: req.To, FromBank: rt.FromInst.ID, ToCode: rt.ToInst.NIPCode, Amount: req.Amount, Status: nip.Pending, At: now}
-	if p, ok := a.directoryLocked().Lookup(rt.ToInst.NIPCode); ok {
-		t.ToBank = p.BankID
-	}
+	t := NIPFailure{SessionID: sid, FromBank: rt.FromInst.ID, ToCode: rt.ToInst.NIPCode, Amount: req.Amount, At: now}
 	if a.bankUnavailable(rt.FromInst.ID, now) {
-		return ""
+		return reply{}, false
 	}
 	nuban := req.To
 	if rt.To != nil {
@@ -287,42 +433,32 @@ func (a *App) nipTransferLocked(w http.ResponseWriter, r *http.Request, body tra
 		if err == nil || !(errors.Is(err, world.ErrBankSuspended) || errors.Is(err, world.ErrBankClosed) || errors.Is(err, world.ErrBankUnavailable)) {
 			err = fmt.Errorf("%w: %s is not available, so NIBSS rejected the transfer and nothing was debited", world.ErrBankUnavailable, rt.ToInst.Name)
 		}
-		a.failNIPLocked(w, r, t, bankFailure(err))
-		return nip.Failed
+		return a.failNIPLocked(r, t, bankFailure(err)), true
 	case nip.InvalidAccount:
-		a.failNIPLocked(w, r, t, nipFailure{status: http.StatusUnprocessableEntity, code: nip.InvalidAccount, errCode: "invalid_account", message: ne.Message + " Nothing was debited."})
-		return nip.Failed
+		return a.failNIPLocked(r, t, nipFailure{status: http.StatusUnprocessableEntity, code: nip.InvalidAccount, errCode: "invalid_account", message: ne.Message + " Nothing was debited."}), true
 	}
 	if _, err := a.world.Quote(now, req); err != nil {
-		return ""
+		return reply{}, false
 	}
-	bank := a.cfg.Bank(rt.FromInst.ID)
-	pos := a.netDebitLocked(rt.FromInst.ID, now)
-	if bank != nil && pos+req.Amount > bank.Cap() {
-		left := bank.Cap() - pos
-		a.failNIPLocked(w, r, t, nipFailure{status: http.StatusUnprocessableEntity, code: nip.OverCap, errCode: "net_debit_cap_exceeded", message: fmt.Sprintf("%s has reached its NIP net debit cap of %s. This transfer needs %s and %s is left. It clears at the next settlement session. Nothing was debited.", rt.FromInst.Name, naira(bank.Cap()), naira(req.Amount), naira(max(left, 0)))})
-		return nip.Failed
+	if bank := a.cfg.Bank(rt.FromInst.ID); bank != nil {
+		open, err := a.openPositionLocked(bank.ID, now, now)
+		if err != nil {
+			a.log.Error("NIP position", "bank", bank.ID, "err", err)
+			return errReply(r, http.StatusInternalServerError, "internal_error", "The bank's NIP position could not be worked out."), true
+		}
+		if pos := open.netDebit(); pos+req.Amount > bank.Cap() {
+			left := bank.Cap() - pos
+			return a.failNIPLocked(r, t, nipFailure{status: http.StatusUnprocessableEntity, code: nip.OverCap, errCode: "net_debit_cap_exceeded", message: fmt.Sprintf("%s has reached its NIP net debit cap of %s. This transfer needs %s and %s is left. It clears at the next settlement session. Nothing was debited.", rt.FromInst.Name, naira(bank.Cap()), naira(req.Amount), naira(max(left, 0)))}), true
+		}
 	}
-	a.st.NIP.Transfers[sid] = t
 	req.SessionID = sid
 	res, err := a.world.Transfer(now, req)
 	if err != nil {
-		a.failNIPLocked(w, r, t, nipFailure{status: http.StatusBadRequest, code: nip.SystemError, errCode: "invalid_request", message: err.Error()})
-		return nip.Failed
+		return a.failNIPLocked(r, t, transferFailure(err)), true
 	}
-	t.Status, t.Code, t.Message = nip.Success, nip.OK, "Successful."
-	out := map[string]any{
-		"result":        res,
-		"amount":        naira(res.Amount),
-		"charges":       naira(res.Fee + res.VAT + res.StampDuty),
-		"total_debit":   naira(res.TotalDebit),
-		"sender_after":  naira(res.BalanceAfter),
-		"session_id":    sid,
-		"response_code": nip.OK,
-		"status":        nip.Success,
-		"business_time": ts(now),
-	}
-	a.recordLocked(t, http.StatusOK, out)
-	writeJSON(w, http.StatusOK, out)
-	return nip.Success
+	out := transferView(res, now)
+	out["session_id"], out["response_code"], out["status"] = sid, nip.OK, nip.Success
+	rep := jsonReply(http.StatusOK, out)
+	rep.synced, rep.session = true, sid
+	return rep, true
 }

@@ -145,6 +145,19 @@ func (rec *recorder) Write(b []byte) (int, error) {
 
 const idemTTL = 24 * time.Hour
 
+func (a *App) idemGetLocked(scope string) *IdemRec {
+	rec := a.st.Idem[scope]
+	if rec != nil && a.clock.Real().Sub(rec.CreatedReal) > idemTTL {
+		delete(a.st.Idem, scope)
+		return nil
+	}
+	return rec
+}
+
+func (a *App) idemPutLocked(scope, hash string, status int, contentType string, body []byte) {
+	a.st.Idem[scope] = &IdemRec{Hash: hash, Status: status, ContentType: contentType, Body: body, CreatedReal: a.clock.Real()}
+}
+
 func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("Idempotency-Key")
@@ -166,11 +179,7 @@ func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
 		lock.Lock()
 		defer lock.Unlock()
 		a.mu.Lock()
-		rec := a.st.Idem[scope]
-		if rec != nil && a.clock.Real().Sub(rec.CreatedReal) > idemTTL {
-			delete(a.st.Idem, scope)
-			rec = nil
-		}
+		rec := a.idemGetLocked(scope)
 		a.mu.Unlock()
 		if rec != nil {
 			if rec.Hash != hash {
@@ -193,7 +202,7 @@ func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
 		}
 		a.mu.Lock()
 		if rw.status < 500 && rw.status != http.StatusTooManyRequests {
-			a.st.Idem[scope] = &IdemRec{Hash: hash, Status: rw.status, ContentType: rw.Header().Get("Content-Type"), Body: rw.buf.Bytes(), CreatedReal: a.clock.Real()}
+			a.idemPutLocked(scope, hash, rw.status, rw.Header().Get("Content-Type"), rw.buf.Bytes())
 		}
 		err = a.saveLocked()
 		a.mu.Unlock()

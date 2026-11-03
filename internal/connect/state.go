@@ -197,7 +197,7 @@ func newState() *State {
 		Feeds:          map[string]*Feed{},
 		Refreshes:      map[string]*Refresh{},
 		Idem:           map[string]*IdemRec{},
-		NIP:            &NIPState{Transfers: map[string]*NIPTransfer{}, Keys: map[string]string{}},
+		NIP:            &NIPState{Failures: map[string]*NIPFailure{}},
 	}
 }
 

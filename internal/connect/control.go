@@ -3,7 +3,6 @@ package connect
 import (
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -39,6 +38,7 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /nip/name-enquiry", a.ctlNameEnquiry)
 	mux.HandleFunc("GET /nip/participants", a.ctlNIPParticipants)
 	mux.HandleFunc("GET /nip/positions", a.ctlNIPPositions)
+	mux.HandleFunc("POST /banks/{id}/net-debit-cap", a.ctlNetDebitCap)
 	mux.HandleFunc("GET /nip/transfers/{session_id}", a.ctlNIPStatus)
 	mux.HandleFunc("GET /connections", a.ctlConnections)
 	mux.HandleFunc("POST /connections/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
@@ -327,59 +327,17 @@ func (a *App) ctlTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := r.Header.Get("Idempotency-Key")
+	if len(key) > 255 {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "An Idempotency-Key must be 1 to 255 characters.")
+		return
+	}
 	a.mu.Lock()
-	if a.replayLocked(w, r, key, body) {
-		a.mu.Unlock()
-		return
-	}
-	from, to := body.From, body.To
-	if k, ok := a.resolveAccount(from); ok {
-		from = k
-	}
-	if k, ok := a.resolveAccount(to); ok {
-		to = k
-	}
-	req := world.TransferRequest{From: from, To: to, ToBank: body.ToBank, ToName: body.ToName, Amount: amount, Narration: body.Narration, SessionID: body.SessionID}
-	if rt, rerr := a.world.Route(req); rerr == nil && rt.FromInst.ID != rt.ToInst.ID {
-		outcome := a.nipTransferLocked(w, r, body, req, rt, key)
-		a.mu.Unlock()
-		switch outcome {
-		case nip.Success:
-			a.SyncAll()
-			return
-		case nip.Failed:
-			return
-		}
-		a.mu.Lock()
-	}
-	res, err := a.world.Transfer(a.clock.Now(), req)
-	if err == nil {
-		a.dirty()
-	}
+	rep := a.transferLocked(r, body, amount, key)
 	a.mu.Unlock()
-	switch {
-	case errors.Is(err, world.ErrBankSuspended):
-		writeError(w, r, http.StatusConflict, "bank_suspended", transferMessage(err))
-		return
-	case errors.Is(err, world.ErrBankClosed):
-		writeError(w, r, http.StatusConflict, "bank_closed", transferMessage(err))
-		return
-	case errors.Is(err, world.ErrBankUnavailable):
-		writeError(w, r, http.StatusServiceUnavailable, "bank_unavailable", transferMessage(err))
-		return
-	case err != nil:
-		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
-		return
+	if rep.synced {
+		a.SyncAll()
 	}
-	a.SyncAll()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"result":        res,
-		"amount":        naira(res.Amount),
-		"charges":       naira(res.Fee + res.VAT + res.StampDuty),
-		"total_debit":   naira(res.TotalDebit),
-		"sender_after":  naira(res.BalanceAfter),
-		"business_time": ts(a.clock.Now()),
-	})
+	rep.write(w)
 }
 
 func (a *App) ctlPersonas(w http.ResponseWriter, r *http.Request) {
