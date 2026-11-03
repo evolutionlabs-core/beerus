@@ -9,6 +9,7 @@ const bankTemplates = `
 <meta name="color-scheme" content="dark light">
 <title>{{.Title}} · {{.Bank.Name}}</title>
 <link rel="stylesheet" href="{{css}}">
+<script src="/assets/theme.js"></script>
 </head>
 <body class="min-h-screen {{.Bank.ID}}">{{end}}
 
@@ -21,8 +22,8 @@ const bankTemplates = `
 <a href="/transfer" class="flex h-8 shrink-0 items-center rounded-full px-3 {{if eq .Nav "transfer"}}bg-raised text-ink{{else}}text-muted hover:text-ink{{end}}">Send money</a>
 <a href="/apps" class="flex h-8 shrink-0 items-center rounded-full px-3 {{if eq .Nav "apps"}}bg-raised text-ink{{else}}text-muted hover:text-ink{{end}}">Connected apps</a>
 </nav>
-<div class="hidden items-center gap-3 text-[13px] text-muted sm:flex"><span class="truncate">{{.User}}</span>
-<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit" class="btn btn-secondary btn-sm">Sign out</button></form></div>
+<div class="ml-auto flex items-center gap-2">{{themeToggle}}<div class="hidden items-center gap-3 text-[13px] text-muted sm:flex"><span class="truncate">{{.User}}</span>
+<form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit" class="btn btn-secondary btn-sm">Sign out</button></form></div></div>
 </div>
 </header>
 <main class="mx-auto max-w-[1040px] px-5 py-8">
@@ -33,6 +34,7 @@ const bankTemplates = `
 </html>{{end}}
 
 {{define "bank_auth_head"}}{{template "bank_doc" .}}
+<div class="fixed top-3 right-4">{{themeToggle}}</div>
 <main class="flex min-h-screen flex-col items-center px-4 pt-16 pb-10 sm:pt-24">
 <div class="w-full max-w-[400px]">
 <div class="mb-6 flex items-center gap-3"><span class="grid size-9 place-items-center rounded-[10px] border border-line-strong bg-raised text-[15px] text-bank">{{initial .Bank.Name}}</span><div class="leading-tight"><div class="text-[14px]">{{.Bank.Name}}</div><div class="text-[12.5px] text-muted">Online banking</div></div></div>
