@@ -71,11 +71,21 @@ func (a *App) ctlConsentRecord(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+const (
+	peerTimeout    = 30 * time.Second
+	replicaTimeout = 5 * time.Second
+	replicaRetry   = time.Second
+)
+
 func (a *App) coreDo(method, path string, in, out any) (int, error) {
 	return a.peerDo(a.coreURL, method, path, in, out)
 }
 
 func (a *App) peerDo(base, method, path string, in, out any) (int, error) {
+	return a.peerDoWithin(peerTimeout, base, method, path, in, out)
+}
+
+func (a *App) peerDoWithin(limit time.Duration, base, method, path string, in, out any) (int, error) {
 	var rd io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -84,7 +94,9 @@ func (a *App) peerDo(base, method, path string, in, out any) (int, error) {
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, strings.TrimSuffix(base, "/")+path, rd)
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(base, "/")+path, rd)
 	if err != nil {
 		return 0, err
 	}
@@ -92,7 +104,7 @@ func (a *App) peerDo(base, method, path string, in, out any) (int, error) {
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	resp, err := a.peers.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -138,6 +150,7 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 		ctlToken: token,
 		log:      o.Logger,
 		limiters: map[string]*rate.Limiter{},
+		peers:    &http.Client{},
 		wake:     make(chan struct{}, 1),
 		sending:  make(chan struct{}, 4),
 		role:     RoleBank,
@@ -184,16 +197,21 @@ func (a *App) pullReplica() error {
 	if time.Since(a.pulledAt) < 2*time.Millisecond && a.synced.Load() {
 		return nil
 	}
+	if a.pullErr != nil && time.Since(a.pullFailed) < replicaRetry {
+		return a.pullErr
+	}
 	if err := a.pullReplicaLocked(); err != nil {
+		a.pullErr, a.pullFailed = err, time.Now()
 		return err
 	}
+	a.pullErr = nil
 	a.pulledAt = time.Now()
 	return nil
 }
 
 func (a *App) pullReplicaLocked() error {
 	var rep replica
-	if _, err := a.coreDo(http.MethodGet, "/internal/replica", nil, &rep); err != nil {
+	if _, err := a.peerDoWithin(replicaTimeout, a.coreURL, http.MethodGet, "/internal/replica", nil, &rep); err != nil {
 		return err
 	}
 	sum := sha256.New()
@@ -203,6 +221,11 @@ func (a *App) pullReplicaLocked() error {
 	if err != nil {
 		return err
 	}
+	a.lifeMu.Lock()
+	if st := a.status[a.bankID]; st != nil && rep.Phases[a.bankID] != "" {
+		st.Phase = rep.Phases[a.bankID]
+	}
+	a.lifeMu.Unlock()
 	a.mu.Lock()
 	a.clock.Restore(clock.State{AnchorBusiness: rep.Now})
 	_ = a.clock.SetPace(rep.Pace)
@@ -225,11 +248,6 @@ func (a *App) pullReplicaLocked() error {
 		a.st.Registry[c.ID] = c
 	}
 	a.regMu.Unlock()
-	a.lifeMu.Lock()
-	if st := a.status[a.bankID]; st != nil && rep.Phases[a.bankID] != "" {
-		st.Phase = rep.Phases[a.bankID]
-	}
-	a.lifeMu.Unlock()
 	a.mu.Unlock()
 	if reopen {
 		for _, l := range a.ledgers {
@@ -263,6 +281,7 @@ func (a *App) ServeBank(ctx context.Context) error {
 			a.closeLedgers()
 			return nil
 		case <-tick.C:
+			a.flushEvents()
 			if err := a.pullReplica(); err != nil {
 				if msg := err.Error(); msg != lastErr {
 					a.log.Warn("simulator not reachable", "err", err)
@@ -302,11 +321,11 @@ func (a *bankSite) internalRevoke(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if err := a.ob.Revoke(r.Context(), body.ConsentID, "", "bank"); err != nil {
+	if err := a.ob.RevokeByBank(r.Context(), body.ConsentID, "bank"); err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	a.WaitConsentEvents()
+	a.flushEvents()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -348,11 +367,15 @@ func (a *App) pauseBanks() func() {
 	if a.role != RoleSim {
 		return func() {}
 	}
-	var paused []*config.Bank
+	var targets, paused []*config.Bank
+	a.mu.Lock()
 	for _, b := range a.cfg.Banks {
-		if b.Closed() || a.ledgerFor(b.ID) == nil {
-			continue
+		if !b.Closed() && a.ledgerFor(b.ID) != nil {
+			targets = append(targets, b)
 		}
+	}
+	a.mu.Unlock()
+	for _, b := range targets {
 		if _, err := a.peerDo(b.URL(), http.MethodPost, "/internal/pause", nil, nil); err != nil {
 			a.log.Warn("bank did not pause", "bank", b.ID, "err", err)
 			continue

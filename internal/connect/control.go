@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -112,12 +113,15 @@ func (a *App) ControlHandler() http.Handler {
 func (a *App) localOnly(next http.Handler) http.Handler {
 	port := strconv.Itoa(a.cfg.Connect.ControlPort)
 	hosts := map[string]bool{"127.0.0.1:" + port: true, "localhost:" + port: true, "[::1]:" + port: true}
+	if u, err := url.Parse(a.coreURL); err == nil && multiProcess() && u.Host != "" {
+		hosts[u.Host] = true
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if host, _, err := net.SplitHostPort(r.RemoteAddr); !multiProcess() && (err != nil || !net.ParseIP(host).IsLoopback()) {
 			writeError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
 			return
 		}
-		if !multiProcess() && !hosts[r.Host] {
+		if !hosts[r.Host] {
 			writeError(w, r, http.StatusForbidden, "forbidden", "Unexpected Host header.")
 			return
 		}
@@ -445,6 +449,7 @@ func (a *App) snapshotDir() string {
 
 func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 	a.Step()
+	defer a.pauseBanks()()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.st.Clock = a.clock.State()
@@ -460,12 +465,15 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 		return snapshotMeta{}, err
 	}
 	cp.Deliveries = nil
+	cp.Vault = nil
+	cp.Registry = nil
+	cp.Revokes = nil
+	cp.ConsentLedger = nil
 	cp.Idem = map[string]*IdemRec{}
 	cp.WidgetSessions = map[string]*WidgetSession{}
 	for _, ls := range cp.LinkSessions {
 		ls.OTP, ls.Verifier, ls.BankState = "", "", ""
 	}
-	defer a.pauseBanks()()
 	meta := snapshotMeta{ID: newID("snap"), Name: name, BusinessTime: ts(a.clock.Now()), Seed: a.cfg.Seed, Schema: schemaVersion, TakenReal: a.clock.Real()}
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {
@@ -524,9 +532,12 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 			return "", fmt.Errorf("snapshot %s was taken before %s closed, and closing a bank cannot be undone", id, b.Name)
 		}
 	}
+	defer a.pauseBanks()()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	defer a.pauseBanks()()
+	for a.settling {
+		a.settleDone.Wait()
+	}
 	taken := map[string]bool{}
 	for _, id := range f.Meta.Banks {
 		taken[id] = true
@@ -544,15 +555,26 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 			return "", fmt.Errorf("snapshot %s has no copy of %s", id, l.inst.Name)
 		}
 	}
-	hadVault := f.State.Vault != nil
 	st := f.State
 	st.fill()
 	st.WorldID = newID("wld")
 	st.Deliveries = a.st.Deliveries
-	if !hadVault {
-		st.Vault = a.st.Vault
-	}
+	st.Registry = a.st.Registry
+	st.Revokes = a.st.Revokes
+	st.ConsentLedger = a.st.ConsentLedger
 	a.st = st
+	if err := a.ensureRegistryLocked(); err != nil {
+		return "", err
+	}
+	if a.live() {
+		for _, c := range st.Connections {
+			switch c.Status {
+			case "revoked", "expired", "reauth_required":
+			default:
+				a.setStatus(c, "reauth_required", "reauth_required")
+			}
+		}
+	}
 	a.clock.Restore(st.Clock)
 	genesis, _ := a.cfg.GenesisDate()
 	a.world = world.New(a.worldConfig(genesis), st.World)
@@ -574,17 +596,17 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 		if err := a.rtgs.Restore(id); err != nil {
 			return "", err
 		}
-		if err := a.settleLocked(a.clock.Now()); err != nil {
-			a.log.Error("NIP settlement", "err", err)
-		}
 	}
 	for _, rec := range a.st.Accounts {
-		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed {
+		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed && c.Status != "reauth_required" {
 			a.emit(c.PartnerID, "sync.available", map[string]any{"connection_id": c.ID, "account_id": rec.ID, "world_id": st.WorldID})
 		}
 	}
 	a.dirty()
 	a.poke()
+	if err := a.settleLocked(a.clock.Now()); err != nil {
+		a.log.Error("NIP settlement", "err", err)
+	}
 	return st.WorldID, nil
 }
 

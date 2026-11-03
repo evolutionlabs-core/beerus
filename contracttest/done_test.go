@@ -89,7 +89,7 @@ func TestDoneStory(t *testing.T) {
 	otp := reOTP.FindStringSubmatch(b.last)
 	check(otp != nil, "no 2FA code in the inbox: %.300s", b.last)
 	b.postTo(base, "/verify", url.Values{"otp": {otp[1]}})
-	for _, want := range []string{s.cfg.Connect.LegalName, s.cfg.Connect.RegistryID, s.cfg.Connect.CACNumber, "Evolution Labs", "to keep your books in sync", "Read only", "Anonymised analytics", "12 months", "Connected apps"} {
+	for _, want := range []string{s.cfg.Connect.LegalName, s.cfg.Connect.RegistryID, s.cfg.Connect.CACNumber, s.cfg.Partners[0].LegalName, s.cfg.Partners[0].Purpose, "Read only", "Anonymised analytics", "12 months", "Connected apps"} {
 		check(strings.Contains(b.last, want), "the consent screen is missing %q", want)
 	}
 	check(!limited || strings.Contains(b.last, "shares history from"), "the consent screen does not say the bank limits history")
@@ -302,11 +302,19 @@ func TestDoneStory(t *testing.T) {
 	s.vmu.Unlock()
 	check(n == 0, "%d contract violations", n)
 
-	step(11, "restoring the snapshot resets the cursor and rebuilds the feed")
+	step(11, "restoring the snapshot asks Balance to reconnect, then rebuilds the feed")
 	restored := s.ctl("POST", "/snapshots/"+fmt.Sprint(snap["id"])+"/restore", nil)
 	check(restored["world_id"] != feedB.worldID, "restore kept the world ID")
 	r = s.call("GET", "/v1/accounts/"+idB+"/transactions/sync?cursor="+oldCursor, nil)
-	check(r.Status == 409 && r.Code() == "cursor_reset", "old cursor after restore: %d %s", r.Status, r.Body)
+	check(r.Status == 409 && r.Code() == "reauth_required", "old cursor after restore: %d %s", r.Status, r.Body)
+	for name, id := range map[string]string{"Bank A": connA, "Bank B": connB} {
+		check(s.must(s.call("GET", "/v1/connections/"+id, nil), 200).JSON["status"] == "reauth_required", "%s: the connection should need consent again", name)
+		re := s.must(s.call("POST", "/v1/connections/"+id+"/reauth", map[string]string{"state": "restored"}), 201)
+		res := s.completeLink(fmt.Sprint(re.JSON["widget_url"]), "", "adaeze", nil)
+		check(res.Code != "" && res.State == "restored", "%s: reconnect: %+v", name, res)
+		ex := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 200)
+		check(ex.JSON["id"] == id, "%s: reconnecting created a new connection", name)
+	}
 	s.syncNow()
 	for name, pair := range map[string]struct {
 		id  string

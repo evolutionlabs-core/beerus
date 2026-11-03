@@ -13,6 +13,13 @@ type MemStore struct {
 	tokens   map[string]*Token
 	access   []Access
 	customer map[string]string
+	events   []*outboxRow
+}
+
+type outboxRow struct {
+	Event
+	next      time.Time
+	delivered bool
 }
 
 func NewMemStore() *MemStore {
@@ -22,6 +29,7 @@ func NewMemStore() *MemStore {
 func cloneConsent(c *Consent) *Consent {
 	x := *c
 	x.Accounts = slices.Clone(c.Accounts)
+	x.Scopes = slices.Clone(c.Scopes)
 	return &x
 }
 
@@ -153,5 +161,50 @@ func (m *MemStore) MarkUsed(_ context.Context, id string, at time.Time) error {
 	if c, ok := m.consents[id]; ok {
 		c.LastUsedAt = at
 	}
+	return nil
+}
+
+func (m *MemStore) Awaiting(context.Context) ([]*Consent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*Consent{}
+	for _, c := range m.consents {
+		if c.Status == AwaitingAuthorisation {
+			out = append(out, cloneConsent(c))
+		}
+	}
+	return out, nil
+}
+
+func (m *MemStore) Enqueue(_ context.Context, e ConsentEvent, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events = append(m.events, &outboxRow{Event: Event{ConsentEvent: e, ID: int64(len(m.events) + 1)}, next: at})
+	return nil
+}
+
+func (m *MemStore) Due(_ context.Context, now time.Time, limit int) ([]Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Event{}
+	for _, r := range m.events {
+		if !r.delivered && !r.next.After(now) && len(out) < limit {
+			out = append(out, r.Event)
+		}
+	}
+	return out, nil
+}
+
+func (m *MemStore) Delivered(_ context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events[id-1].delivered = true
+	return nil
+}
+
+func (m *MemStore) Retry(_ context.Context, id int64, attempts int, next time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events[id-1].Attempts, m.events[id-1].next = attempts, next
 	return nil
 }

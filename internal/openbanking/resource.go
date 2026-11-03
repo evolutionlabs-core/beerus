@@ -1,21 +1,63 @@
 package openbanking
 
 import (
+	"cmp"
 	"errors"
 	"net/http"
 	"slices"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
+
+type cursor struct {
+	date clock.Date
+	seq  int64
+}
+
+func cursorOf(t Txn) cursor {
+	return cursor{t.ValueDate, t.Seq}
+}
+
+func (c cursor) compare(o cursor) int {
+	switch {
+	case c.date.Before(o.date):
+		return -1
+	case o.date.Before(c.date):
+		return 1
+	}
+	return cmp.Compare(c.seq, o.seq)
+}
+
+func (c cursor) String() string {
+	return c.date.String() + "." + strconv.FormatInt(c.seq, 10)
+}
+
+func parseCursor(v string) (cursor, error) {
+	day, seq, ok := strings.Cut(v, ".")
+	if !ok {
+		return cursor{}, errors.New("cursor is not valid")
+	}
+	d, err := clock.ParseDate(day)
+	if err != nil {
+		return cursor{}, err
+	}
+	n, err := strconv.ParseInt(seq, 10, 64)
+	if err != nil {
+		return cursor{}, err
+	}
+	return cursor{d, n}, nil
+}
 
 type granted struct {
 	consent *Consent
 	client  *Client
 }
 
-func (s *Server) resource(next func(http.ResponseWriter, *http.Request, granted)) http.HandlerFunc {
+func (s *Server) resource(scope string, next func(http.ResponseWriter, *http.Request, granted)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		client, thumb, ok := s.caller(w, r)
 		if !ok {
@@ -49,16 +91,27 @@ func (s *Server) resource(next func(http.ResponseWriter, *http.Request, granted)
 			fail(w, http.StatusUnauthorized, "invalid_token", "The access token is not valid.")
 			return
 		}
+		if !slices.Contains(c.Scopes, scope) {
+			fail(w, http.StatusForbidden, "insufficient_scope", "The customer did not share this kind of data.")
+			return
+		}
 		next(w, r, granted{consent: c, client: client})
 	}
 }
 
-func (s *Server) touch(r *http.Request, c *Consent, accounts ...string) {
+func (s *Server) touch(w http.ResponseWriter, r *http.Request, c *Consent, accounts ...string) bool {
 	now := s.cfg.Biz()
-	_ = s.cfg.Store.MarkUsed(r.Context(), c.ID, now)
+	err := s.cfg.Store.MarkUsed(r.Context(), c.ID, now)
 	for _, a := range accounts {
-		_ = s.cfg.Store.RecordAccess(r.Context(), Access{ConsentID: c.ID, Account: a, At: now})
+		if err == nil {
+			err = s.cfg.Store.RecordAccess(r.Context(), Access{ConsentID: c.ID, Account: a, At: now})
+		}
 	}
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
+		return false
+	}
+	return true
 }
 
 func (s *Server) account(w http.ResponseWriter, r *http.Request, g granted) (AccountInfo, bool) {
@@ -82,7 +135,9 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request, g granted)
 			out = append(out, info)
 		}
 	}
-	s.touch(r, g.consent)
+	if !s.touch(w, r, g.consent) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"consent_id": g.consent.ID, "transaction_from": g.consent.TransactionFrom.String(), "consent_expires_at": g.consent.ExpiresAt.UTC().Format(time.RFC3339Nano), "data": out})
 }
 
@@ -91,7 +146,9 @@ func (s *Server) getAccount(w http.ResponseWriter, r *http.Request, g granted) {
 	if !ok {
 		return
 	}
-	s.touch(r, g.consent)
+	if !s.touch(w, r, g.consent) {
+		return
+	}
 	writeJSON(w, http.StatusOK, info)
 }
 
@@ -116,7 +173,9 @@ func (s *Server) getBalances(w http.ResponseWriter, r *http.Request, g granted) 
 			fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
 			return
 		}
-		s.touch(r, g.consent, info.ID)
+		if !s.touch(w, r, g.consent, info.ID) {
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"account_id": info.ID, "as_of": d.String(), "ledger_balance": money(ledger, info.Currency)})
 		return
 	}
@@ -125,7 +184,9 @@ func (s *Server) getBalances(w http.ResponseWriter, r *http.Request, g granted) 
 		fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
 		return
 	}
-	s.touch(r, g.consent, info.ID)
+	if !s.touch(w, r, g.consent, info.ID) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account_id":        info.ID,
 		"as_of":             s.cfg.Biz().UTC().Format(time.RFC3339),
@@ -195,7 +256,8 @@ func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, g grant
 			to = d
 		}
 	}
-	size, offset := 100, 0
+	size := 100
+	var after *cursor
 	if v := q.Get("page_size"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > 500 {
@@ -205,12 +267,12 @@ func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, g grant
 		size = n
 	}
 	if v := q.Get("cursor"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 {
+		c, err := parseCursor(v)
+		if err != nil {
 			bad("cursor is not valid.")
 			return
 		}
-		offset = n
+		after = &c
 	}
 	rows, err := s.cfg.Data.Transactions(info.ID, from, to)
 	if err != nil {
@@ -218,24 +280,22 @@ func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, g grant
 		return
 	}
 	slices.SortStableFunc(rows, func(a, b Txn) int {
-		if a.ValueDate != b.ValueDate {
-			if a.ValueDate.Before(b.ValueDate) {
-				return -1
-			}
-			return 1
-		}
-		return int(a.Seq - b.Seq)
+		return cursorOf(a).compare(cursorOf(b))
 	})
-	end := min(offset+size, len(rows))
-	offset = min(offset, len(rows))
-	data := make([]map[string]any, 0, end-offset)
-	for _, t := range rows[offset:end] {
-		data = append(data, txnJSON(t, info.Currency))
+	if after != nil {
+		rows = rows[sort.Search(len(rows), func(i int) bool { return cursorOf(rows[i]).compare(*after) > 0 }):]
 	}
 	var next any
-	if end < len(rows) {
-		next = strconv.Itoa(end)
+	if len(rows) > size {
+		rows = rows[:size]
+		next = cursorOf(rows[size-1]).String()
 	}
-	s.touch(r, g.consent, info.ID)
+	data := make([]map[string]any, 0, len(rows))
+	for _, t := range rows {
+		data = append(data, txnJSON(t, info.Currency))
+	}
+	if !s.touch(w, r, g.consent, info.ID) {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"account_id": info.ID, "from": from.String(), "data": data, "next_cursor": next})
 }

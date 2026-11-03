@@ -529,6 +529,10 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 			status = "revoked"
 		case openbanking.Expired:
 			status = "expired"
+		case openbanking.Dormant:
+			status = "dormant"
+		case openbanking.ReconsentRequired:
+			status = "renew"
 		default:
 			continue
 		}
@@ -604,7 +608,7 @@ func (a *bankSite) obRevoke(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		a.WaitConsentEvents()
+		a.flushEvents()
 		http.Redirect(w, r, "/apps?revoked=1", http.StatusSeeOther)
 		return
 	}

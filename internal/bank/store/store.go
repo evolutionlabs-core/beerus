@@ -16,10 +16,13 @@ import (
 
 var validName = regexp.MustCompile(`^beerus_[a-z0-9_]{1,50}$`)
 
+type Migration func(context.Context, *pgxpool.Pool) error
+
 type Store struct {
-	url  string
-	name string
-	Pool *pgxpool.Pool
+	url        string
+	name       string
+	Pool       *pgxpool.Pool
+	migrations []Migration
 }
 
 func admin(ctx context.Context, url string) (*pgx.Conn, error) {
@@ -37,7 +40,7 @@ func exists(ctx context.Context, c *pgx.Conn, name string) (bool, error) {
 	return ok, err
 }
 
-func Open(ctx context.Context, url, name string) (*Store, error) {
+func Open(ctx context.Context, url, name string, migrations ...Migration) (*Store, error) {
 	if !validName.MatchString(name) {
 		return nil, fmt.Errorf("database name %q must look like beerus_something", name)
 	}
@@ -58,7 +61,7 @@ func Open(ctx context.Context, url, name string) (*Store, error) {
 			}
 		}
 	}
-	s := &Store{url: url, name: name}
+	s := &Store{url: url, name: name, migrations: migrations}
 	if err := s.connect(ctx); err != nil {
 		return nil, err
 	}
@@ -79,6 +82,12 @@ func (s *Store) connect(ctx context.Context) error {
 	if err := ledger.Migrate(ctx, pool); err != nil {
 		pool.Close()
 		return err
+	}
+	for _, m := range s.migrations {
+		if err := m(ctx, pool); err != nil {
+			pool.Close()
+			return err
+		}
 	}
 	s.Pool = pool
 	return nil

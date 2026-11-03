@@ -46,7 +46,7 @@ func TestHungBankDoesNotStallPartnerAPI(t *testing.T) {
 	id := fmt.Sprint(conn.Accounts[0]["id"])
 
 	hang.Store(true)
-	s.app.ExpireAccessTokens()
+	s.skewReal(15 * time.Minute)
 	ref := s.must(s.call("POST", "/v1/accounts/"+id+"/refresh", nil), 202)
 	deadline := time.Now().Add(5 * time.Second)
 	for held.Load() == 0 && time.Now().Before(deadline) {

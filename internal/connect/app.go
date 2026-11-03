@@ -32,7 +32,7 @@ type App struct {
 	key        config.SigningKey
 	ctlToken   string
 	log        *slog.Logger
-	isDirty    bool
+	isDirty    atomic.Bool
 	limiters   map[string]*rate.Limiter
 	idemLock   sync.Map
 	client     *http.Client
@@ -44,6 +44,8 @@ type App struct {
 	ledgers    []*ledgerSource
 	rtgs       *rtgs
 	rtgsTried  time.Time
+	settling   bool
+	settleDone *sync.Cond
 	worldOnly  bool
 	personas   []string
 	lifeMu     sync.Mutex
@@ -63,7 +65,7 @@ type App struct {
 	regMu      sync.Mutex
 	poolMu     sync.RWMutex
 	pools      map[string]*ledgerSource
-	events     inflight
+	flushMu    sync.Mutex
 	vault      *vault
 	obHTTP     *http.Client
 	role       string
@@ -75,10 +77,13 @@ type App struct {
 	paused     atomic.Bool
 	pullMu     sync.Mutex
 	pulledAt   time.Time
+	pullFailed time.Time
+	pullErr    error
+	peers      *http.Client
 	bankWrap   func(http.RoundTripper) http.RoundTripper
 	obKey      *ecdsa.PrivateKey
 	metas      map[string]bankMeta
-	seenJTI    map[string]time.Time
+	eventJTI   jtiSet
 }
 
 type Options struct {
@@ -115,6 +120,8 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		ctlToken:  token,
 		log:       o.Logger,
 		limiters:  map[string]*rate.Limiter{},
+		peers:     &http.Client{},
+		coreURL:   o.CoreURL,
 		client:    o.Client,
 		bankWrap:  o.BankWrap,
 		role:      o.Role,
@@ -122,6 +129,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		statePath: cfg.Path("stub-state.json"),
 		sending:   make(chan struct{}, 4),
 	}
+	a.settleDone = sync.NewCond(&a.mu)
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
@@ -201,9 +209,11 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	if err := a.ensureRTGS(); err != nil {
 		return nil, err
 	}
+	a.mu.Lock()
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}
+	a.mu.Unlock()
 	a.initLifecycle()
 	for _, id := range purged {
 		a.warn("%s was purged and cannot come back; it was removed from beerus.yaml", id)
@@ -269,7 +279,7 @@ func (a *App) Config() *config.Config {
 }
 
 func (a *App) dirty() {
-	a.isDirty = true
+	a.isDirty.Store(true)
 }
 
 func (a *App) poke() {
@@ -288,7 +298,7 @@ func (a *App) Save() error {
 func (a *App) saveLocked() error {
 	a.st.Clock = a.clock.State()
 	a.st.World = a.world.Overrides()
-	a.isDirty = false
+	a.isDirty.Store(false)
 	a.regMu.Lock()
 	defer a.regMu.Unlock()
 	return saveJSON(a.statePath, a.st)
@@ -320,7 +330,7 @@ func (a *App) Run(ctx context.Context) {
 			a.Step()
 		case <-save.C:
 			a.mu.Lock()
-			if a.isDirty {
+			if a.isDirty.Load() {
 				if err := a.saveLocked(); err != nil {
 					a.log.Error("save state", "err", err)
 				}
@@ -351,11 +361,13 @@ func (a *App) Step() {
 		a.log.Error("NIP settlement", "err", err)
 	}
 	a.refreshTokens()
+	a.retryRevokes()
 	a.runConnections()
 	a.runRefreshes()
 	a.sweep()
 	due := a.dueDeliveries()
 	a.mu.Unlock()
+	a.flushEvents()
 	for _, d := range due {
 		go func(d Delivery) {
 			a.sending <- struct{}{}
@@ -678,10 +690,10 @@ func (a *App) RevokeAtBank(connID string) error {
 	if ob == nil || consent == "" {
 		return errNotFound
 	}
-	if err := ob.Revoke(context.Background(), consent, "", "bank"); err != nil {
+	if err := ob.RevokeByBank(context.Background(), consent, "bank"); err != nil {
 		return err
 	}
-	a.WaitConsentEvents()
+	a.flushEvents()
 	return nil
 }
 
