@@ -127,20 +127,28 @@ func startStack(t *testing.T, worldOnly bool) *Stack {
 		var lastErr error
 		for attempt := 0; attempt < 5 && s.app == nil; attempt++ {
 			ports := freePorts(t, 5)
-			cfg, _, err := config.Init(t.TempDir(), config.InitOptions{
+			cfg, err := config.Init(t.TempDir(), config.InitOptions{
 				Seed:        20261028,
 				Today:       clock.DateOf(time.Now()),
 				PartnerPort: ports[0],
 				WidgetPort:  ports[1],
 				ControlPort: ports[2],
 				BankPorts:   []int{ports[3], ports[4]},
-				WebhookURL:  s.sink.srv.URL + "/webhooks",
-				RedirectURI: "https://balance.localhost/bank_connections/callback",
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			cfg.DatabaseURL = os.Getenv("BEERUS_TEST_DATABASE_URL")
+			if _, err := cfg.AddPartner(config.PartnerOptions{
+				ID:           "balance",
+				Name:         "Balance",
+				LegalName:    "Evolution Labs",
+				Purpose:      "to keep your books in sync with this account",
+				RedirectURIs: []string{"https://balance.localhost/bank_connections/callback"},
+				WebhookURL:   s.sink.srv.URL + "/webhooks",
+			}); err != nil {
+				t.Fatal(err)
+			}
 			if !worldOnly {
 				cfg.Genesis = clock.DateOf(time.Now()).AddDays(-bankHistoryDays).String()
 				for _, b := range cfg.Banks {

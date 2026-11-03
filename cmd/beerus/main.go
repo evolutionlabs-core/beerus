@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -27,9 +26,13 @@ var version = "0.1.0"
 const usage = `Beerus simulates a Nigerian banking ecosystem on your machine.
 
 Usage:
-  beerus init [--dir .beerus] [--seed N] [--webhook-url URL] [--redirect-uri URL] [--partner-port 7443] [--widget-port 7444] [--control-port 7480]
+  beerus init [--dir .beerus] [--seed N] [--partner-port 7443] [--widget-port 7444] [--control-port 7480]
   beerus up [--dir .beerus]
   beerus info [--dir .beerus]
+  beerus partner add <id> --redirect-uri URL [--redirect-uri URL] [--webhook-url URL] [--name N] [--legal-name N] [--purpose P]
+  beerus partner list
+  beerus partner rotate-key <id>
+  beerus partner remove <id>
   beerus clock [advance <24h|7d|365d> | pace <n>]
   beerus scenarios
   beerus scenario <name> [--account ID] [--institution bank-a] [--persona adaeze] [--connection ID] [--duration 2h] [--count N]
@@ -65,6 +68,8 @@ func main() {
 		err = cmdUp(args)
 	case "info":
 		err = cmdInfo(args)
+	case "partner":
+		err = cmdPartner(args)
 	case "trust":
 		err = cmdTrust(args, true)
 	case "untrust":
@@ -93,18 +98,16 @@ func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	seed := fs.Int64("seed", 20261028, "world seed")
-	hook := fs.String("webhook-url", "", "Balance's webhook URL")
-	redirect := fs.String("redirect-uri", "", "Balance's widget redirect URI")
 	pp := fs.Int("partner-port", 7443, "partner API port")
 	wp := fs.Int("widget-port", 7444, "widget port")
 	cp := fs.Int("control-port", 7480, "control API port")
 	bp := fs.Int("bank-port", 7445, "first online banking port; each bank takes the next one")
 	fs.Parse(args)
-	c, key, err := config.Init(*dir, config.InitOptions{Seed: *seed, Today: clock.DateOf(time.Now()), WebhookURL: *hook, RedirectURI: *redirect, PartnerPort: *pp, WidgetPort: *wp, ControlPort: *cp, BankPort: *bp})
+	c, err := config.Init(*dir, config.InitOptions{Seed: *seed, Today: clock.DateOf(time.Now()), PartnerPort: *pp, WidgetPort: *wp, ControlPort: *cp, BankPort: *bp})
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Created %s.\n\nBalance's API key (shown once, also saved to %s):\n  %s\n\n", c.Dir, c.Path("partners", "balance", "api-key"), key)
+	fmt.Printf("Created %s.\n\n", c.Dir)
 	return printInfo(c)
 }
 
@@ -121,14 +124,19 @@ func printInfo(c *config.Config) error {
 		fmt.Fprintf(w, "%s online banking\t%s\t(database %s)\n", b.Name, b.URL(), b.Database)
 	}
 	fmt.Fprintf(w, "Control API\t%s\t(Bearer token in %s)\n", c.ControlURL(), c.Path("control-token"))
-	fmt.Fprintf(w, "Client certificate\t%s\n", c.Path("partners", "balance", "client.crt"))
-	fmt.Fprintf(w, "Client key\t%s\n", c.Path("partners", "balance", "client.key"))
-	fmt.Fprintf(w, "Server CA\t%s\n", c.Path("partners", "balance", "ca.crt"))
-	fmt.Fprintf(w, "API key file\t%s\n", c.Path("partners", "balance", "api-key"))
-	fmt.Fprintf(w, "Webhook URL\t%s\n", c.Partners[0].WebhookURL)
 	fmt.Fprintf(w, "Webhook public key\t%s\n", k.PublicWH())
-	fmt.Fprintf(w, "Redirect URIs\t%s\n", strings.Join(c.Partners[0].RedirectURIs, ", "))
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if len(c.Partners) == 0 {
+		fmt.Println("\nNo partner apps yet. Register one when it is ready to connect:\n  beerus partner add balance --redirect-uri http://localhost:3000/bank_connections/callback --webhook-url http://localhost:3000/webhooks/beerus")
+		return nil
+	}
+	fmt.Println("\nPartner apps:")
+	for _, p := range c.Partners {
+		fmt.Printf("  %-12s credentials in %s\n", p.ID, c.Path("partners", p.ID))
+	}
+	return nil
 }
 
 func cmdInfo(args []string) error {
@@ -157,6 +165,9 @@ func cmdUp(args []string) error {
 		return err
 	}
 	if err := c.EnsureCertificates(); err != nil {
+		return err
+	}
+	if err := c.Save(); err != nil {
 		return err
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
