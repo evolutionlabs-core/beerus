@@ -31,6 +31,7 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /scenarios", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"data": append(world.Scenarios, world.Scenario{Name: "token_refresh_failed", Description: "Connect can no longer refresh the bank token, so the connection needs reauthorisation"})})
 	})
+	mux.HandleFunc("POST /scenarios/run", a.ctlScenarioRun)
 	mux.HandleFunc("POST /scenarios/{name}", a.ctlScenario)
 	mux.HandleFunc("GET /personas", a.ctlPersonas)
 	mux.HandleFunc("POST /transfers", a.ctlTransfer)
