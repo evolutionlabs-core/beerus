@@ -50,6 +50,7 @@ type App struct {
 	personas   []string
 	lifeMu     sync.Mutex
 	recMu      sync.Mutex
+	stepMu     sync.Mutex
 	status     map[string]*BankStatus
 	sites      map[string]*siteServer
 	serving    bool
@@ -67,6 +68,7 @@ type App struct {
 	flushMu    sync.Mutex
 	vault      *vault
 	obHTTP     *http.Client
+	bankWrap   func(http.RoundTripper) http.RoundTripper
 	obKey      *ecdsa.PrivateKey
 	metas      map[string]bankMeta
 	eventJTI   jtiSet
@@ -78,6 +80,7 @@ type Options struct {
 	Client    *http.Client
 	WorldOnly bool
 	Personas  []string
+	BankWrap  func(http.RoundTripper) http.RoundTripper
 }
 
 func New(cfg *config.Config, o Options) (*App, error) {
@@ -100,6 +103,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		log:       o.Logger,
 		limiters:  map[string]*rate.Limiter{},
 		client:    o.Client,
+		bankWrap:  o.BankWrap,
 		wake:      make(chan struct{}, 1),
 		statePath: cfg.Path("stub-state.json"),
 		sending:   make(chan struct{}, 4),
@@ -316,6 +320,8 @@ func (a *App) Run(ctx context.Context) {
 }
 
 func (a *App) Step() {
+	a.stepMu.Lock()
+	defer a.stepMu.Unlock()
 	if a.recMu.TryLock() {
 		a.reconcileBanks()
 		a.recMu.Unlock()
@@ -463,6 +469,9 @@ func (a *App) runConnections() {
 	sort.Strings(ids)
 	for _, id := range ids {
 		c := a.st.Connections[id]
+		if c == nil {
+			continue
+		}
 		switch c.Status {
 		case "revoked", "expired", "reauth_required", "error":
 			continue
@@ -498,13 +507,16 @@ func (a *App) syncConnection(c *Connection, at time.Time) bool {
 		return false
 	}
 	changed := map[string]bool{}
-	for _, accID := range c.AccountIDs {
+	for _, accID := range slices.Clone(c.AccountIDs) {
 		acct := a.st.Accounts[accID]
 		if acct == nil || acct.Removed {
 			continue
 		}
 		res, err := a.fetchAccount(c, acct, at)
 		if err != nil {
+			if errors.Is(err, errStale) {
+				return false
+			}
 			if a.live() && a.bankFailed(c, err) {
 				c.LastSyncedReal = a.clock.Real()
 				return false
@@ -575,6 +587,9 @@ func (a *App) runRefreshes() {
 	sort.Strings(ids)
 	for _, id := range ids {
 		r := a.st.Refreshes[id]
+		if r == nil || r.Status != "queued" {
+			continue
+		}
 		acct := a.st.Accounts[r.AccountID]
 		r.Status = "done"
 		r.DoneReal = a.clock.Real()

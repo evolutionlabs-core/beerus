@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -90,7 +91,7 @@ func (a *App) bankClient() (*http.Client, error) {
 		},
 	}
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	a.obHTTP = &http.Client{Timeout: bankCallBudget, Transport: &http.Transport{
+	var rt http.RoundTripper = &http.Transport{
 		TLSClientConfig: tc,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
@@ -99,7 +100,11 @@ func (a *App) bankClient() (*http.Client, error) {
 			}
 			return dialer.DialContext(ctx, network, addr)
 		},
-	}}
+	}
+	if a.bankWrap != nil {
+		rt = a.bankWrap(rt)
+	}
+	a.obHTTP = &http.Client{Timeout: bankCallBudget, Transport: rt}
 	return a.obHTTP, nil
 }
 
@@ -141,12 +146,17 @@ func (a *App) bankDo(b *config.Bank, method, path string, form url.Values, token
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	a.mu.Unlock()
 	resp, err := cl.Do(req)
+	var raw []byte
+	if err == nil {
+		raw, _ = io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		resp.Body.Close()
+	}
+	a.mu.Lock()
 	if err != nil {
 		return &bankDown{err}
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusBadGateway {
 		return &bankDown{fmt.Errorf("HTTP %d", resp.StatusCode)}
 	}
@@ -239,7 +249,16 @@ func (a *App) refreshToken(vid string, b *config.Bank) error {
 		if err == nil || !isDown(err) || attempt == 1 {
 			break
 		}
+		a.mu.Unlock()
 		time.Sleep(100 * time.Millisecond)
+		a.mu.Lock()
+	}
+	cur := a.st.Vault[vid]
+	if cur == nil {
+		return errReauth
+	}
+	if err != nil && cur != e {
+		return nil
 	}
 	if err != nil {
 		var be *bankError
@@ -320,7 +339,16 @@ func (a *App) refreshTokens() {
 		return
 	}
 	real := a.clock.Real()
-	for _, c := range a.st.Connections {
+	ids := make([]string, 0, len(a.st.Connections))
+	for id := range a.st.Connections {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		c := a.st.Connections[id]
+		if c == nil {
+			continue
+		}
 		switch c.Status {
 		case "revoked", "expired", "reauth_required":
 			continue

@@ -25,6 +25,10 @@ func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSess
 		a.failSession(w, r, ls, "institution_down")
 		return
 	}
+	if a.st.LinkSessions[ls.ID] != ls || ls.Status == "expired" || ls.Status == "authorised" || ls.Status == "exchanged" {
+		a.message(w, http.StatusConflict, "Already finished", "You can close this window.")
+		return
+	}
 	ls.BankState, ls.Verifier, ls.Status = state, verifier, "at_bank"
 	a.dirty()
 	q := url.Values{"client_id": {a.cfg.Connect.RegistryID}, "request_uri": {uri}}
@@ -76,6 +80,12 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 		} else {
 			a.failSession(w, r, ls, "server_error")
 		}
+		return
+	}
+	if a.st.LinkSessions[ls.ID] != ls || ls.Status != "at_bank" {
+		_ = a.bankRevoke(b, tok.ConsentID)
+		a.vaultDrop(vid)
+		a.message(w, http.StatusConflict, "Already finished", "This sign-in is no longer needed. Go back to the app and start again.")
 		return
 	}
 	drop := func(code string) {

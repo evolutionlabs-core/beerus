@@ -133,6 +133,13 @@ func newBankStack(t *testing.T) *Stack {
 
 func startStack(t *testing.T, worldOnly bool, edits ...func(*config.Config)) *Stack {
 	t.Helper()
+	return startStackWith(t, worldOnly, connect.Options{}, edits...)
+}
+
+func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ...func(*config.Config)) *Stack {
+	t.Helper()
+	opts.WorldOnly = worldOnly
+	opts.Personas = bankStackPersonas(worldOnly)
 	s := &Stack{t: t, worldOnly: worldOnly}
 	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
 		cfg, err := config.Load(dir)
@@ -182,7 +189,7 @@ func startStack(t *testing.T, worldOnly bool, edits ...func(*config.Config)) *St
 					t.Fatal(err)
 				}
 			}
-			app, err := connect.New(cfg, connect.Options{WorldOnly: worldOnly, Personas: bankStackPersonas(worldOnly)})
+			app, err := connect.New(cfg, opts)
 			if err != nil {
 				t.Fatal(err)
 			}
