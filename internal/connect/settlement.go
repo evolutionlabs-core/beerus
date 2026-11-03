@@ -27,21 +27,18 @@ var reservedIDs = map[string]bool{cbnID: true, "nibss": true}
 
 type schedule struct {
 	per int
+	cal *clock.Calendar
 }
 
 func (s schedule) every() time.Duration {
 	return 24 * time.Hour / time.Duration(s.per)
 }
 
-func businessDay(d clock.Date) bool {
-	return clock.IsBusinessDay(d)
-}
-
 func (s schedule) next(after time.Time) time.Time {
 	d := clock.DateOf(after)
 	k := int(after.Sub(d.Start())/s.every()) + 1
 	for {
-		if businessDay(d) && k <= s.per {
+		if s.cal.IsBusinessDay(d) && k <= s.per {
 			return d.Start().Add(time.Duration(k) * s.every())
 		}
 		d, k = d.AddDays(1), 1
@@ -57,7 +54,7 @@ func (a *App) schedule() schedule {
 	if n <= 0 || 24*time.Hour%time.Duration(n) != 0 {
 		n = defaultNIPSessions
 	}
-	return schedule{per: n}
+	return schedule{per: n, cal: a.cfg.Calendar()}
 }
 
 func settlementAccount(member string) string {

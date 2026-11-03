@@ -87,3 +87,16 @@ func TestSessionScheduleSkipsHolidays(t *testing.T) {
 		t.Errorf("first session after Easter Monday closes at %s", got)
 	}
 }
+
+func TestScheduleFollowsCalendar(t *testing.T) {
+	friday := clock.Date{Y: 2026, M: 11, D: 6}
+	plain := schedule{per: 12}
+	closed := schedule{per: 12, cal: clock.NewCalendar([]clock.Date{friday.AddDays(3)}, nil)}
+	from := friday.AddDays(2).Start()
+	if got := plain.next(from); !got.Equal(friday.AddDays(3).Start().Add(2 * time.Hour)) {
+		t.Fatalf("plain next session %s", got)
+	}
+	if got := closed.next(from); !got.Equal(friday.AddDays(4).Start().Add(2 * time.Hour)) {
+		t.Errorf("next session with the extra holiday %s", got)
+	}
+}

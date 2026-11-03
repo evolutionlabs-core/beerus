@@ -1,42 +1,91 @@
 package clock
 
-import "time"
-
-var islamicHolidays = []string{
-	"2023-04-21", "2023-04-24", "2023-06-28", "2023-06-29", "2023-09-27",
-	"2024-04-10", "2024-04-11", "2024-06-17", "2024-06-18", "2024-09-16",
-	"2025-03-31", "2025-04-01", "2025-06-06", "2025-06-09", "2025-09-04",
-	"2026-03-19", "2026-03-20", "2026-05-27", "2026-05-28", "2026-08-25",
-	"2027-03-10", "2027-03-11", "2027-05-17", "2027-05-18", "2027-08-16",
-	"2028-02-28", "2028-02-29", "2028-05-05", "2028-05-08", "2028-08-03",
-}
-
-const (
-	firstHolidayYear = 2023
-	lastHolidayYear  = 2028
+import (
+	"sort"
+	"sync"
+	"time"
 )
 
-var holidays = buildHolidays()
+type Calendar struct {
+	mu     sync.Mutex
+	years  map[int]map[Date]bool
+	add    map[Date]bool
+	remove map[Date]bool
+}
 
-func buildHolidays() map[Date]bool {
-	out := map[Date]bool{}
-	for _, s := range islamicHolidays {
-		d, err := ParseDate(s)
-		if err != nil {
-			panic(err)
-		}
-		out[d] = true
+var rules = &Calendar{}
+
+func NewCalendar(add, remove []Date) *Calendar {
+	c := &Calendar{add: map[Date]bool{}, remove: map[Date]bool{}}
+	for _, d := range add {
+		c.add[d] = true
 	}
-	for y := firstHolidayYear; y <= lastHolidayYear; y++ {
-		for _, d := range fixedHolidays(y) {
-			for d.Weekday() == time.Saturday || d.Weekday() == time.Sunday || out[d] {
-				d = d.AddDays(1)
-			}
+	for _, d := range remove {
+		c.remove[d] = true
+	}
+	return c
+}
+
+func (c *Calendar) IsHoliday(d Date) bool {
+	if c == nil {
+		c = rules
+	}
+	if c.remove[d] {
+		return false
+	}
+	if c.add[d] {
+		return true
+	}
+	return c.year(d.Y)[d]
+}
+
+func (c *Calendar) IsBusinessDay(d Date) bool {
+	w := d.Weekday()
+	return w != time.Saturday && w != time.Sunday && !c.IsHoliday(d)
+}
+
+func (c *Calendar) year(y int) map[Date]bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if s, ok := c.years[y]; ok {
+		return s
+	}
+	if c.years == nil {
+		c.years = map[int]map[Date]bool{}
+	}
+	s := buildYear(y)
+	c.years[y] = s
+	return s
+}
+
+func buildYear(y int) map[Date]bool {
+	placed := map[Date]bool{}
+	for _, ey := range []int{y - 1, y} {
+		e := easter(ey)
+		placed[e.AddDays(-2)] = true
+		placed[e.AddDays(1)] = true
+	}
+	var bases []Date
+	for _, by := range []int{y - 1, y} {
+		bases = append(bases, fixedHolidays(by)...)
+	}
+	bases = append(bases, islamicHolidays(y)...)
+	sort.SliceStable(bases, func(i, j int) bool { return bases[i].Before(bases[j]) })
+	start := Date{y - 1, time.November, 1}
+	for _, d := range bases {
+		if d.Before(start) {
+			continue
+		}
+		for d.Weekday() == time.Saturday || d.Weekday() == time.Sunday || placed[d] {
+			d = d.AddDays(1)
+		}
+		placed[d] = true
+	}
+	out := map[Date]bool{}
+	for d := range placed {
+		if d.Y == y {
 			out[d] = true
 		}
-		e := easter(y)
-		out[e.AddDays(-2)] = true
-		out[e.AddDays(1)] = true
 	}
 	return out
 }
@@ -50,6 +99,17 @@ func fixedHolidays(y int) []Date {
 		{y, time.December, 25},
 		{y, time.December, 26},
 	}
+}
+
+func islamicHolidays(y int) []Date {
+	var out []Date
+	approx := (y - 622) * 1030684 / 1000000
+	for hy := approx - 1; hy <= approx+2; hy++ {
+		fitr := FromHijri(Hijri{hy, 10, 1})
+		kabir := FromHijri(Hijri{hy, 12, 10})
+		out = append(out, fitr, fitr.AddDays(1), kabir, kabir.AddDays(1), FromHijri(Hijri{hy, 3, 12}))
+	}
+	return out
 }
 
 func easter(y int) Date {
@@ -68,10 +128,9 @@ func easter(y int) Date {
 }
 
 func IsHoliday(d Date) bool {
-	return holidays[d]
+	return rules.IsHoliday(d)
 }
 
 func IsBusinessDay(d Date) bool {
-	w := d.Weekday()
-	return w != time.Saturday && w != time.Sunday && !holidays[d]
+	return rules.IsBusinessDay(d)
 }

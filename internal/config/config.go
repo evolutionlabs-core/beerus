@@ -96,6 +96,11 @@ func DatabaseName(dir, bankID string) string {
 	return "beerus_" + HashKey(abs)[:12] + "_" + strings.ReplaceAll(bankID, "-", "_")
 }
 
+type Holidays struct {
+	Add    []string `yaml:"add,omitempty"`
+	Remove []string `yaml:"remove,omitempty"`
+}
+
 type Config struct {
 	DatabaseURL string     `yaml:"database_url"`
 	Banks       []*Bank    `yaml:"banks,omitempty"`
@@ -106,7 +111,41 @@ type Config struct {
 	Pace        float64    `yaml:"pace"`
 	Connect     Connect    `yaml:"connect"`
 	Partners    []*Partner `yaml:"partners"`
+	Holidays    *Holidays  `yaml:"holidays,omitempty"`
 	Dir         string     `yaml:"-"`
+	calendar    *clock.Calendar
+}
+
+func (c *Config) Calendar() *clock.Calendar {
+	return c.calendar
+}
+
+func (c *Config) buildCalendar() error {
+	c.calendar = nil
+	if c.Holidays == nil {
+		return nil
+	}
+	parse := func(name string, list []string) ([]clock.Date, error) {
+		var out []clock.Date
+		for _, s := range list {
+			d, err := clock.ParseDate(s)
+			if err != nil {
+				return nil, fmt.Errorf("beerus.yaml: holidays.%s: %q is not a date (use YYYY-MM-DD)", name, s)
+			}
+			out = append(out, d)
+		}
+		return out, nil
+	}
+	add, err := parse("add", c.Holidays.Add)
+	if err != nil {
+		return err
+	}
+	remove, err := parse("remove", c.Holidays.Remove)
+	if err != nil {
+		return err
+	}
+	c.calendar = clock.NewCalendar(add, remove)
+	return nil
 }
 
 func (c *Config) Path(parts ...string) string {
@@ -199,6 +238,9 @@ func Load(dir string) (*Config, error) {
 	}
 	if c.Pace <= 0 {
 		c.Pace = 1
+	}
+	if err := c.buildCalendar(); err != nil {
+		return nil, err
 	}
 	return c, nil
 }
