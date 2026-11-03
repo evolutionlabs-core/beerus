@@ -8,9 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -21,27 +23,38 @@ import (
 const (
 	assertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 	requestPrefix = "urn:ietf:params:oauth:request_uri:"
+	maxForm       = 64 << 10
 )
 
 type Config struct {
-	BankID       string
-	BankName     string
-	Issuer       string
-	AuthorizeURL string
-	HistoryDays  int
-	Store        Store
-	Registry     Registry
-	Data         Data
-	Ledger       Ledger
-	Notify       func(ConsentEvent)
-	StableIDs    bool
-	Now          func() time.Time
-	Biz          func() time.Time
-	CodeLife     time.Duration
-	AccessLife   time.Duration
-	RefreshGrace time.Duration
-	RequestLife  time.Duration
+	BankID        string
+	BankName      string
+	Issuer        string
+	AuthorizeURL  string
+	HistoryDays   int
+	Store         Store
+	Registry      Registry
+	Data          Data
+	Ledger        Ledger
+	StableIDs     bool
+	Now           func() time.Time
+	Biz           func() time.Time
+	CodeLife      time.Duration
+	AccessLife    time.Duration
+	RefreshGrace  time.Duration
+	RequestLife   time.Duration
+	AssertionLife time.Duration
+	ConsentMonths int
+	RefreshDays   int
+	DormantDays   int
 }
+
+const (
+	DefaultConsentMonths = 12
+	DefaultRefreshDays   = 372
+	DefaultDormantDays   = 180
+	DefaultAssertionLife = 5 * time.Minute
+)
 
 type Server struct {
 	cfg   Config
@@ -95,6 +108,18 @@ func New(cfg Config) *Server {
 	if cfg.RefreshGrace <= 0 {
 		cfg.RefreshGrace = time.Minute
 	}
+	if cfg.AssertionLife <= 0 {
+		cfg.AssertionLife = DefaultAssertionLife
+	}
+	if cfg.ConsentMonths <= 0 {
+		cfg.ConsentMonths = DefaultConsentMonths
+	}
+	if cfg.RefreshDays <= 0 {
+		cfg.RefreshDays = DefaultRefreshDays
+	}
+	if cfg.DormantDays <= 0 {
+		cfg.DormantDays = DefaultDormantDays
+	}
 	return &Server{cfg: cfg, pars: map[string]*par{}, codes: map[string]*code{}, jtis: map[string]time.Time{}}
 }
 
@@ -142,10 +167,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /par", s.par)
 	mux.HandleFunc("POST /token", s.token)
 	mux.HandleFunc("DELETE /consents/{id}", s.revokeConsent)
-	mux.HandleFunc("GET /accounts", s.resource(s.listAccounts))
-	mux.HandleFunc("GET /accounts/{id}", s.resource(s.getAccount))
-	mux.HandleFunc("GET /accounts/{id}/balances", s.resource(s.getBalances))
-	mux.HandleFunc("GET /accounts/{id}/transactions", s.resource(s.getTransactions))
+	mux.HandleFunc("GET /accounts", s.resource("accounts", s.listAccounts))
+	mux.HandleFunc("GET /accounts/{id}", s.resource("accounts", s.getAccount))
+	mux.HandleFunc("GET /accounts/{id}/balances", s.resource("balances", s.getBalances))
+	mux.HandleFunc("GET /accounts/{id}/transactions", s.resource("transactions", s.getTransactions))
 	return mux
 }
 
@@ -172,6 +197,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*Client, 
 	if !ok {
 		return nil, "", false
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxForm)
 	if err := r.ParseForm(); err != nil {
 		fail(w, http.StatusBadRequest, "invalid_request", "The body must be a form.")
 		return nil, "", false
@@ -193,7 +219,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*Client, 
 	exp, _ := claims["exp"].(float64)
 	jti, _ := claims["jti"].(string)
 	if claims["iss"] != c.ID || claims["sub"] != c.ID || !s.audience(claims["aud"]) || jti == "" ||
-		time.Unix(int64(exp), 0).Before(now) || time.Unix(int64(exp), 0).After(now.Add(5*time.Minute)) {
+		time.Unix(int64(exp), 0).Before(now) || time.Unix(int64(exp), 0).After(now.Add(s.cfg.AssertionLife)) {
 		fail(w, http.StatusUnauthorized, "invalid_client", "The client assertion has the wrong issuer, audience or lifetime.")
 		return nil, "", false
 	}
@@ -216,7 +242,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*Client, 
 func (s *Server) audience(aud any) bool {
 	ok := func(v any) bool {
 		x, _ := v.(string)
-		return x == s.cfg.Issuer || x == s.cfg.Issuer+"/par" || x == s.cfg.Issuer+"/token"
+		return x == s.cfg.Issuer
 	}
 	if list, isList := aud.([]any); isList {
 		return slices.ContainsFunc(list, ok)
@@ -256,7 +282,7 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		"token_endpoint_auth_signing_alg_values_supported": []string{"ES256"},
 		"tls_client_certificate_bound_access_tokens":       true,
 		"authorization_response_iss_parameter_supported":   true,
-		"scopes_supported": []string{"accounts", "balances", "transactions"},
+		"scopes_supported": Scopes,
 		"history_days":     s.cfg.HistoryDays,
 		"stable_ids":       s.cfg.StableIDs,
 	})
@@ -267,6 +293,7 @@ func (s *Server) par(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.sweep(r.Context())
 	f := r.PostForm
 	if f.Get("response_type") != "code" || f.Get("code_challenge_method") != "S256" || len(f.Get("code_challenge")) != 43 {
 		fail(w, http.StatusBadRequest, "invalid_request", "Use response_type=code with a PKCE S256 challenge.")
@@ -279,6 +306,11 @@ func (s *Server) par(w http.ResponseWriter, r *http.Request) {
 	redirect := f.Get("redirect_uri")
 	if !slices.Contains(c.RedirectURIs, redirect) {
 		fail(w, http.StatusBadRequest, "invalid_request", "The redirect_uri is not registered for this client.")
+		return
+	}
+	scopes, err := parseScope(f.Get("scope"))
+	if err != nil {
+		fail(w, http.StatusBadRequest, "invalid_scope", err.Error())
 		return
 	}
 	from := clock.DateOf(s.cfg.Biz())
@@ -299,6 +331,7 @@ func (s *Server) par(w http.ResponseWriter, r *http.Request) {
 		PartnerLegal:    f.Get("partner_legal_name"),
 		Purpose:         f.Get("purpose"),
 		Status:          AwaitingAuthorisation,
+		Scopes:          scopes,
 		TransactionFrom: from,
 		Analytics:       f.Get("analytics") == "yes",
 		CreatedAt:       s.cfg.Biz(),
@@ -314,12 +347,84 @@ func (s *Server) par(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"request_uri": uri, "expires_in": int(s.cfg.RequestLife.Seconds()), "consent_id": consent.ID})
 }
 
+func parseScope(raw string) ([]string, error) {
+	out := []string{}
+	for _, v := range strings.Fields(raw) {
+		if !slices.Contains(Scopes, v) {
+			return nil, fmt.Errorf("The scope %q is not supported.", v)
+		}
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("Ask for at least one scope.")
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 type Request struct {
 	Client    *Client
 	Consent   *Consent
 	Effective clock.Date
 	Capped    bool
+	Months    int
 	Until     time.Time
+}
+
+func (s *Server) renewal(from time.Time) time.Time {
+	return from.AddDate(0, s.cfg.ConsentMonths, 0)
+}
+
+func (s *Server) sweep(ctx context.Context) {
+	now := s.cfg.Now()
+	stale := []string{}
+	s.mu.Lock()
+	for uri, p := range s.pars {
+		switch {
+		case p.used:
+			delete(s.pars, uri)
+		case now.After(p.expires):
+			stale = append(stale, p.consentID)
+			delete(s.pars, uri)
+		}
+	}
+	for h, cd := range s.codes {
+		if now.After(cd.expires.Add(s.cfg.RequestLife)) {
+			delete(s.codes, h)
+		}
+	}
+	s.mu.Unlock()
+	for _, id := range stale {
+		if c, err := s.cfg.Store.Consent(ctx, id); err == nil {
+			_ = s.expireAwaiting(ctx, c)
+		}
+	}
+}
+
+func (s *Server) expireAwaiting(ctx context.Context, c *Consent) error {
+	if c.Status != AwaitingAuthorisation {
+		return nil
+	}
+	c.Status = Expired
+	if err := s.cfg.Store.UpdateConsent(ctx, c); err != nil {
+		return err
+	}
+	return s.record(ctx, c, Expired, "bank")
+}
+
+func (s *Server) Resume(ctx context.Context) error {
+	list, err := s.cfg.Store.Awaiting(ctx)
+	if err != nil {
+		return err
+	}
+	for _, c := range list {
+		if err := s.expireAwaiting(ctx, c); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Server) HistoryFloor() clock.Date {
@@ -346,7 +451,7 @@ func (s *Server) Request(ctx context.Context, requestURI, clientID string) (*Req
 	if floor := s.HistoryFloor(); eff.Before(floor) {
 		eff, capped = floor, true
 	}
-	return &Request{Client: client, Consent: c, Effective: eff, Capped: capped, Until: s.cfg.Biz().AddDate(1, 0, 0)}, nil
+	return &Request{Client: client, Consent: c, Effective: eff, Capped: capped, Months: s.cfg.ConsentMonths, Until: s.renewal(s.cfg.Biz())}, nil
 }
 
 func (s *Server) take(requestURI string) (*par, error) {
@@ -357,6 +462,7 @@ func (s *Server) take(requestURI string) (*par, error) {
 		return nil, ErrInvalidRequest
 	}
 	p.used = true
+	delete(s.pars, requestURI)
 	return p, nil
 }
 
@@ -374,14 +480,24 @@ func (s *Server) redirect(base string, q url.Values) string {
 	return u.String()
 }
 
-func (s *Server) record(c *Consent, status Status, via string) {
+func (s *Server) record(ctx context.Context, c *Consent, status Status, via string) error {
 	e := ConsentEvent{ConsentID: c.ID, Bank: s.cfg.BankID, ClientID: c.ClientID, PartnerID: c.PartnerID, Status: status, Via: via, At: s.cfg.Biz()}
 	if s.cfg.Ledger != nil {
 		s.cfg.Ledger.Record(e)
 	}
-	if s.cfg.Notify != nil && via != ViaAggregator && (status == Revoked || status == Expired) {
-		s.cfg.Notify(e)
-	}
+	return s.cfg.Store.Enqueue(ctx, e, s.cfg.Now())
+}
+
+func (s *Server) Due(ctx context.Context, limit int) ([]Event, error) {
+	return s.cfg.Store.Due(ctx, s.cfg.Now(), limit)
+}
+
+func (s *Server) Delivered(ctx context.Context, e Event) error {
+	return s.cfg.Store.Delivered(ctx, e.ID)
+}
+
+func (s *Server) Retry(ctx context.Context, e Event, next time.Time) error {
+	return s.cfg.Store.Retry(ctx, e.ID, e.Attempts+1, next)
 }
 
 func (s *Server) revokeConsent(w http.ResponseWriter, r *http.Request) {
@@ -444,11 +560,13 @@ func (s *Server) Approve(ctx context.Context, requestURI, customer string, accou
 		c.TransactionFrom = floor
 	}
 	c.Customer, c.Accounts, c.Analytics = customer, chosen, analytics
-	c.Status, c.AuthorisedAt, c.ExpiresAt = Authorised, now, now.AddDate(1, 0, 0)
+	c.Status, c.AuthorisedAt, c.ExpiresAt = Authorised, now, s.renewal(now)
 	if err := s.cfg.Store.UpdateConsent(ctx, c); err != nil {
 		return "", err
 	}
-	s.record(c, Authorised, "bank")
+	if err := s.record(ctx, c, Authorised, "bank"); err != nil {
+		return "", err
+	}
 	raw := random("oc_", 24)
 	s.mu.Lock()
 	s.codes[Hash(raw)] = &code{clientID: p.clientID, redirect: p.redirect, challenge: p.challenge, consentID: c.ID, expires: s.cfg.Now().Add(s.cfg.CodeLife)}
@@ -467,8 +585,11 @@ func (s *Server) Reject(ctx context.Context, requestURI string) (string, error) 
 	}
 	if c, err := s.cfg.Store.Consent(ctx, p.consentID); err == nil && c.Status == AwaitingAuthorisation {
 		c.Status = Rejected
-		if err := s.cfg.Store.UpdateConsent(ctx, c); err == nil {
-			s.record(c, Rejected, "bank")
+		if err := s.cfg.Store.UpdateConsent(ctx, c); err != nil {
+			return "", err
+		}
+		if err := s.record(ctx, c, Rejected, "bank"); err != nil {
+			return "", err
 		}
 	}
 	q := url.Values{"error": {"access_denied"}, "error_description": {"The customer declined."}}
@@ -483,8 +604,16 @@ func (s *Server) Revoke(ctx context.Context, consentID, customer, via string) er
 	if err != nil {
 		return err
 	}
-	if customer != "" && c.Customer != customer {
+	if customer == "" || c.Customer != customer {
 		return ErrNotYours
+	}
+	return s.revoke(ctx, c, via)
+}
+
+func (s *Server) RevokeByBank(ctx context.Context, consentID, via string) error {
+	c, err := s.cfg.Store.Consent(ctx, consentID)
+	if err != nil {
+		return err
 	}
 	return s.revoke(ctx, c, via)
 }
@@ -500,15 +629,25 @@ func (s *Server) revoke(ctx context.Context, c *Consent, via string) error {
 	if err := s.cfg.Store.RevokeConsentTokens(ctx, c.ID); err != nil {
 		return err
 	}
-	s.record(c, Revoked, via)
-	return nil
+	return s.record(ctx, c, Revoked, via)
 }
 
 func (s *Server) Effective(c *Consent) Status {
-	if c.Status == Authorised && !s.cfg.Biz().Before(c.ExpiresAt) {
-		return Expired
+	if c.Status != Authorised {
+		return c.Status
 	}
-	return c.Status
+	now := s.cfg.Biz()
+	if !now.Before(c.ExpiresAt) {
+		return ReconsentRequired
+	}
+	lastUse := c.LastUsedAt
+	if lastUse.Before(c.AuthorisedAt) {
+		lastUse = c.AuthorisedAt
+	}
+	if !now.Before(lastUse.AddDate(0, 0, s.cfg.DormantDays)) {
+		return Dormant
+	}
+	return Authorised
 }
 
 func (s *Server) Consents(ctx context.Context, customer string) ([]*Consent, error) {
@@ -534,6 +673,8 @@ func (s *Server) AccessHistory(ctx context.Context, customer string, limit int) 
 var consentCodes = map[Status]string{
 	Revoked:               "consent_revoked",
 	Expired:               "consent_expired",
+	Dormant:               "consent_dormant",
+	ReconsentRequired:     "consent_reconsent_required",
 	Rejected:              "consent_not_authorised",
 	AwaitingAuthorisation: "consent_not_authorised",
 }
@@ -551,11 +692,16 @@ func (s *Server) live(ctx context.Context, id string) (*Consent, error) {
 	if err != nil {
 		return nil, consentError{"consent_not_authorised"}
 	}
-	if s.Effective(c) == Expired && c.Status == Authorised {
-		c.Status = Expired
-		if err := s.cfg.Store.UpdateConsent(ctx, c); err == nil {
-			_ = s.cfg.Store.RevokeConsentTokens(ctx, c.ID)
-			s.record(c, Expired, "bank")
+	if eff := s.Effective(c); eff != c.Status {
+		c.Status = eff
+		if err := s.cfg.Store.UpdateConsent(ctx, c); err != nil {
+			return nil, err
+		}
+		if err := s.cfg.Store.RevokeConsentTokens(ctx, c.ID); err != nil {
+			return nil, err
+		}
+		if err := s.record(ctx, c, eff, "bank"); err != nil {
+			return nil, err
 		}
 	}
 	if c.Status != Authorised {
@@ -565,6 +711,7 @@ func (s *Server) live(ctx context.Context, id string) (*Consent, error) {
 }
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {
+	s.sweep(r.Context())
 	c, thumb, ok := s.authenticate(w, r)
 	if !ok {
 		return
@@ -659,7 +806,7 @@ func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clien
 	access, refresh := random("oba_", 24), random("obr_", 24)
 	for _, t := range []*Token{
 		{Hash: Hash(access), Kind: "access", ExpiresAt: now.Add(s.cfg.AccessLife)},
-		{Hash: Hash(refresh), Kind: "refresh", ExpiresAt: now.AddDate(1, 0, 7)},
+		{Hash: Hash(refresh), Kind: "refresh", ExpiresAt: now.AddDate(0, 0, s.cfg.RefreshDays)},
 	} {
 		t.ConsentID, t.ClientID, t.Thumbprint, t.Family, t.Parent, t.CreatedAt = c.ID, clientID, thumb, family, parent, now
 		if err := s.cfg.Store.PutToken(r.Context(), t); err != nil {
@@ -672,7 +819,7 @@ func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clien
 		"token_type":    "Bearer",
 		"expires_in":    int(s.cfg.AccessLife.Seconds()),
 		"refresh_token": refresh,
-		"scope":         "accounts balances transactions",
+		"scope":         strings.Join(c.Scopes, " "),
 		"consent_id":    c.ID,
 	})
 }

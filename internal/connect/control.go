@@ -455,6 +455,8 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 	}
 	cp.Deliveries = nil
 	cp.Vault = nil
+	cp.Registry = nil
+	cp.ConsentLedger = nil
 	cp.Idem = map[string]*IdemRec{}
 	cp.WidgetSessions = map[string]*WidgetSession{}
 	for _, ls := range cp.LinkSessions {
@@ -520,6 +522,9 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	for a.settling {
+		a.settleDone.Wait()
+	}
 	taken := map[string]bool{}
 	for _, id := range f.Meta.Banks {
 		taken[id] = true
@@ -542,6 +547,8 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	st.WorldID = newID("wld")
 	st.Deliveries = a.st.Deliveries
 	st.Vault = a.st.Vault
+	st.Registry = a.st.Registry
+	st.ConsentLedger = a.st.ConsentLedger
 	a.st = st
 	a.clock.Restore(st.Clock)
 	genesis, _ := a.cfg.GenesisDate()
@@ -564,9 +571,6 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 		if err := a.rtgs.Restore(id); err != nil {
 			return "", err
 		}
-		if err := a.settleLocked(a.clock.Now()); err != nil {
-			a.log.Error("NIP settlement", "err", err)
-		}
 	}
 	for _, rec := range a.st.Accounts {
 		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed {
@@ -575,6 +579,9 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	}
 	a.dirty()
 	a.poke()
+	if err := a.settleLocked(a.clock.Now()); err != nil {
+		a.log.Error("NIP settlement", "err", err)
+	}
 	return st.WorldID, nil
 }
 

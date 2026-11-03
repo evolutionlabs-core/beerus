@@ -197,6 +197,7 @@ func (a *App) bankPAR(b *config.Bank, ls *LinkSession, state, challenge string) 
 		"state":                 {state},
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
+		"scope":                 {strings.Join(openbanking.Scopes, " ")},
 		"partner_id":            {ls.PartnerID},
 		"transaction_from":      {ls.StartDate.String()},
 	}

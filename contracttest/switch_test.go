@@ -3,10 +3,12 @@ package contracttest
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -55,6 +57,21 @@ func TestNIPSwitch(t *testing.T) {
 	}
 	if ne := enquiry("999003", world.NUBAN("999003", 123456)); ne["response_code"] != "00" {
 		t.Fatalf("outside bank: %v", ne)
+	}
+	checked := 0
+	for _, l := range w.LinesFor(from.Key, time.Now()) {
+		if l.Counterparty == nil || slices.ContainsFunc(s.cfg.Banks, func(b *config.Bank) bool { return b.NIPCode == l.Counterparty.BankCode }) {
+			continue
+		}
+		if ne := enquiry(l.Counterparty.BankCode, l.Counterparty.AccountNumber); ne["response_code"] != "00" {
+			t.Fatalf("name enquiry on a generated counterparty: %v", ne)
+		}
+		if checked++; checked == 20 {
+			break
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no generated counterparties")
 	}
 	if ne := enquiry("999003", "0123456789"); ne["response_code"] != "07" {
 		t.Fatalf("outside bank, bad check digit: %v", ne)
