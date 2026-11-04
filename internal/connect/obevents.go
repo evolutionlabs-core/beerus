@@ -23,11 +23,12 @@ import (
 const eventType = "application/secevent+jwt"
 
 const (
-	eventBackoff   = 2 * time.Second
-	eventBackoffAt = 10 * time.Minute
-	eventBatch     = 50
-	eventLife      = 5 * time.Minute
-	seenLimit      = 10000
+	eventBackoff     = 2 * time.Second
+	eventBackoffAt   = 10 * time.Minute
+	eventBatch       = 50
+	eventLife        = 5 * time.Minute
+	eventIdleTimeout = 90 * time.Second
+	seenLimit        = 10000
 )
 
 type jtiSet struct {
@@ -132,6 +133,24 @@ func (a *App) bankSigner(b *config.Bank) (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
+func (a *App) eventClient(dest string) (*http.Client, error) {
+	a.eventMu.Lock()
+	defer a.eventMu.Unlock()
+	if cl := a.eventHTTP[dest]; cl != nil {
+		return cl, nil
+	}
+	pool, err := pki.LoadPool(a.cfg.Path("ca", "root.crt"))
+	if err != nil {
+		return nil, err
+	}
+	cl := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsRoots(pool), MaxIdleConnsPerHost: 2, IdleConnTimeout: eventIdleTimeout}}
+	if a.eventHTTP == nil {
+		a.eventHTTP = map[string]*http.Client{}
+	}
+	a.eventHTTP[dest] = cl
+	return cl, nil
+}
+
 func (a *App) sendConsentEvent(b *config.Bank, e openbanking.Event) error {
 	key, err := a.bankSigner(b)
 	if err != nil {
@@ -152,12 +171,12 @@ func (a *App) sendConsentEvent(b *config.Bank, e openbanking.Event) error {
 	if err != nil {
 		return err
 	}
-	pool, err := pki.LoadPool(a.cfg.Path("ca", "root.crt"))
+	dest := a.cfg.WidgetURL()
+	cl, err := a.eventClient(dest)
 	if err != nil {
 		return err
 	}
-	cl := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsRoots(pool)}}
-	resp, err := cl.Post(a.cfg.WidgetURL()+"/consent-events", eventType, bytes.NewReader([]byte(jwt)))
+	resp, err := cl.Post(dest+"/consent-events", eventType, bytes.NewReader([]byte(jwt)))
 	if err != nil {
 		return err
 	}

@@ -68,6 +68,8 @@ type App struct {
 	flushMu    sync.Mutex
 	vault      *vault
 	obHTTP     *http.Client
+	eventMu    sync.Mutex
+	eventHTTP  map[string]*http.Client
 	bankWrap   func(http.RoundTripper) http.RoundTripper
 	obKey      *ecdsa.PrivateKey
 	metas      map[string]bankMeta
