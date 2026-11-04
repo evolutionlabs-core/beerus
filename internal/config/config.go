@@ -18,6 +18,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
@@ -58,6 +59,19 @@ type Bank struct {
 	Database       string `yaml:"database"`
 	SettlesThrough string `yaml:"settles_through,omitempty"`
 	State          string `yaml:"state,omitempty"`
+	NetDebitCap    int64  `yaml:"net_debit_cap,omitempty"`
+	Collateral     int64  `yaml:"collateral,omitempty"`
+}
+
+func (b *Bank) Cap() int64 {
+	if b.NetDebitCap > 0 {
+		return b.NetDebitCap
+	}
+	return nip.SimulatorDefaultCap(b.Type)
+}
+
+func (b *Bank) CapIsDefault() bool {
+	return b.NetDebitCap <= 0
 }
 
 func (b *Bank) Suspended() bool {

@@ -296,11 +296,19 @@ func TestBanksFollowConfigFile(t *testing.T) {
 	s.waitPhase("kano-digital", connect.PhaseSuspended, 10*time.Second)
 	edit(func(c *config.Config) { c.Bank("kano-digital").State = "" })
 	s.waitPhase("kano-digital", connect.PhaseActive, 10*time.Second)
+	edit(func(c *config.Config) { c.Bank("bank-a").NetDebitCap, c.Bank("bank-a").Collateral = 123400, 567800 })
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && s.position("bank-a")["net_debit_cap_minor"] != float64(123400) {
+		time.Sleep(200 * time.Millisecond)
+	}
+	if row := s.position("bank-a"); row["net_debit_cap_minor"] != float64(123400) || row["collateral_minor"] != float64(567800) || row["cap_source"] != "configured" {
+		t.Fatalf("the cap edited in beerus.yaml was not applied: %v", row)
+	}
 	edit(func(c *config.Config) {
 		c.Banks = append(c.Banks, &config.Bank{ID: "copycat", Name: "Copycat", NIPCode: c.Bank("bank-a").NIPCode})
 		c.Bank("bank-a").Name = "Renamed"
 	})
-	deadline := time.Now().Add(10 * time.Second)
+	deadline = time.Now().Add(10 * time.Second)
 	var warnings []any
 	for time.Now().Before(deadline) && len(warnings) < 2 {
 		warnings, _ = s.ctl("GET", "/banks", nil)["warnings"].([]any)

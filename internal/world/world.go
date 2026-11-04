@@ -127,6 +127,7 @@ type Config struct {
 	Seed         int64         `json:"seed"`
 	Genesis      clock.Date    `json:"genesis"`
 	Institutions []Institution `json:"-"`
+	Personas     []string      `json:"-"`
 }
 
 func DefaultInstitutions() []Institution {
@@ -196,27 +197,38 @@ func hash64(parts ...string) uint64 {
 }
 
 func NUBAN(bankCode string, serial uint64) string {
-	s := fmt.Sprintf("%09d", serial%1000000000)
-	digits := bankCode + s
-	w := []int{3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3}
-	sum := 0
-	for i, c := range digits {
-		sum += int(c-'0') * w[i]
+	return nubanCheck(bankCode, fmt.Sprintf("%09d", serial%1000000000))
+}
+
+func NormaliseBankCode(code string) (string, error) {
+	if strings.Trim(code, "0123456789") != "" {
+		return "", fmt.Errorf("bank code %q must be digits", code)
 	}
-	check := (10 - sum%10) % 10
-	return s + fmt.Sprint(check)
+	switch len(code) {
+	case 3:
+		return "000" + code, nil
+	case 5:
+		return "9" + code, nil
+	case 6:
+		return code, nil
+	}
+	return "", fmt.Errorf("bank code %q must have 3, 5 or 6 digits", code)
 }
 
 func ValidNUBAN(bankCode, nuban string) bool {
-	if len(nuban) != 10 {
+	if len(nuban) != 10 || strings.Trim(nuban, "0123456789") != "" {
 		return false
 	}
 	return nubanCheck(bankCode, nuban[:9]) == nuban
 }
 
 func nubanCheck(bankCode, serial string) string {
-	digits := bankCode + serial
-	w := []int{3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3}
+	code, err := NormaliseBankCode(bankCode)
+	if err != nil {
+		return ""
+	}
+	digits := code + serial
+	w := []int{3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3, 3, 7, 3}
 	sum := 0
 	for i, c := range digits {
 		sum += int(c-'0') * w[i]
@@ -256,6 +268,9 @@ func New(cfg Config, ov Overrides) *World {
 		w.purged[inst.ID] = true
 	}
 	add := func(p *Persona, accts ...Account) {
+		if len(cfg.Personas) > 0 && !slices.Contains(cfg.Personas, p.ID) {
+			return
+		}
 		for _, a := range accts {
 			inst, ok := w.institutions[a.Institution]
 			if !ok {
@@ -283,6 +298,42 @@ func New(cfg Config, ov Overrides) *World {
 		Account{Institution: "bank-b", Name: "Ngozi Fabrics Ventures", Type: "current", Opening: 32000000})
 	add(&Persona{ID: "chidi", Username: "chidi", Name: "Chidi Okafor", Business: false, rate: 0.4},
 		Account{Institution: "bank-b", Name: "Chidi Okafor", Type: "savings", Opening: 8500000})
+	add(&Persona{ID: "kemi", Username: "kemi", Name: "Kemi Beauty Lounge", Business: true, rate: 0.5},
+		Account{Institution: "bank-b", Name: "Kemi Beauty Lounge", Type: "current", Opening: 18000000})
+	add(&Persona{ID: "emeka", Username: "emeka", Name: "Emeka Auto Parts Nig Ltd", Business: true, rate: 0.7},
+		Account{Institution: "bank-a", Name: "EMEKA AUTO PARTS NIG LTD", Type: "current", Opening: 260000000},
+		Account{Institution: "bank-a", Name: "EMEKA AUTO PARTS NIG LTD SAVINGS", Type: "savings", Opening: 150000000})
+	add(&Persona{ID: "fatima", Username: "fatima", Name: "Fatima Spices and Grains", Business: true, rate: 0.4},
+		Account{Institution: "bank-a", Name: "FATIMA SPICES AND GRAINS", Type: "current", Opening: 54000000})
+	add(&Persona{ID: "bola", Username: "bola", Name: "Bola Print Works", Business: true, rate: 0.5},
+		Account{Institution: "bank-a", Name: "BOLA PRINT WORKS", Type: "current", Opening: 96000000},
+		Account{Institution: "bank-b", Name: "Bola Print Works", Type: "current", Opening: 22000000})
+	add(&Persona{ID: "ifeanyi", Username: "ifeanyi", Name: "Ifeanyi Pharmacy Ltd", Business: true, rate: 0.6},
+		Account{Institution: "bank-a", Name: "IFEANYI PHARMACY LTD", Type: "current", Opening: 175000000})
+	add(&Persona{ID: "sade", Username: "sade", Name: "Sade Event Planners", Business: true, rate: 0.4},
+		Account{Institution: "bank-b", Name: "Sade Event Planners", Type: "current", Opening: 27000000})
+	add(&Persona{ID: "musa", Username: "musa", Name: "Musa Cattle Traders", Business: true, rate: 0.45},
+		Account{Institution: "bank-a", Name: "MUSA CATTLE TRADERS", Type: "current", Opening: 310000000})
+	add(&Persona{ID: "nkechi", Username: "nkechi", Name: "Nkechi Cosmetics Hub", Business: true, rate: 0.4},
+		Account{Institution: "bank-b", Name: "Nkechi Cosmetics Hub", Type: "current", Opening: 15000000})
+	add(&Persona{ID: "yemi", Username: "yemi", Name: "Yemi Tech Solutions Ltd", Business: true, rate: 0.7},
+		Account{Institution: "bank-a", Name: "YEMI TECH SOLUTIONS LTD", Type: "current", Opening: 420000000},
+		Account{Institution: "bank-a", Name: "YEMI TECH SOLUTIONS LTD SAVINGS", Type: "savings", Opening: 500000000},
+		Account{Institution: "bank-b", Name: "Yemi Tech Solutions Ltd", Type: "current", Opening: 80000000})
+	add(&Persona{ID: "hauwa", Username: "hauwa", Name: "Hauwa Fresh Farms", Business: true, rate: 0.4},
+		Account{Institution: "bank-a", Name: "HAUWA FRESH FARMS", Type: "current", Opening: 66000000})
+	add(&Persona{ID: "obinna", Username: "obinna", Name: "Obinna Eze", Business: false, rate: 0.2},
+		Account{Institution: "bank-a", Name: "OBINNA EZE", Type: "savings", Opening: 12000000})
+	add(&Persona{ID: "amina", Username: "amina", Name: "Amina Sule", Business: false, rate: 0.15},
+		Account{Institution: "bank-b", Name: "Amina Sule", Type: "savings", Opening: 6500000})
+	add(&Persona{ID: "segun", Username: "segun", Name: "Segun Adebisi", Business: false, rate: 0.25},
+		Account{Institution: "bank-a", Name: "SEGUN ADEBISI", Type: "current", Opening: 9500000})
+	add(&Persona{ID: "ruth", Username: "ruth", Name: "Ruth Akpan", Business: false, rate: 0.15},
+		Account{Institution: "bank-b", Name: "Ruth Akpan", Type: "savings", Opening: 4200000})
+	add(&Persona{ID: "kunle", Username: "kunle", Name: "Kunle Balogun", Business: false, rate: 0.2},
+		Account{Institution: "bank-b", Name: "Kunle Balogun", Type: "savings", Opening: 15500000})
+	add(&Persona{ID: "ifeoma", Username: "ifeoma", Name: "Ifeoma Nwachukwu", Business: false, rate: 0.15},
+		Account{Institution: "bank-a", Name: "IFEOMA NWACHUKWU", Type: "savings", Opening: 7800000})
 	for _, o := range w.ov.Opened {
 		_, _ = w.openLocked(o)
 	}

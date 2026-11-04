@@ -37,8 +37,10 @@ Usage:
   beerus partner remove <id>
   beerus clock [advance <24h|7d|365d> | pace <n>]
   beerus scenarios
+  beerus scenario run <file.yaml>
   beerus scenario <name> [--account ID] [--institution bank-a] [--persona adaeze] [--connection ID] [--duration 2h] [--count N]
   beerus personas
+  beerus nip name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions
   beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA [--to-bank "Bank C"] [--to-name NAME] [--narration TEXT]
   beerus connections
   beerus revoke <connection-id>
@@ -257,14 +259,17 @@ func newCtl() (*ctl, error) {
 
 func (c *ctl) do(method, path string, body any) (map[string]any, error) {
 	var rd io.Reader
-	if body != nil {
+	contentType := "application/json"
+	if raw, ok := body.([]byte); ok {
+		rd, contentType = bytes.NewReader(raw), "application/yaml"
+	} else if body != nil {
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
 	req, _ := http.NewRequest(method, c.base+path, rd)
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
 	if err != nil {
@@ -314,7 +319,18 @@ func cmdControl(cmd string, args []string) error {
 		out, err = c.do("GET", "/scenarios", nil)
 	case "scenario":
 		if len(args) == 0 {
-			return errors.New("usage: beerus scenario <name> [flags]")
+			return errors.New("usage: beerus scenario <name> [flags] | beerus scenario run <file.yaml>")
+		}
+		if args[0] == "run" {
+			if len(args) != 2 {
+				return errors.New("usage: beerus scenario run <file.yaml>")
+			}
+			raw, rerr := os.ReadFile(args[1])
+			if rerr != nil {
+				return fmt.Errorf("cannot read %s", args[1])
+			}
+			out, err = c.do("POST", "/scenarios/run", raw)
+			break
 		}
 		fs := flag.NewFlagSet("scenario", flag.ExitOnError)
 		acc := fs.String("account", "", "account ID")
@@ -335,11 +351,23 @@ func cmdControl(cmd string, args []string) error {
 		toBank := fs.String("to-bank", "", "bank of an outside account (Bank A, Bank B, Bank C, Bank D Microfinance)")
 		toName := fs.String("to-name", "", "name of an outside beneficiary")
 		narration := fs.String("narration", "", "narration for the debit")
+		sessionID := fs.String("session-id", "", "30-digit NIP session ID; sending the same one again returns the first answer")
 		fs.Parse(args)
 		if *from == "" || *to == "" || *amount == "" {
 			return errors.New("usage: beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA")
 		}
-		out, err = c.do("POST", "/transfers", map[string]string{"from": *from, "to": *to, "amount": *amount, "to_bank": *toBank, "to_name": *toName, "narration": *narration})
+		out, err = c.do("POST", "/transfers", map[string]string{"from": *from, "to": *to, "amount": *amount, "to_bank": *toBank, "to_name": *toName, "narration": *narration, "session_id": *sessionID})
+	case "nip":
+		switch {
+		case len(args) == 3 && args[0] == "name-enquiry":
+			out, err = c.do("GET", "/nip/name-enquiry?bank_code="+url.QueryEscape(args[1])+"&account_number="+url.QueryEscape(args[2]), nil)
+		case len(args) == 2 && args[0] == "status":
+			out, err = c.do("GET", "/nip/transfers/"+url.PathEscape(args[1]), nil)
+		case len(args) == 1 && (args[0] == "participants" || args[0] == "positions"):
+			out, err = c.do("GET", "/nip/"+args[0], nil)
+		default:
+			return errors.New("usage: beerus nip [name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions]")
+		}
 	case "connections":
 		out, err = c.do("GET", "/connections", nil)
 	case "revoke":

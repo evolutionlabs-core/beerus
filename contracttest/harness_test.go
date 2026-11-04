@@ -106,6 +106,13 @@ func newStack(t *testing.T) *Stack {
 
 const bankHistoryDays = 90
 
+func bankStackPersonas(worldOnly bool) []string {
+	if worldOnly {
+		return nil
+	}
+	return []string{"adaeze", "tunde", "ngozi", "chidi"}
+}
+
 func newBankStack(t *testing.T) *Stack {
 	t.Helper()
 	return startStack(t, false)
@@ -158,7 +165,7 @@ func startStack(t *testing.T, worldOnly bool) *Stack {
 					t.Fatal(err)
 				}
 			}
-			app, err := connect.New(cfg, connect.Options{WorldOnly: worldOnly})
+			app, err := connect.New(cfg, connect.Options{WorldOnly: worldOnly, Personas: bankStackPersonas(worldOnly)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -389,6 +396,11 @@ func (s *Stack) must(r Resp, status int) Resp {
 }
 
 func (s *Stack) ctlTry(method, path string, body any) (map[string]any, error) {
+	out, _, err := s.ctlWith(method, path, body, nil)
+	return out, err
+}
+
+func (s *Stack) ctlWith(method, path string, body any, header map[string]string) (map[string]any, *http.Response, error) {
 	var rd io.Reader
 	if body != nil {
 		j, _ := json.Marshal(body)
@@ -399,18 +411,21 @@ func (s *Stack) ctlTry(method, path string, body any) (map[string]any, error) {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	for k, v := range header {
+		req.Header.Set(k, v)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	out := map[string]any{}
 	b, _ := io.ReadAll(resp.Body)
 	_ = json.Unmarshal(b, &out)
 	if resp.StatusCode >= 300 {
-		return out, fmt.Errorf("control %s %s: HTTP %d %s", method, path, resp.StatusCode, b)
+		return out, resp, fmt.Errorf("control %s %s: HTTP %d %s", method, path, resp.StatusCode, b)
 	}
-	return out, nil
+	return out, resp, nil
 }
 
 func (s *Stack) ctl(method, path string, body any) map[string]any {

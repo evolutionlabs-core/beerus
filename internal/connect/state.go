@@ -184,6 +184,7 @@ type State struct {
 	Deliveries     []*Delivery               `json:"deliveries"`
 	Idem           map[string]*IdemRec       `json:"idempotency"`
 	Seq            int64                     `json:"seq"`
+	NIP            *NIPState                 `json:"nip,omitempty"`
 }
 
 func newState() *State {
@@ -196,6 +197,7 @@ func newState() *State {
 		Feeds:          map[string]*Feed{},
 		Refreshes:      map[string]*Refresh{},
 		Idem:           map[string]*IdemRec{},
+		NIP:            &NIPState{Failures: map[string]*NIPFailure{}},
 	}
 }
 
@@ -221,6 +223,10 @@ func (s *State) fill() {
 	if s.Idem == nil {
 		s.Idem = map[string]*IdemRec{}
 	}
+	if s.NIP == nil {
+		s.NIP = &NIPState{}
+	}
+	s.NIP.fill()
 	for _, a := range s.Accounts {
 		if len(a.Grants) == 0 && a.ConnectionID != "" && !a.Removed {
 			a.Grants = []string{a.ConnectionID}

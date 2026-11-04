@@ -50,6 +50,17 @@ func (s schedule) next(after time.Time) time.Time {
 	}
 }
 
+func (s schedule) prev(at time.Time) time.Time {
+	d := clock.DateOf(at)
+	k := int(at.Sub(d.Start()) / s.every())
+	for {
+		if businessDay(d) && k >= 1 {
+			return d.Start().Add(time.Duration(k) * s.every())
+		}
+		d, k = d.AddDays(-1), s.per
+	}
+}
+
 func (s schedule) key(cutoff time.Time) string {
 	return cutoff.In(clock.Lagos).Format("2006-01-02T15:04")
 }
@@ -274,6 +285,32 @@ func (a *App) accountsByBank() map[string][]world.Account {
 	return out
 }
 
+func (a *App) openPositionLocked(bankID string, after, now time.Time) (position, error) {
+	sched := a.schedule()
+	since := sched.prev(after)
+	var open position
+	for _, acc := range a.world.Accounts() {
+		if acc.Institution != bankID {
+			continue
+		}
+		vs, err := a.world.Versions(acc.Key, since, now)
+		if err != nil {
+			return open, err
+		}
+		for _, v := range vs {
+			o, i, err := nipAmounts(v)
+			if err != nil {
+				return open, err
+			}
+			if (o != 0 || i != 0) && sched.next(v.BookedAt.Add(-time.Nanosecond)).After(after) {
+				open.outward += o
+				open.inward += i
+			}
+		}
+	}
+	return open, nil
+}
+
 func (a *App) settleLocked(now time.Time) error {
 	for a.settling {
 		a.settleDone.Wait()
@@ -452,7 +489,6 @@ func (a *App) CheckSettlement() (SettlementCheck, error) {
 	if err := a.settleLocked(now); err != nil {
 		return out, err
 	}
-	sched := a.schedule()
 	last := a.rtgs.through
 	out.SettledThrough = last
 	if err := a.rtgs.l.Pool().QueryRow(a.rtgs.ctx, `SELECT count(*) FROM journal_entries WHERE kind = 'session'`).Scan(&out.Sessions); err != nil {
@@ -468,7 +504,10 @@ func (a *App) CheckSettlement() (SettlementCheck, error) {
 	accounts := a.accountsByBank()
 	genesis := a.world.Config().Genesis.Start()
 	for _, l := range a.ledgers {
-		var open position
+		open, err := a.openPositionLocked(l.inst.ID, last, now)
+		if err != nil {
+			return out, err
+		}
 		var worldNet int64
 		for _, acc := range accounts[l.inst.ID] {
 			vs, err := a.world.Versions(acc.Key, genesis.Add(-time.Nanosecond), now)
@@ -478,14 +517,6 @@ func (a *App) CheckSettlement() (SettlementCheck, error) {
 			for _, v := range vs {
 				if !v.Pending && (v.Channel == "nip" || (v.Channel == "reversal" && v.Category == "")) {
 					worldNet += v.Amount
-				}
-				o, i, err := nipAmounts(v)
-				if err != nil {
-					return out, err
-				}
-				if sched.next(v.BookedAt.Add(-time.Nanosecond)).After(last) {
-					open.outward += o
-					open.inward += i
 				}
 			}
 		}
