@@ -189,7 +189,7 @@ func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferRe
 		}
 		lines = append(lines, Line{Key: s.key(from.Key), Account: from.Key, Amount: -r.Amount, BookedAt: at, Narration: narr, Counterparty: cp, BankRef: ref, Channel: "internal"})
 		if res.StampDuty > 0 {
-			lines = append(lines, Line{Key: s.key(from.Key), Account: from.Key, Amount: -res.StampDuty, BookedAt: at, Narration: g.narr(fromInst, "stamp", ref), BankRef: ref, Channel: "charge"})
+			lines = append(lines, Line{Key: s.key(from.Key), Account: from.Key, Amount: -res.StampDuty, BookedAt: at, Narration: g.narr(fromInst, "stamp", ref), BankRef: ref, Channel: "charge", Category: charges.CategoryStamp})
 		}
 		if to != nil {
 			back := &Counterparty{Name: strings.ToUpper(w.personas[from.Owner].Name), AccountNumber: from.NUBAN, BankCode: fromInst.NIPCode, BankName: fromInst.Name}
@@ -210,16 +210,16 @@ func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferRe
 		}
 		lines = append(lines,
 			Line{Key: s.key(from.Key), Account: from.Key, Amount: -r.Amount, BookedAt: at, Narration: narr, Counterparty: cp, SessionID: sid, BankRef: ref, Channel: "nip"},
-			Line{Key: s.key(from.Key), Account: from.Key, Amount: -res.Fee, BookedAt: at, Narration: g.narr(fromInst, "fee", short), SessionID: sid, BankRef: g.bankRef(fromInst, at), Channel: "charge"},
-			Line{Key: s.key(from.Key), Account: from.Key, Amount: -res.VAT, BookedAt: at, Narration: g.narr(fromInst, "vat", short), SessionID: sid, BankRef: g.bankRef(fromInst, at), Channel: "charge"})
+			Line{Key: s.key(from.Key), Account: from.Key, Amount: -res.Fee, BookedAt: at, Narration: g.narr(fromInst, "fee", short), SessionID: sid, BankRef: g.bankRef(fromInst, at), Channel: "charge", Category: charges.CategoryFee},
+			Line{Key: s.key(from.Key), Account: from.Key, Amount: -res.VAT, BookedAt: at, Narration: g.narr(fromInst, "vat", short), SessionID: sid, BankRef: g.bankRef(fromInst, at), Channel: "charge", Category: charges.CategoryVAT})
 		if res.StampDuty > 0 {
-			lines = append(lines, Line{Key: s.key(from.Key), Account: from.Key, Amount: -res.StampDuty, BookedAt: at, Narration: g.narr(fromInst, "stamp", short), SessionID: sid, BankRef: g.bankRef(fromInst, at), Channel: "charge"})
+			lines = append(lines, Line{Key: s.key(from.Key), Account: from.Key, Amount: -res.StampDuty, BookedAt: at, Narration: g.narr(fromInst, "stamp", short), SessionID: sid, BankRef: g.bankRef(fromInst, at), Channel: "charge", Category: charges.CategoryStamp})
 		}
 		if to != nil {
 			back := &Counterparty{Name: strings.ToUpper(w.personas[from.Owner].Name), AccountNumber: from.NUBAN, BankCode: fromInst.NIPCode, BankName: fromInst.Name}
 			lines = append(lines, Line{Key: s.key(to.Key), Account: to.Key, Amount: r.Amount, BookedAt: at, Narration: g.narr(&toInst, "in", back.Name, back.BankName, short), Counterparty: back, SessionID: sid, BankRef: g.bankRef(&toInst, at), Channel: "nip"})
 			if levy := charges.EMTL(r.Amount, d); levy > 0 {
-				lines = append(lines, Line{Key: s.key(to.Key), Account: to.Key, Amount: -levy, BookedAt: at, Narration: g.narr(&toInst, "emtl", short), SessionID: sid, BankRef: g.bankRef(&toInst, at), Channel: "charge"})
+				lines = append(lines, Line{Key: s.key(to.Key), Account: to.Key, Amount: -levy, BookedAt: at, Narration: g.narr(&toInst, "emtl", short), SessionID: sid, BankRef: g.bankRef(&toInst, at), Channel: "charge", Category: charges.CategoryLevy})
 			}
 			res.Credited = true
 		}

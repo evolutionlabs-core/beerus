@@ -91,12 +91,30 @@ type Config struct {
 	DatabaseURL string     `yaml:"database_url"`
 	Banks       []*Bank    `yaml:"banks,omitempty"`
 	MaxBanks    int        `yaml:"max_banks,omitempty"`
+	NIPSessions int        `yaml:"nip_sessions,omitempty"`
 	Seed        int64      `yaml:"seed"`
 	Genesis     string     `yaml:"genesis"`
 	Pace        float64    `yaml:"pace"`
 	Connect     Connect    `yaml:"connect"`
 	Partners    []*Partner `yaml:"partners"`
 	Dir         string     `yaml:"-"`
+}
+
+const DefaultNIPSessions = 4
+
+func (c *Config) Sessions() int {
+	if c.NIPSessions == 0 {
+		return DefaultNIPSessions
+	}
+	return c.NIPSessions
+}
+
+func (c *Config) validateSessions() error {
+	n := c.Sessions()
+	if n < 1 || 24*60%n != 0 {
+		return fmt.Errorf("beerus.yaml: nip_sessions must be a whole number of sessions that divides a day into whole minutes, such as 1, 2, 4, 6, 12 or 24, not %d", n)
+	}
+	return nil
 }
 
 func (c *Config) Path(parts ...string) string {
@@ -186,6 +204,9 @@ func Load(dir string) (*Config, error) {
 	}
 	if _, err := c.GenesisDate(); err != nil {
 		return nil, fmt.Errorf("beerus.yaml: genesis: %w", err)
+	}
+	if err := c.validateSessions(); err != nil {
+		return nil, err
 	}
 	if c.Pace <= 0 {
 		c.Pace = 1

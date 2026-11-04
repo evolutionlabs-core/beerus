@@ -75,6 +75,11 @@ func cr(account string, amount int64, narration string) ledger.Line {
 	return ledger.Line{Account: account, Amount: -amount, Narration: narration}
 }
 
+const (
+	GenesisSettlement int64 = 1_000_000_000_000
+	GenesisVault      int64 = 200_000_000_000
+)
+
 func (b *Bank) Genesis(ctx context.Context, settlement, vault int64, at time.Time) error {
 	_, err := b.L.Post(ctx, entry("genesis", "genesis", at, "Genesis capital",
 		dr(Settlement, settlement, "Genesis settlement funding"),
@@ -206,19 +211,13 @@ func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int6
 }
 
 func (b *Bank) Settle(ctx context.Context, sessionKey string, outward, inward int64, at time.Time) (ledger.Posted, error) {
-	net := inward - outward
+	narr := "Settlement " + sessionKey
 	lines := []ledger.Line{}
-	if outward > 0 {
-		lines = append(lines, dr(NIPOutward, outward, "Settlement "+sessionKey))
-	}
-	if inward > 0 {
-		lines = append(lines, cr(NIPInward, inward, "Settlement "+sessionKey))
-	}
-	switch {
-	case net > 0:
-		lines = append(lines, dr(Settlement, net, "Settlement "+sessionKey))
-	case net < 0:
-		lines = append(lines, cr(Settlement, -net, "Settlement "+sessionKey))
+	for _, ln := range []ledger.Line{{Account: NIPOutward, Amount: outward}, {Account: NIPInward, Amount: -inward}, {Account: Settlement, Amount: inward - outward}} {
+		if ln.Amount != 0 {
+			ln.Narration = narr
+			lines = append(lines, ln)
+		}
 	}
 	if len(lines) < 2 {
 		return ledger.Posted{}, nil

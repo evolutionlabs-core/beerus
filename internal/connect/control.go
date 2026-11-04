@@ -427,6 +427,7 @@ type snapshotMeta struct {
 	Schema       int       `json:"schema"`
 	TakenReal    time.Time `json:"taken_real"`
 	Banks        []string  `json:"banks,omitempty"`
+	CBN          bool      `json:"cbn,omitempty"`
 }
 
 const schemaVersion = 1
@@ -469,6 +470,12 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 			return snapshotMeta{}, err
 		}
 		meta.Banks = append(meta.Banks, l.inst.ID)
+	}
+	if a.rtgs != nil {
+		if err := a.rtgs.Snapshot(meta.ID); err != nil {
+			return snapshotMeta{}, err
+		}
+		meta.CBN = true
 	}
 	if err := saveJSON(filepath.Join(a.snapshotDir(), meta.ID+".json"), snapshotFile{Meta: meta, State: cp}); err != nil {
 		return snapshotMeta{}, err
@@ -514,6 +521,9 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	for a.settling {
+		a.settleDone.Wait()
+	}
 	taken := map[string]bool{}
 	for _, id := range f.Meta.Banks {
 		taken[id] = true
@@ -553,6 +563,11 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 			return "", err
 		}
 	}
+	if a.rtgs != nil {
+		if err := a.rtgs.Restore(id); err != nil {
+			return "", err
+		}
+	}
 	for _, rec := range a.st.Accounts {
 		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed {
 			a.emit(c.PartnerID, "sync.available", map[string]any{"connection_id": c.ID, "account_id": rec.ID, "world_id": st.WorldID})
@@ -560,6 +575,9 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	}
 	a.dirty()
 	a.poke()
+	if err := a.settleLocked(a.clock.Now()); err != nil {
+		a.log.Error("NIP settlement", "err", err)
+	}
 	return st.WorldID, nil
 }
 

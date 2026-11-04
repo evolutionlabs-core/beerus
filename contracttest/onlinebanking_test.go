@@ -170,7 +170,7 @@ func TestEveryDeclaredBankHasOnlineBanking(t *testing.T) {
 	}
 	dbs := 0
 	for _, r := range man.Resources {
-		if r.Kind == "database" {
+		if r.Kind == "database" && r.Bank != "" {
 			dbs++
 		}
 	}
