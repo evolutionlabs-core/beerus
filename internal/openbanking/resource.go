@@ -13,6 +13,8 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
+const defaultLookaheadDays = 30
+
 type cursor struct {
 	date clock.Date
 	seq  int64
@@ -232,7 +234,7 @@ func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, g grant
 	}
 	q := r.URL.Query()
 	today := clock.DateOf(s.cfg.Biz())
-	from, to := g.consent.TransactionFrom, today.AddDays(30)
+	from, to := g.consent.TransactionFrom, today.AddDays(defaultLookaheadDays)
 	bad := func(msg string) {
 		fail(w, http.StatusBadRequest, "invalid_request", msg)
 	}
@@ -297,5 +299,5 @@ func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, g grant
 	if !s.touch(w, r, g.consent, info.ID) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"account_id": info.ID, "from": from.String(), "data": data, "next_cursor": next})
+	writeJSON(w, http.StatusOK, map[string]any{"account_id": info.ID, "from": from.String(), "to": to.String(), "data": data, "next_cursor": next})
 }
