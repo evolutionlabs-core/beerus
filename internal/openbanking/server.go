@@ -375,7 +375,16 @@ type Request struct {
 }
 
 func (s *Server) renewal(from time.Time) time.Time {
-	return from.AddDate(0, s.cfg.ConsentMonths, 0)
+	return addMonths(from, s.cfg.ConsentMonths)
+}
+
+func addMonths(t time.Time, n int) time.Time {
+	y, m, d := t.Date()
+	first := time.Date(y, m+time.Month(n), 1, t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
+	if last := first.AddDate(0, 1, -1).Day(); d > last {
+		d = last
+	}
+	return first.AddDate(0, 0, d-1)
 }
 
 func (s *Server) sweep(ctx context.Context) {

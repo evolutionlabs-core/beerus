@@ -81,6 +81,8 @@ type App struct {
 	pullErr    error
 	pulling    *pullFlight
 	peers      *http.Client
+	eventMu    sync.Mutex
+	eventHTTP  map[string]*http.Client
 	bankWrap   func(http.RoundTripper) http.RoundTripper
 	obKey      *ecdsa.PrivateKey
 	metas      map[string]bankMeta

@@ -337,6 +337,7 @@ func (a *App) retryRevokes() {
 	for _, p := range pending {
 		b := a.cfg.Bank(p.Bank)
 		if b == nil {
+			a.log.Warn("pending revoke dropped because the bank is gone", "bank", p.Bank, "consent", p.ConsentID)
 			continue
 		}
 		if a.clock.Real().Before(p.Next) {

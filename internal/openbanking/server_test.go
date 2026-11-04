@@ -500,12 +500,12 @@ func TestConsentLifetimeFollowsTheSetting(t *testing.T) {
 	e := newEnv(t, func(c *Config) { c.ConsentMonths = 6 })
 	_, id := e.tokens()
 	c, _ := e.store.Consent(context.Background(), id)
-	if want := c.AuthorisedAt.AddDate(0, 6, 0); !c.ExpiresAt.Equal(want) {
+	if want := addMonths(c.AuthorisedAt, 6); !c.ExpiresAt.Equal(want) {
 		t.Fatalf("expires %s, want %s", c.ExpiresAt, want)
 	}
 	uri, _ := e.pushed()
 	req, err := e.srv.Request(context.Background(), uri, "OBR-1")
-	if err != nil || req.Months != 6 || !req.Until.Equal(e.biz.AddDate(0, 6, 0)) {
+	if err != nil || req.Months != 6 || !req.Until.Equal(addMonths(e.biz, 6)) {
 		t.Fatalf("request %+v %v", req, err)
 	}
 }
@@ -745,5 +745,46 @@ func TestLedgerOutboxKeepsOrderAndRetries(t *testing.T) {
 	}
 	if left, _ := e.srv.LedgerDue(ctx, 10); len(left) != 0 {
 		t.Fatalf("delivered events still due: %+v", left)
+	}
+}
+
+func TestAddMonthsClampsToMonthEnd(t *testing.T) {
+	at := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 9, 30, 0, 0, time.UTC) }
+	for _, c := range []struct {
+		from   time.Time
+		months int
+		want   time.Time
+	}{
+		{at(2028, time.February, 29), 12, at(2029, time.February, 28)},
+		{at(2028, time.February, 29), 48, at(2032, time.February, 29)},
+		{at(2026, time.August, 31), 6, at(2027, time.February, 28)},
+		{at(2027, time.August, 31), 6, at(2028, time.February, 29)},
+		{at(2026, time.January, 31), 1, at(2026, time.February, 28)},
+		{at(2026, time.November, 30), 3, at(2027, time.February, 28)},
+		{at(2026, time.March, 15), 12, at(2027, time.March, 15)},
+		{at(2026, time.December, 31), 2, at(2027, time.February, 28)},
+	} {
+		if got := addMonths(c.from, c.months); !got.Equal(c.want) {
+			t.Errorf("%s + %d months = %s, want %s", c.from.Format("2006-01-02"), c.months, got.Format("2006-01-02"), c.want.Format("2006-01-02"))
+		}
+	}
+}
+
+func TestConsentAuthorisedOnAMonthEndExpiresOnTheLastDay(t *testing.T) {
+	e := newEnv(t, func(c *Config) { c.ConsentMonths = 6; c.DormantDays = 400 })
+	start := time.Date(2026, time.August, 31, 9, 0, 0, 0, time.UTC)
+	e.now, e.biz = start, start
+	tok, id := e.tokens()
+	c, _ := e.store.Consent(context.Background(), id)
+	if want := time.Date(2027, time.February, 28, 9, 0, 0, 0, time.UTC); !c.ExpiresAt.Equal(want) {
+		t.Fatalf("expires %s, want %s", c.ExpiresAt, want)
+	}
+	e.advance(0, 180*day)
+	if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != http.StatusOK {
+		t.Fatalf("before the last day: %d %v", status, body)
+	}
+	e.advance(0, 2*day)
+	if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != http.StatusForbidden || body["error"] != "consent_reconsent_required" {
+		t.Fatalf("after the last day: %d %v", status, body)
 	}
 }
