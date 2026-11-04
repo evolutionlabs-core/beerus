@@ -117,9 +117,6 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if url := os.Getenv("BEERUS_DATABASE_URL"); url != "" {
-		c.DatabaseURL = url
-	}
 	if len(c.Partners) == 0 {
 		if redirect := os.Getenv("BEERUS_PARTNER_REDIRECT_URI"); redirect != "" {
 			p := config.PartnerOptions{ID: os.Getenv("BEERUS_PARTNER_ID"), Name: os.Getenv("BEERUS_PARTNER_NAME"), LegalName: os.Getenv("BEERUS_PARTNER_LEGAL_NAME"), Purpose: os.Getenv("BEERUS_PARTNER_PURPOSE"), RedirectURIs: []string{redirect}, WebhookURL: os.Getenv("BEERUS_PARTNER_WEBHOOK_URL")}

@@ -136,7 +136,12 @@ type Config struct {
 	Holidays    *Holidays  `yaml:"holidays,omitempty"`
 	Dir         string     `yaml:"-"`
 	calendar    *clock.Calendar
+
+	savedDatabaseURL string
+	databaseFromEnv  bool
 }
+
+const DatabaseURLEnv = "BEERUS_DATABASE_URL"
 
 func (c *Config) Calendar() *clock.Calendar {
 	return c.calendar
@@ -269,6 +274,12 @@ func Load(dir string) (*Config, error) {
 		return nil, fmt.Errorf("beerus.yaml: %w", err)
 	}
 	c.Dir = dir
+	if u := os.Getenv(DatabaseURLEnv); u != "" {
+		if c.DatabaseURL != u {
+			c.savedDatabaseURL = c.DatabaseURL
+		}
+		c.DatabaseURL, c.databaseFromEnv = u, true
+	}
 	if c.Seed == 0 {
 		return nil, errors.New("beerus.yaml: seed is required")
 	}
@@ -291,7 +302,11 @@ func Load(dir string) (*Config, error) {
 }
 
 func (c *Config) Save() error {
-	b, err := yaml.Marshal(c)
+	out := *c
+	if c.databaseFromEnv {
+		out.DatabaseURL = c.savedDatabaseURL
+	}
+	b, err := yaml.Marshal(&out)
 	if err != nil {
 		return err
 	}

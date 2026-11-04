@@ -20,6 +20,7 @@ x-beerus: &beerus
   environment: &env
     BEERUS_DIR: /state
     BEERUS_BIND: 0.0.0.0
+    BEERUS_DATABASE_URL: postgres://postgres:beerus@postgres:5432/postgres?sslmode=disable
     BEERUS_CORE_URL: http://sim:{{.ControlPort}}
     BEERUS_PARTNER_PORT: "{{.PartnerPort}}"
     BEERUS_WIDGET_PORT: "{{.WidgetPort}}"
@@ -47,7 +48,6 @@ services:
     command: ["run", "--participant", "cbn"]
     environment:
       <<: *env
-      BEERUS_DATABASE_URL: postgres://postgres:beerus@postgres:5432/postgres?sslmode=disable
 {{- if .NeedsPartner}}
       BEERUS_PARTNER_ID: ${BEERUS_PARTNER_ID:?set the partner app's ID}
       BEERUS_PARTNER_NAME: ${BEERUS_PARTNER_NAME:?set the partner app's name}

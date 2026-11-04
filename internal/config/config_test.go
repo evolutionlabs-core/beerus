@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 func load(t *testing.T, extra string) (*Config, error) {
@@ -62,5 +64,42 @@ func TestPortAllocation(t *testing.T) {
 	}
 	if _, err := load(t, "banks:\n  - id: bank-a\n    open_banking:\n      dormant_days: -5\n"); err == nil || !strings.Contains(err.Error(), "dormant_days") {
 		t.Fatalf("negative dormant_days: %v", err)
+	}
+}
+
+func TestDatabaseURLFromEnvIsNeverSaved(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Init(dir, InitOptions{Seed: 7, Today: clock.Date{Y: 2026, M: 11, D: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "postgres://postgres:hunter2@db:5432/postgres"
+	t.Setenv(DatabaseURLEnv, secret)
+	c, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DatabaseURL != secret {
+		t.Fatalf("the environment did not win: %q", c.DatabaseURL)
+	}
+	if _, err := c.AddPartner(PartnerOptions{ID: "p1", RedirectURIs: []string{"https://p1.localhost/cb"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(c.Path("beerus.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "hunter2") {
+		t.Fatalf("beerus.yaml holds the database password:\n%s", raw)
+	}
+	t.Setenv(DatabaseURLEnv, "")
+	again, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.DatabaseURL == secret {
+		t.Fatal("the password came back from beerus.yaml")
 	}
 }
