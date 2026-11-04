@@ -1,11 +1,15 @@
 package config
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/url"
@@ -49,18 +53,20 @@ type Connect struct {
 }
 
 type Bank struct {
-	ID             string `yaml:"id"`
-	Name           string `yaml:"name"`
-	Type           string `yaml:"type"`
-	NIPCode        string `yaml:"nip_code"`
-	NUBANCode      string `yaml:"nuban_code"`
-	HistoryDays    int    `yaml:"history_days"`
-	Port           int    `yaml:"port"`
-	Database       string `yaml:"database"`
-	SettlesThrough string `yaml:"settles_through,omitempty"`
-	State          string `yaml:"state,omitempty"`
-	NetDebitCap    int64  `yaml:"net_debit_cap,omitempty"`
-	Collateral     int64  `yaml:"collateral,omitempty"`
+	ID             string  `yaml:"id"`
+	Name           string  `yaml:"name"`
+	Type           string  `yaml:"type"`
+	NIPCode        string  `yaml:"nip_code"`
+	NUBANCode      string  `yaml:"nuban_code"`
+	HistoryDays    int     `yaml:"history_days"`
+	Port           int     `yaml:"port"`
+	APIPort        int     `yaml:"api_port,omitempty"`
+	Database       string  `yaml:"database"`
+	SettlesThrough string  `yaml:"settles_through,omitempty"`
+	State          string  `yaml:"state,omitempty"`
+	NetDebitCap    int64   `yaml:"net_debit_cap,omitempty"`
+	Collateral     int64   `yaml:"collateral,omitempty"`
+	API            BankAPI `yaml:"open_banking,omitempty"`
 }
 
 func (b *Bank) Cap() int64 {
@@ -84,6 +90,10 @@ func (b *Bank) Closed() bool {
 
 func (b *Bank) URL() string {
 	return fmt.Sprintf("http://%s.localhost:%d", b.ID, b.Port)
+}
+
+func (b *Bank) APIURL() string {
+	return fmt.Sprintf("https://%s.localhost:%d", b.ID, b.APIPort)
 }
 
 func (b *Bank) Style() string {
@@ -111,6 +121,7 @@ type Config struct {
 	Banks       []*Bank    `yaml:"banks,omitempty"`
 	MaxBanks    int        `yaml:"max_banks,omitempty"`
 	NIPSessions int        `yaml:"nip_sessions,omitempty"`
+	Ports       Ports      `yaml:"ports,omitempty"`
 	Seed        int64      `yaml:"seed"`
 	Genesis     string     `yaml:"genesis"`
 	Pace        float64    `yaml:"pace"`
@@ -261,6 +272,9 @@ func Load(dir string) (*Config, error) {
 	if err := c.validateSessions(); err != nil {
 		return nil, err
 	}
+	if err := c.validatePorts(); err != nil {
+		return nil, err
+	}
 	if c.Pace <= 0 {
 		c.Pace = 1
 	}
@@ -299,6 +313,7 @@ type InitOptions struct {
 	ControlPort int
 	BankPort    int
 	BankPorts   []int
+	APIPorts    []int
 }
 
 func Init(dir string, o InitOptions) (*Config, error) {
@@ -350,6 +365,12 @@ func Init(dir string, o InitOptions) (*Config, error) {
 	if len(o.BankPorts) == 2 {
 		c.Banks[0].Port, c.Banks[1].Port = o.BankPorts[0], o.BankPorts[1]
 	}
+	for i, b := range c.Banks {
+		b.APIPort = b.Port + c.APIPortOffset()
+		if len(o.APIPorts) == len(c.Banks) {
+			b.APIPort = o.APIPorts[i]
+		}
+	}
 	if err := c.EnsureCertificates(); err != nil {
 		return nil, err
 	}
@@ -394,6 +415,9 @@ func (c *Config) EnsureCertificates() error {
 			return err
 		}
 	}
+	if err := c.ensureOpenBanking(root, now); err != nil {
+		return err
+	}
 	for _, p := range c.Partners {
 		dir := c.Path("partners", p.ID)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -418,6 +442,89 @@ func (c *Config) EnsureCertificates() error {
 		}
 	}
 	return nil
+}
+
+const (
+	AggregatorCN   = "beerus-connect"
+	AggregatorRole = "aggregator"
+)
+
+func (c *Config) ensureOpenBanking(root *pki.Authority, now time.Time) error {
+	dir := c.Path("connect")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
+		leaf, err := root.IssueClient(AggregatorCN, AggregatorRole, leafLife)
+		if err != nil {
+			return err
+		}
+		if err := leaf.Save(dir, "client"); err != nil {
+			return err
+		}
+	}
+	if _, err := c.SigningKey(); err != nil {
+		return err
+	}
+	return c.EnsureBankCertificates(root, now)
+}
+
+func (c *Config) EnsureBankCertificates(root *pki.Authority, now time.Time) error {
+	if root == nil {
+		var err error
+		if root, err = pki.LoadAuthority(c.Path("ca"), "root"); err != nil {
+			return err
+		}
+		now = time.Now()
+	}
+	for _, b := range c.Banks {
+		dir := c.Path("banks", b.ID)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		if !pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
+			continue
+		}
+		leaf, err := root.IssueServer([]string{b.ID + ".localhost", "localhost"}, leafLife)
+		if err != nil {
+			return err
+		}
+		if err := leaf.Save(dir, "server"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Config) SigningKey() (*ecdsa.PrivateKey, error) {
+	path := c.Path("connect", "ob-signing.key")
+	if b, err := os.ReadFile(path); err == nil {
+		block, _ := pem.Decode(b)
+		if block == nil {
+			return nil, errors.New("connect/ob-signing.key is malformed")
+		}
+		k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		key, ok := k.(*ecdsa.PrivateKey)
+		if !ok {
+			return nil, errors.New("connect/ob-signing.key is not an EC key")
+		}
+		return key, nil
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	return key, os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600)
 }
 
 func loadOrCreateCA(dir, name, cn string) (*pki.Authority, error) {

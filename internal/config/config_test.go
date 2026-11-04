@@ -34,3 +34,33 @@ func TestNIPSessionsAreValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestPortAllocation(t *testing.T) {
+	c, err := load(t, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.APIPortOffset() != DefaultAPIPortOffset || c.PortWindow() != DefaultPortWindow {
+		t.Fatalf("defaults %d %d", c.APIPortOffset(), c.PortWindow())
+	}
+	used := map[int]bool{8010: true, 8011: true}
+	if p, err := c.AllocatePort(8010, used, func(p int) bool { return p != 8012 }); err != nil || p != 8013 {
+		t.Fatalf("port %d: %v", p, err)
+	}
+	if _, err := c.AllocatePort(8010, used, func(int) bool { return false }); err == nil || !strings.Contains(err.Error(), "8010 to 8209") {
+		t.Fatalf("no port free: %v", err)
+	}
+	c, err = load(t, "ports:\n  api_offset: 20\n  window: 3\n")
+	if err != nil || c.APIPortOffset() != 20 {
+		t.Fatalf("custom: %v", err)
+	}
+	if _, err := c.AllocatePort(9000, map[int]bool{9000: true, 9001: true, 9002: true}, func(int) bool { return true }); err == nil {
+		t.Fatal("the window should stop the search")
+	}
+	if _, err := load(t, "ports:\n  window: -1\n"); err == nil {
+		t.Fatal("negative window accepted")
+	}
+	if _, err := load(t, "banks:\n  - id: bank-a\n    open_banking:\n      dormant_days: -5\n"); err == nil || !strings.Contains(err.Error(), "dormant_days") {
+		t.Fatalf("negative dormant_days: %v", err)
+	}
+}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -57,6 +58,8 @@ type App struct {
 	driftAt    time.Time
 	driftDue   atomic.Bool
 	strikes    map[string]int
+	obMu       sync.Mutex
+	obs        map[string]*openbanking.Server
 }
 
 type Options struct {
@@ -146,6 +149,9 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	a.personas = o.Personas
 	a.world = world.New(a.worldConfig(genesis), st.World)
 	a.worldOnly = o.WorldOnly
+	if err := a.prepareOpenBanking(); err != nil {
+		return nil, err
+	}
 	for _, b := range cfg.Banks {
 		if a.worldOnly {
 			break

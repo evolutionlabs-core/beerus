@@ -133,7 +133,7 @@ func startStack(t *testing.T, worldOnly bool) *Stack {
 		t.Cleanup(s.sink.srv.Close)
 		var lastErr error
 		for attempt := 0; attempt < 5 && s.app == nil; attempt++ {
-			ports := freePorts(t, 5)
+			ports := freePorts(t, 7)
 			cfg, err := config.Init(t.TempDir(), config.InitOptions{
 				Seed:        20261028,
 				Today:       clock.DateOf(time.Now()),
@@ -141,6 +141,7 @@ func startStack(t *testing.T, worldOnly bool) *Stack {
 				WidgetPort:  ports[1],
 				ControlPort: ports[2],
 				BankPorts:   []int{ports[3], ports[4]},
+				APIPorts:    []int{ports[5], ports[6]},
 			})
 			if err != nil {
 				t.Fatal(err)

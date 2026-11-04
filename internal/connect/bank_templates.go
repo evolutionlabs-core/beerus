@@ -185,12 +185,56 @@ const bankTemplates = `
 <div class="min-w-0 flex-1"><p class="text-[14px]">{{.Partner}} <span class="text-muted">via {{$.Via}}</span></p>
 <p class="mt-0.5 text-[12.5px] text-muted">{{range $i, $a := .Accounts}}{{if $i}}, {{end}}{{$a}}{{end}}</p>
 <p class="mt-0.5 text-[12.5px] text-faint">Allowed {{day .Since}}{{if not .Until.IsZero}} · until {{day .Until}}{{end}}{{if not .LastAccess.IsZero}} · last accessed {{when .LastAccess}}{{end}}</p></div>
-{{if eq .Status "revoked"}}<span class="badge badge-bad">Access withdrawn</span>{{else if eq .Status "expired"}}<span class="badge badge-bad">Expired</span>{{else}}<form method="post" action="/apps/{{.ID}}/revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-secondary btn-sm">Withdraw access</button></form>{{end}}
+{{if eq .Status "revoked"}}<span class="badge badge-bad">Access withdrawn</span>{{else if eq .Status "expired"}}<span class="badge badge-bad">Expired</span>{{else if eq .Status "dormant"}}<span class="badge badge-bad">Not used for a while</span>{{else if eq .Status "renew"}}<span class="badge badge-bad">Renewal needed</span>{{else}}<form method="post" action="/apps/{{.ID}}/revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="btn btn-secondary btn-sm">Withdraw access</button></form>{{end}}
 </li>{{end}}</ul>{{else}}<p class="px-5 py-10 text-center text-muted">No apps are connected.</p>{{end}}
 </section>
 <section class="mt-8 rounded-2xl border border-line bg-panel">
 <div class="border-b border-line px-5 py-3.5"><h2 class="text-[15px]">Access history</h2></div>
 {{if .History}}<ul>{{range .History}}<li class="flex items-center justify-between gap-4 border-b border-line px-5 py-3 text-[13.5px] last:border-b-0"><span>{{.Partner}} read {{.Account}}</span><span class="text-muted">{{when .At}}</span></li>{{end}}</ul>{{else}}<p class="px-5 py-8 text-center text-muted">No access yet.</p>{{end}}
 </section>
+{{template "bank_foot" .}}{{end}}
+
+{{define "bank_oauth_error"}}{{template "bank_auth_head" .}}
+<h1 class="text-[22px]">Request not valid</h1>
+<p class="mt-2 text-[13.5px] text-muted">{{.Error}}</p>
+{{template "bank_auth_foot" .}}{{end}}
+
+{{define "bank_consent"}}{{template "bank_head" .}}
+<div class="mx-auto max-w-[560px]">
+<h1 class="text-[22px] leading-snug">Share account data with {{.Partner}}</h1>
+<p class="mt-2 text-[13.5px] leading-relaxed text-muted">{{.Client.Name}}, on behalf of {{.Partner}}, is asking for access {{.Purpose}}.</p>
+<section class="mt-6 rounded-2xl border border-line bg-panel p-6">
+<dl class="grid grid-cols-[124px_1fr] gap-x-4 gap-y-2.5 text-[13px]">
+<dt class="text-muted">Receiving party</dt><dd>{{.Client.LegalName}}</dd>
+<dt class="text-muted">Registry number</dt><dd class="num">{{.Client.RegistryID}}</dd>
+<dt class="text-muted">CAC number</dt><dd class="num">{{.Client.CAC}}</dd>
+<dt class="text-muted">Acting for</dt><dd>{{.PartnerLegal}} ({{.Partner}})</dd>
+<dt class="text-muted">Access</dt><dd>{{.Shared}}. Read only.</dd>
+<dt class="text-muted">History from</dt><dd>{{.Start}}{{if .Capped}} <span class="text-muted">· {{$.Bank.Name}} shares history from {{.Effective}}</span>{{end}}</dd>
+<dt class="text-muted">Duration</dt><dd>{{.Months}} months, until {{.Until}}</dd>
+<dt class="text-muted">Frequency</dt><dd>Several times a day, and when {{.Partner}} asks</dd>
+</dl>
+</section>
+{{template "bank_error" .}}
+<form method="post" action="/authorize/consent" class="mt-6">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<p class="mb-2.5 text-[12.5px] text-muted">Accounts to share</p>
+<div class="space-y-2">
+{{range .Choices}}<label class="flex cursor-pointer items-start gap-3 rounded-xl border border-line px-3.5 py-3 transition-colors hover:border-line-strong has-[:checked]:border-line-strong has-[:checked]:bg-raised">
+<input type="checkbox" name="account" value="{{.ID}}" class="mt-1 accent-[var(--primary)]" {{if .Checked}}checked{{end}}>
+<span class="flex-1"><span class="block text-[14px]">{{.Name}}</span><span class="block text-[12.5px] text-muted"><span class="capitalize">{{.Type}}</span> · <span class="num">{{.ID}}</span></span></span>
+</label>{{end}}
+<label class="flex cursor-pointer items-start gap-3 rounded-xl border border-line px-3.5 py-3 transition-colors hover:border-line-strong">
+<input type="checkbox" name="analytics" value="yes" class="mt-1 accent-[var(--primary)]">
+<span class="flex-1"><span class="block text-[14px]">Anonymised analytics</span><span class="block text-[12.5px] text-muted">Optional. You can connect without it.</span></span>
+</label>
+</div>
+<p class="mt-5 text-[12.5px] leading-relaxed text-muted">You can withdraw access at any time from Connected apps at {{$.Bank.Name}}, or from {{.Client.Name}}'s customer page. When you do, {{.Client.Name}} stops collecting data and deletes what it holds within 30 days. {{.Partner}} keeps records already in your books under its own privacy notice.</p>
+<div class="mt-6 grid grid-cols-2 gap-2">
+<button type="submit" name="action" value="decline" class="btn btn-secondary w-full">Decline</button>
+<button type="submit" name="action" value="approve" class="btn btn-primary w-full">Approve</button>
+</div>
+</form>
+</div>
 {{template "bank_foot" .}}{{end}}
 `

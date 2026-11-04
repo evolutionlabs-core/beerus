@@ -18,6 +18,7 @@ type bankBrowser struct {
 	c    *http.Client
 	last string
 	loc  string
+	next string
 }
 
 func (s *Stack) bankBrowser() *bankBrowser {
@@ -35,6 +36,7 @@ func (b *bankBrowser) do(req *http.Request) {
 	body, _ := io.ReadAll(resp.Body)
 	b.last = string(body)
 	b.loc = resp.Request.URL.Path
+	b.next = resp.Header.Get("Location")
 }
 
 func (b *bankBrowser) get(path string) {

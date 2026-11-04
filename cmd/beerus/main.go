@@ -53,6 +53,7 @@ Usage:
   beerus bank open-account <id> --persona ID [--type current|savings]
   beerus bank close <id> --to BANK [--money transfer|payout|leave] [--customers a=payout,b=leave] [--dry-run] [--yes]
   beerus bank purge <id> [--yes]
+  beerus registry [list | add-client <id> --cert-cn CN --public-key FILE --redirect-uri URL [--name N] [--legal-name N] [--cac N] | consents [--bank ID]]
   beerus doctor [--dir .beerus] [--fix]
   beerus trust [--dir .beerus]
   beerus untrust [--dir .beerus]
@@ -131,6 +132,9 @@ func printInfo(c *config.Config) error {
 	fmt.Fprintf(w, "Customer page\t%s/customer\n", c.WidgetURL())
 	for _, b := range c.Banks {
 		fmt.Fprintf(w, "%s online banking\t%s\t(database %s)\n", b.Name, b.URL(), b.Database)
+		if b.APIPort != 0 {
+			fmt.Fprintf(w, "%s open banking API\t%s\t(mTLS)\n", b.Name, b.APIURL())
+		}
 	}
 	fmt.Fprintf(w, "Control API\t%s\t(Bearer token in %s)\n", c.ControlURL(), c.Path("control-token"))
 	fmt.Fprintf(w, "Webhook public key\t%s\n", k.PublicWH())
@@ -385,6 +389,8 @@ func cmdControl(cmd string, args []string) error {
 		}
 	case "bank":
 		out, err = cmdBank(c, args)
+	case "registry":
+		out, err = cmdRegistry(c, args)
 	case "snapshot":
 		switch {
 		case len(args) == 0:
@@ -409,6 +415,38 @@ func cmdControl(cmd string, args []string) error {
 	}
 	pretty(out)
 	return nil
+}
+
+func cmdRegistry(c *ctl, args []string) (map[string]any, error) {
+	const usage = "usage: beerus registry [list | add-client <id> --cert-cn CN --public-key FILE --redirect-uri URL | consents [--bank ID]]"
+	switch {
+	case len(args) == 0 || args[0] == "list":
+		return c.do("GET", "/registry/clients", nil)
+	case args[0] == "consents":
+		fs := flag.NewFlagSet("registry consents", flag.ExitOnError)
+		bank := fs.String("bank", "", "only consent changes recorded by this bank")
+		fs.Parse(args[1:])
+		return c.do("GET", "/registry/consents?bank="+url.QueryEscape(*bank), nil)
+	case args[0] == "add-client" && len(args) >= 2 && !strings.HasPrefix(args[1], "-"):
+		fs := flag.NewFlagSet("registry add-client", flag.ExitOnError)
+		cn := fs.String("cert-cn", "", "common name of the client's mTLS certificate")
+		keyFile := fs.String("public-key", "", "PEM file with the client's EC P-256 public key, used to check its private_key_jwt")
+		name := fs.String("name", "", "brand name")
+		legal := fs.String("legal-name", "", "legal name")
+		cac := fs.String("cac", "", "CAC number")
+		var redirects multi
+		fs.Var(&redirects, "redirect-uri", "where the bank sends the browser back to (repeatable)")
+		fs.Parse(args[2:])
+		if *cn == "" || *keyFile == "" || len(redirects) == 0 {
+			return nil, errors.New(usage)
+		}
+		pem, err := os.ReadFile(*keyFile)
+		if err != nil {
+			return nil, err
+		}
+		return c.do("POST", "/registry/clients", map[string]any{"id": args[1], "cert_cn": *cn, "public_key_pem": string(pem), "name": *name, "legal_name": *legal, "cac": *cac, "redirect_uris": []string(redirects)})
+	}
+	return nil, errors.New(usage)
 }
 
 func cmdBank(c *ctl, args []string) (map[string]any, error) {

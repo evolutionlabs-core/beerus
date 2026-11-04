@@ -58,6 +58,9 @@ func (a *App) ControlHandler() http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]int{"partners": n})
 	})
+	mux.HandleFunc("GET /registry/clients", a.ctlRegistryClients)
+	mux.HandleFunc("POST /registry/clients", a.ctlRegistryAdd)
+	mux.HandleFunc("GET /registry/consents", a.ctlConsentLedger)
 	mux.HandleFunc("GET /webhooks/deliveries", a.ctlDeliveries)
 	mux.HandleFunc("POST /webhooks/deliveries/{id}/replay", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.Replay(r.PathValue("id")); err != nil {
@@ -449,6 +452,8 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 		return snapshotMeta{}, err
 	}
 	cp.Deliveries = nil
+	cp.Registry = nil
+	cp.ConsentLedger = nil
 	cp.Idem = map[string]*IdemRec{}
 	cp.WidgetSessions = map[string]*WidgetSession{}
 	for _, ls := range cp.LinkSessions {
@@ -538,6 +543,8 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	st.fill()
 	st.WorldID = newID("wld")
 	st.Deliveries = a.st.Deliveries
+	st.Registry = a.st.Registry
+	st.ConsentLedger = a.st.ConsentLedger
 	a.st = st
 	a.clock.Restore(st.Clock)
 	genesis, _ := a.cfg.GenesisDate()
