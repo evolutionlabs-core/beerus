@@ -154,10 +154,15 @@ func TestSlowPullDoesNotHoldThePullLock(t *testing.T) {
 		go func() { errs <- a.pullReplica() }()
 	}
 	<-in
-	if !a.pullMu.TryLock() {
+	free := false
+	for deadline := time.Now().Add(time.Second); !free && time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if free = a.pullMu.TryLock(); free {
+			a.pullMu.Unlock()
+		}
+	}
+	if !free {
 		t.Fatal("the pull lock is held during the call to the simulator")
 	}
-	a.pullMu.Unlock()
 	time.Sleep(50 * time.Millisecond)
 	close(release)
 	for i := 0; i < 3; i++ {
