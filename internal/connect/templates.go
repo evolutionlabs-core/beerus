@@ -15,9 +15,11 @@ var pages = template.Must(template.New("").Funcs(uiFuncs).Funcs(template.FuncMap
 <meta name="color-scheme" content="dark light">
 <title>{{.Title}}</title>
 <link rel="stylesheet" href="{{css}}">
+<script src="/assets/theme.js"></script>
 <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
 </head>
 <body class="min-h-screen">
+<div class="fixed top-3 right-4">{{themeToggle}}</div>
 <main class="flex min-h-screen flex-col items-center px-4 pt-14 pb-10 sm:pt-20 {{.BankClass}}">
 <div class="w-full max-w-[420px]">
 <header class="mb-6 flex items-center gap-3">

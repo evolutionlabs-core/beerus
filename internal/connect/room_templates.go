@@ -10,6 +10,7 @@ const roomTemplates = `
 <title>{{.Title}} · Beerus</title>
 {{if .Refresh}}<meta http-equiv="refresh" content="2">{{end}}
 <link rel="stylesheet" href="{{css}}">
+<script src="/assets/theme.js"></script>
 <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
 </head>
 <body class="min-h-screen">
@@ -30,6 +31,7 @@ const roomTemplates = `
 <div class="min-w-0">
 <header class="sticky top-0 z-10 flex h-14 items-center justify-between gap-4 border-b border-line bg-canvas/85 px-5 backdrop-blur-md lg:px-8">
 <div class="truncate text-[13.5px] text-muted">{{block "crumbs" .}}{{.Title}}{{end}}</div>
+<div class="flex items-center gap-2.5">
 <form method="post" action="/ui/clock" class="flex items-center gap-2.5 text-[12.5px]">
 <input type="hidden" name="back" value="{{.Back}}">
 <span class="hidden text-muted sm:inline">{{when .Now}} WAT</span>
@@ -39,6 +41,8 @@ const roomTemplates = `
 </select>
 <button type="submit" class="btn btn-secondary btn-sm">Advance</button>
 </form>
+{{themeToggle}}
+</div>
 </header>
 <main class="max-w-[1180px] px-5 py-8 lg:px-8">
 {{end}}
@@ -360,8 +364,8 @@ const roomTemplates = `
 {{template "room_foot" .}}{{end}}
 
 {{define "room_login"}}<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · Beerus</title><link rel="stylesheet" href="{{css}}"><link rel="icon" href="/assets/icon.svg" type="image/svg+xml"></head>
-<body class="min-h-screen"><main class="flex min-h-screen items-center justify-center px-4">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · Beerus</title><link rel="stylesheet" href="{{css}}"><script src="/assets/theme.js"></script><link rel="icon" href="/assets/icon.svg" type="image/svg+xml"></head>
+<body class="min-h-screen"><div class="fixed top-3 right-4">{{themeToggle}}</div><main class="flex min-h-screen items-center justify-center px-4">
 <form method="post" action="/ui/login" class="w-full max-w-[380px] rounded-2xl border border-line bg-panel p-7">
 <div class="mb-6 flex items-center gap-2.5 text-[14px]">{{logo}}<span>Beerus</span></div>
 <h1 class="text-[22px]">Control room</h1>

@@ -43,7 +43,7 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme="dark"]) {
     --canvas: #f7f6f2;
     --panel: #ffffff;
     --raised: #f2f1ec;
@@ -66,6 +66,30 @@
     --mark-right-2: #121210;
     color-scheme: light;
   }
+}
+
+:root[data-theme="light"] {
+  --canvas: #f7f6f2;
+  --panel: #ffffff;
+  --raised: #f2f1ec;
+  --hover: #eae9e3;
+  --line: rgba(20, 18, 11, 0.08);
+  --line-strong: rgba(20, 18, 11, 0.15);
+  --ink: #14120b;
+  --muted: rgba(20, 18, 11, 0.56);
+  --faint: rgba(20, 18, 11, 0.38);
+  --primary: #14120b;
+  --on-primary: #f7f6f2;
+  --pos: #2f7d50;
+  --neg: #b4513a;
+  --warn: #9a6b12;
+  --mark-top-1: #adaca6;
+  --mark-top-2: #8e8d87;
+  --mark-left-1: #55544f;
+  --mark-left-2: #3a3935;
+  --mark-right-1: #252422;
+  --mark-right-2: #121210;
+  color-scheme: light;
 }
 
 @theme inline {
@@ -100,6 +124,32 @@
   h3 {
     @apply font-normal tracking-tight;
   }
+}
+
+@utility theme-toggle {
+  @apply inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-full border border-transparent bg-transparent text-muted transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-line-strong;
+
+  & .theme-moon {
+    display: none;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .theme-toggle .theme-moon {
+    display: block;
+  }
+
+  :root:not([data-theme="dark"]) .theme-toggle .theme-sun {
+    display: none;
+  }
+}
+
+:root[data-theme="light"] .theme-toggle .theme-moon {
+  display: block;
+}
+
+:root[data-theme="light"] .theme-toggle .theme-sun {
+  display: none;
 }
 
 @utility bank-a {
