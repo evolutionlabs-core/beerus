@@ -606,6 +606,19 @@ func TestTransactionCursor(t *testing.T) {
 	}
 }
 
+func TestTransactionsReportTheWindow(t *testing.T) {
+	e := newEnv(t)
+	tok, _ := e.tokens()
+	access := tok["access_token"].(string)
+	want := clock.DateOf(e.biz).AddDays(defaultLookaheadDays).String()
+	if status, body := e.get(e.good, "/accounts/0123456789/transactions", access); status != 200 || body["to"] != want {
+		t.Errorf("default window: %d %v, want to %s", status, body, want)
+	}
+	if status, body := e.get(e.good, "/accounts/0123456789/transactions?to=2026-01-06", access); status != 200 || body["to"] != "2026-01-06" {
+		t.Errorf("requested window: %d %v", status, body)
+	}
+}
+
 func TestRevokeNeedsTheCustomer(t *testing.T) {
 	e := newEnv(t)
 	_, id := e.tokens()

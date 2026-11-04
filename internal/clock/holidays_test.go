@@ -1,6 +1,7 @@
 package clock
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -174,18 +175,6 @@ func holidaysOf(c *Calendar, y int, from, to time.Month) []string {
 	return out
 }
 
-func sameList(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func TestHolidayYears(t *testing.T) {
 	cases := map[int][]string{
 		2022: {"2022-01-03", "2022-04-15", "2022-04-18", "2022-05-02", "2022-05-03", "2022-06-13", "2022-07-11", "2022-07-12", "2022-10-03", "2022-10-10", "2022-12-26", "2022-12-27"},
@@ -193,7 +182,7 @@ func TestHolidayYears(t *testing.T) {
 		2040: {"2040-01-02", "2040-03-26", "2040-03-30", "2040-04-02", "2040-05-01", "2040-06-12", "2040-10-01", "2040-10-08", "2040-10-09", "2040-12-17", "2040-12-18", "2040-12-25", "2040-12-26"},
 	}
 	for y, want := range cases {
-		if got := holidaysOf(NewCalendar(nil, nil), y, time.January, time.December); !sameList(got, want) {
+		if got := holidaysOf(NewCalendar(nil, nil), y, time.January, time.December); !slices.Equal(got, want) {
 			t.Errorf("%d: got %v, want %v", y, got, want)
 		}
 	}
@@ -213,7 +202,7 @@ func TestWeekendQueue(t *testing.T) {
 		{2170, time.March, time.April, []string{"2170-03-30", "2170-04-02", "2170-04-03"}, "Eid on Good Friday queues behind Easter Monday"},
 	}
 	for _, c := range cases {
-		if got := holidaysOf(NewCalendar(nil, nil), c.year, c.from, c.to); !sameList(got, c.want) {
+		if got := holidaysOf(NewCalendar(nil, nil), c.year, c.from, c.to); !slices.Equal(got, c.want) {
 			t.Errorf("%s: got %v, want %v", c.collisions, got, c.want)
 		}
 	}
@@ -240,10 +229,10 @@ func TestDeclaredAdjustments(t *testing.T) {
 			}
 		}
 	}
-	if got, want := holidaysOf(c, 2023, time.April, time.April), []string{"2023-04-07", "2023-04-10", "2023-04-21", "2023-04-24"}; !sameList(got, want) {
+	if got, want := holidaysOf(c, 2023, time.April, time.April), []string{"2023-04-07", "2023-04-10", "2023-04-21", "2023-04-24"}; !slices.Equal(got, want) {
 		t.Errorf("April 2023: got %v, want %v", got, want)
 	}
-	if got, want := holidaysOf(c, 2025, time.June, time.June), []string{"2025-06-06", "2025-06-09", "2025-06-12"}; !sameList(got, want) {
+	if got, want := holidaysOf(c, 2025, time.June, time.June), []string{"2025-06-06", "2025-06-09", "2025-06-12"}; !slices.Equal(got, want) {
 		t.Errorf("June 2025: got %v, want %v", got, want)
 	}
 }

@@ -69,6 +69,12 @@ func eventDelay(attempts int) time.Duration {
 	return min(eventBackoff<<attempts, eventBackoffAt)
 }
 
+func (a *App) bankConfig(id string) *config.Bank {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.Bank(id)
+}
+
 func (a *App) flushEvents() {
 	if !a.flushMu.TryLock() {
 		return
@@ -82,7 +88,7 @@ func (a *App) flushEvents() {
 	a.obMu.Unlock()
 	ctx := context.Background()
 	for id, s := range servers {
-		b := a.cfg.Bank(id)
+		b := a.bankConfig(id)
 		if b == nil {
 			continue
 		}
@@ -164,7 +170,7 @@ func (a *App) sendConsentEvent(b *config.Bank, e openbanking.Event) error {
 }
 
 func (a *App) bankVerifyKey(id string) (*ecdsa.PublicKey, error) {
-	if a.cfg.Bank(id) == nil {
+	if a.bankConfig(id) == nil {
 		return nil, errors.New("unknown bank")
 	}
 	raw, err := os.ReadFile(a.cfg.Path("banks", id, config.EventSignerName+".crt"))
@@ -219,7 +225,7 @@ func (a *App) consentEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnauthorized, "invalid_signature", "The signature does not match the bank.")
 		return
 	}
-	b := a.cfg.Bank(kid)
+	b := a.bankConfig(kid)
 	exp, _ := claims["exp"].(float64)
 	jti, _ := claims["jti"].(string)
 	consentID, _ := claims["consent_id"].(string)
