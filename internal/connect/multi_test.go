@@ -245,3 +245,79 @@ func TestFailedResumeIsRetriedThenReported(t *testing.T) {
 		t.Fatalf("the other bank saw %q", got)
 	}
 }
+
+func pauseCall(t *testing.T, s *bankSite, path string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	req.Header.Set("Authorization", "Bearer ctl_secret")
+	rec := httptest.NewRecorder()
+	if path == "/internal/pause" {
+		s.internalPause(rec, req)
+	} else {
+		s.internalResume(rec, req)
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("%s answered %d", path, rec.Code)
+	}
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if ok() {
+			return
+		}
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func TestPausedBankResumesWhenTheLeaseRunsOut(t *testing.T) {
+	cfg := testBankConfig()
+	cfg.Connect.PauseLease = "80ms"
+	s := &bankSite{App: &App{cfg: cfg, ctlToken: "ctl_secret", log: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+	pauseCall(t, s, "/internal/pause")
+	if !s.paused.Load() {
+		t.Fatal("the bank did not pause")
+	}
+	for i := 0; i < 4; i++ {
+		time.Sleep(40 * time.Millisecond)
+		pauseCall(t, s, "/internal/pause")
+		if !s.paused.Load() {
+			t.Fatal("a renewed pause ended early")
+		}
+	}
+	waitFor(t, "the lease to resume the bank", func() bool { return !s.paused.Load() })
+	pauseCall(t, s, "/internal/pause")
+	pauseCall(t, s, "/internal/resume")
+	time.Sleep(150 * time.Millisecond)
+	if s.paused.Load() || s.pauseTimer != nil {
+		t.Fatal("a resumed bank kept its lease")
+	}
+}
+
+func TestSimRenewsThePauseWhileItHoldsIt(t *testing.T) {
+	a, mu, calls := pausingSim(t, nil)
+	a.cfg.Connect.PauseLease = "60ms"
+	resume, err := a.pauseBanks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a renewal", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls["bank-a"]) >= 3
+	})
+	if err := resume(); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	n := len(calls["bank-a"])
+	last := calls["bank-a"][n-1]
+	mu.Unlock()
+	time.Sleep(150 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if last != "/internal/resume" || len(calls["bank-a"]) != n {
+		t.Fatalf("renewals continued after the resume: %v", calls["bank-a"])
+	}
+}

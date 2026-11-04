@@ -75,6 +75,8 @@ type App struct {
 	replicated bool
 	synced     atomic.Bool
 	paused     atomic.Bool
+	pauseMu    sync.Mutex
+	pauseTimer *time.Timer
 	pullMu     sync.Mutex
 	pulledAt   time.Time
 	pullFailed time.Time

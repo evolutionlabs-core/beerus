@@ -85,7 +85,10 @@ const (
 	replicaRetry   = time.Second
 )
 
-var resumeWait = time.Second
+var (
+	resumeWait = time.Second
+	leaseRetry = 10 * time.Second
+)
 
 func (a *App) coreDo(method, path string, in, out any) (int, error) {
 	return a.peerDo(a.coreURL, method, path, in, out)
@@ -380,10 +383,14 @@ func (a *bankSite) internalPause(w http.ResponseWriter, r *http.Request) {
 	if !a.peerAuthorised(w, r) {
 		return
 	}
-	a.paused.Store(true)
-	for _, l := range a.ledgers {
-		l.Release()
+	a.pauseMu.Lock()
+	defer a.pauseMu.Unlock()
+	if !a.paused.Swap(true) {
+		for _, l := range a.ledgers {
+			l.Release()
+		}
 	}
+	a.armLease(a.cfg.PauseLease())
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -391,14 +398,53 @@ func (a *bankSite) internalResume(w http.ResponseWriter, r *http.Request) {
 	if !a.peerAuthorised(w, r) {
 		return
 	}
+	a.pauseMu.Lock()
+	defer a.pauseMu.Unlock()
+	if err := a.reconnectLedgers(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.endPause()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *App) reconnectLedgers() error {
 	for _, l := range a.ledgers {
 		if err := l.Reconnect(); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return err
 		}
 	}
+	return nil
+}
+
+func (a *App) endPause() {
+	if a.pauseTimer != nil {
+		a.pauseTimer.Stop()
+		a.pauseTimer = nil
+	}
 	a.paused.Store(false)
-	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *App) armLease(d time.Duration) {
+	if a.pauseTimer != nil {
+		a.pauseTimer.Stop()
+	}
+	a.pauseTimer = time.AfterFunc(d, a.leaseExpired)
+}
+
+func (a *App) leaseExpired() {
+	a.pauseMu.Lock()
+	defer a.pauseMu.Unlock()
+	if !a.paused.Load() {
+		return
+	}
+	if err := a.reconnectLedgers(); err != nil {
+		a.log.Warn("pause lease ran out and the bank could not resume; trying again", "err", err)
+		a.armLease(leaseRetry)
+		return
+	}
+	a.log.Warn("pause lease ran out without a renewal; the bank resumed on its own")
+	a.endPause()
 }
 
 func (a *App) pauseBanks() (func() error, error) {
@@ -423,7 +469,31 @@ func (a *App) pauseBanks() (func() error, error) {
 		}
 		paused = append(paused, b)
 	}
-	return func() error { return a.resumeBanks(paused) }, nil
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	go a.renewPauses(paused, stop, stopped)
+	return func() error {
+		close(stop)
+		<-stopped
+		return a.resumeBanks(paused)
+	}, nil
+}
+
+func (a *App) renewPauses(banks []*config.Bank, stop, stopped chan struct{}) {
+	defer close(stopped)
+	t := time.NewTicker(a.cfg.PauseLease() / 3)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			for _, b := range banks {
+				if _, err := a.peerDo(b.URL(), http.MethodPost, "/internal/pause", nil, nil); err != nil {
+					a.log.Warn("pause not renewed; the bank resumes when its lease runs out", "bank", b.ID, "err", err)
+				}
+			}
+		}
+	}
 }
 
 func (a *App) resumeBanks(banks []*config.Bank) error {
@@ -440,7 +510,7 @@ func (a *App) resumeBanks(banks []*config.Bank) error {
 			a.log.Warn("bank did not resume; trying again", "bank", b.ID, "attempt", attempt+1, "err", err)
 		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s did not resume and stays paused until it is restarted: %w", b.Name, err))
+			errs = append(errs, fmt.Errorf("%s did not resume; it resumes on its own when its pause lease runs out: %w", b.Name, err))
 		}
 	}
 	return errors.Join(errs...)
