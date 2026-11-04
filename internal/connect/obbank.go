@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -174,16 +175,26 @@ func (a *App) RegistryClients() []*RegistryClient {
 	return out
 }
 
-func (a *App) ConsentLedger(bank string, limit int) []ConsentRecord {
+const (
+	consentPageDefault = 200
+	consentPageMax     = 1000
+)
+
+func (a *App) ConsentLedger(bank string, before int64, limit int) ([]ConsentRecord, int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	out := []ConsentRecord{}
-	for i := len(a.st.ConsentLedger) - 1; i >= 0 && len(out) < limit; i-- {
-		if bank == "" || a.st.ConsentLedger[i].Bank == bank {
-			out = append(out, a.st.ConsentLedger[i])
+	for i := len(a.st.ConsentLedger) - 1; i >= 0; i-- {
+		e := a.st.ConsentLedger[i]
+		if (bank != "" && e.Bank != bank) || (before > 0 && e.Seq >= before) {
+			continue
 		}
+		if len(out) == limit {
+			return out, out[len(out)-1].Seq
+		}
+		out = append(out, e)
 	}
-	return out
+	return out, 0
 }
 
 type registryView struct {
@@ -326,8 +337,9 @@ func (d bankData) Ping() error {
 
 func (a *App) openBanking(id string) *openbanking.Server {
 	a.obMu.Lock()
-	defer a.obMu.Unlock()
-	if s := a.obs[id]; s != nil {
+	s := a.obs[id]
+	a.obMu.Unlock()
+	if s != nil {
 		return s
 	}
 	b := a.cfg.Bank(id)
@@ -337,7 +349,7 @@ func (a *App) openBanking(id string) *openbanking.Server {
 	if b == nil || l == nil {
 		return nil
 	}
-	s := openbanking.New(openbanking.Config{
+	s = openbanking.New(openbanking.Config{
 		BankID:        b.ID,
 		BankName:      b.Name,
 		Issuer:        b.APIURL(),
@@ -354,10 +366,16 @@ func (a *App) openBanking(id string) *openbanking.Server {
 		DormantDays:   b.API.DormantDays,
 		AssertionLife: time.Duration(b.API.AssertionSeconds) * time.Second,
 	})
+	a.obMu.Lock()
+	if cur := a.obs[id]; cur != nil {
+		a.obMu.Unlock()
+		return cur
+	}
+	a.obs[id] = s
+	a.obMu.Unlock()
 	if err := s.Resume(context.Background()); err != nil {
 		a.log.Error("open banking requests not cleared", "bank", id, "err", err)
 	}
-	a.obs[id] = s
 	return s
 }
 
@@ -439,5 +457,28 @@ func (a *App) ctlRegistryAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlConsentLedger(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"data": a.ConsentLedger(r.URL.Query().Get("bank"), 200)})
+	q := r.URL.Query()
+	limit, before := consentPageDefault, int64(0)
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > consentPageMax {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("limit must be a number from 1 to %d.", consentPageMax))
+			return
+		}
+		limit = n
+	}
+	if v := q.Get("cursor"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 1 {
+			writeError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use the next value from the last page.")
+			return
+		}
+		before = n
+	}
+	data, next := a.ConsentLedger(q.Get("bank"), before, limit)
+	out := map[string]any{"data": data}
+	if next > 0 {
+		out["next"] = strconv.FormatInt(next, 10)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
