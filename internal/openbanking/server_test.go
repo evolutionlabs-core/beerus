@@ -710,6 +710,44 @@ func TestAssertionRules(t *testing.T) {
 	}
 }
 
+func TestLedgerOutboxKeepsOrderAndRetries(t *testing.T) {
+	e := newEnv(t, func(c *Config) { c.LedgerOutbox = true })
+	ctx := context.Background()
+	_, id := e.tokens()
+	if err := e.srv.Revoke(ctx, id, "adaeze", "bank"); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.ledger.events) != 0 {
+		t.Fatalf("%d events went to the ledger in-process", len(e.ledger.events))
+	}
+	due, err := e.srv.LedgerDue(ctx, 10)
+	if err != nil || len(due) != 2 || due[0].Status != Authorised || due[1].Status != Revoked || due[0].ID >= due[1].ID {
+		t.Fatalf("pending ledger events %+v: %v", due, err)
+	}
+	if err := e.srv.Retry(ctx, due[0], e.now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := e.srv.LedgerDue(ctx, 10); len(again) != 0 {
+		t.Fatalf("a later event is due while the first waits: %+v", again)
+	}
+	if conn, _ := e.srv.Due(ctx, 10); len(conn) != 2 {
+		t.Fatalf("%d events due for Connect", len(conn))
+	}
+	e.advance(2*time.Minute, 0)
+	again, _ := e.srv.LedgerDue(ctx, 10)
+	if len(again) != 2 || again[0].ID != due[0].ID || again[0].Attempts != 1 {
+		t.Fatalf("after the wait: %+v", again)
+	}
+	for _, d := range again {
+		if err := e.srv.Delivered(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if left, _ := e.srv.LedgerDue(ctx, 10); len(left) != 0 {
+		t.Fatalf("delivered events still due: %+v", left)
+	}
+}
+
 func TestAddMonthsClampsToMonthEnd(t *testing.T) {
 	at := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 9, 30, 0, 0, time.UTC) }
 	for _, c := range []struct {

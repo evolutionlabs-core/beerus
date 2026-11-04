@@ -250,6 +250,25 @@ func (s *ledgerSource) Restore(id string, w *world.World) error {
 	return s.reopen()
 }
 
+func (s *ledgerSource) Release() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.st.Pool.Close()
+}
+
+func (s *ledgerSource) Reconnect() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := store.Open(s.ctx, s.cfg.DatabaseURL, s.st.Name())
+	if err != nil {
+		return err
+	}
+	old := s.st
+	s.st = st
+	old.Close()
+	return s.reopen()
+}
+
 func (s *ledgerSource) reopen() error {
 	s.b = bank.New(ledger.New(s.st.Pool, nil), bank.Profile{ID: s.inst.ID, Name: s.inst.Name, NIPCode: s.inst.NIPCode, NUBANCode: s.inst.NUBANCode})
 	s.marks = map[string]time.Time{}

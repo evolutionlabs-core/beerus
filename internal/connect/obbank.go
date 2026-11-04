@@ -245,7 +245,17 @@ type consentLedger struct {
 func (l consentLedger) Record(e openbanking.ConsentEvent) {
 	l.a.regMu.Lock()
 	defer l.a.regMu.Unlock()
-	l.a.st.ConsentLedger = append(l.a.st.ConsentLedger, ConsentRecord{Seq: int64(len(l.a.st.ConsentLedger) + 1), ConsentID: e.ConsentID, Bank: e.Bank, ClientID: e.ClientID, PartnerID: e.PartnerID, Status: string(e.Status), Via: e.Via, At: e.At})
+	if e.Seq != 0 {
+		for i := len(l.a.st.ConsentLedger) - 1; i >= 0; i-- {
+			if r := l.a.st.ConsentLedger[i]; r.Bank == e.Bank && r.SourceSeq != 0 {
+				if r.SourceSeq >= e.Seq {
+					return
+				}
+				break
+			}
+		}
+	}
+	l.a.st.ConsentLedger = append(l.a.st.ConsentLedger, ConsentRecord{Seq: int64(len(l.a.st.ConsentLedger) + 1), SourceSeq: e.Seq, ConsentID: e.ConsentID, Bank: e.Bank, ClientID: e.ClientID, PartnerID: e.PartnerID, Status: string(e.Status), Via: e.Via, At: e.At})
 	l.a.isDirty.Store(true)
 }
 
@@ -396,6 +406,7 @@ func (a *App) openBanking(id string) *openbanking.Server {
 		Registry:      registryView{a},
 		Data:          bankData{a, b},
 		Ledger:        consentLedger{a},
+		LedgerOutbox:  a.role == RoleBank,
 		StableIDs:     b.Stable(),
 		Now:           a.clock.Real,
 		Biz:           a.clock.Now,
@@ -456,7 +467,8 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	}
 	h := ob.Handler()
 	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.bankPhase(b.ID) == PhaseSuspended || a.obLedger(b.ID) == nil || a.world.Down(b.ID, a.clock.Now()) {
+		a.freshen()
+		if (a.role == RoleBank && (!a.synced.Load() || a.paused.Load())) || a.bankPhase(b.ID) == PhaseSuspended || a.obLedger(b.ID) == nil || a.world.Down(b.ID, a.clock.Now()) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "30")
 			w.WriteHeader(http.StatusServiceUnavailable)

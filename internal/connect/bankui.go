@@ -70,6 +70,10 @@ func (app *App) BankHandler(id string) http.Handler {
 	mux.HandleFunc("POST /transfer/confirm", a.obTransferConfirm)
 	mux.HandleFunc("GET /apps", a.obApps)
 	mux.HandleFunc("POST /apps/{id}/revoke", a.obRevoke)
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("POST /internal/revoke", a.internalRevoke)
+	mux.HandleFunc("POST /internal/pause", a.internalPause)
+	mux.HandleFunc("POST /internal/resume", a.internalResume)
 	mux.HandleFunc("GET /authorize", a.obAuthorize)
 	mux.HandleFunc("GET /authorize/consent", a.obConsentPage)
 	mux.HandleFunc("POST /authorize/consent", a.obConsentSubmit)
@@ -80,8 +84,21 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 	port := strconv.Itoa(a.bank.Port)
 	hosts := map[string]bool{a.bank.ID + ".localhost:" + port: true, "127.0.0.1:" + port: true, "localhost:" + port: true}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err != nil || !net.ParseIP(host).IsLoopback() || !hosts[r.Host] {
+		if r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); (!remotePeers() && (err != nil || !net.ParseIP(host).IsLoopback())) || !hosts[r.Host] {
 			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/internal/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		a.freshen()
+		if a.role == RoleBank && (!a.synced.Load() || a.paused.Load()) && !strings.HasPrefix(r.URL.Path, "/assets/") {
+			http.Error(w, "starting", http.StatusServiceUnavailable)
 			return
 		}
 		if a.bankPhase(a.bank.ID) == PhaseSuspended && !strings.HasPrefix(r.URL.Path, "/assets/") {
@@ -452,7 +469,11 @@ func (a *bankSite) obTransferConfirm(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	req, err := a.obTransferRequest(s, r.PostForm)
 	var res world.TransferResult
-	if err == nil {
+	if err == nil && a.role == RoleBank {
+		a.mu.Unlock()
+		res, err = a.remoteTransfer(req)
+		a.mu.Lock()
+	} else if err == nil {
 		res, err = a.world.Transfer(a.clock.Now(), req)
 	}
 	if err != nil {

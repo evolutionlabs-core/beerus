@@ -44,12 +44,14 @@ type Connect struct {
 	WidgetPort   int    `yaml:"widget_port"`
 	WidgetTLS    bool   `yaml:"widget_tls"`
 	ControlPort  int    `yaml:"control_port"`
+	HealthPort   int    `yaml:"health_port"`
 	LegalName    string `yaml:"legal_name"`
 	BrandName    string `yaml:"brand_name"`
 	RegistryID   string `yaml:"registry_id"`
 	CACNumber    string `yaml:"cac_number"`
 	SyncInterval string `yaml:"sync_interval"`
 	RefreshEvery string `yaml:"refresh_min_interval"`
+	PauseLease   string `yaml:"pause_lease,omitempty"`
 }
 
 type Bank struct {
@@ -135,7 +137,12 @@ type Config struct {
 	Holidays    *Holidays  `yaml:"holidays,omitempty"`
 	Dir         string     `yaml:"-"`
 	calendar    *clock.Calendar
+
+	savedDatabaseURL string
+	databaseFromEnv  bool
 }
+
+const DatabaseURLEnv = "BEERUS_DATABASE_URL"
 
 func (c *Config) Calendar() *clock.Calendar {
 	return c.calendar
@@ -200,6 +207,10 @@ func (c *Config) SyncInterval() time.Duration {
 
 func (c *Config) RefreshMinInterval() time.Duration {
 	return dur(c.Connect.RefreshEvery, time.Minute)
+}
+
+func (c *Config) PauseLease() time.Duration {
+	return dur(c.Connect.PauseLease, 2*time.Minute)
 }
 
 func dur(s string, def time.Duration) time.Duration {
@@ -268,6 +279,12 @@ func Load(dir string) (*Config, error) {
 		return nil, fmt.Errorf("beerus.yaml: %w", err)
 	}
 	c.Dir = dir
+	if u := os.Getenv(DatabaseURLEnv); u != "" {
+		if c.DatabaseURL != u {
+			c.savedDatabaseURL = c.DatabaseURL
+		}
+		c.DatabaseURL, c.databaseFromEnv = u, true
+	}
 	if c.Seed == 0 {
 		return nil, errors.New("beerus.yaml: seed is required")
 	}
@@ -290,7 +307,11 @@ func Load(dir string) (*Config, error) {
 }
 
 func (c *Config) Save() error {
-	b, err := yaml.Marshal(c)
+	out := *c
+	if c.databaseFromEnv {
+		out.DatabaseURL = c.savedDatabaseURL
+	}
+	b, err := yaml.Marshal(&out)
 	if err != nil {
 		return err
 	}
@@ -316,6 +337,7 @@ type InitOptions struct {
 	PartnerPort int
 	WidgetPort  int
 	ControlPort int
+	HealthPort  int
 	BankPort    int
 	BankPorts   []int
 	APIPorts    []int
@@ -342,6 +364,9 @@ func Init(dir string, o InitOptions) (*Config, error) {
 	if o.ControlPort == 0 {
 		o.ControlPort = 7480
 	}
+	if o.HealthPort == 0 {
+		o.HealthPort = 7490
+	}
 	if o.BankPort == 0 {
 		o.BankPort = 7445
 	}
@@ -355,6 +380,7 @@ func Init(dir string, o InitOptions) (*Config, error) {
 			PartnerPort:  o.PartnerPort,
 			WidgetPort:   o.WidgetPort,
 			ControlPort:  o.ControlPort,
+			HealthPort:   o.HealthPort,
 			LegalName:    "Beerus Connect Limited",
 			BrandName:    "Beerus Connect",
 			RegistryID:   "OBR-T2-000001",

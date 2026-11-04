@@ -83,6 +83,8 @@ type Store interface {
 	AccessFor(ctx context.Context, customer string, limit int) ([]Access, error)
 	Awaiting(ctx context.Context) ([]*Consent, error)
 	Enqueue(ctx context.Context, e ConsentEvent, at time.Time) error
+	EnqueueLedger(ctx context.Context, e ConsentEvent, at time.Time) error
+	LedgerDue(ctx context.Context, now time.Time, limit int) ([]Event, error)
 	Due(ctx context.Context, now time.Time, limit int) ([]Event, error)
 	Delivered(ctx context.Context, id int64) error
 	Retry(ctx context.Context, id int64, attempts int, next time.Time) error
@@ -114,6 +116,7 @@ type ConsentEvent struct {
 	Status    Status
 	Via       string
 	At        time.Time
+	Seq       int64
 }
 
 type Event struct {

@@ -96,7 +96,7 @@ func (a *App) bankClient() (*http.Client, error) {
 		TLSClientConfig: tc,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
-			if err == nil && strings.HasSuffix(host, ".localhost") {
+			if err == nil && !multiProcess() && strings.HasSuffix(host, ".localhost") {
 				addr = net.JoinHostPort("127.0.0.1", port)
 			}
 			return dialer.DialContext(ctx, network, addr)

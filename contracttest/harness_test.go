@@ -273,6 +273,9 @@ func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ..
 	s.api = &http.Client{Timeout: 30 * time.Second, Transport: &validating{s: s, base: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool}}}}
 	s.raw = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
 	s.waitHealthy()
+	if s.external {
+		s.ctl("POST", "/clock/pace", map[string]float64{"pace": 0})
+	}
 	t.Cleanup(func() {
 		s.vmu.Lock()
 		defer s.vmu.Unlock()
@@ -296,12 +299,29 @@ func (s *Stack) rootPool() *x509.CertPool {
 func (s *Stack) waitHealthy() {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := s.ctlTry("GET", "/health", nil); err == nil {
+		if _, err := s.ctlTry("GET", "/health", nil); err == nil && s.banksAnswer() {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	s.t.Fatal("stack did not become healthy")
+}
+
+func (s *Stack) banksAnswer() bool {
+	if !s.external || s.worldOnly {
+		return true
+	}
+	for _, b := range s.cfg.Banks {
+		resp, err := http.Get(b.URL() + "/login")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+	}
+	return true
 }
 
 type validating struct {

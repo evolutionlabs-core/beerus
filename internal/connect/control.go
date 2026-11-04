@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,6 +40,9 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /nip/name-enquiry", a.ctlNameEnquiry)
 	mux.HandleFunc("GET /nip/participants", a.ctlNIPParticipants)
 	mux.HandleFunc("GET /nip/positions", a.ctlNIPPositions)
+	mux.HandleFunc("GET /nip/settlement", a.ctlNIPSettlement)
+	mux.HandleFunc("GET /internal/replica", a.ctlReplica)
+	mux.HandleFunc("POST /internal/consents", a.ctlConsentRecord)
 	mux.HandleFunc("POST /banks/{id}/net-debit-cap", a.ctlNetDebitCap)
 	mux.HandleFunc("GET /nip/transfers/{session_id}", a.ctlNIPStatus)
 	mux.HandleFunc("GET /connections", a.ctlConnections)
@@ -109,8 +113,11 @@ func (a *App) ControlHandler() http.Handler {
 func (a *App) localOnly(next http.Handler) http.Handler {
 	port := strconv.Itoa(a.cfg.Connect.ControlPort)
 	hosts := map[string]bool{"127.0.0.1:" + port: true, "localhost:" + port: true, "[::1]:" + port: true}
+	if u, err := url.Parse(a.coreURL); err == nil && multiProcess() && u.Host != "" {
+		hosts[u.Host] = true
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err != nil || !net.ParseIP(host).IsLoopback() {
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); !remotePeers() && (err != nil || !net.ParseIP(host).IsLoopback()) {
 			writeError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
 			return
 		}
@@ -404,6 +411,9 @@ func (a *App) ctlDeliveries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) SyncAll() {
+	if a.role == RoleBank {
+		return
+	}
 	a.mu.Lock()
 	now := a.clock.Now()
 	for _, c := range a.st.Connections {
@@ -437,8 +447,17 @@ func (a *App) snapshotDir() string {
 	return a.cfg.Path("snapshots")
 }
 
-func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
+func (a *App) TakeSnapshot(name string) (meta snapshotMeta, err error) {
 	a.Step()
+	resume, err := a.pauseBanks()
+	if err != nil {
+		return snapshotMeta{}, err
+	}
+	defer func() {
+		if rerr := resume(); rerr != nil {
+			err = errors.Join(err, rerr)
+		}
+	}()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.st.Clock = a.clock.State()
@@ -463,7 +482,7 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 	for _, ls := range cp.LinkSessions {
 		ls.OTP, ls.Verifier, ls.BankState = "", "", ""
 	}
-	meta := snapshotMeta{ID: newID("snap"), Name: name, BusinessTime: ts(a.clock.Now()), Seed: a.cfg.Seed, Schema: schemaVersion, TakenReal: a.clock.Real()}
+	meta = snapshotMeta{ID: newID("snap"), Name: name, BusinessTime: ts(a.clock.Now()), Seed: a.cfg.Seed, Schema: schemaVersion, TakenReal: a.clock.Real()}
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {
 			return snapshotMeta{}, err
@@ -485,7 +504,7 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 	return meta, nil
 }
 
-func (a *App) RestoreSnapshot(id string) (string, error) {
+func (a *App) RestoreSnapshot(id string) (result string, err error) {
 	if strings.ContainsAny(id, `/\.`) {
 		return "", errNotFound
 	}
@@ -521,6 +540,15 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 			return "", fmt.Errorf("snapshot %s was taken before %s closed, and closing a bank cannot be undone", id, b.Name)
 		}
 	}
+	resume, err := a.pauseBanks()
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if rerr := resume(); rerr != nil {
+			err = errors.Join(err, rerr)
+		}
+	}()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for a.settling {

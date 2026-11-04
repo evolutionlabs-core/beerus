@@ -208,6 +208,15 @@ func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
+func (a *App) ctlNIPSettlement(w http.ResponseWriter, r *http.Request) {
+	c, err := a.CheckSettlement()
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
 func (a *App) SetNetDebitCap(id string, cap, collateral int64) error {
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()

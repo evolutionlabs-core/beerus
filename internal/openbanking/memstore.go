@@ -20,6 +20,7 @@ type outboxRow struct {
 	Event
 	next      time.Time
 	delivered bool
+	ledger    bool
 }
 
 func NewMemStore() *MemStore {
@@ -183,12 +184,39 @@ func (m *MemStore) Enqueue(_ context.Context, e ConsentEvent, at time.Time) erro
 	return nil
 }
 
+func (m *MemStore) EnqueueLedger(_ context.Context, e ConsentEvent, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events = append(m.events, &outboxRow{Event: Event{ConsentEvent: e, ID: int64(len(m.events) + 1)}, next: at, ledger: true})
+	return nil
+}
+
+func (m *MemStore) LedgerDue(_ context.Context, now time.Time, limit int) ([]Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Event{}
+	head := true
+	for _, r := range m.events {
+		if !r.ledger || r.delivered {
+			continue
+		}
+		if head && r.next.After(now) {
+			break
+		}
+		head = false
+		if len(out) < limit {
+			out = append(out, r.Event)
+		}
+	}
+	return out, nil
+}
+
 func (m *MemStore) Due(_ context.Context, now time.Time, limit int) ([]Event, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := []Event{}
 	for _, r := range m.events {
-		if !r.delivered && !r.next.After(now) && len(out) < limit {
+		if !r.ledger && !r.delivered && !r.next.After(now) && len(out) < limit {
 			out = append(out, r.Event)
 		}
 	}

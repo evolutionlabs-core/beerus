@@ -68,6 +68,21 @@ type App struct {
 	flushMu    sync.Mutex
 	vault      *vault
 	obHTTP     *http.Client
+	role       string
+	bankID     string
+	coreURL    string
+	worldSum   string
+	replicated bool
+	synced     atomic.Bool
+	paused     atomic.Bool
+	pauseMu    sync.Mutex
+	pauseTimer *time.Timer
+	pullMu     sync.Mutex
+	pulledAt   time.Time
+	pullFailed time.Time
+	pullErr    error
+	pulling    *pullFlight
+	peers      *http.Client
 	eventMu    sync.Mutex
 	eventHTTP  map[string]*http.Client
 	bankWrap   func(http.RoundTripper) http.RoundTripper
@@ -81,11 +96,17 @@ type Options struct {
 	Logger    *slog.Logger
 	Client    *http.Client
 	WorldOnly bool
-	Personas  []string
+	Role      string
+	BankID    string
+	CoreURL   string
 	BankWrap  func(http.RoundTripper) http.RoundTripper
+	Personas  []string
 }
 
 func New(cfg *config.Config, o Options) (*App, error) {
+	if o.Role == RoleBank {
+		return newBankRole(cfg, o)
+	}
 	genesis, err := cfg.GenesisDate()
 	if err != nil {
 		return nil, err
@@ -104,8 +125,11 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		ctlToken:  token,
 		log:       o.Logger,
 		limiters:  map[string]*rate.Limiter{},
+		peers:     &http.Client{},
+		coreURL:   o.CoreURL,
 		client:    o.Client,
 		bankWrap:  o.BankWrap,
+		role:      o.Role,
 		wake:      make(chan struct{}, 1),
 		statePath: cfg.Path("stub-state.json"),
 		sending:   make(chan struct{}, 4),
@@ -661,6 +685,12 @@ func (a *App) RevokeAtBank(connID string) error {
 	}
 	bank, consent := c.Institution, c.ConsentID
 	a.mu.Unlock()
+	if b := a.cfg.Bank(bank); a.role == RoleSim && b != nil && consent != "" {
+		if err := a.revokeRemote(b, consent); err != nil {
+			return err
+		}
+		return nil
+	}
 	ob := a.openBanking(bank)
 	if ob == nil || consent == "" {
 		return errNotFound
