@@ -61,6 +61,7 @@ type Bank struct {
 	HistoryDays    int     `yaml:"history_days"`
 	Port           int     `yaml:"port"`
 	APIPort        int     `yaml:"api_port,omitempty"`
+	StableIDs      *bool   `yaml:"stable_ids,omitempty"`
 	Database       string  `yaml:"database"`
 	SettlesThrough string  `yaml:"settles_through,omitempty"`
 	State          string  `yaml:"state,omitempty"`
@@ -82,6 +83,10 @@ func (b *Bank) CapIsDefault() bool {
 
 func (b *Bank) Suspended() bool {
 	return b.State == "suspended"
+}
+
+func (b *Bank) Stable() bool {
+	return b.StableIDs == nil || *b.StableIDs
 }
 
 func (b *Bank) Closed() bool {
@@ -445,8 +450,10 @@ func (c *Config) EnsureCertificates() error {
 }
 
 const (
-	AggregatorCN   = "beerus-connect"
-	AggregatorRole = "aggregator"
+	AggregatorCN    = "beerus-connect"
+	AggregatorRole  = "aggregator"
+	EventSignerName = "events"
+	EventSignerRole = "event-signer"
 )
 
 func (c *Config) ensureOpenBanking(root *pki.Authority, now time.Time) error {
@@ -482,15 +489,23 @@ func (c *Config) EnsureBankCertificates(root *pki.Authority, now time.Time) erro
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
-		if !pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
-			continue
+		if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
+			leaf, err := root.IssueServer([]string{b.ID + ".localhost", "localhost"}, leafLife)
+			if err != nil {
+				return err
+			}
+			if err := leaf.Save(dir, "server"); err != nil {
+				return err
+			}
 		}
-		leaf, err := root.IssueServer([]string{b.ID + ".localhost", "localhost"}, leafLife)
-		if err != nil {
-			return err
-		}
-		if err := leaf.Save(dir, "server"); err != nil {
-			return err
+		if pki.NeedsRenewal(filepath.Join(dir, EventSignerName+".crt"), now) {
+			leaf, err := root.IssueSigner(b.ID+"-events", EventSignerRole, leafLife)
+			if err != nil {
+				return err
+			}
+			if err := leaf.Save(dir, EventSignerName); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

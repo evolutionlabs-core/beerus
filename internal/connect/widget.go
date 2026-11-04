@@ -57,6 +57,8 @@ func (a *App) WidgetHandler() http.Handler {
 	mux.HandleFunc("GET /link/start", a.widgetStart)
 	mux.HandleFunc("POST /link/institution", a.widgetInstitution)
 	mux.HandleFunc("POST /link/cancel", a.widgetCancel)
+	mux.HandleFunc("GET /bank/callback", a.bankCallback)
+	mux.HandleFunc("POST /consent-events", a.consentEvents)
 	mux.HandleFunc("GET /bank/login", a.bankLoginPage)
 	mux.HandleFunc("POST /bank/login", a.bankLogin)
 	mux.HandleFunc("GET /bank/otp", a.bankOTPPage)
@@ -201,6 +203,10 @@ func (a *App) widgetStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ls.Institution != "" {
+		if a.live() {
+			a.beginBankAuth(w, r, ls)
+			return
+		}
 		http.Redirect(w, r, "/bank/login", http.StatusSeeOther)
 		return
 	}
@@ -227,6 +233,10 @@ func (a *App) widgetInstitution(w http.ResponseWriter, r *http.Request) {
 		ls.Status = "bank_chosen"
 		a.dirty()
 	}
+	if a.live() {
+		a.beginBankAuth(w, r, ls)
+		return
+	}
 	http.Redirect(w, r, "/bank/login", http.StatusSeeOther)
 }
 
@@ -243,6 +253,10 @@ func (a *App) widgetCancel(w http.ResponseWriter, r *http.Request) {
 func (a *App) atBank(w http.ResponseWriter, r *http.Request) (*WidgetSession, *LinkSession, *world.Institution) {
 	ws, ls := a.session(w, r)
 	if ls == nil {
+		return nil, nil, nil
+	}
+	if a.live() {
+		a.message(w, http.StatusNotFound, "Not found", "Sign in at your bank instead. Go back and choose the bank again.")
 		return nil, nil, nil
 	}
 	inst, ok := a.world.Institution(ls.Institution)
@@ -542,6 +556,12 @@ func (a *App) customerRevoke(w http.ResponseWriter, r *http.Request) {
 	if c == nil || c.PersonaID != ws.LinkSessionID {
 		a.message(w, http.StatusNotFound, "Not found", "That connection does not exist.")
 		return
+	}
+	if a.live() && c.Status != "revoked" {
+		if err := a.revokeAtBank(c); err != nil {
+			a.message(w, http.StatusServiceUnavailable, "Bank not reachable", "The bank could not be reached to withdraw access. Try again soon.")
+			return
+		}
 	}
 	a.setStatus(c, "revoked", "connection_revoked")
 	http.Redirect(w, r, "/customer", http.StatusSeeOther)

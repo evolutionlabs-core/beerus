@@ -443,7 +443,9 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 	defer a.mu.Unlock()
 	a.st.Clock = a.clock.State()
 	a.st.World = a.world.Overrides()
+	a.regMu.Lock()
 	b, err := json.Marshal(a.st)
+	a.regMu.Unlock()
 	if err != nil {
 		return snapshotMeta{}, err
 	}
@@ -452,12 +454,14 @@ func (a *App) TakeSnapshot(name string) (snapshotMeta, error) {
 		return snapshotMeta{}, err
 	}
 	cp.Deliveries = nil
+	cp.Vault = nil
 	cp.Registry = nil
+	cp.Revokes = nil
 	cp.ConsentLedger = nil
 	cp.Idem = map[string]*IdemRec{}
 	cp.WidgetSessions = map[string]*WidgetSession{}
 	for _, ls := range cp.LinkSessions {
-		ls.OTP = ""
+		ls.OTP, ls.Verifier, ls.BankState = "", "", ""
 	}
 	meta := snapshotMeta{ID: newID("snap"), Name: name, BusinessTime: ts(a.clock.Now()), Seed: a.cfg.Seed, Schema: schemaVersion, TakenReal: a.clock.Real()}
 	for _, l := range a.ledgers {
@@ -544,8 +548,21 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 	st.WorldID = newID("wld")
 	st.Deliveries = a.st.Deliveries
 	st.Registry = a.st.Registry
+	st.Revokes = a.st.Revokes
 	st.ConsentLedger = a.st.ConsentLedger
 	a.st = st
+	if err := a.ensureRegistryLocked(); err != nil {
+		return "", err
+	}
+	if a.live() {
+		for _, c := range st.Connections {
+			switch c.Status {
+			case "revoked", "expired", "reauth_required":
+			default:
+				a.setStatus(c, "reauth_required", "reauth_required")
+			}
+		}
+	}
 	a.clock.Restore(st.Clock)
 	genesis, _ := a.cfg.GenesisDate()
 	a.world = world.New(a.worldConfig(genesis), st.World)
@@ -569,7 +586,7 @@ func (a *App) RestoreSnapshot(id string) (string, error) {
 		}
 	}
 	for _, rec := range a.st.Accounts {
-		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed {
+		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed && c.Status != "reauth_required" {
 			a.emit(c.PartnerID, "sync.available", map[string]any{"connection_id": c.ID, "account_id": rec.ID, "world_id": st.WorldID})
 		}
 	}

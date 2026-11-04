@@ -156,6 +156,8 @@ func changeReason(old, cur Txn) string {
 	return ""
 }
 
+var errStale = errors.New("the connection changed during the sync")
+
 type fetchResult struct {
 	added, modified, removed int
 }
@@ -164,9 +166,49 @@ func (r fetchResult) changed() bool {
 	return r.added+r.modified+r.removed > 0
 }
 
-func (a *App) fetchAccount(partner string, acct *AccountRec, at time.Time) (fetchResult, error) {
+type pulled struct {
+	lines     []world.Presented
+	ledger    int64
+	available int64
+	from      clock.Date
+	windowed  bool
+}
+
+func (a *App) pullWorld(acct *AccountRec, at time.Time) (pulled, error) {
+	src := a.src(acct.WorldKey)
+	lines, err := src.Fetch(acct.WorldKey, at, acct.From)
+	if err != nil {
+		return pulled{}, err
+	}
+	ledger, err := src.LedgerAt(acct.WorldKey, at)
+	if err != nil {
+		return pulled{}, err
+	}
+	pend, err := src.PendingAt(acct.WorldKey, at)
+	if err != nil {
+		return pulled{}, err
+	}
+	p := pulled{lines: lines, ledger: ledger, available: ledger, from: acct.From}
+	if pend < 0 {
+		p.available = ledger + pend
+	}
+	return p, nil
+}
+
+func (a *App) fetchAccount(c *Connection, acct *AccountRec, at time.Time) (fetchResult, error) {
 	var res fetchResult
-	lines, err := a.src(acct.WorldKey).Fetch(acct.WorldKey, at, acct.From)
+	partner := c.PartnerID
+	var in pulled
+	var err error
+	if a.live() {
+		consent := c.ConsentID
+		in, err = a.pullBank(c, acct, at)
+		if err == nil && (a.st.Connections[c.ID] != c || a.st.Accounts[acct.ID] != acct || c.ConsentID != consent || c.Status == "revoked" || acct.Removed) {
+			err = errStale
+		}
+	} else {
+		in, err = a.pullWorld(acct, at)
+	}
 	if err != nil {
 		return res, err
 	}
@@ -177,8 +219,11 @@ func (a *App) fetchAccount(partner string, acct *AccountRec, at time.Time) (fetc
 	}
 	seen := map[string]bool{}
 	var added, modified []LogEntry
-	for _, p := range lines {
+	for _, p := range in.lines {
 		t := toTxn(partner, acct, p)
+		if seen[t.ID] {
+			continue
+		}
 		seen[t.ID] = true
 		if feed.Gone[t.ID] {
 			continue
@@ -205,7 +250,7 @@ func (a *App) fetchAccount(partner string, acct *AccountRec, at time.Time) (fetc
 	sort.Strings(ids)
 	for _, id := range ids {
 		t := feed.Lines[id]
-		if t.Status == "pending" && !seen[id] {
+		if t.Status == "pending" && !seen[id] && (!in.windowed || t.ValueDate >= in.from.String()) {
 			removed = append(removed, LogEntry{Kind: "removed", Txn: Txn{ID: id}})
 			delete(feed.Lines, id)
 			feed.Gone[id] = true
@@ -221,19 +266,8 @@ func (a *App) fetchAccount(partner string, acct *AccountRec, at time.Time) (fetc
 		}
 	}
 	res.added, res.modified, res.removed = len(added), len(modified), len(removed)
-	ledger, err := a.src(acct.WorldKey).LedgerAt(acct.WorldKey, at)
-	if err != nil {
-		return res, err
-	}
-	pend, err := a.src(acct.WorldKey).PendingAt(acct.WorldKey, at)
-	if err != nil {
-		return res, err
-	}
-	acct.Ledger = ledger
-	acct.Available = ledger
-	if pend < 0 {
-		acct.Available = ledger + pend
-	}
+	acct.Ledger = in.ledger
+	acct.Available = in.available
 	acct.AsAt = at
 	a.dirty()
 	return res, nil

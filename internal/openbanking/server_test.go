@@ -48,6 +48,10 @@ func (fakeData) Balance(string) (Balance, error) {
 	return Balance{Ledger: 5000, Available: 4000, Currency: "NGN"}, nil
 }
 
+func (fakeData) BalanceOn(string, clock.Date) (int64, error) {
+	return 4200, nil
+}
+
 func (fakeData) Transactions(string, clock.Date, clock.Date) ([]Txn, error) {
 	d, _ := clock.ParseDate("2026-01-05")
 	out := []Txn{}
@@ -599,6 +603,19 @@ func TestTransactionCursor(t *testing.T) {
 	}
 	if status, body := e.get(e.good, "/accounts/0123456789/transactions?cursor=2099-01-01.0", access); status != 200 || len(body["data"].([]any)) != 0 || body["next_cursor"] != nil {
 		t.Errorf("cursor past the end: %d %v", status, body)
+	}
+}
+
+func TestTransactionsReportTheWindow(t *testing.T) {
+	e := newEnv(t)
+	tok, _ := e.tokens()
+	access := tok["access_token"].(string)
+	want := clock.DateOf(e.biz).AddDays(defaultLookaheadDays).String()
+	if status, body := e.get(e.good, "/accounts/0123456789/transactions", access); status != 200 || body["to"] != want {
+		t.Errorf("default window: %d %v, want to %s", status, body, want)
+	}
+	if status, body := e.get(e.good, "/accounts/0123456789/transactions?to=2026-01-06", access); status != 200 || body["to"] != "2026-01-06" {
+		t.Errorf("requested window: %d %v", status, body)
 	}
 }
 

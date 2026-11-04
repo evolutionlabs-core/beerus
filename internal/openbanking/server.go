@@ -36,6 +36,7 @@ type Config struct {
 	Registry      Registry
 	Data          Data
 	Ledger        Ledger
+	StableIDs     bool
 	Now           func() time.Time
 	Biz           func() time.Time
 	CodeLife      time.Duration
@@ -165,6 +166,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /.well-known/oauth-authorization-server", s.discover)
 	mux.HandleFunc("POST /par", s.par)
 	mux.HandleFunc("POST /token", s.token)
+	mux.HandleFunc("DELETE /consents/{id}", s.revokeConsent)
 	mux.HandleFunc("GET /accounts", s.resource("accounts", s.listAccounts))
 	mux.HandleFunc("GET /accounts/{id}", s.resource("accounts", s.getAccount))
 	mux.HandleFunc("GET /accounts/{id}/balances", s.resource("balances", s.getBalances))
@@ -282,6 +284,7 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		"authorization_response_iss_parameter_supported":   true,
 		"scopes_supported":                                 Scopes,
 		"history_days":                                     s.cfg.HistoryDays,
+		"stable_ids":                                       s.cfg.StableIDs,
 	})
 }
 
@@ -417,8 +420,7 @@ func (s *Server) expireAwaiting(ctx context.Context, c *Consent) error {
 	if err := s.cfg.Store.UpdateConsent(ctx, c); err != nil {
 		return err
 	}
-	s.record(c, Expired, "bank")
-	return nil
+	return s.record(ctx, c, Expired, "bank")
 }
 
 func (s *Server) Resume(ctx context.Context) error {
@@ -487,10 +489,50 @@ func (s *Server) redirect(base string, q url.Values) string {
 	return u.String()
 }
 
-func (s *Server) record(c *Consent, status Status, via string) {
+func (s *Server) record(ctx context.Context, c *Consent, status Status, via string) error {
+	e := ConsentEvent{ConsentID: c.ID, Bank: s.cfg.BankID, ClientID: c.ClientID, PartnerID: c.PartnerID, Status: status, Via: via, At: s.cfg.Biz()}
 	if s.cfg.Ledger != nil {
-		s.cfg.Ledger.Record(ConsentEvent{ConsentID: c.ID, Bank: s.cfg.BankID, ClientID: c.ClientID, PartnerID: c.PartnerID, Status: status, Via: via, At: s.cfg.Biz()})
+		s.cfg.Ledger.Record(e)
 	}
+	return s.cfg.Store.Enqueue(ctx, e, s.cfg.Now())
+}
+
+func (s *Server) Due(ctx context.Context, limit int) ([]Event, error) {
+	return s.cfg.Store.Due(ctx, s.cfg.Now(), limit)
+}
+
+func (s *Server) Delivered(ctx context.Context, e Event) error {
+	return s.cfg.Store.Delivered(ctx, e.ID)
+}
+
+func (s *Server) Retry(ctx context.Context, e Event, next time.Time) error {
+	return s.cfg.Store.Retry(ctx, e.ID, e.Attempts+1, next)
+}
+
+func (s *Server) revokeConsent(w http.ResponseWriter, r *http.Request) {
+	client, _, ok := s.caller(w, r)
+	if !ok {
+		return
+	}
+	c, err := s.cfg.Store.Consent(r.Context(), r.PathValue("id"))
+	if err != nil || c.ClientID != client.ID {
+		fail(w, http.StatusNotFound, "consent_not_found", "No such consent.")
+		return
+	}
+	if err := s.revoke(r.Context(), c, ViaAggregator); err != nil {
+		fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func consentFail(w http.ResponseWriter, desc string, err error) {
+	var ce consentError
+	body := map[string]string{"error": "invalid_grant", "error_description": desc}
+	if errors.As(err, &ce) {
+		body["consent_error"] = ce.code
+	}
+	writeJSON(w, http.StatusBadRequest, body)
 }
 
 func (s *Server) Approve(ctx context.Context, requestURI, customer string, accounts []string, analytics bool) (string, error) {
@@ -531,7 +573,9 @@ func (s *Server) Approve(ctx context.Context, requestURI, customer string, accou
 	if err := s.cfg.Store.UpdateConsent(ctx, c); err != nil {
 		return "", err
 	}
-	s.record(c, Authorised, "bank")
+	if err := s.record(ctx, c, Authorised, "bank"); err != nil {
+		return "", err
+	}
 	raw := random("oc_", 24)
 	s.mu.Lock()
 	s.codes[Hash(raw)] = &code{clientID: p.clientID, redirect: p.redirect, challenge: p.challenge, consentID: c.ID, expires: s.cfg.Now().Add(s.cfg.CodeLife)}
@@ -550,8 +594,11 @@ func (s *Server) Reject(ctx context.Context, requestURI string) (string, error) 
 	}
 	if c, err := s.cfg.Store.Consent(ctx, p.consentID); err == nil && c.Status == AwaitingAuthorisation {
 		c.Status = Rejected
-		if err := s.cfg.Store.UpdateConsent(ctx, c); err == nil {
-			s.record(c, Rejected, "bank")
+		if err := s.cfg.Store.UpdateConsent(ctx, c); err != nil {
+			return "", err
+		}
+		if err := s.record(ctx, c, Rejected, "bank"); err != nil {
+			return "", err
 		}
 	}
 	q := url.Values{"error": {"access_denied"}, "error_description": {"The customer declined."}}
@@ -572,6 +619,14 @@ func (s *Server) Revoke(ctx context.Context, consentID, customer, via string) er
 	return s.revoke(ctx, c, via)
 }
 
+func (s *Server) RevokeByBank(ctx context.Context, consentID, via string) error {
+	c, err := s.cfg.Store.Consent(ctx, consentID)
+	if err != nil {
+		return err
+	}
+	return s.revoke(ctx, c, via)
+}
+
 func (s *Server) revoke(ctx context.Context, c *Consent, via string) error {
 	if c.Status != Authorised && c.Status != AwaitingAuthorisation {
 		return nil
@@ -583,8 +638,7 @@ func (s *Server) revoke(ctx context.Context, c *Consent, via string) error {
 	if err := s.cfg.Store.RevokeConsentTokens(ctx, c.ID); err != nil {
 		return err
 	}
-	s.record(c, Revoked, via)
-	return nil
+	return s.record(ctx, c, Revoked, via)
 }
 
 func (s *Server) Effective(c *Consent) Status {
@@ -655,7 +709,9 @@ func (s *Server) live(ctx context.Context, id string) (*Consent, error) {
 		if err := s.cfg.Store.RevokeConsentTokens(ctx, c.ID); err != nil {
 			return nil, err
 		}
-		s.record(c, eff, "bank")
+		if err := s.record(ctx, c, eff, "bank"); err != nil {
+			return nil, err
+		}
 	}
 	if c.Status != Authorised {
 		return nil, consentError{consentCodes[c.Status]}
@@ -712,7 +768,7 @@ func (s *Server) codeGrant(w http.ResponseWriter, r *http.Request, client *Clien
 	default:
 		consent, err := s.live(r.Context(), cd.consentID)
 		if err != nil {
-			fail(w, http.StatusBadRequest, "invalid_grant", "The consent is not active.")
+			consentFail(w, "The consent is not active.", err)
 			return
 		}
 		s.issue(w, r, consent, client.ID, thumb, "code:"+h, random("fam_", 9))
@@ -734,7 +790,7 @@ func (s *Server) refreshGrant(w http.ResponseWriter, r *http.Request, client *Cl
 	}
 	consent, err := s.live(ctx, tok.ConsentID)
 	if err != nil {
-		fail(w, http.StatusBadRequest, "invalid_grant", "The consent is not active.")
+		consentFail(w, "The consent is not active.", err)
 		return
 	}
 	first, err := s.cfg.Store.MarkRotated(ctx, h, now)
@@ -757,9 +813,10 @@ func (s *Server) refreshGrant(w http.ResponseWriter, r *http.Request, client *Cl
 func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clientID, thumb, parent, family string) {
 	now := s.cfg.Now()
 	access, refresh := random("oba_", 24), random("obr_", 24)
+	refreshUntil := now.AddDate(0, 0, s.cfg.RefreshDays)
 	for _, t := range []*Token{
 		{Hash: Hash(access), Kind: "access", ExpiresAt: now.Add(s.cfg.AccessLife)},
-		{Hash: Hash(refresh), Kind: "refresh", ExpiresAt: now.AddDate(0, 0, s.cfg.RefreshDays)},
+		{Hash: Hash(refresh), Kind: "refresh", ExpiresAt: refreshUntil},
 	} {
 		t.ConsentID, t.ClientID, t.Thumbprint, t.Family, t.Parent, t.CreatedAt = c.ID, clientID, thumb, family, parent, now
 		if err := s.cfg.Store.PutToken(r.Context(), t); err != nil {
@@ -768,12 +825,13 @@ func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clien
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"access_token":  access,
-		"token_type":    "Bearer",
-		"expires_in":    int(s.cfg.AccessLife.Seconds()),
-		"refresh_token": refresh,
-		"scope":         strings.Join(c.Scopes, " "),
-		"consent_id":    c.ID,
+		"access_token":       access,
+		"token_type":         "Bearer",
+		"expires_in":         int(s.cfg.AccessLife.Seconds()),
+		"refresh_token":      refresh,
+		"refresh_expires_in": int(refreshUntil.Sub(now).Seconds()),
+		"scope":              strings.Join(c.Scopes, " "),
+		"consent_id":         c.ID,
 	})
 }
 

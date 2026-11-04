@@ -25,6 +25,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 func (a *App) prepareOpenBanking() error {
@@ -56,6 +57,12 @@ func (a *App) prepareOpenBanking() error {
 }
 
 func (a *App) ensureRegistry() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ensureRegistryLocked()
+}
+
+func (a *App) ensureRegistryLocked() error {
 	key, err := a.cfg.SigningKey()
 	if err != nil {
 		return err
@@ -72,8 +79,8 @@ func (a *App) ensureRegistry() error {
 		RedirectURIs: []string{a.cfg.WidgetURL() + "/bank/callback"},
 		RegisteredAt: a.clock.Real(),
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.regMu.Lock()
+	defer a.regMu.Unlock()
 	if old := a.st.Registry[c.ID]; old != nil {
 		c.RegisteredAt = old.RegisteredAt
 		c.RedirectURIs = old.RedirectURIs
@@ -150,6 +157,8 @@ func (a *App) AddRegistryClient(req RegistryRequest) (*RegistryClient, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.regMu.Lock()
+	defer a.regMu.Unlock()
 	if a.st.Registry[req.ID] != nil {
 		return nil, bad("%s is already registered", req.ID)
 	}
@@ -165,8 +174,8 @@ func (a *App) AddRegistryClient(req RegistryRequest) (*RegistryClient, error) {
 }
 
 func (a *App) RegistryClients() []*RegistryClient {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.regMu.Lock()
+	defer a.regMu.Unlock()
 	out := []*RegistryClient{}
 	for _, c := range a.st.Registry {
 		out = append(out, c)
@@ -181,8 +190,8 @@ const (
 )
 
 func (a *App) ConsentLedger(bank string, before int64, limit int) ([]ConsentRecord, int64) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.regMu.Lock()
+	defer a.regMu.Unlock()
 	out := []ConsentRecord{}
 	for i := len(a.st.ConsentLedger) - 1; i >= 0; i-- {
 		e := a.st.ConsentLedger[i]
@@ -210,8 +219,8 @@ func (r registryView) convert(c *RegistryClient) (*openbanking.Client, bool) {
 }
 
 func (r registryView) Client(id string) (*openbanking.Client, bool) {
-	r.a.mu.Lock()
-	defer r.a.mu.Unlock()
+	r.a.regMu.Lock()
+	defer r.a.regMu.Unlock()
 	if c := r.a.st.Registry[id]; c != nil {
 		return r.convert(c)
 	}
@@ -219,8 +228,8 @@ func (r registryView) Client(id string) (*openbanking.Client, bool) {
 }
 
 func (r registryView) ClientByCert(cn string) (*openbanking.Client, bool) {
-	r.a.mu.Lock()
-	defer r.a.mu.Unlock()
+	r.a.regMu.Lock()
+	defer r.a.regMu.Unlock()
 	for _, c := range r.a.st.Registry {
 		if c.CertCN == cn {
 			return r.convert(c)
@@ -234,16 +243,22 @@ type consentLedger struct {
 }
 
 func (l consentLedger) Record(e openbanking.ConsentEvent) {
-	l.a.mu.Lock()
-	defer l.a.mu.Unlock()
+	l.a.regMu.Lock()
+	defer l.a.regMu.Unlock()
 	l.a.st.ConsentLedger = append(l.a.st.ConsentLedger, ConsentRecord{Seq: int64(len(l.a.st.ConsentLedger) + 1), ConsentID: e.ConsentID, Bank: e.Bank, ClientID: e.ClientID, PartnerID: e.PartnerID, Status: string(e.Status), Via: e.Via, At: e.At})
-	l.a.dirty()
+	l.a.isDirty.Store(true)
 }
 
 type bankData struct {
 	a    *App
 	bank *config.Bank
-	l    *ledgerSource
+}
+
+func (d bankData) ledger() (*ledgerSource, error) {
+	if l := d.a.obLedger(d.bank.ID); l != nil {
+		return l, nil
+	}
+	return nil, errors.New("the bank ledger is not open")
 }
 
 func (d bankData) find(nuban string) (accountRef, error) {
@@ -263,8 +278,6 @@ func (r accountRef) info() openbanking.AccountInfo {
 }
 
 func (d bankData) Accounts(customer string) ([]openbanking.AccountInfo, error) {
-	d.a.mu.Lock()
-	defer d.a.mu.Unlock()
 	out := []openbanking.AccountInfo{}
 	for _, acc := range d.a.world.AccountsAt(customer, d.bank.ID) {
 		out = append(out, accountRef{acc.Key, acc.NUBAN, acc.Name, acc.Type, acc.Currency}.info())
@@ -273,29 +286,25 @@ func (d bankData) Accounts(customer string) ([]openbanking.AccountInfo, error) {
 }
 
 func (d bankData) Account(nuban string) (openbanking.AccountInfo, error) {
-	d.a.mu.Lock()
-	defer d.a.mu.Unlock()
 	r, err := d.find(nuban)
 	return r.info(), err
 }
 
-func (d bankData) lookup(nuban string) (accountRef, time.Time, error) {
-	d.a.mu.Lock()
-	defer d.a.mu.Unlock()
-	r, err := d.find(nuban)
-	return r, d.a.clock.Now(), err
-}
-
 func (d bankData) Balance(nuban string) (openbanking.Balance, error) {
-	r, now, err := d.lookup(nuban)
+	r, err := d.find(nuban)
 	if err != nil {
 		return openbanking.Balance{}, err
 	}
-	ledger, err := d.l.LedgerAt(r.Key, now)
+	l, err := d.ledger()
 	if err != nil {
 		return openbanking.Balance{}, err
 	}
-	pending, err := d.l.PendingAt(r.Key, now)
+	now := d.a.clock.Now()
+	ledger, err := l.LedgerAt(r.Key, now)
+	if err != nil {
+		return openbanking.Balance{}, err
+	}
+	pending, err := l.PendingAt(r.Key, now)
 	if err != nil {
 		return openbanking.Balance{}, err
 	}
@@ -306,12 +315,28 @@ func (d bankData) Balance(nuban string) (openbanking.Balance, error) {
 	return b, nil
 }
 
+func (d bankData) BalanceOn(nuban string, day clock.Date) (int64, error) {
+	r, err := d.find(nuban)
+	if err != nil {
+		return 0, err
+	}
+	l, err := d.ledger()
+	if err != nil {
+		return 0, err
+	}
+	return l.EndOfDay(r.Key, day)
+}
+
 func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking.Txn, error) {
-	r, now, err := d.lookup(nuban)
+	r, err := d.find(nuban)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := d.l.Fetch(r.Key, now, from)
+	l, err := d.ledger()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := l.Fetch(r.Key, d.a.clock.Now(), from)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +345,11 @@ func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking
 		if p.ValueDate.Before(from) || p.ValueDate.After(to) {
 			continue
 		}
-		t := openbanking.Txn{ID: p.Key, Pending: p.Pending, Amount: p.Amount, BookedAt: p.BookedAt, ValueDate: p.ValueDate, Narration: p.Narration, SessionID: p.SessionID, BankRef: p.BankRef, Channel: p.Channel, BalanceAfter: p.BalanceAfter, Seq: p.Seq}
+		id := p.Key
+		if !d.bank.Stable() {
+			id = world.ID("t", p.Key, clock.DateOf(d.a.clock.Now()).String())
+		}
+		t := openbanking.Txn{ID: id, HadPending: p.HadPending, Pending: p.Pending, Amount: p.Amount, BookedAt: p.BookedAt, ValueDate: p.ValueDate, Narration: p.Narration, SessionID: p.SessionID, BankRef: p.BankRef, Channel: p.Channel, BalanceAfter: p.BalanceAfter, Seq: p.Seq}
 		if p.Counterparty != nil {
 			t.Counterparty = &openbanking.Counterparty{Name: p.Counterparty.Name, AccountNumber: p.Counterparty.AccountNumber, BankCode: p.Counterparty.BankCode, BankName: p.Counterparty.BankName}
 		}
@@ -332,7 +361,11 @@ func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking
 func (d bankData) Ping() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	return d.l.Ping(ctx)
+	l, err := d.ledger()
+	if err != nil {
+		return err
+	}
+	return l.Ping(ctx)
 }
 
 func (a *App) openBanking(id string) *openbanking.Server {
@@ -343,22 +376,27 @@ func (a *App) openBanking(id string) *openbanking.Server {
 		return s
 	}
 	b := a.cfg.Bank(id)
-	a.mu.Lock()
-	l := a.ledgerFor(id)
-	a.mu.Unlock()
+	l := a.obLedger(id)
 	if b == nil || l == nil {
 		return nil
 	}
+	first := l.st.Pool
 	s = openbanking.New(openbanking.Config{
-		BankID:        b.ID,
-		BankName:      b.Name,
-		Issuer:        b.APIURL(),
-		AuthorizeURL:  b.URL() + "/authorize",
-		HistoryDays:   b.HistoryDays,
-		Store:         &openbanking.PGStore{Pool: func() *pgxpool.Pool { return l.st.Pool }},
+		BankID:       b.ID,
+		BankName:     b.Name,
+		Issuer:       b.APIURL(),
+		AuthorizeURL: b.URL() + "/authorize",
+		HistoryDays:  b.HistoryDays,
+		Store: &openbanking.PGStore{Pool: func() *pgxpool.Pool {
+			if cur := a.obLedger(id); cur != nil {
+				return cur.st.Pool
+			}
+			return first
+		}},
 		Registry:      registryView{a},
-		Data:          bankData{a, b, l},
+		Data:          bankData{a, b},
 		Ledger:        consentLedger{a},
+		StableIDs:     b.Stable(),
 		Now:           a.clock.Real,
 		Biz:           a.clock.Now,
 		ConsentMonths: b.API.ConsentMonths,
@@ -418,7 +456,7 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	}
 	h := ob.Handler()
 	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.bankPhase(b.ID) == PhaseSuspended {
+		if a.bankPhase(b.ID) == PhaseSuspended || a.obLedger(b.ID) == nil || a.world.Down(b.ID, a.clock.Now()) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "30")
 			w.WriteHeader(http.StatusServiceUnavailable)

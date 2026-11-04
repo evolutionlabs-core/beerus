@@ -34,7 +34,7 @@ func errorMessage(out map[string]any) string {
 }
 
 func TestScenarioFiles(t *testing.T) {
-	s := newStack(t)
+	s := newStackAllPersonas(t)
 	files, err := filepath.Glob("../examples/scenarios/*.yaml")
 	if err != nil || len(files) < 2 {
 		t.Fatalf("example files: %v %v", files, err)

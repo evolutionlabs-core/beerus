@@ -25,6 +25,8 @@ var Scopes = []string{"accounts", "balances", "transactions"}
 
 var ErrNotFound = errors.New("not found")
 
+const ViaAggregator = "aggregator"
+
 type Consent struct {
 	ID              string
 	ClientID        string
@@ -80,6 +82,10 @@ type Store interface {
 	MarkUsed(ctx context.Context, id string, at time.Time) error
 	AccessFor(ctx context.Context, customer string, limit int) ([]Access, error)
 	Awaiting(ctx context.Context) ([]*Consent, error)
+	Enqueue(ctx context.Context, e ConsentEvent, at time.Time) error
+	Due(ctx context.Context, now time.Time, limit int) ([]Event, error)
+	Delivered(ctx context.Context, id int64) error
+	Retry(ctx context.Context, id int64, attempts int, next time.Time) error
 	Ping(ctx context.Context) error
 }
 
@@ -108,6 +114,12 @@ type ConsentEvent struct {
 	Status    Status
 	Via       string
 	At        time.Time
+}
+
+type Event struct {
+	ConsentEvent
+	ID       int64
+	Attempts int
 }
 
 type Ledger interface {
@@ -140,6 +152,7 @@ type Txn struct {
 	Channel      string
 	BalanceAfter int64
 	Seq          int64
+	HadPending   bool
 }
 
 type Counterparty struct {
@@ -153,6 +166,7 @@ type Data interface {
 	Accounts(customer string) ([]AccountInfo, error)
 	Account(nuban string) (AccountInfo, error)
 	Balance(nuban string) (Balance, error)
+	BalanceOn(nuban string, d clock.Date) (int64, error)
 	Transactions(nuban string, from, to clock.Date) ([]Txn, error)
 	Ping() error
 }

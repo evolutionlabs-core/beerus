@@ -13,6 +13,8 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
+const defaultLookaheadDays = 30
+
 type cursor struct {
 	date clock.Date
 	seq  int64
@@ -138,7 +140,7 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request, g granted)
 	if !s.touch(w, r, g.consent) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"consent_id": g.consent.ID, "transaction_from": g.consent.TransactionFrom.String(), "data": out})
+	writeJSON(w, http.StatusOK, map[string]any{"consent_id": g.consent.ID, "transaction_from": g.consent.TransactionFrom.String(), "consent_expires_at": g.consent.ExpiresAt.UTC().Format(time.RFC3339Nano), "data": out})
 }
 
 func (s *Server) getAccount(w http.ResponseWriter, r *http.Request, g granted) {
@@ -159,6 +161,24 @@ func money(minor int64, currency string) map[string]any {
 func (s *Server) getBalances(w http.ResponseWriter, r *http.Request, g granted) {
 	info, ok := s.account(w, r, g)
 	if !ok {
+		return
+	}
+	if v := r.URL.Query().Get("as_of"); v != "" {
+		d, err := clock.ParseDate(v)
+		today := clock.DateOf(s.cfg.Biz())
+		if err != nil || d.After(today.AddDays(-1)) || d.Before(s.HistoryFloor().AddDays(-1)) {
+			fail(w, http.StatusBadRequest, "invalid_request", "as_of must be a past date inside the bank's history, in YYYY-MM-DD form.")
+			return
+		}
+		ledger, err := s.cfg.Data.BalanceOn(info.ID, d)
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
+			return
+		}
+		if !s.touch(w, r, g.consent, info.ID) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"account_id": info.ID, "as_of": d.String(), "ledger_balance": money(ledger, info.Currency)})
 		return
 	}
 	b, err := s.cfg.Data.Balance(info.ID)
@@ -203,6 +223,7 @@ func txnJSON(t Txn, currency string) map[string]any {
 		"bank_reference":      t.BankRef,
 		"channel":             t.Channel,
 		"balance_after_minor": t.BalanceAfter,
+		"had_pending":         t.HadPending,
 	}
 }
 
@@ -213,7 +234,7 @@ func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, g grant
 	}
 	q := r.URL.Query()
 	today := clock.DateOf(s.cfg.Biz())
-	from, to := g.consent.TransactionFrom, today
+	from, to := g.consent.TransactionFrom, today.AddDays(defaultLookaheadDays)
 	bad := func(msg string) {
 		fail(w, http.StatusBadRequest, "invalid_request", msg)
 	}

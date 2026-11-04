@@ -200,3 +200,38 @@ func (s *PGStore) Awaiting(ctx context.Context) ([]*Consent, error) {
 	}
 	return out, rows.Err()
 }
+
+func (s *PGStore) Enqueue(ctx context.Context, e ConsentEvent, at time.Time) error {
+	_, err := s.Pool().Exec(ctx, `INSERT INTO ob_events (consent_id, bank, client_id, partner_id, status, via, at, next_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		e.ConsentID, e.Bank, e.ClientID, e.PartnerID, string(e.Status), e.Via, e.At, at)
+	return err
+}
+
+func (s *PGStore) Due(ctx context.Context, now time.Time, limit int) ([]Event, error) {
+	rows, err := s.Pool().Query(ctx, `SELECT id, consent_id, bank, client_id, partner_id, status, via, at, attempts FROM ob_events WHERE delivered_at IS NULL AND next_at <= $1 ORDER BY id LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Event{}
+	for rows.Next() {
+		var e Event
+		var status string
+		if err := rows.Scan(&e.ID, &e.ConsentID, &e.Bank, &e.ClientID, &e.PartnerID, &status, &e.Via, &e.At, &e.Attempts); err != nil {
+			return nil, err
+		}
+		e.Status = Status(status)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func (s *PGStore) Delivered(ctx context.Context, id int64) error {
+	_, err := s.Pool().Exec(ctx, `UPDATE ob_events SET delivered_at = now() WHERE id = $1`, id)
+	return err
+}
+
+func (s *PGStore) Retry(ctx context.Context, id int64, attempts int, next time.Time) error {
+	_, err := s.Pool().Exec(ctx, `UPDATE ob_events SET attempts = $2, next_at = $3 WHERE id = $1`, id, attempts, next)
+	return err
+}

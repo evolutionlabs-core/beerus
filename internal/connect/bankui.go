@@ -525,7 +525,7 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, row)
 	}
 	for _, c := range a.st.Connections {
-		if c.PersonaID != s.Persona || c.Institution != a.bank.ID {
+		if a.live() || c.PersonaID != s.Persona || c.Institution != a.bank.ID {
 			continue
 		}
 		row := appRow{ID: c.ID, Partner: c.PartnerID, Status: c.Status, Since: c.AuthorisedAt, Until: c.ExpiresAt}
@@ -587,6 +587,7 @@ func (a *bankSite) obRevoke(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		a.flushEvents()
 		http.Redirect(w, r, "/apps?revoked=1", http.StatusSeeOther)
 		return
 	}

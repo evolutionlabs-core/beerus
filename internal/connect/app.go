@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,7 +32,7 @@ type App struct {
 	key        config.SigningKey
 	ctlToken   string
 	log        *slog.Logger
-	isDirty    bool
+	isDirty    atomic.Bool
 	limiters   map[string]*rate.Limiter
 	idemLock   sync.Map
 	client     *http.Client
@@ -49,6 +50,7 @@ type App struct {
 	personas   []string
 	lifeMu     sync.Mutex
 	recMu      sync.Mutex
+	stepMu     sync.Mutex
 	status     map[string]*BankStatus
 	sites      map[string]*siteServer
 	serving    bool
@@ -60,6 +62,18 @@ type App struct {
 	strikes    map[string]int
 	obMu       sync.Mutex
 	obs        map[string]*openbanking.Server
+	regMu      sync.Mutex
+	poolMu     sync.RWMutex
+	pools      map[string]*ledgerSource
+	flushMu    sync.Mutex
+	vault      *vault
+	obHTTP     *http.Client
+	eventMu    sync.Mutex
+	eventHTTP  map[string]*http.Client
+	bankWrap   func(http.RoundTripper) http.RoundTripper
+	obKey      *ecdsa.PrivateKey
+	metas      map[string]bankMeta
+	eventJTI   jtiSet
 }
 
 type Options struct {
@@ -68,6 +82,7 @@ type Options struct {
 	Client    *http.Client
 	WorldOnly bool
 	Personas  []string
+	BankWrap  func(http.RoundTripper) http.RoundTripper
 }
 
 func New(cfg *config.Config, o Options) (*App, error) {
@@ -90,6 +105,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		log:       o.Logger,
 		limiters:  map[string]*rate.Limiter{},
 		client:    o.Client,
+		bankWrap:  o.BankWrap,
 		wake:      make(chan struct{}, 1),
 		statePath: cfg.Path("stub-state.json"),
 		sending:   make(chan struct{}, 4),
@@ -152,6 +168,9 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	if err := a.prepareOpenBanking(); err != nil {
 		return nil, err
 	}
+	if a.vault, err = loadVault(cfg.Path("connect", "vault.key")); err != nil {
+		return nil, err
+	}
 	for _, b := range cfg.Banks {
 		if a.worldOnly {
 			break
@@ -161,7 +180,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
 			continue
 		}
-		a.ledgers = append(a.ledgers, ls)
+		a.addLedger(ls)
 	}
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {
@@ -189,9 +208,25 @@ func New(cfg *config.Config, o Options) (*App, error) {
 func (a *App) worldConfig(genesis clock.Date) world.Config {
 	wc := world.Config{Seed: a.cfg.Seed, Genesis: genesis, Calendar: a.cfg.Calendar(), Personas: a.personas}
 	for _, b := range a.cfg.Banks {
-		wc.Institutions = append(wc.Institutions, world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: true, Style: b.Style()})
+		wc.Institutions = append(wc.Institutions, world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: b.Stable(), Style: b.Style()})
 	}
 	return wc
+}
+
+func (a *App) addLedger(ls *ledgerSource) {
+	a.ledgers = append(a.ledgers, ls)
+	a.poolMu.Lock()
+	if a.pools == nil {
+		a.pools = map[string]*ledgerSource{}
+	}
+	a.pools[ls.inst.ID] = ls
+	a.poolMu.Unlock()
+}
+
+func (a *App) obLedger(id string) *ledgerSource {
+	a.poolMu.RLock()
+	defer a.poolMu.RUnlock()
+	return a.pools[id]
 }
 
 func (a *App) ledgerFor(institution string) *ledgerSource {
@@ -225,7 +260,7 @@ func (a *App) Config() *config.Config {
 }
 
 func (a *App) dirty() {
-	a.isDirty = true
+	a.isDirty.Store(true)
 }
 
 func (a *App) poke() {
@@ -244,7 +279,9 @@ func (a *App) Save() error {
 func (a *App) saveLocked() error {
 	a.st.Clock = a.clock.State()
 	a.st.World = a.world.Overrides()
-	a.isDirty = false
+	a.isDirty.Store(false)
+	a.regMu.Lock()
+	defer a.regMu.Unlock()
 	return saveJSON(a.statePath, a.st)
 }
 
@@ -274,7 +311,7 @@ func (a *App) Run(ctx context.Context) {
 			a.Step()
 		case <-save.C:
 			a.mu.Lock()
-			if a.isDirty {
+			if a.isDirty.Load() {
 				if err := a.saveLocked(); err != nil {
 					a.log.Error("save state", "err", err)
 				}
@@ -285,6 +322,8 @@ func (a *App) Run(ctx context.Context) {
 }
 
 func (a *App) Step() {
+	a.stepMu.Lock()
+	defer a.stepMu.Unlock()
 	if a.recMu.TryLock() {
 		a.reconcileBanks()
 		a.recMu.Unlock()
@@ -302,11 +341,14 @@ func (a *App) Step() {
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}
+	a.refreshTokens()
+	a.retryRevokes()
 	a.runConnections()
 	a.runRefreshes()
 	a.sweep()
 	due := a.dueDeliveries()
 	a.mu.Unlock()
+	a.flushEvents()
 	for _, d := range due {
 		go func(d Delivery) {
 			a.sending <- struct{}{}
@@ -430,6 +472,9 @@ func (a *App) runConnections() {
 	sort.Strings(ids)
 	for _, id := range ids {
 		c := a.st.Connections[id]
+		if c == nil {
+			continue
+		}
 		switch c.Status {
 		case "revoked", "expired", "reauth_required", "error":
 			continue
@@ -456,7 +501,7 @@ func (a *App) runConnections() {
 }
 
 func (a *App) syncConnection(c *Connection, at time.Time) bool {
-	if a.world.Down(c.Institution, at) {
+	if !a.live() && a.world.Down(c.Institution, at) {
 		if c.Status != "institution_down" {
 			c.StatusBeforeDown = c.Status
 			a.setStatus(c, "institution_down", "institution_down")
@@ -465,13 +510,20 @@ func (a *App) syncConnection(c *Connection, at time.Time) bool {
 		return false
 	}
 	changed := map[string]bool{}
-	for _, accID := range c.AccountIDs {
+	for _, accID := range slices.Clone(c.AccountIDs) {
 		acct := a.st.Accounts[accID]
 		if acct == nil || acct.Removed {
 			continue
 		}
-		res, err := a.fetchAccount(c.PartnerID, acct, at)
+		res, err := a.fetchAccount(c, acct, at)
 		if err != nil {
+			if errors.Is(err, errStale) {
+				return false
+			}
+			if a.live() && a.bankFailed(c, err) {
+				c.LastSyncedReal = a.clock.Real()
+				return false
+			}
 			a.log.Error("fetch", "account", accID, "err", err)
 			a.setStatus(c, "error", "internal_error")
 			return false
@@ -495,6 +547,7 @@ func (a *App) syncConnection(c *Connection, at time.Time) bool {
 			})
 		}
 	}
+	c.FullDue = false
 	t := at
 	c.LastSyncedAt = &t
 	c.LastSyncedBiz = at
@@ -537,6 +590,9 @@ func (a *App) runRefreshes() {
 	sort.Strings(ids)
 	for _, id := range ids {
 		r := a.st.Refreshes[id]
+		if r == nil || r.Status != "queued" {
+			continue
+		}
 		acct := a.st.Accounts[r.AccountID]
 		r.Status = "done"
 		r.DoneReal = a.clock.Real()
@@ -554,12 +610,21 @@ func (a *App) runRefreshes() {
 			outcome, code = "failed", "connection_revoked"
 		case conn.Status == "expired" || conn.Status == "reauth_required":
 			outcome, code = "failed", "reauth_required"
-		case a.world.Down(conn.Institution, a.clock.Now()):
+		case !a.live() && a.world.Down(conn.Institution, a.clock.Now()):
 			a.syncConnection(conn, a.clock.Now())
 			outcome, code = "failed", "institution_down"
 		default:
+			conn.FullDue = true
 			if !a.syncConnection(conn, a.clock.Now()) {
 				outcome, code = "failed", "internal_error"
+				switch conn.Status {
+				case "institution_down":
+					code = "institution_down"
+				case "revoked":
+					code = "connection_revoked"
+				case "expired", "reauth_required":
+					code = "reauth_required"
+				}
 			}
 		}
 		connID := ""
@@ -584,12 +649,26 @@ var errNotFound = errors.New("not found")
 
 func (a *App) RevokeAtBank(connID string) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	c, ok := a.st.Connections[connID]
 	if !ok {
+		a.mu.Unlock()
 		return errNotFound
 	}
-	a.setStatus(c, "revoked", "connection_revoked")
+	if !a.live() {
+		a.setStatus(c, "revoked", "connection_revoked")
+		a.mu.Unlock()
+		return nil
+	}
+	bank, consent := c.Institution, c.ConsentID
+	a.mu.Unlock()
+	ob := a.openBanking(bank)
+	if ob == nil || consent == "" {
+		return errNotFound
+	}
+	if err := ob.RevokeByBank(context.Background(), consent, "bank"); err != nil {
+		return err
+	}
+	a.flushEvents()
 	return nil
 }
 

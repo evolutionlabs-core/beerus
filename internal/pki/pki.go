@@ -133,6 +133,22 @@ func (a *Authority) IssueClient(commonName, role string, lifetime time.Duration)
 	return a.issue(tmpl)
 }
 
+func (a *Authority) IssueSigner(commonName, purpose string, lifetime time.Duration) (*Leaf, error) {
+	sn, err := serial()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	tmpl := &x509.Certificate{
+		SerialNumber: sn,
+		Subject:      pkix.Name{CommonName: commonName, Organization: []string{"Beerus Simulator"}, OrganizationalUnit: []string{purpose}},
+		NotBefore:    now.Add(-time.Minute),
+		NotAfter:     now.Add(lifetime),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	return a.issue(tmpl)
+}
+
 func (a *Authority) Save(dir, name string) error {
 	keyDER, err := x509.MarshalPKCS8PrivateKey(a.Key)
 	if err != nil {

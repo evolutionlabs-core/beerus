@@ -15,31 +15,37 @@ import (
 )
 
 type LinkSession struct {
-	ID            string     `json:"id"`
-	PartnerID     string     `json:"partner_id"`
-	WorkspaceID   string     `json:"workspace_id"`
-	Status        string     `json:"status"`
-	StartDate     clock.Date `json:"start_date"`
-	RedirectURI   string     `json:"redirect_uri"`
-	State         string     `json:"state"`
-	ConnectionID  string     `json:"connection_id"`
-	TokenHash     string     `json:"token_hash"`
-	TokenExpires  time.Time  `json:"token_expires"`
-	TokenUsed     bool       `json:"token_used"`
-	Institution   string     `json:"institution"`
-	PersonaID     string     `json:"persona_id"`
-	Accounts      []string   `json:"accounts"`
-	Analytics     bool       `json:"analytics"`
-	CodeHash      string     `json:"code_hash"`
-	CodeExpires   time.Time  `json:"code_expires"`
-	CodeUsed      bool       `json:"code_used"`
-	CreatedAt     time.Time  `json:"created_at"`
-	ExpiresReal   time.Time  `json:"expires_real"`
-	OTP           string     `json:"otp"`
-	OTPExpires    time.Time  `json:"otp_expires"`
-	OTPAttempts   int        `json:"otp_attempts"`
-	LoginAttempts int        `json:"login_attempts"`
-	Verified      bool       `json:"verified"`
+	ID            string        `json:"id"`
+	PartnerID     string        `json:"partner_id"`
+	WorkspaceID   string        `json:"workspace_id"`
+	Status        string        `json:"status"`
+	StartDate     clock.Date    `json:"start_date"`
+	RedirectURI   string        `json:"redirect_uri"`
+	State         string        `json:"state"`
+	ConnectionID  string        `json:"connection_id"`
+	TokenHash     string        `json:"token_hash"`
+	TokenExpires  time.Time     `json:"token_expires"`
+	TokenUsed     bool          `json:"token_used"`
+	Institution   string        `json:"institution"`
+	PersonaID     string        `json:"persona_id"`
+	Accounts      []string      `json:"accounts"`
+	Analytics     bool          `json:"analytics"`
+	CodeHash      string        `json:"code_hash"`
+	CodeExpires   time.Time     `json:"code_expires"`
+	CodeUsed      bool          `json:"code_used"`
+	CreatedAt     time.Time     `json:"created_at"`
+	ExpiresReal   time.Time     `json:"expires_real"`
+	OTP           string        `json:"otp"`
+	OTPExpires    time.Time     `json:"otp_expires"`
+	OTPAttempts   int           `json:"otp_attempts"`
+	LoginAttempts int           `json:"login_attempts"`
+	Verified      bool          `json:"verified"`
+	BankState     string        `json:"bank_state,omitempty"`
+	Verifier      string        `json:"verifier,omitempty"`
+	BankConsentID string        `json:"bank_consent_id,omitempty"`
+	ConsentEnds   time.Time     `json:"consent_ends,omitempty"`
+	BankFrom      clock.Date    `json:"bank_from,omitempty"`
+	BankAccounts  []bankAccount `json:"bank_accounts,omitempty"`
 }
 
 type WidgetSession struct {
@@ -68,6 +74,7 @@ type Connection struct {
 	LastSyncedReal   time.Time   `json:"last_synced_real"`
 	CreatedAt        time.Time   `json:"created_at"`
 	SyncDueReal      time.Time   `json:"sync_due_real"`
+	FullDue          bool        `json:"full_due,omitempty"`
 }
 
 type AccountRec struct {
@@ -84,6 +91,10 @@ type AccountRec struct {
 	Removed      bool       `json:"removed"`
 	HistoryDone  bool       `json:"history_done"`
 	Grants       []string   `json:"grants"`
+	NUBAN        string     `json:"nuban,omitempty"`
+	Name         string     `json:"name,omitempty"`
+	Type         string     `json:"type,omitempty"`
+	Currency     string     `json:"currency,omitempty"`
 }
 
 type Txn struct {
@@ -195,7 +206,15 @@ type ConsentRecord struct {
 	At        time.Time `json:"at"`
 }
 
+type PendingRevoke struct {
+	Bank      string    `json:"bank"`
+	ConsentID string    `json:"consent_id"`
+	Attempts  int       `json:"attempts"`
+	Next      time.Time `json:"next"`
+}
+
 type State struct {
+	Revokes        []PendingRevoke            `json:"revokes,omitempty"`
 	Registry       map[string]*RegistryClient `json:"registry"`
 	ConsentLedger  []ConsentRecord            `json:"consent_ledger"`
 	Access         []AccessEvent              `json:"access"`
@@ -212,6 +231,7 @@ type State struct {
 	Deliveries     []*Delivery                `json:"deliveries"`
 	Idem           map[string]*IdemRec        `json:"idempotency"`
 	Seq            int64                      `json:"seq"`
+	Vault          map[string]*VaultEntry     `json:"vault,omitempty"`
 	NIP            *NIPState                  `json:"nip,omitempty"`
 }
 
@@ -226,6 +246,7 @@ func newState() *State {
 		Refreshes:      map[string]*Refresh{},
 		Idem:           map[string]*IdemRec{},
 		Registry:       map[string]*RegistryClient{},
+		Vault:          map[string]*VaultEntry{},
 		NIP:            &NIPState{Failures: map[string]*NIPFailure{}},
 	}
 }
@@ -254,6 +275,9 @@ func (s *State) fill() {
 	}
 	if s.Registry == nil {
 		s.Registry = map[string]*RegistryClient{}
+	}
+	if s.Vault == nil {
+		s.Vault = map[string]*VaultEntry{}
 	}
 	if s.NIP == nil {
 		s.NIP = &NIPState{}

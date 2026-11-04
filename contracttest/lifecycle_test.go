@@ -241,6 +241,10 @@ func TestBankRepairsDrift(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	s.syncNow()
+	if r := s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+s.today().AddDays(-1).String(), nil); r.Status != 409 || r.Code() != "reauth_required" {
+		t.Fatalf("consents live in the bank database, so a rebuilt bank should ask for consent again: %d %s", r.Status, r.Body)
+	}
+	s.connect("chidi", "bank-b", s.today().AddDays(-10))
 	after := s.must(s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+s.today().AddDays(-1).String(), nil), 200).JSON["ledger_balance"]
 	if fmt.Sprint(before) != fmt.Sprint(after) {
 		t.Fatalf("balance changed across the repair: %v then %v", before, after)
