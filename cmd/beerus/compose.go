@@ -24,6 +24,7 @@ x-beerus: &beerus
     BEERUS_PARTNER_PORT: "{{.PartnerPort}}"
     BEERUS_WIDGET_PORT: "{{.WidgetPort}}"
     BEERUS_CONTROL_PORT: "{{.ControlPort}}"
+    BEERUS_HEALTH_PORT: "{{.HealthPort}}"
     BEERUS_BANK_PORT: "{{.FirstBankPort}}"
   volumes:
     - ${BEERUS_STATE:-state}:/state
@@ -56,12 +57,12 @@ services:
       BEERUS_PARTNER_WEBHOOK_URL: ${BEERUS_PARTNER_WEBHOOK_URL:-}
 {{- end}}
     ports:
-      - "127.0.0.1:${BEERUS_CBN_PORT:-7490}:7490"
+      - "127.0.0.1:{{.HealthPort}}:{{.HealthPort}}"
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "beerus", "health", "http://127.0.0.1:7490/health"]
+      test: ["CMD", "beerus", "health", "http://127.0.0.1:{{.HealthPort}}/health"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -112,14 +113,14 @@ volumes:
 `
 
 type composeData struct {
-	PartnerPort, WidgetPort, ControlPort, FirstBankPort int
-	ConnectHost                                         string
-	NeedsPartner                                        bool
-	Banks                                               []*config.Bank
+	PartnerPort, WidgetPort, ControlPort, HealthPort, FirstBankPort int
+	ConnectHost                                                     string
+	NeedsPartner                                                    bool
+	Banks                                                           []*config.Bank
 }
 
 func renderCompose(c *config.Config) ([]byte, error) {
-	d := composeData{PartnerPort: c.Connect.PartnerPort, WidgetPort: c.Connect.WidgetPort, ControlPort: c.Connect.ControlPort, ConnectHost: c.Connect.Host, NeedsPartner: len(c.Partners) == 0}
+	d := composeData{PartnerPort: c.Connect.PartnerPort, WidgetPort: c.Connect.WidgetPort, ControlPort: c.Connect.ControlPort, HealthPort: c.Connect.HealthPort, ConnectHost: c.Connect.Host, NeedsPartner: len(c.Partners) == 0}
 	for _, b := range c.Banks {
 		if !b.Closed() {
 			d.Banks = append(d.Banks, b)
@@ -127,6 +128,9 @@ func renderCompose(c *config.Config) ([]byte, error) {
 	}
 	if len(d.Banks) == 0 {
 		return nil, fmt.Errorf("%s has no open banks to run", c.Path("beerus.yaml"))
+	}
+	if d.HealthPort <= 0 {
+		return nil, fmt.Errorf("%s has no health_port; set it to the port the cbn container listens on", c.Path("beerus.yaml"))
 	}
 	d.FirstBankPort = d.Banks[0].Port
 	var out bytes.Buffer

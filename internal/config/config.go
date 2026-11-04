@@ -44,6 +44,7 @@ type Connect struct {
 	WidgetPort   int    `yaml:"widget_port"`
 	WidgetTLS    bool   `yaml:"widget_tls"`
 	ControlPort  int    `yaml:"control_port"`
+	HealthPort   int    `yaml:"health_port"`
 	LegalName    string `yaml:"legal_name"`
 	BrandName    string `yaml:"brand_name"`
 	RegistryID   string `yaml:"registry_id"`
@@ -316,6 +317,7 @@ type InitOptions struct {
 	PartnerPort int
 	WidgetPort  int
 	ControlPort int
+	HealthPort  int
 	BankPort    int
 	BankPorts   []int
 	APIPorts    []int
@@ -342,6 +344,9 @@ func Init(dir string, o InitOptions) (*Config, error) {
 	if o.ControlPort == 0 {
 		o.ControlPort = 7480
 	}
+	if o.HealthPort == 0 {
+		o.HealthPort = 7490
+	}
 	if o.BankPort == 0 {
 		o.BankPort = 7445
 	}
@@ -355,6 +360,7 @@ func Init(dir string, o InitOptions) (*Config, error) {
 			PartnerPort:  o.PartnerPort,
 			WidgetPort:   o.WidgetPort,
 			ControlPort:  o.ControlPort,
+			HealthPort:   o.HealthPort,
 			LegalName:    "Beerus Connect Limited",
 			BrandName:    "Beerus Connect",
 			RegistryID:   "OBR-T2-000001",

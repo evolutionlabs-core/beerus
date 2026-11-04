@@ -28,7 +28,7 @@ var version = "0.1.0"
 const usage = `Beerus simulates a Nigerian banking ecosystem on your machine.
 
 Usage:
-  beerus init [--dir .beerus] [--seed N] [--partner-port 7443] [--widget-port 7444] [--control-port 7480]
+  beerus init [--dir .beerus] [--seed N] [--partner-port 7443] [--widget-port 7444] [--control-port 7480] [--health-port 7490]
   beerus up [--dir .beerus]
   beerus run --participant cbn|sim|bank-a|bank-b [--dir .beerus] [--bind 0.0.0.0] [--core URL]
   beerus compose [--dir .beerus]
@@ -120,9 +120,10 @@ func cmdInit(args []string) error {
 	pp := fs.Int("partner-port", 7443, "partner API port")
 	wp := fs.Int("widget-port", 7444, "widget port")
 	cp := fs.Int("control-port", 7480, "control API port")
+	hp := fs.Int("health-port", 7490, "health port of the cbn container")
 	bp := fs.Int("bank-port", 7445, "first online banking port; each bank takes the next one")
 	fs.Parse(args)
-	c, err := config.Init(*dir, config.InitOptions{Seed: *seed, Today: clock.DateOf(time.Now()), PartnerPort: *pp, WidgetPort: *wp, ControlPort: *cp, BankPort: *bp})
+	c, err := config.Init(*dir, config.InitOptions{Seed: *seed, Today: clock.DateOf(time.Now()), PartnerPort: *pp, WidgetPort: *wp, ControlPort: *cp, HealthPort: *hp, BankPort: *bp})
 	if err != nil {
 		return err
 	}

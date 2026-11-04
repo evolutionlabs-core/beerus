@@ -12,6 +12,7 @@ x-beerus: &beerus
     BEERUS_PARTNER_PORT: "7443"
     BEERUS_WIDGET_PORT: "7444"
     BEERUS_CONTROL_PORT: "7480"
+    BEERUS_HEALTH_PORT: "7490"
     BEERUS_BANK_PORT: "7445"
   volumes:
     - ${BEERUS_STATE:-state}:/state
@@ -42,7 +43,7 @@ services:
       BEERUS_PARTNER_REDIRECT_URI: ${BEERUS_PARTNER_REDIRECT_URI:?set the partner app's callback URL}
       BEERUS_PARTNER_WEBHOOK_URL: ${BEERUS_PARTNER_WEBHOOK_URL:-}
     ports:
-      - "127.0.0.1:${BEERUS_CBN_PORT:-7490}:7490"
+      - "127.0.0.1:7490:7490"
     depends_on:
       postgres:
         condition: service_healthy

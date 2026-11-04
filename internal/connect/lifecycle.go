@@ -308,7 +308,7 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 			return nil, invalid("%q is the name of an outside bank that transfers already use", o.Name)
 		}
 	}
-	usedPort := map[int]bool{a.cfg.Connect.PartnerPort: true, a.cfg.Connect.WidgetPort: true, a.cfg.Connect.ControlPort: true}
+	usedPort := map[int]bool{a.cfg.Connect.PartnerPort: true, a.cfg.Connect.WidgetPort: true, a.cfg.Connect.ControlPort: true, a.cfg.Connect.HealthPort: true}
 	maxPort := 0
 	for _, b := range a.cfg.Banks {
 		if strings.EqualFold(b.Name, name) {

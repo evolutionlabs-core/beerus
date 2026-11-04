@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,13 +27,27 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+func envNumber(key string, positive bool) (int64, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a whole number, got %q", key, v)
+	}
+	if positive && n <= 0 {
+		return 0, fmt.Errorf("%s must be above zero, got %q", key, v)
+	}
+	return n, nil
+}
+
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	participant := fs.String("participant", "", "cbn, sim, bank-a, bank-b or any bank ID")
-	bind := fs.String("bind", envOr("BEERUS_BIND", "0.0.0.0"), "address to listen on")
-	core := fs.String("core", envOr("BEERUS_CORE_URL", "http://sim:7480"), "the simulator's control URL, for banks")
-	healthPort := fs.Int("health-port", 7490, "health port for cbn")
+	bind := fs.String("bind", envOr("BEERUS_BIND", "127.0.0.1"), "address to listen on")
+	core := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "the simulator's control URL, for banks")
 	fs.Parse(args)
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -42,7 +57,7 @@ func cmdRun(args []string) error {
 	case "":
 		return errors.New("usage: beerus run --participant cbn|sim|bank-a|bank-b")
 	case "cbn":
-		return runCBN(ctx, *dir, *bind, *healthPort, log)
+		return runCBN(ctx, *dir, *bind, log)
 	case "sim":
 		c, err := config.Load(*dir)
 		if err != nil {
@@ -80,17 +95,20 @@ func bankIDs(c *config.Config) []string {
 	return ids
 }
 
-func runCBN(ctx context.Context, dir, bind string, port int, log *slog.Logger) error {
+func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 	if !config.Exists(dir) {
-		seed, _ := strconv.ParseInt(envOr("BEERUS_SEED", "0"), 10, 64)
-		port := func(key string, fallback int) int {
-			n, err := strconv.Atoi(os.Getenv(key))
-			if err != nil || n <= 0 {
-				return fallback
-			}
-			return n
+		opts := config.InitOptions{Today: clock.DateOf(time.Now())}
+		var err error
+		if opts.Seed, err = envNumber("BEERUS_SEED", false); err != nil {
+			return err
 		}
-		opts := config.InitOptions{Seed: seed, Today: clock.DateOf(time.Now()), PartnerPort: port("BEERUS_PARTNER_PORT", 0), WidgetPort: port("BEERUS_WIDGET_PORT", 0), ControlPort: port("BEERUS_CONTROL_PORT", 0), BankPort: port("BEERUS_BANK_PORT", 0)}
+		for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &opts.PartnerPort, "BEERUS_WIDGET_PORT": &opts.WidgetPort, "BEERUS_CONTROL_PORT": &opts.ControlPort, "BEERUS_HEALTH_PORT": &opts.HealthPort, "BEERUS_BANK_PORT": &opts.BankPort} {
+			n, err := envNumber(key, true)
+			if err != nil {
+				return err
+			}
+			*dst = int(n)
+		}
 		if _, err := config.Init(dir, opts); err != nil {
 			return err
 		}
@@ -122,7 +140,10 @@ func runCBN(ctx context.Context, dir, bind string, port int, log *slog.Logger) e
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /ca.crt", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, c.Path("ca", "root.crt")) })
-	srv := &http.Server{Addr: bind + ":" + strconv.Itoa(port), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	if c.Connect.HealthPort <= 0 {
+		return fmt.Errorf("%s has no health_port; set it to the port the cbn container listens on", c.Path("beerus.yaml"))
+	}
+	srv := &http.Server{Addr: net.JoinHostPort(bind, strconv.Itoa(c.Connect.HealthPort)), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Shutdown(context.Background())

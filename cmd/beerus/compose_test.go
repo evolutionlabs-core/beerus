@@ -40,7 +40,7 @@ func TestComposeFollowsTheSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(out)
-	for _, want := range []string{"  bank-b:", "  bank-c:", "127.0.0.1:7460:7460", "bank-c.localhost", "connect.example.localhost", "BEERUS_BANK_PORT: \"7446\""} {
+	for _, want := range []string{"  bank-b:", "  bank-c:", "127.0.0.1:7460:7460", "bank-c.localhost", "connect.example.localhost", "BEERUS_BANK_PORT: \"7446\"", "BEERUS_BIND: 0.0.0.0"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("compose file lacks %q", want)
 		}
@@ -49,5 +49,29 @@ func TestComposeFollowsTheSetup(t *testing.T) {
 		if strings.Contains(text, unwanted) {
 			t.Errorf("compose file holds %q", unwanted)
 		}
+	}
+}
+
+func TestComposeFollowsTheHealthPort(t *testing.T) {
+	c, err := config.Init(t.TempDir(), config.InitOptions{Today: clock.DateOf(time.Now()), HealthPort: 7555})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := renderCompose(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+	for _, want := range []string{"127.0.0.1:7555:7555", "http://127.0.0.1:7555/health", "BEERUS_HEALTH_PORT: \"7555\""} {
+		if !strings.Contains(text, want) {
+			t.Errorf("compose file lacks %q", want)
+		}
+	}
+	if strings.Contains(text, "7490") {
+		t.Error("compose file still holds the default health port")
+	}
+	c.Connect.HealthPort = 0
+	if _, err := renderCompose(c); err == nil || !strings.Contains(err.Error(), "health_port") {
+		t.Errorf("a setup without a health port rendered: %v", err)
 	}
 }
