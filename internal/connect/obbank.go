@@ -232,17 +232,19 @@ type consentLedger struct {
 }
 
 func (l consentLedger) Record(e openbanking.ConsentEvent) {
-	if l.a.role == RoleBank {
-		go func() {
-			if _, err := l.a.coreDo(http.MethodPost, "/internal/consents", e, nil); err != nil {
-				l.a.log.Warn("consent ledger not updated", "consent", e.ConsentID, "err", err)
-			}
-		}()
-		return
-	}
 	l.a.regMu.Lock()
 	defer l.a.regMu.Unlock()
-	l.a.st.ConsentLedger = append(l.a.st.ConsentLedger, ConsentRecord{Seq: int64(len(l.a.st.ConsentLedger) + 1), ConsentID: e.ConsentID, Bank: e.Bank, ClientID: e.ClientID, PartnerID: e.PartnerID, Status: string(e.Status), Via: e.Via, At: e.At})
+	if e.Seq != 0 {
+		for i := len(l.a.st.ConsentLedger) - 1; i >= 0; i-- {
+			if r := l.a.st.ConsentLedger[i]; r.Bank == e.Bank && r.SourceSeq != 0 {
+				if r.SourceSeq >= e.Seq {
+					return
+				}
+				break
+			}
+		}
+	}
+	l.a.st.ConsentLedger = append(l.a.st.ConsentLedger, ConsentRecord{Seq: int64(len(l.a.st.ConsentLedger) + 1), SourceSeq: e.Seq, ConsentID: e.ConsentID, Bank: e.Bank, ClientID: e.ClientID, PartnerID: e.PartnerID, Status: string(e.Status), Via: e.Via, At: e.At})
 	l.a.isDirty.Store(true)
 }
 
@@ -392,6 +394,7 @@ func (a *App) openBanking(id string) *openbanking.Server {
 		Registry:      registryView{a},
 		Data:          bankData{a, b},
 		Ledger:        consentLedger{a},
+		LedgerOutbox:  a.role == RoleBank,
 		StableIDs:     b.Stable(),
 		Now:           a.clock.Real,
 		Biz:           a.clock.Now,

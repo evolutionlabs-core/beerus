@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
@@ -343,5 +345,51 @@ func TestRestoreAsksForANewConsent(t *testing.T) {
 	}
 	if clients := s.ctl("GET", "/registry/clients", nil)["data"].([]any); len(clients) != 1 || clients[0].(map[string]any)["id"] != s.cfg.Connect.RegistryID {
 		t.Fatalf("registry after a restore: %v", clients)
+	}
+}
+
+func TestBankLedgerOutboxInPostgres(t *testing.T) {
+	s := newBankStack(t)
+	ctx := context.Background()
+	pc, err := pgxpool.ParseConfig(s.cfg.DatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc.ConnConfig.Database = s.cfg.Bank("bank-a").Database
+	db, err := pgxpool.NewWithConfig(ctx, pc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := &openbanking.PGStore{Pool: func() *pgxpool.Pool { return db }}
+	now := time.Now()
+	for _, status := range []openbanking.Status{openbanking.Authorised, openbanking.Revoked} {
+		if err := store.EnqueueLedger(ctx, openbanking.ConsentEvent{ConsentID: "obc_outbox", Bank: "bank-a", ClientID: "OBR-1", Status: status, Via: "bank", At: now}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	due, err := store.LedgerDue(ctx, now, 10)
+	if err != nil || len(due) != 2 || due[0].Status != openbanking.Authorised || due[1].Status != openbanking.Revoked {
+		t.Fatalf("ledger events %+v: %v", due, err)
+	}
+	if connect, _ := store.Due(ctx, now, 100); slices.ContainsFunc(connect, func(e openbanking.Event) bool { return e.ConsentID == "obc_outbox" }) {
+		t.Fatal("a ledger event is due for Connect")
+	}
+	if err := store.Retry(ctx, due[0].ID, 1, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if held, _ := store.LedgerDue(ctx, now, 10); len(held) != 0 {
+		t.Fatalf("later events are due while the first waits: %+v", held)
+	}
+	if err := store.Retry(ctx, due[0].ID, 1, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range due {
+		if err := store.Delivered(ctx, e.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if left, _ := store.LedgerDue(ctx, now, 10); len(left) != 0 {
+		t.Fatalf("delivered events still due: %+v", left)
 	}
 }

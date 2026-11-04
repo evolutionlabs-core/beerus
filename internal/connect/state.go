@@ -197,6 +197,7 @@ type RegistryClient struct {
 
 type ConsentRecord struct {
 	Seq       int64     `json:"seq"`
+	SourceSeq int64     `json:"source_seq,omitempty"`
 	ConsentID string    `json:"consent_id"`
 	Bank      string    `json:"bank"`
 	ClientID  string    `json:"client_id"`

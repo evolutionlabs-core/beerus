@@ -120,3 +120,24 @@ func TestFailedRevokesAreQueuedAndRetried(t *testing.T) {
 		t.Fatalf("queue after the bank came back: %+v", a.st.Revokes)
 	}
 }
+
+func TestConsentLedgerIgnoresRepeatedSourceEvents(t *testing.T) {
+	a := &App{st: newState()}
+	l := consentLedger{a}
+	for _, e := range []openbanking.ConsentEvent{
+		{ConsentID: "obc_1", Bank: "bank-a", Status: openbanking.Authorised, Seq: 1},
+		{ConsentID: "obc_1", Bank: "bank-a", Status: openbanking.Revoked, Seq: 2},
+		{ConsentID: "obc_1", Bank: "bank-a", Status: openbanking.Revoked, Seq: 2},
+		{ConsentID: "obc_9", Bank: "bank-b", Status: openbanking.Authorised, Seq: 1},
+		{ConsentID: "obc_1", Bank: "bank-a", Status: openbanking.Authorised, Seq: 1},
+	} {
+		l.Record(e)
+	}
+	got := a.ConsentLedger("", 10)
+	if len(got) != 3 {
+		t.Fatalf("ledger has %d entries: %+v", len(got), got)
+	}
+	if got[2].Status != string(openbanking.Authorised) || got[1].Status != string(openbanking.Revoked) || got[2].SourceSeq != 1 || got[1].SourceSeq != 2 {
+		t.Fatalf("ledger order %+v", got)
+	}
+}

@@ -207,8 +207,22 @@ func (s *PGStore) Enqueue(ctx context.Context, e ConsentEvent, at time.Time) err
 	return err
 }
 
+func (s *PGStore) EnqueueLedger(ctx context.Context, e ConsentEvent, at time.Time) error {
+	_, err := s.Pool().Exec(ctx, `INSERT INTO ob_events (consent_id, bank, client_id, partner_id, status, via, at, next_at, target) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'ledger')`,
+		e.ConsentID, e.Bank, e.ClientID, e.PartnerID, string(e.Status), e.Via, e.At, at)
+	return err
+}
+
+func (s *PGStore) LedgerDue(ctx context.Context, now time.Time, limit int) ([]Event, error) {
+	return s.events(ctx, `SELECT id, consent_id, bank, client_id, partner_id, status, via, at, attempts FROM ob_events WHERE delivered_at IS NULL AND target = 'ledger' AND (SELECT next_at FROM ob_events WHERE delivered_at IS NULL AND target = 'ledger' ORDER BY id LIMIT 1) <= $1 ORDER BY id LIMIT $2`, now, limit)
+}
+
 func (s *PGStore) Due(ctx context.Context, now time.Time, limit int) ([]Event, error) {
-	rows, err := s.Pool().Query(ctx, `SELECT id, consent_id, bank, client_id, partner_id, status, via, at, attempts FROM ob_events WHERE delivered_at IS NULL AND next_at <= $1 ORDER BY id LIMIT $2`, now, limit)
+	return s.events(ctx, `SELECT id, consent_id, bank, client_id, partner_id, status, via, at, attempts FROM ob_events WHERE delivered_at IS NULL AND target = 'connect' AND next_at <= $1 ORDER BY id LIMIT $2`, now, limit)
+}
+
+func (s *PGStore) events(ctx context.Context, query string, now time.Time, limit int) ([]Event, error) {
+	rows, err := s.Pool().Query(ctx, query, now, limit)
 	if err != nil {
 		return nil, err
 	}

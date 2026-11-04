@@ -112,6 +112,38 @@ func (a *App) flushEvents() {
 	}
 }
 
+func (a *App) flushLedger() {
+	a.obMu.Lock()
+	servers := make(map[string]*openbanking.Server, len(a.obs))
+	for id, s := range a.obs {
+		servers[id] = s
+	}
+	a.obMu.Unlock()
+	ctx := context.Background()
+	for id, s := range servers {
+		due, err := s.LedgerDue(ctx, eventBatch)
+		if err != nil {
+			a.log.Warn("consent ledger events not read", "bank", id, "err", err)
+			continue
+		}
+		for _, e := range due {
+			ev := e.ConsentEvent
+			ev.Seq = e.ID
+			if _, err := a.coreDo(http.MethodPost, "/internal/consents", ev, nil); err != nil {
+				a.log.Warn("consent ledger not updated; will retry", "bank", id, "consent", e.ConsentID, "attempt", e.Attempts+1, "err", err)
+				if err := s.Retry(ctx, e, a.clock.Real().Add(eventDelay(e.Attempts))); err != nil {
+					a.log.Error("consent ledger retry not saved", "bank", id, "consent", e.ConsentID, "err", err)
+				}
+				break
+			}
+			if err := s.Delivered(ctx, e); err != nil {
+				a.log.Error("consent ledger delivery not saved", "bank", id, "consent", e.ConsentID, "err", err)
+				break
+			}
+		}
+	}
+}
+
 func (a *App) bankSigner(b *config.Bank) (*ecdsa.PrivateKey, error) {
 	raw, err := os.ReadFile(a.cfg.Path("banks", b.ID, config.EventSignerName+".key"))
 	if err != nil {
