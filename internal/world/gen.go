@@ -209,8 +209,25 @@ func (g *dayGen) amount(min, max, step int) int64 {
 	return int64(v) * 100
 }
 
+func (g *dayGen) payday() bool {
+	if g.w.cfg.Calendar.IsHoliday(g.d) {
+		return false
+	}
+	if g.d.D == 25 {
+		return true
+	}
+	n := g.d.AddDays(1)
+	for g.w.cfg.Calendar.IsHoliday(n) {
+		if n.D == 25 {
+			return true
+		}
+		n = n.AddDays(1)
+	}
+	return false
+}
+
 func (g *dayGen) run() {
-	weekend := g.d.Weekday() == time.Saturday || g.d.Weekday() == time.Sunday
+	weekend := g.d.Weekday() == time.Saturday || g.d.Weekday() == time.Sunday || g.w.cfg.Calendar.IsHoliday(g.d)
 	scale := g.p.rate
 	if weekend {
 		scale /= 3
@@ -231,12 +248,12 @@ func (g *dayGen) run() {
 		if g.d.Weekday() == time.Friday {
 			g.ownTransfer()
 		}
-		if g.d.D == 25 {
+		if g.payday() {
 			g.sweepToSavings()
 		}
 	} else {
 		a := accts[0]
-		if g.d.D == 25 {
+		if g.payday() {
 			g.inflow(a, 45000000, "salary")
 		}
 		if g.rng.Float64() < 0.35*scale*3 {

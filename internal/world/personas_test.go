@@ -14,8 +14,8 @@ import (
 var originalPersonas = []string{"adaeze", "tunde", "ngozi", "chidi"}
 
 var originalDigests = map[int64]string{
-	42:       "d3b52459209951e68c6d3ae27a5602e3837069ea1440483997fcbe8bc8711a5d",
-	20261028: "324a575b99954a9b4d7650cac3f1316f9b5c67b5e4189e89b0fdc314cb1782d3",
+	42:       "5e16fac90c9dc945fa3e41ee0128e6dab30c77df7083d7fe6a26243fc0eaabcd",
+	20261028: "43bfc77cdaf1342617a7eb891f16222197a9adbdf531248b35bfa6a54b77b1f2",
 }
 
 func originalsDigest(seed int64) (string, int) {

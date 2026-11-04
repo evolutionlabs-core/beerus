@@ -102,12 +102,19 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stub state: %w", err)
 	}
-	if st == nil {
+	fresh := st == nil
+	if fresh {
 		st = newState()
 		st.Clock = clock.State{Pace: cfg.Pace}
 	} else if _, err := os.Stat(a.runningPath()); err == nil {
 		a.log.Warn("the last run did not shut down cleanly; starting a new world so partners resync", "old_world", st.WorldID)
 		st.WorldID = newID("wld")
+	}
+	if st.Calendar != clock.CalendarVersion() {
+		if !fresh {
+			a.log.Warn("the holiday calendar changed since this setup last ran; past transaction history is regenerated with the new holiday dates", "from", st.Calendar, "to", clock.CalendarVersion())
+		}
+		st.Calendar = clock.CalendarVersion()
 	}
 	for _, d := range st.Deliveries {
 		if d.Status == "sending" {
@@ -174,7 +181,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 }
 
 func (a *App) worldConfig(genesis clock.Date) world.Config {
-	wc := world.Config{Seed: a.cfg.Seed, Genesis: genesis, Personas: a.personas}
+	wc := world.Config{Seed: a.cfg.Seed, Genesis: genesis, Calendar: a.cfg.Calendar(), Personas: a.personas}
 	for _, b := range a.cfg.Banks {
 		wc.Institutions = append(wc.Institutions, world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: true, Style: b.Style()})
 	}
