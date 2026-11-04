@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
@@ -342,6 +343,7 @@ func New(cfg Config, ov Overrides) *World {
 		w.state[k] = &genState{projected: a.Opening}
 	}
 	w.injectedSet = map[string]bool{}
+	categoriseLegacy(w.ov.Injected)
 	for i := range w.ov.Injected {
 		if w.ov.Injected[i].ValueDate.IsZero() {
 			w.ov.Injected[i].ValueDate = clock.DateOf(w.ov.Injected[i].BookedAt)
@@ -888,5 +890,49 @@ func (w *World) finish() {
 			}
 		}
 		w.lines[key] = ls
+	}
+}
+
+func categoriseLegacy(lines []Line) {
+	group := func(key string) string {
+		parts := strings.SplitN(key, ":", 4)
+		if len(parts) < 4 {
+			return key
+		}
+		return strings.Join(parts[:3], ":")
+	}
+	sender := map[string]string{}
+	for _, l := range lines {
+		if l.Channel != "charge" && l.Channel != "reversal" && l.Amount < 0 {
+			if _, ok := sender[group(l.Key)]; !ok {
+				sender[group(l.Key)] = l.Account
+			}
+		}
+	}
+	charged := map[string][]int{}
+	for i, l := range lines {
+		if l.Channel == "charge" && l.Category == "" {
+			g := group(l.Key)
+			charged[g] = append(charged[g], i)
+		}
+	}
+	for g, idx := range charged {
+		var own []int
+		for _, i := range idx {
+			if lines[i].Account == sender[g] {
+				own = append(own, i)
+			} else {
+				lines[i].Category = charges.CategoryLevy
+			}
+		}
+		order := []string{charges.CategoryFee, charges.CategoryVAT, charges.CategoryStamp}
+		if len(own) == 1 {
+			order = []string{charges.CategoryStamp}
+		}
+		for n, i := range own {
+			if n < len(order) {
+				lines[i].Category = order[n]
+			}
+		}
 	}
 }
