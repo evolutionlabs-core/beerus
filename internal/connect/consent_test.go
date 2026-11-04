@@ -32,7 +32,7 @@ func TestConsentLedgerAndSaveDoNotRace(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if got := a.ConsentLedger("", 100); len(got) != 8 {
+	if got, _ := a.ConsentLedger("", 0, 100); len(got) != 8 {
 		t.Fatalf("ledger has %d entries", len(got))
 	}
 }
