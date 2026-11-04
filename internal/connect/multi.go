@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -37,6 +38,11 @@ func SetBind(addr string) {
 
 func multiProcess() bool {
 	return bindAddr != ""
+}
+
+func remotePeers() bool {
+	ip := net.ParseIP(bindAddr)
+	return multiProcess() && (ip == nil || !ip.IsLoopback())
 }
 
 type replica struct {
@@ -72,10 +78,14 @@ func (a *App) ctlConsentRecord(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
+	maxPeerBody    = 16 << 20
+	resumeAttempts = 5
 	peerTimeout    = 30 * time.Second
 	replicaTimeout = 5 * time.Second
 	replicaRetry   = time.Second
 )
+
+var resumeWait = time.Second
 
 func (a *App) coreDo(method, path string, in, out any) (int, error) {
 	return a.peerDo(a.coreURL, method, path, in, out)
@@ -109,7 +119,13 @@ func (a *App) peerDoWithin(limit time.Duration, base, method, path string, in, o
 		return 0, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxPeerBody+1))
+	if err != nil {
+		return resp.StatusCode, fmt.Errorf("reading the answer to %s: %w", path, err)
+	}
+	if len(raw) > maxPeerBody {
+		return resp.StatusCode, fmt.Errorf("the answer to %s is larger than %d MiB", path, maxPeerBody>>20)
+	}
 	if resp.StatusCode >= 300 {
 		var e struct {
 			Error struct {
@@ -135,7 +151,7 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 		return nil, fmt.Errorf("no bank %q in %s", o.BankID, cfg.Path("beerus.yaml"))
 	}
 	if o.CoreURL == "" {
-		return nil, errors.New("a bank needs the simulator's control URL")
+		return nil, errors.New("a bank needs --core or BEERUS_CORE_URL, the simulator's control URL")
 	}
 	genesis, err := cfg.GenesisDate()
 	if err != nil {
@@ -193,23 +209,43 @@ func (a *App) freshen() {
 
 func (a *App) pullReplica() error {
 	a.pullMu.Lock()
-	defer a.pullMu.Unlock()
 	if time.Since(a.pulledAt) < 2*time.Millisecond && a.synced.Load() {
+		a.pullMu.Unlock()
 		return nil
 	}
 	if a.pullErr != nil && time.Since(a.pullFailed) < replicaRetry {
-		return a.pullErr
-	}
-	if err := a.pullReplicaLocked(); err != nil {
-		a.pullErr, a.pullFailed = err, time.Now()
+		err := a.pullErr
+		a.pullMu.Unlock()
 		return err
 	}
-	a.pullErr = nil
-	a.pulledAt = time.Now()
-	return nil
+	if flight := a.pulling; flight != nil {
+		a.pullMu.Unlock()
+		<-flight.done
+		return flight.err
+	}
+	flight := &pullFlight{done: make(chan struct{})}
+	a.pulling = flight
+	a.pullMu.Unlock()
+	flight.err = a.fetchReplica()
+	a.pullMu.Lock()
+	a.pulling = nil
+	if flight.err != nil {
+		a.pullErr, a.pullFailed = flight.err, time.Now()
+	} else {
+		a.pullErr = nil
+		a.pulledAt = time.Now()
+	}
+	a.pullMu.Unlock()
+	close(flight.done)
+	return flight.err
 }
 
-func (a *App) pullReplicaLocked() error {
+type pullFlight struct {
+	done chan struct{}
+	err  error
+}
+
+func (a *App) fetchReplica() error {
 	var rep replica
 	if _, err := a.peerDoWithin(replicaTimeout, a.coreURL, http.MethodGet, "/internal/replica", nil, &rep); err != nil {
 		return err
@@ -282,6 +318,7 @@ func (a *App) ServeBank(ctx context.Context) error {
 			return nil
 		case <-tick.C:
 			a.flushEvents()
+			a.flushLedger()
 			if err := a.pullReplica(); err != nil {
 				if msg := err.Error(); msg != lastErr {
 					a.log.Warn("simulator not reachable", "err", err)
@@ -326,6 +363,7 @@ func (a *bankSite) internalRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.flushEvents()
+	a.flushLedger()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -363,9 +401,9 @@ func (a *bankSite) internalResume(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *App) pauseBanks() func() {
+func (a *App) pauseBanks() (func() error, error) {
 	if a.role != RoleSim {
-		return func() {}
+		return func() error { return nil }, nil
 	}
 	var targets, paused []*config.Bank
 	a.mu.Lock()
@@ -377,16 +415,33 @@ func (a *App) pauseBanks() func() {
 	a.mu.Unlock()
 	for _, b := range targets {
 		if _, err := a.peerDo(b.URL(), http.MethodPost, "/internal/pause", nil, nil); err != nil {
-			a.log.Warn("bank did not pause", "bank", b.ID, "err", err)
-			continue
+			err = fmt.Errorf("%s did not pause: %w", b.Name, err)
+			if rerr := a.resumeBanks(paused); rerr != nil {
+				err = errors.Join(err, rerr)
+			}
+			return nil, err
 		}
 		paused = append(paused, b)
 	}
-	return func() {
-		for _, b := range paused {
-			if _, err := a.peerDo(b.URL(), http.MethodPost, "/internal/resume", nil, nil); err != nil {
-				a.log.Warn("bank did not resume", "bank", b.ID, "err", err)
+	return func() error { return a.resumeBanks(paused) }, nil
+}
+
+func (a *App) resumeBanks(banks []*config.Bank) error {
+	var errs []error
+	for _, b := range banks {
+		var err error
+		for attempt := 0; attempt < resumeAttempts; attempt++ {
+			if attempt > 0 {
+				time.Sleep(resumeWait)
 			}
+			if _, err = a.peerDo(b.URL(), http.MethodPost, "/internal/resume", nil, nil); err == nil {
+				break
+			}
+			a.log.Warn("bank did not resume; trying again", "bank", b.ID, "attempt", attempt+1, "err", err)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s did not resume and stays paused until it is restarted: %w", b.Name, err))
 		}
 	}
+	return errors.Join(errs...)
 }

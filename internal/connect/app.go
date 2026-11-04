@@ -79,6 +79,7 @@ type App struct {
 	pulledAt   time.Time
 	pullFailed time.Time
 	pullErr    error
+	pulling    *pullFlight
 	peers      *http.Client
 	bankWrap   func(http.RoundTripper) http.RoundTripper
 	obKey      *ecdsa.PrivateKey
