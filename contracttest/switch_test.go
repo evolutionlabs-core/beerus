@@ -280,7 +280,7 @@ func TestBankCodesAreComparedAsSixDigits(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newStack(t)
-	for _, code := range []string{"901", "000901", "902", "999003", "123456", "1234", "12", "90a"} {
+	for _, code := range []string{"901", "000901", "902", "123456", "1234", "12", "90a"} {
 		if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Newcomer " + code, "nuban_code": code}); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
 			t.Fatalf("nuban_code %q: %v", code, err)
 		}

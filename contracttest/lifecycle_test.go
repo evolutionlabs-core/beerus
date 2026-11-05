@@ -57,13 +57,16 @@ func TestCreateBank(t *testing.T) {
 		if step.(map[string]any)["done"] != true {
 			t.Fatalf("step not done: %v", step)
 		}
+		if at, ok := step.(map[string]any)["at"]; ok && strings.HasPrefix(fmt.Sprint(at), "0001-") {
+			t.Fatalf("step has no real time: %v", step)
+		}
 	}
 	cfg, err := connect.LoadConfig(s.cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	b := cfg.Bank("abuja-digital")
-	if b == nil || b.Type != "digital" || b.NIPCode == "" || b.NIPCode == "999003" || b.NIPCode == "999004" || b.Database != config.DatabaseName(cfg.Dir, "abuja-digital") {
+	if b == nil || b.Type != "digital" || b.NIPCode != "999003" || b.NUBANCode != "903" || b.Database != config.DatabaseName(cfg.Dir, "abuja-digital") {
 		t.Fatalf("saved bank: %+v", b)
 	}
 	claimed := map[string]bool{}
@@ -98,10 +101,8 @@ func TestCreateBank(t *testing.T) {
 	}
 	for _, bad := range []map[string]any{
 		{"name": "Abuja Digital"},
-		{"name": "Bank C"},
-		{"name": "bank d microfinance"},
 		{"name": "Bank E", "type": "credit-union"},
-		{"name": "Bank F", "nip_code": "999003"},
+		{"name": "Bank F", "nip_code": "99903"},
 		{"name": "Bank G", "nip_code": b.NIPCode},
 		{"name": "Bank H", "history_days": 5000},
 		{"name": "Bank I", "settles_through": "nowhere"},

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
@@ -40,11 +41,11 @@ var (
 )
 
 type BankStep struct {
-	ID    string    `json:"id"`
-	Name  string    `json:"name"`
-	Done  bool      `json:"done"`
-	Error string    `json:"error,omitempty"`
-	At    time.Time `json:"at,omitempty"`
+	ID    string     `json:"id"`
+	Name  string     `json:"name"`
+	Done  bool       `json:"done"`
+	Error string     `json:"error,omitempty"`
+	At    *time.Time `json:"at,omitempty"`
 }
 
 type BankStatus struct {
@@ -260,21 +261,6 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 		usedNIP[p.NIPCode] = true
 		markNUBAN(p.NUBANCode)
 	}
-	declared := map[string]bool{}
-	for _, b := range a.cfg.Banks {
-		declared[b.NIPCode] = true
-	}
-	reservedNIP := map[string]bool{}
-	for _, o := range world.CounterpartyBanks() {
-		if declared[o.NIPCode] {
-			continue
-		}
-		reservedNIP[o.NIPCode] = true
-		markNUBAN(o.NIPCode)
-		if strings.EqualFold(o.Name, name) || strings.Trim(slugRe.ReplaceAllString(strings.ToLower(o.Name), "-"), "-") == id {
-			return nil, invalid("%q is the name of an outside bank that transfers already use", o.Name)
-		}
-	}
 	usedPort := map[int]bool{a.cfg.Connect.PartnerPort: true, a.cfg.Connect.WidgetPort: true, a.cfg.Connect.ControlPort: true, a.cfg.Connect.HealthPort: true}
 	maxPort := 0
 	for _, b := range a.cfg.Banks {
@@ -293,26 +279,37 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 			maxPort = b.Port
 		}
 	}
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return nil, fmt.Errorf("load simulator code ranges: %w", err)
+	}
+	codes := pack.SimulatorCodes
 	nip := req.NIPCode
 	if nip == "" {
-		for n := 999005; n < 999999; n++ {
+		for n := codes.NIP.First; n <= codes.NIP.Last; n++ {
 			c := strconv.Itoa(n)
-			if !usedNIP[c] && !reservedNIP[c] {
+			if !usedNIP[c] {
 				nip = c
 				break
 			}
 		}
-	} else if !regexp.MustCompile(`^\d{6}$`).MatchString(nip) || usedNIP[nip] || reservedNIP[nip] {
+		if nip == "" {
+			return nil, invalid("all NIP codes from %d to %d are taken. Set nip_code by hand, or purge a bank", codes.NIP.First, codes.NIP.Last)
+		}
+	} else if !regexp.MustCompile(`^\d{6}$`).MatchString(nip) || usedNIP[nip] {
 		return nil, invalid("nip_code %q must be 6 digits and not already used", nip)
 	}
 	nuban := req.NUBANCode
 	if nuban == "" {
-		for n := 903; n < 999; n++ {
+		for n := codes.NUBAN.First; n <= codes.NUBAN.Last; n++ {
 			c := strconv.Itoa(n)
 			if norm, _ := world.NormaliseBankCode(c); !usedNUBAN[norm] {
 				nuban = c
 				break
 			}
+		}
+		if nuban == "" {
+			return nil, invalid("all NUBAN codes from %d to %d are taken. Set nuban_code by hand, or purge a bank", codes.NUBAN.First, codes.NUBAN.Last)
 		}
 	} else if norm, err := world.NormaliseBankCode(nuban); err != nil || (len(nuban) == 6 && nuban[0] != '9') || usedNUBAN[norm] {
 		return nil, invalid("nuban_code %q must be 3 digits, or 5 or 6 digits starting with 9, and not already used", nuban)

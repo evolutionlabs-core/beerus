@@ -130,7 +130,7 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 	err := run()
 	now := a.clock.Real()
 	a.lifeMu.Lock()
-	st.Steps[i].At = now
+	st.Steps[i].At = &now
 	if err != nil {
 		st.Steps[i].Error = err.Error()
 		st.Attempts++
