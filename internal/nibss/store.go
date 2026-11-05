@@ -26,7 +26,7 @@ var validName = regexp.MustCompile(`^beerus_[a-z0-9_]{1,50}$`)
 const maxConns = 8
 
 var (
-	ErrMemberBank = errors.New("name enquiry for a member bank goes to that bank")
+	ErrAskBank = errors.New("the account name comes from the receiving bank")
 
 	errTransition = errors.New("status change not allowed")
 )
@@ -45,15 +45,7 @@ type Store struct {
 
 var _ Switch = (*Store)(nil)
 
-func Outside(p *countrypack.Pack) []Institution {
-	out := make([]Institution, 0, len(p.Outside.Banks))
-	for _, b := range p.Outside.Banks {
-		out = append(out, Institution{ID: b.NIPCode, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NIPCode, Type: b.Type, Outside: true, Status: StatusActive})
-	}
-	return out
-}
-
-func Open(ctx context.Context, url, name string, outside []Institution) (*Store, error) {
+func Open(ctx context.Context, url, name string) (*Store, error) {
 	if !validName.MatchString(name) {
 		return nil, fmt.Errorf("database name %q must look like beerus_something", name)
 	}
@@ -70,7 +62,7 @@ func Open(ctx context.Context, url, name string, outside []Institution) (*Store,
 	if err != nil {
 		return nil, fmt.Errorf("open NIBSS database: %w", err)
 	}
-	s, err := newStore(ctx, pool, outside)
+	s, err := newStore(ctx, pool)
 	if err != nil {
 		pool.Close()
 		return nil, err
@@ -105,7 +97,7 @@ func createDatabase(ctx context.Context, url, name string) error {
 	return nil
 }
 
-func newStore(ctx context.Context, pool *pgxpool.Pool, outside []Institution) (*Store, error) {
+func newStore(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 	p, err := countrypack.Nigeria()
 	if err != nil {
 		return nil, fmt.Errorf("load country pack: %w", err)
@@ -113,11 +105,7 @@ func newStore(ctx context.Context, pool *pgxpool.Pool, outside []Institution) (*
 	if err := migrate(ctx, pool); err != nil {
 		return nil, err
 	}
-	s := &Store{pool: pool, phone: p.Phone}
-	if err := s.loadOutside(ctx, outside); err != nil {
-		return nil, err
-	}
-	return s, nil
+	return &Store{pool: pool, phone: p.Phone}, nil
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -137,27 +125,6 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func (s *Store) loadOutside(ctx context.Context, outside []Institution) error {
-	for _, in := range outside {
-		if !in.Outside || in.ID == "" || in.Name == "" || in.NIPCode == "" || in.NUBANCode == "" || in.Type == "" {
-			return fmt.Errorf("outside bank %q needs outside set, an id, name, codes and a type", in.Name)
-		}
-		if in.Status != "" && in.Status != StatusActive {
-			return fmt.Errorf("outside bank %s must be active, not %s", in.Name, in.Status)
-		}
-		_, err := s.pool.Exec(ctx, `
-INSERT INTO institutions (id, name, nip_code, nuban_code, type, outside, status)
-VALUES ($1, $2, $3, $4, $5, true, 'active')
-ON CONFLICT (nip_code) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, updated_at = now()
-WHERE institutions.outside AND (institutions.name, institutions.type) IS DISTINCT FROM (EXCLUDED.name, EXCLUDED.type)`,
-			in.ID, in.Name, in.NIPCode, in.NUBANCode, in.Type)
-		if err != nil {
-			return fmt.Errorf("load outside bank %s: %w", in.Name, err)
-		}
-	}
-	return nil
-}
-
 func (s *Store) Close() {
 	s.pool.Close()
 }
@@ -166,11 +133,11 @@ type querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-const institutionCols = `id, name, nip_code, nuban_code, type, outside, status`
+const institutionCols = `id, name, nip_code, nuban_code, type, status`
 
 func scanInstitution(row pgx.Row) (Institution, error) {
 	var in Institution
-	err := row.Scan(&in.ID, &in.Name, &in.NIPCode, &in.NUBANCode, &in.Type, &in.Outside, &in.Status)
+	err := row.Scan(&in.ID, &in.Name, &in.NIPCode, &in.NUBANCode, &in.Type, &in.Status)
 	return in, err
 }
 
@@ -201,7 +168,7 @@ func (s *Store) Institution(ctx context.Context, code string) (Institution, erro
 func institution(ctx context.Context, q querier, code, lock string) (Institution, error) {
 	in, err := scanInstitution(q.QueryRow(ctx, `SELECT `+institutionCols+` FROM institutions WHERE nip_code = $1 `+lock, code))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Institution{}, fmt.Errorf("no institution has code %s: %w", code, ErrNoRecord)
+		return Institution{}, fmt.Errorf("bank code %s is %w", code, ErrUnknownInstitution)
 	}
 	if err != nil {
 		return Institution{}, fmt.Errorf("look up institution %s: %w", code, err)
@@ -217,7 +184,7 @@ func (s *Store) SetStatus(ctx context.Context, id, status string) error {
 		var cur string
 		err := tx.QueryRow(ctx, `SELECT status FROM institutions WHERE id = $1 FOR UPDATE`, id).Scan(&cur)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("no institution has id %s: %w", id, ErrNoRecord)
+			return fmt.Errorf("bank id %s is %w", id, ErrUnknownInstitution)
 		}
 		if err != nil {
 			return fmt.Errorf("look up institution %s: %w", id, err)

@@ -19,10 +19,8 @@ var (
 
 func checkRegister(in Institution) error {
 	switch {
-	case in.Outside:
-		return fmt.Errorf("register adds member banks; %s is marked outside", in.ID)
 	case in.ID == "" || strings.TrimSpace(in.Name) == "" || in.Type == "":
-		return errors.New("a member bank needs an id, a name and a type")
+		return errors.New("a bank needs an id, a name and a type")
 	case !nipCodeRe.MatchString(in.NIPCode):
 		return fmt.Errorf("bank %s: nip_code %q must be 6 digits", in.ID, in.NIPCode)
 	case !nubanCodeRe.MatchString(in.NUBANCode):
@@ -71,7 +69,7 @@ ORDER BY nip_code`, in.ID, in.NIPCode, in.NUBANCode, in.Name)
 		if self != nil {
 			return updateMember(ctx, tx, in, *self)
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO institutions (id, name, nip_code, nuban_code, type, outside, status) VALUES ($1, $2, $3, $4, $5, false, 'active')`,
+		_, err = tx.Exec(ctx, `INSERT INTO institutions (id, name, nip_code, nuban_code, type, status) VALUES ($1, $2, $3, $4, $5, 'active')`,
 			in.ID, in.Name, in.NIPCode, in.NUBANCode, in.Type)
 		if err != nil {
 			return fmt.Errorf("register bank %s: %w", in.ID, err)
@@ -84,8 +82,6 @@ func updateMember(ctx context.Context, tx pgx.Tx, in, cur Institution) error {
 	switch {
 	case cur.Status == StatusRemoved:
 		return fmt.Errorf("bank %s was removed, and its id stays reserved: %w", in.ID, errCodeTaken)
-	case cur.Outside:
-		return fmt.Errorf("%s is the id of outside bank %s: %w", in.ID, cur.Name, errCodeTaken)
 	case cur.NIPCode != in.NIPCode || cur.NUBANCode != in.NUBANCode:
 		return fmt.Errorf("bank %s has codes %s/%s and they cannot change to %s/%s", in.ID, cur.NIPCode, cur.NUBANCode, in.NIPCode, in.NUBANCode)
 	case cur.Name == in.Name && cur.Type == in.Type:
@@ -99,11 +95,8 @@ func updateMember(ctx context.Context, tx pgx.Tx, in, cur Institution) error {
 
 func clashError(in, c Institution) error {
 	holder := c.ID
-	switch {
-	case c.Status == StatusRemoved:
+	if c.Status == StatusRemoved {
 		holder = "removed bank " + c.ID
-	case c.Outside:
-		holder = "outside bank " + c.Name
 	}
 	switch {
 	case c.NIPCode == in.NIPCode:

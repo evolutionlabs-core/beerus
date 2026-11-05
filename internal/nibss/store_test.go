@@ -11,8 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 )
 
 const testDatabase = "beerus_test"
@@ -83,18 +81,9 @@ func scratchPool(t testing.TB) *pgxpool.Pool {
 	return pool
 }
 
-func packOutside(t testing.TB) []Institution {
-	t.Helper()
-	p, err := countrypack.Nigeria()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return Outside(p)
-}
-
 func testStore(t testing.TB) *Store {
 	t.Helper()
-	s, err := newStore(context.Background(), scratchPool(t), packOutside(t))
+	s, err := newStore(context.Background(), scratchPool(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,72 +105,54 @@ func wantErr(t *testing.T, err error, msg string) {
 }
 
 func TestOpenRejectsBadName(t *testing.T) {
-	_, err := Open(context.Background(), testBaseURL(), "nibss", nil)
+	_, err := Open(context.Background(), testBaseURL(), "nibss")
 	wantErr(t, err, `database name "nibss" must look like beerus_something`)
 }
 
-func TestOutsideLoadedFromPack(t *testing.T) {
+func TestDirectory(t *testing.T) {
 	ctx := context.Background()
 	pool := scratchPool(t)
-	s, err := newStore(ctx, pool, packOutside(t))
+	s, err := newStore(ctx, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir, err := s.Directory(ctx)
+	if err != nil || len(dir) != 0 {
+		t.Fatalf("new directory: %+v, %v", dir, err)
+	}
+	register(t, s, "bank-b", "Bank B", "999002", "902")
+	register(t, s, "bank-a", "Bank A", "999001", "901")
+	again, err := newStore(ctx, pool)
 	if err != nil {
 		t.Fatal(err)
 	}
+	dir, err = again.Directory(ctx)
 	want := []Institution{
-		{ID: "999001", Name: "Bank A", NIPCode: "999001", NUBANCode: "999001", Type: "commercial", Outside: true, Status: StatusActive},
-		{ID: "999002", Name: "Bank B", NIPCode: "999002", NUBANCode: "999002", Type: "digital", Outside: true, Status: StatusActive},
-		{ID: "999003", Name: "Bank C", NIPCode: "999003", NUBANCode: "999003", Type: "commercial", Outside: true, Status: StatusActive},
-		{ID: "999004", Name: "Bank D Microfinance", NIPCode: "999004", NUBANCode: "999004", Type: "microfinance", Outside: true, Status: StatusActive},
+		{ID: "bank-a", Name: "Bank A", NIPCode: "999001", NUBANCode: "901", Type: "commercial", Status: StatusActive},
+		{ID: "bank-b", Name: "Bank B", NIPCode: "999002", NUBANCode: "902", Type: "commercial", Status: StatusActive},
 	}
-	if len(dir) != len(want) {
-		t.Fatalf("directory has %d rows, want %d", len(dir), len(want))
+	if err != nil || len(dir) != len(want) {
+		t.Fatalf("directory: %+v, %v", dir, err)
 	}
 	for i := range want {
 		if dir[i] != want[i] {
 			t.Errorf("row %d = %+v, want %+v", i, dir[i], want[i])
 		}
 	}
-	register(t, s, "bank-a", "Member A", "999101", "901")
-	again, err := newStore(ctx, pool, packOutside(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	in, err := again.Institution(ctx, "999101")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if in.ID != "bank-a" || in.Outside || in.NUBANCode != "901" || in.Status != StatusActive {
-		t.Errorf("reopening changed the member bank: %+v", in)
-	}
-	dir, _ = again.Directory(ctx)
-	if len(dir) != 5 {
-		t.Errorf("reopening left %d rows, want 5", len(dir))
-	}
-}
-
-func TestOutsideMustBeComplete(t *testing.T) {
-	_, err := newStore(context.Background(), scratchPool(t), []Institution{{ID: "999009", Name: "Bank Z", NIPCode: "999009", NUBANCode: "999009", Type: "commercial"}})
-	wantErr(t, err, `outside bank "Bank Z" needs outside set, an id, name, codes and a type`)
-	_, err = newStore(context.Background(), scratchPool(t), []Institution{{ID: "999009", Name: "Bank Z", NIPCode: "999009", NUBANCode: "999009", Type: "commercial", Outside: true, Status: StatusSuspended}})
-	wantErr(t, err, "outside bank Bank Z must be active, not suspended")
 }
 
 func TestInstitutionUnknown(t *testing.T) {
 	_, err := testStore(t).Institution(context.Background(), "123456")
-	if !errors.Is(err, ErrNoRecord) {
-		t.Fatalf("got %v, want ErrNoRecord", err)
+	if !errors.Is(err, ErrUnknownInstitution) {
+		t.Fatalf("got %v, want ErrUnknownInstitution", err)
 	}
-	wantErr(t, err, "no institution has code 123456: 25 no record")
+	wantErr(t, err, "bank code 123456 is not in the NIBSS directory")
 }
 
 func TestSetStatus(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
-	register(t, s, "bank-c", "Bank Cee", "999103", "903")
+	register(t, s, "bank-c", "Bank C", "999003", "903")
 	steps := []struct {
 		to   string
 		want string
@@ -204,16 +175,16 @@ func TestSetStatus(t *testing.T) {
 			wantErr(t, err, st.want)
 		}
 	}
-	in, _ := s.Institution(ctx, "999103")
+	in, _ := s.Institution(ctx, "999003")
 	if in.Status != StatusRemoved {
 		t.Errorf("status %s, want removed", in.Status)
 	}
 	wantErr(t, s.SetStatus(ctx, "bank-c", "closed"), `unknown institution status "closed"`)
 	err := s.SetStatus(ctx, "bank-x", StatusActive)
-	if !errors.Is(err, ErrNoRecord) {
-		t.Fatalf("got %v, want ErrNoRecord", err)
+	if !errors.Is(err, ErrUnknownInstitution) {
+		t.Fatalf("got %v, want ErrUnknownInstitution", err)
 	}
-	wantErr(t, err, "no institution has id bank-x: 25 no record")
+	wantErr(t, err, "bank id bank-x is not in the NIBSS directory")
 }
 
 func TestOpenCreatesDatabase(t *testing.T) {
@@ -227,15 +198,18 @@ func TestOpenCreatesDatabase(t *testing.T) {
 		_, _ = c.Exec(context.Background(), `DROP DATABASE IF EXISTS `+name)
 		c.Close(context.Background())
 	})
-	for range 2 {
-		s, err := Open(ctx, testBaseURL(), name, packOutside(t))
+	for i := range 2 {
+		s, err := Open(ctx, testBaseURL(), name)
 		if err != nil {
 			t.Fatal(err)
 		}
+		if i == 0 {
+			register(t, s, "bank-a", "Bank A", "999001", "901")
+		}
 		dir, err := s.Directory(ctx)
 		s.Close()
-		if err != nil || len(dir) != 4 {
-			t.Fatalf("directory %d rows, %v; want 4", len(dir), err)
+		if err != nil || len(dir) != 1 || dir[0].ID != "bank-a" {
+			t.Fatalf("open %d: directory %+v, %v", i, dir, err)
 		}
 	}
 }

@@ -22,9 +22,6 @@ var (
 
 func (s *Store) NameEnquiry(ctx context.Context, code, nuban string) (string, error) {
 	in, err := s.Institution(ctx, code)
-	if errors.Is(err, ErrNoRecord) {
-		return "", fmt.Errorf("no bank has code %s: %w", code, ErrInvalidAccount)
-	}
 	if err != nil {
 		return "", err
 	}
@@ -34,13 +31,10 @@ func (s *Store) NameEnquiry(ctx context.Context, code, nuban string) (string, er
 	if in.Status != StatusActive {
 		return "", fmt.Errorf("%s is %s: %w", in.Name, in.Status, ErrUnavailable)
 	}
-	if !in.Outside {
-		return "", fmt.Errorf("%s: %w", in.Name, ErrMemberBank)
-	}
 	if !world.ValidNUBAN(in.NUBANCode, nuban) {
 		return "", fmt.Errorf("%s is not a valid account number at %s: %w", nuban, in.Name, ErrInvalidAccount)
 	}
-	return world.CounterpartyName(nuban), nil
+	return "", fmt.Errorf("%s: %w", in.Name, ErrAskBank)
 }
 
 const sessionCols = `session_id, from_code, to_code, from_nuban, to_nuban, amount_minor, narration, status, outcome, tsq_attempts, next_tsq_at, created_at, resolved_at, settlement_session, closure`
@@ -104,14 +98,7 @@ func (s *Store) Begin(ctx context.Context, x Session) (Session, error) {
 		if to.Status != StatusActive {
 			return fmt.Errorf("%s is %s: %w", to.Name, to.Status, ErrUnavailable)
 		}
-		x.Status, x.TSQAttempts = SessionPending, 0
-		if to.Outside {
-			if x.Outcome != "" {
-				return fmt.Errorf("session %s: outside bank %s answers at once and cannot hold outcome %s", x.ID, to.Name, x.Outcome)
-			}
-			at := x.CreatedAt
-			x.Status, x.Outcome, x.ResolvedAt, x.NextTSQAt = SessionOK, OutcomeCredited, &at, nil
-		}
+		x.Status = SessionPending
 		out, err = scanSession(tx.QueryRow(ctx, `
 INSERT INTO nip_sessions (session_id, from_code, to_code, from_nuban, to_nuban, amount_minor, narration, status, outcome, next_tsq_at, created_at, resolved_at, closure)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
@@ -136,11 +123,7 @@ RETURNING `+sessionCols,
 }
 
 func sessionBank(ctx context.Context, tx pgx.Tx, code string) (Institution, error) {
-	in, err := institution(ctx, tx, code, "FOR SHARE")
-	if errors.Is(err, ErrNoRecord) {
-		return Institution{}, fmt.Errorf("no bank has code %s: %w", code, ErrInvalidAccount)
-	}
-	return in, err
+	return institution(ctx, tx, code, "FOR SHARE")
 }
 
 func sameRequest(a, b Session) bool {

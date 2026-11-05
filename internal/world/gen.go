@@ -8,7 +8,6 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 )
 
 const buffer = 2000000
@@ -25,18 +24,8 @@ type cpBank struct {
 	name string
 }
 
-var counterpartyBanks = mustCounterpartyBanks()
-
-func mustCounterpartyBanks() []cpBank {
-	p, err := countrypack.Nigeria()
-	if err != nil {
-		panic(err)
-	}
-	out := make([]cpBank, 0, len(p.Outside.Banks))
-	for _, b := range p.Outside.Banks {
-		out = append(out, cpBank{code: b.NIPCode, name: b.Name})
-	}
-	return out
+var counterpartyBanks = []cpBank{
+	{"999001", "Bank A"}, {"999002", "Bank B"}, {"999003", "Bank C"}, {"999004", "Bank D Microfinance"},
 }
 
 func CounterpartyBanks() []Institution {
@@ -45,10 +34,6 @@ func CounterpartyBanks() []Institution {
 		out = append(out, Institution{NIPCode: b.code, Name: b.name})
 	}
 	return out
-}
-
-func CounterpartyName(nuban string) string {
-	return counterpartyNames[hash64("counterparty-name", nuban)%uint64(len(counterpartyNames))]
 }
 
 func NIPFee(amount int64) int64 {
