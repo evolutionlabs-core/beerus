@@ -3,6 +3,7 @@ package setup
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -81,7 +82,9 @@ func (l Local) check(pos map[string]Pos) []specProblem {
 	if (l.Bind != "" || c.has("bind")) && net.ParseIP(l.Bind) == nil {
 		c.add("bind", "bind %q is not an IP address. Use an address such as 127.0.0.1", l.Bind)
 	}
-	if l.Pace < 0 || (l.Pace == 0 && c.has("pace")) {
+	if math.IsNaN(l.Pace) || math.IsInf(l.Pace, 0) {
+		c.add("pace", "pace %g is not a finite number. Use 1 for real time", l.Pace)
+	} else if l.Pace < 0 || (l.Pace == 0 && c.has("pace")) {
 		c.add("pace", "pace %g must be more than zero. Use 1 for real time", l.Pace)
 	}
 	c.port("ports.api_offset", l.Ports.APIOffset)

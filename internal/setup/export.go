@@ -2,20 +2,24 @@ package setup
 
 import (
 	"bytes"
+	_ "embed"
+	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"go.yaml.in/yaml/v3"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
+//go:embed default.yaml
+var defaultSetup []byte
+
 const (
-	exportIndent       = 2
-	defaultStartHour   = 8
-	defaultTSQAfter    = "2m"
-	defaultTSQAttempts = 3
+	exportIndent     = 2
+	defaultStartHour = 8
+	defaultFile      = "default.yaml"
 )
 
 func Export(s Spec) ([]byte, error) {
@@ -32,24 +36,13 @@ func Export(s Spec) ([]byte, error) {
 }
 
 func DefaultSpec(name string, today clock.Date) Spec {
-	start := time.Date(today.Y, today.M, today.D, defaultStartHour, 0, 0, 0, clock.Lagos)
-	return Spec{
-		APIVersion: APIVersion,
-		Kind:       KindSetup,
-		Metadata:   Metadata{Name: name},
-		Spec: Body{
-			Start: start.Format(time.RFC3339),
-			NIP:   NIP{Sessions: config.DefaultNIPSessions, TSQAfter: defaultTSQAfter, TSQAttempts: defaultTSQAttempts},
-			Connect: ConnectLegal{
-				LegalName:  "Beerus Connect Ltd",
-				BrandName:  "Beerus",
-				RegistryID: "OB-0001",
-				CACNumber:  "RC-000001",
-			},
-			Banks: []Bank{
-				{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "999001", NUBANCode: "901"},
-				{ID: "bank-b", Name: "Bank B", Type: "digital", NIPCode: "999002", NUBANCode: "902"},
-			},
-		},
+	var s Spec
+	d := &nodeDecoder{file: defaultFile, flatten: "spec", pos: map[string]Pos{}}
+	d.document(defaultSetup, reflect.ValueOf(&s).Elem())
+	if len(d.errs) > 0 {
+		panic(fmt.Errorf("decode embedded %s: %w", defaultFile, errors.Join(d.errs...)))
 	}
+	s.Metadata.Name = name
+	s.Spec.Start = time.Date(today.Y, today.M, today.D, defaultStartHour, 0, 0, 0, clock.Lagos).Format(time.RFC3339)
+	return s
 }

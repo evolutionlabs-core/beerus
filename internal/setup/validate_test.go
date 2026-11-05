@@ -8,12 +8,16 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
-func validSpec() Spec {
-	return DefaultSpec("beerus", clock.Date{Y: 2026, M: time.November, D: 4})
+func validSpec(t *testing.T) Spec {
+	t.Helper()
+	return clearPos(parseFixture(t, "default.yaml"))
 }
 
 func TestValidateDefaultSpecIsClean(t *testing.T) {
-	if errs := Validate(validSpec()); len(errs) > 0 {
+	if errs := Validate(DefaultSpec("beerus", clock.Date{Y: 2026, M: time.November, D: 4})); len(errs) > 0 {
+		t.Fatal(errStrings(errs))
+	}
+	if errs := Validate(validSpec(t)); len(errs) > 0 {
 		t.Fatal(errStrings(errs))
 	}
 }
@@ -107,7 +111,7 @@ func TestValidateRules(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := validSpec()
+			s := validSpec(t)
 			c.edit(&s)
 			if got := errStrings(Validate(s)); !slices.Equal(got, c.want) {
 				t.Fatalf("got  %q\nwant %q", got, c.want)
