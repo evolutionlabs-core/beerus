@@ -279,13 +279,31 @@ func (r *seedRun) line(a *seedAcct, kind string, amount int64, at time.Time, nar
 	}
 }
 
+func (r *seedRun) charge(base SeedPosting, kind string, amount int64, offset time.Duration, narration, category string) SeedPosting {
+	return SeedPosting{
+		Key:       base.Key + ":" + kind,
+		Bank:      base.Bank,
+		Account:   base.Account,
+		PostedAt:  base.PostedAt.Add(offset),
+		ValueDate: clock.DateOf(base.PostedAt.Add(offset)),
+		Amount:    amount,
+		Narration: narration,
+		Channel:   "charge",
+		Category:  category,
+	}
+}
+
+func (r *seedRun) reserve(a *seedAcct, amount int64) {
+	a.st.projected += amount
+}
+
 func (r *seedRun) post(a *seedAcct, l SeedPosting) {
 	r.out.Postings = append(r.out.Postings, l)
 	a.st.projected += l.Amount
 	if l.Amount > 0 {
 		a.st.credits = append(a.st.credits, credit{l.PostedAt, l.Amount})
 	}
-	if l.Channel != "charge" {
+	if l.Category == "" {
 		a.st.alerts++
 	}
 	if l.Amount < 0 && (l.Channel == "nip" || l.Channel == "internal") {
@@ -309,9 +327,15 @@ func (r *seedRun) inflow(a *seedAcct, amt int64, salary bool) {
 	}
 	cpBank := r.counterpartyBank(r.nextKey(a, "in"))
 	narration, channel := r.transfer("in", cp, cpBank, short)
-	r.post(a, r.line(a, "in", amt, t, narration, channel, "", cp, cpBank.NIPCode))
-	if levy := charges.EMTL(amt, r.d); levy > 0 {
-		r.post(a, r.line(a, "emtl", -levy, t.Add(time.Second), r.narr("emtl", short), "charge", charges.CategoryLevy, "", ""))
+	in := r.line(a, "in", amt, t, narration, channel, "", cp, cpBank.NIPCode)
+	r.post(a, in)
+	levy := charges.EMTL(amt, r.d)
+	switch {
+	case levy == 0:
+	case channel == "nip":
+		r.post(a, r.charge(in, "emtl", -levy, time.Second, r.narr("emtl", short), charges.CategoryLevy))
+	default:
+		r.reserve(a, -levy)
 	}
 }
 
@@ -340,15 +364,20 @@ func (r *seedRun) outflow(a *seedAcct) {
 	tr := charges.ForTransfer(amt, r.d, false)
 	cpBank := r.counterpartyBank(r.nextKey(a, "out"))
 	narration, channel := r.transfer("out", cp, cpBank, short)
-	lines := []SeedPosting{
-		r.line(a, "out", -amt, t, narration, channel, "", cp, cpBank.NIPCode),
-		r.line(a, "fee", -tr.Fee, t.Add(time.Second), r.narr("fee", short), "charge", charges.CategoryFee, "", ""),
-		r.line(a, "vat", -tr.VAT, t.Add(2*time.Second), r.narr("vat", short), "charge", charges.CategoryVAT, "", ""),
+	main := r.line(a, "out", -amt, t, narration, channel, "", cp, cpBank.NIPCode)
+	lines := []SeedPosting{main}
+	var held int64
+	if channel == "nip" {
+		lines = append(lines,
+			r.charge(main, "fee", -tr.Fee, time.Second, r.narr("fee", short), charges.CategoryFee),
+			r.charge(main, "vat", -tr.VAT, 2*time.Second, r.narr("vat", short), charges.CategoryVAT))
+	} else {
+		held = tr.Fee + tr.VAT
 	}
 	if tr.StampDuty > 0 {
-		lines = append(lines, r.line(a, "stamp", -tr.StampDuty, t.Add(3*time.Second), r.narr("stamp", short), "charge", charges.CategoryStamp, "", ""))
+		lines = append(lines, r.charge(main, "stamp", -tr.StampDuty, time.Duration(len(lines))*time.Second, r.narr("stamp", short), charges.CategoryStamp))
 	}
-	last := time.Duration(len(lines)-1) * time.Second
+	last := 3 * time.Second
 	switch {
 	case roll < retailSettleLaterShare:
 		settled := t.Add(time.Duration(retailSettleMinSeconds+r.rng.IntN(retailSettleSpanSeconds)) * time.Second)
@@ -359,8 +388,10 @@ func (r *seedRun) outflow(a *seedAcct) {
 			}
 		}
 		r.postAll(a, lines)
+		r.reserve(a, -held)
 	case roll < retailReversedShare:
 		r.postAll(a, lines)
+		r.reserve(a, -held)
 		back := t.Add(time.Duration(retailReverseMinSeconds+r.rng.IntN(retailReverseSpanSeconds)) * time.Second)
 		if !back.Add(last).Before(r.now) {
 			return
@@ -375,8 +406,10 @@ func (r *seedRun) outflow(a *seedAcct) {
 			rev.Channel = "reversal"
 			r.post(a, rev)
 		}
+		r.reserve(a, held)
 	default:
 		r.postAll(a, lines)
+		r.reserve(a, -held)
 	}
 }
 

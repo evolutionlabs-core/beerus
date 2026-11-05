@@ -10,10 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
-const retailGolden = "6ff600fca024ec852b427a4c32024856a1fd108cb56ba977c04fdd4b9cf4cedf"
+const retailGolden = "bc2671e759ca3cdd5e183c4b970e746d231bfaa65ee14dbc3cc1a2e0123f6b2a"
 
 var goldenNow = time.Date(2026, time.January, 15, 12, 0, 0, 0, clock.Lagos)
 
@@ -84,7 +85,25 @@ func TestRetailIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestRetailAddingABankOnlyMovesCounterpartiesToIt(t *testing.T) {
+func baseKey(key string) string {
+	key = strings.TrimSuffix(key, ":rev")
+	for _, c := range []string{":fee", ":vat", ":stamp", ":emtl"} {
+		if strings.HasSuffix(key, c) {
+			return strings.TrimSuffix(key, c)
+		}
+	}
+	return key
+}
+
+func byKey(ps []SeedPosting) map[string]SeedPosting {
+	out := map[string]SeedPosting{}
+	for _, p := range ps {
+		out[p.Key] = p
+	}
+	return out
+}
+
+func TestRetailAddingABankOnlyMovesTransfersToIt(t *testing.T) {
 	defaults := DefaultInstitutions()
 	a, b, c := defaults[0], defaults[1], bankC()
 	for _, step := range []struct {
@@ -99,34 +118,84 @@ func TestRetailAddingABankOnlyMovesCounterpartiesToIt(t *testing.T) {
 		if !reflect.DeepEqual(was.Customers, now.Customers) || !reflect.DeepEqual(was.Accounts, now.Accounts) {
 			t.Fatalf("adding %s changes bank-a's customers or accounts", step.added.ID)
 		}
-		if len(was.Postings) != len(now.Postings) {
-			t.Fatalf("adding %s changes bank-a from %d to %d postings", step.added.ID, len(was.Postings), len(now.Postings))
-		}
-		moved := 0
-		for i, p := range now.Postings {
-			q := was.Postings[i]
-			if p.Key != q.Key || p.Amount != q.Amount || !p.PostedAt.Equal(q.PostedAt) || p.ValueDate != q.ValueDate || p.Counterparty != q.Counterparty || p.Category != q.Category {
-				t.Fatalf("adding %s changes posting %s to %+v", step.added.ID, q.Key, p)
-			}
-			if p.CounterpartyBank == q.CounterpartyBank {
-				if p.Narration != q.Narration || p.Channel != q.Channel {
-					t.Fatalf("adding %s changes the narration or channel of %s", step.added.ID, q.Key)
+		before, after := byKey(was.Postings), byKey(now.Postings)
+		moved := map[string]bool{}
+		for k, p := range after {
+			q, ok := before[k]
+			if ok && k == baseKey(k) && p.CounterpartyBank != q.CounterpartyBank {
+				if p.CounterpartyBank != step.added.NIPCode {
+					t.Fatalf("adding %s moves %s from %s to %s", step.added.ID, k, q.CounterpartyBank, p.CounterpartyBank)
 				}
-				continue
+				moved[k] = true
 			}
-			if p.CounterpartyBank != step.added.NIPCode {
-				t.Fatalf("adding %s moves %s from %s to %s", step.added.ID, q.Key, q.CounterpartyBank, p.CounterpartyBank)
-			}
-			moved++
 		}
-		if moved == 0 {
-			t.Fatalf("adding %s moves no counterparties to it", step.added.ID)
+		if len(moved) == 0 {
+			t.Fatalf("adding %s moves no transfers to it", step.added.ID)
+		}
+		keys := map[string]bool{}
+		for k := range before {
+			keys[k] = true
+		}
+		for k := range after {
+			keys[k] = true
+		}
+		for k := range keys {
+			p, inAfter := after[k]
+			q, inBefore := before[k]
+			switch {
+			case !moved[baseKey(k)]:
+				if !inAfter || !inBefore || !reflect.DeepEqual(p, q) {
+					t.Fatalf("adding %s changes posting %s, which did not move: %+v to %+v", step.added.ID, k, q, p)
+				}
+			case k == baseKey(k) || k == baseKey(k)+":rev":
+				if !inAfter || !inBefore || p.Amount != q.Amount || !p.PostedAt.Equal(q.PostedAt) || p.ValueDate != q.ValueDate || p.Counterparty != q.Counterparty || p.CounterpartyBank != step.added.NIPCode {
+					t.Fatalf("adding %s changes the principal of moved transfer %s: %+v to %+v", step.added.ID, k, q, p)
+				}
+			}
 		}
 	}
 	ab := generate(t, []Institution{a, b}, 90, goldenNow)
 	ba := generate(t, []Institution{b, a}, 90, goldenNow)
 	if !reflect.DeepEqual(onlyBank(ab, a.ID), onlyBank(ba, a.ID)) {
 		t.Fatal("bank-a depends on the order of the banks")
+	}
+}
+
+func TestRetailIntraBankTransfersFollowTheChargeRules(t *testing.T) {
+	tmpl := generate(t, DefaultInstitutions(), 90, goldenNow)
+	keys := byKey(tmpl.Postings)
+	intra, nip := 0, 0
+	for _, p := range tmpl.Postings {
+		if p.Key != baseKey(p.Key) {
+			continue
+		}
+		switch kind(p) {
+		case "out":
+			_, fee := keys[p.Key+":fee"]
+			_, vat := keys[p.Key+":vat"]
+			_, stamp := keys[p.Key+":stamp"]
+			wantStamp := charges.StampDuty(-p.Amount, p.ValueDate, false) > 0
+			if p.Channel == "internal" {
+				intra++
+				if fee || vat || stamp != wantStamp {
+					t.Fatalf("intra-bank outflow %s has fee %v, VAT %v, stamp %v", p.Key, fee, vat, stamp)
+				}
+			} else {
+				nip++
+				if !fee || !vat || stamp != wantStamp {
+					t.Fatalf("NIP outflow %s has fee %v, VAT %v, stamp %v", p.Key, fee, vat, stamp)
+				}
+			}
+		case "in":
+			_, emtl := keys[p.Key+":emtl"]
+			want := p.Channel == "nip" && charges.EMTL(p.Amount, p.ValueDate) > 0
+			if emtl != want {
+				t.Fatalf("inflow %s on channel %s has EMTL %v", p.Key, p.Channel, emtl)
+			}
+		}
+	}
+	if intra == 0 || nip == 0 {
+		t.Fatalf("%d intra-bank and %d NIP outflows, want some of each", intra, nip)
 	}
 }
 
