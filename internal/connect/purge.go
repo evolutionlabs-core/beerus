@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 type PurgeImpact struct {
@@ -115,7 +116,7 @@ func (a *App) PurgeBank(id string) (PurgeResult, error) {
 	if ls != nil {
 		errs = append(errs, ls.Drop())
 	} else {
-		errs = append(errs, a.cfg.ReleaseBank(id))
+		errs = append(errs, a.ctl.forget(setup.KindBank, id))
 	}
 	for _, snap := range imp.Snapshots {
 		a.mu.Lock()

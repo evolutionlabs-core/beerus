@@ -1,8 +1,6 @@
 package connect
 
 import (
-	"sync"
-
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -11,12 +9,6 @@ type ApplyOptions struct {
 	Money     *setup.Removal `json:"money,omitempty"`
 	Confirmed []string       `json:"confirmed,omitempty"`
 	SettleNow bool           `json:"settle_now,omitempty"`
-}
-
-type ctlStore struct {
-	mu  sync.Mutex
-	dir string
-	st  setup.Status
 }
 
 type finalizer struct {

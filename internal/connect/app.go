@@ -29,6 +29,8 @@ type App struct {
 	clock      *clock.Clock
 	world      *world.World
 	st         *State
+	ctl        *ctlStore
+	setupKey   uint64
 	key        config.SigningKey
 	ctlToken   string
 	log        *slog.Logger
@@ -141,6 +143,10 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	if a.client == nil {
 		a.client = &http.Client{Timeout: 15 * time.Second}
 	}
+	if a.ctl, err = loadOrCreateStore(cfg.Dir); err != nil {
+		return nil, err
+	}
+	a.setupKey = a.ctl.setupKey()
 	st, err := loadState(a.statePath)
 	if err != nil {
 		return nil, fmt.Errorf("stub state: %w", err)
@@ -199,7 +205,10 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		if a.worldOnly {
 			break
 		}
-		ls, err := openLedgerSource(context.Background(), cfg, b, a.world)
+		if err := a.claimBank(b); err != nil {
+			return nil, err
+		}
+		ls, err := openLedgerSource(context.Background(), cfg, a.ctl, b, a.world)
 		if err != nil {
 			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
 			continue

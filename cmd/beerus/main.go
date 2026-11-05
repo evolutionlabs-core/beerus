@@ -176,7 +176,7 @@ func cmdInfo(args []string) error {
 func cmdDoctor(args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	fix := fs.Bool("fix", false, "drop leftover databases, delete snapshots that can no longer be restored and tidy the manifest")
+	fix := fs.Bool("fix", false, "drop leftover databases, delete snapshots that can no longer be restored and forget banks that no longer exist")
 	fs.Parse(args)
 	c, err := config.Load(*dir)
 	if err != nil {
@@ -198,7 +198,7 @@ func cmdDoctor(args []string) error {
 	fmt.Printf("%d databases belong to %s.\n", len(rep.Databases), c.Dir)
 	list("Leftover databases:", rep.Orphans)
 	list("Snapshots that can no longer be restored:", rep.DeadSnapshots)
-	list("Manifest entries for banks that no longer exist:", rep.StaleManifest)
+	list("Status entries for banks that no longer exist:", rep.StaleOwned)
 	list("Missing databases (beerus up recreates bank databases; missing snapshot copies cannot be restored):", rep.Missing)
 	switch {
 	case rep.Fixed:

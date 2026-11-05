@@ -34,6 +34,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 type hook struct {
@@ -284,6 +285,20 @@ func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ..
 		}
 	})
 	return s
+}
+
+func (s *Stack) owned(kind, id string) []setup.Owned {
+	s.t.Helper()
+	st, err := setup.LoadStatus(s.cfg.Dir)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	for _, r := range st.Resources {
+		if r.Kind == kind && r.ID == id {
+			return r.Owned
+		}
+	}
+	return nil
 }
 
 func (s *Stack) rootPool() *x509.CertPool {

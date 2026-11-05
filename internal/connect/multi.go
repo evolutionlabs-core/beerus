@@ -186,7 +186,14 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.clock = clock.New(clock.State{AnchorBusiness: now, AnchorReal: now}, o.Real)
 	a.world = world.New(a.worldConfig(genesis), world.Overrides{})
-	ls, err := openLedgerSource(context.Background(), cfg, b, a.world)
+	if a.ctl, err = readStore(cfg.Dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if a.ctl == nil {
+		a.ctl = &ctlStore{dir: cfg.Dir, readOnly: true}
+	}
+	a.setupKey = a.ctl.setupKey()
+	ls, err := openLedgerSource(context.Background(), cfg, a.ctl, b, a.world)
 	if err != nil {
 		return nil, err
 	}

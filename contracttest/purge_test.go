@@ -13,6 +13,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -86,14 +87,8 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if c.Bank("abuja-digital") != nil {
 		t.Fatal("beerus.yaml still lists the bank")
 	}
-	m, err := c.Manifest()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, r := range m.Resources {
-		if r.Bank == "abuja-digital" {
-			t.Fatalf("manifest still claims %v", r)
-		}
+	if o := s.owned(setup.KindBank, "abuja-digital"); o != nil {
+		t.Fatalf("the status store still claims %v", o)
 	}
 	if l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(bank.Port))); err != nil {
 		t.Fatalf("port %d is still taken: %v", bank.Port, err)

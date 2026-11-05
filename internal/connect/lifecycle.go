@@ -471,13 +471,7 @@ func (a *App) provision(b *config.Bank) {
 	st := a.status[b.ID]
 	a.lifeMu.Unlock()
 	ok := a.step(st, 0, func() error {
-		if err := a.cfg.Claim("database", b.Database, b.ID); err != nil {
-			return err
-		}
-		if err := a.cfg.Claim("port", strconv.Itoa(b.APIPort), b.ID); err != nil {
-			return err
-		}
-		return a.cfg.Claim("port", strconv.Itoa(b.Port), b.ID)
+		return a.claimBank(b)
 	}) && a.step(st, 1, func() error {
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -489,7 +483,7 @@ func (a *App) provision(b *config.Bank) {
 		if have {
 			return nil
 		}
-		ls, err := openLedgerSource(context.Background(), a.cfg, b, a.world)
+		ls, err := openLedgerSource(context.Background(), a.cfg, a.ctl, b, a.world)
 		if err != nil {
 			return err
 		}

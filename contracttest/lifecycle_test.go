@@ -15,6 +15,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -65,18 +66,12 @@ func TestCreateBank(t *testing.T) {
 	if b == nil || b.Type != "digital" || b.NIPCode == "" || b.NIPCode == "999003" || b.NIPCode == "999004" || b.Database != config.DatabaseName(cfg.Dir, "abuja-digital") {
 		t.Fatalf("saved bank: %+v", b)
 	}
-	m, err := cfg.Manifest()
-	if err != nil {
-		t.Fatal(err)
-	}
 	claimed := map[string]bool{}
-	for _, r := range m.Resources {
-		if r.Bank == "abuja-digital" {
-			claimed[r.Kind] = true
-		}
+	for _, o := range s.owned(setup.KindBank, "abuja-digital") {
+		claimed[o.Kind] = true
 	}
 	if !claimed["database"] || !claimed["port"] {
-		t.Fatalf("manifest: %+v", m.Resources)
+		t.Fatalf("owned: %+v", s.owned(setup.KindBank, "abuja-digital"))
 	}
 	resp, err := http.Get(b.URL() + "/login")
 	if err != nil {

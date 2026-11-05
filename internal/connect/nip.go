@@ -425,7 +425,7 @@ func (a *App) nipTransferLocked(r *http.Request, req world.TransferRequest, rt w
 	sid := req.SessionID
 	if sid == "" {
 		a.st.NIP.Sessions++
-		sid = nip.SessionID(a.cfg.Seed, rt.FromInst.NIPCode, now, int(a.st.NIP.Sessions))
+		sid = nip.SessionID(int64(a.setupKey), rt.FromInst.NIPCode, now, int(a.st.NIP.Sessions))
 	}
 	t := NIPFailure{SessionID: sid, FromBank: rt.FromInst.ID, ToCode: rt.ToInst.NIPCode, Amount: req.Amount, At: now}
 	if a.bankUnavailable(rt.FromInst.ID, now) {
