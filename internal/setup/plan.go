@@ -271,9 +271,9 @@ func (p *planner) allocate() map[string]codes {
 			continue
 		}
 		if c.nip == "" {
-			code, err := nipCodes.next(func(s string) bool { _, used := usedNIP[s]; return used })
-			if err != nil {
-				p.fail("banks["+b.ID+"].nip_code", nil, "banks[%s].nip_code: %v", b.ID, err)
+			code, ok := nipCodes.next(func(s string) bool { _, used := usedNIP[s]; return used })
+			if !ok {
+				p.full(b.ID, nipCodes)
 			} else {
 				c.nip = code
 				c.allocated = append(c.allocated, nipCodes.field)
@@ -281,13 +281,13 @@ func (p *planner) allocate() map[string]codes {
 			}
 		}
 		if c.nuban == "" {
-			code, err := nubanCodes.next(func(s string) bool {
+			code, ok := nubanCodes.next(func(s string) bool {
 				n, _ := world.NormaliseBankCode(s)
 				_, used := usedNUBAN[n]
 				return used
 			})
-			if err != nil {
-				p.fail("banks["+b.ID+"].nuban_code", nil, "banks[%s].nuban_code: %v", b.ID, err)
+			if !ok {
+				p.full(b.ID, nubanCodes)
 			} else {
 				c.nuban = code
 				c.allocated = append(c.allocated, nubanCodes.field)
@@ -299,14 +299,18 @@ func (p *planner) allocate() map[string]codes {
 	return out
 }
 
-func (r codeRange) next(used func(string) bool) (string, error) {
+func (r codeRange) next(used func(string) bool) (string, bool) {
 	for n := r.first; n <= r.last; n++ {
 		if s := strconv.Itoa(n); !used(s) {
-			return s, nil
+			return s, true
 		}
 	}
-	size := r.last - r.first + 1
-	return "", fmt.Errorf("all %d codes from %d to %d are taken. Set %s by hand", size, r.first, r.last, r.field)
+	return "", false
+}
+
+func (p *planner) full(id string, r codeRange) {
+	path := "banks[" + id + "]." + r.field
+	p.fail(path, nil, "%s cannot be allocated: all %d codes from %d to %d are taken. Set %s by hand, or remove a bank.", path, r.last-r.first+1, r.first, r.last, r.field)
 }
 
 func (p *planner) order(banks []Bank) []Bank {

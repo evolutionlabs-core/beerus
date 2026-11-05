@@ -75,12 +75,13 @@ func summary(a Action) string {
 	case OpCreate:
 		return createSummary(a)
 	case OpUpdate:
-		parts := make([]string, 0, len(a.Fields))
-		for _, f := range a.Fields {
-			parts = append(parts, change(f))
+		return changes(a.Fields, nil)
+	case OpClose:
+		if c := changes(a.Fields, closeShown); c != "" {
+			return "DESTRUCTIVE; " + c
 		}
-		return strings.Join(parts, "; ")
-	case OpClose, OpRemove:
+		return "DESTRUCTIVE"
+	case OpRemove:
 		return "DESTRUCTIVE"
 	case OpDrift:
 		return driftSummary(a)
@@ -130,6 +131,18 @@ func driftSummary(a Action) string {
 		pronoun = "they"
 	}
 	return fmt.Sprintf("%s missing; %s will be rebuilt", list(names), pronoun)
+}
+
+var closeShown = map[string]bool{"state": true, "on_remove.money": true, "on_remove.to": true}
+
+func changes(fields []FieldChange, skip map[string]bool) string {
+	var parts []string
+	for _, f := range fields {
+		if !skip[f.Path] {
+			parts = append(parts, change(f))
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 func change(f FieldChange) string {

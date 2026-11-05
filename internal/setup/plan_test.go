@@ -680,6 +680,35 @@ func TestBuildOnRemoveTarget(t *testing.T) {
 			errs: []string{"banks[bank-b].on_remove sends money to bank-c, which is leaving too. Choose a bank that stays."},
 		},
 		{
+			name: "close to a bank already closed",
+			status: func(st *Status) {
+				three(&st.Applied)
+				bank(&st.Applied, "bank-c").State = StateClosed
+				st.Resources = append(st.Resources, Resource{Kind: KindBank, ID: "bank-c", Phase: PhaseClosed})
+			},
+			desired: func(s *Spec) {
+				three(s)
+				bank(s, "bank-c").State = StateClosed
+				bank(s, "bank-b").State = StateClosed
+				bank(s, "bank-b").OnRemove = &Removal{Money: MoneyTransfer, To: "bank-c"}
+			},
+			errs: []string{"banks[bank-b].on_remove sends money to bank-c, which is closing or closed. Choose a bank that stays open."},
+		},
+		{
+			name: "close and rename together",
+			desired: func(s *Spec) {
+				bank(s, "bank-b").Name = "Sterling Bank"
+				bank(s, "bank-b").State = StateClosed
+				bank(s, "bank-b").OnRemove = &Removal{Money: MoneyLeave}
+			},
+			want: []Action{{Op: OpClose, Kind: KindBank, ID: "bank-b", Destructive: true, Impact: &Impact{}, Fields: []FieldChange{
+				{Path: "name", From: "Bank B", To: "Sterling Bank"},
+				{Path: "state", From: StateActive, To: StateClosed},
+				{Path: "on_remove", To: MoneyLeave},
+				{Path: "on_remove.money", To: MoneyLeave},
+			}}},
+		},
+		{
 			name: "removal to a bank removed in the same plan",
 			status: func(st *Status) {
 				three(&st.Applied)
@@ -865,7 +894,25 @@ func TestBuildAllocationRangeFull(t *testing.T) {
 	desired.Spec.Banks[0].NIPCode, desired.Spec.Banks[1].NIPCode = "", ""
 	st := status(spec())
 	p := Build(desired, st, dir, today)
-	want := []string{"banks[bank-c].nip_code: all 999 codes from 999001 to 999999 are taken. Set nip_code by hand"}
+	want := []string{"banks[bank-c].nip_code cannot be allocated: all 999 codes from 999001 to 999999 are taken. Set nip_code by hand, or remove a bank."}
+	var got []string
+	for _, e := range p.Errors {
+		got = append(got, e.Error())
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("errors = %q", got)
+	}
+}
+
+func TestBuildNUBANRangeFull(t *testing.T) {
+	desired := spec()
+	var dir []nibss.Institution
+	for n := nubanCodes.first; n <= nubanCodes.last; n++ {
+		dir = append(dir, tombstone("old-"+strconv.Itoa(n), "Old "+strconv.Itoa(n), "", strconv.Itoa(n)))
+	}
+	desired.Spec.Banks = append(desired.Spec.Banks, Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", NIPCode: "999003"})
+	p := Build(desired, status(spec()), dir, today)
+	want := []string{"banks[bank-c].nuban_code cannot be allocated: all 99 codes from 901 to 999 are taken. Set nuban_code by hand, or remove a bank."}
 	var got []string
 	for _, e := range p.Errors {
 		got = append(got, e.Error())

@@ -49,7 +49,7 @@ func TestRenderSingularsAndOtherChoices(t *testing.T) {
 			{Path: "on_remove", To: "payout"},
 		}},
 		{Op: OpClose, Kind: KindBank, ID: "bank-b", Destructive: true,
-			Fields: []FieldChange{{Path: "state", From: StateActive, To: StateClosed}, {Path: "on_remove.money", To: MoneyPayout}},
+			Fields: []FieldChange{{Path: "name", From: "Bank B", To: "Sterling Bank"}, {Path: "state", From: StateActive, To: StateClosed}, {Path: "on_remove.money", To: MoneyPayout}},
 			Impact: &Impact{Transfers: 1, NetMinor: -5050, MoneyMinor: 100, Customers: 1, Connections: 1}},
 		{Op: OpRemove, Kind: KindBank, ID: "mfb", Destructive: true,
 			Fields:   []FieldChange{{Path: "on_remove.money", To: MoneyLeave}},
@@ -69,7 +69,7 @@ func TestRenderSingularsAndOtherChoices(t *testing.T) {
 
   ~ setup lagos-dev        update   nip.tsq_after 2m → 5m; holidays.add +2026-12-28; holidays.remove -2026-12-26
   ~ bank bank-a            update   collateral default → 1.50; open_banking.consent_months 12 → default; on_remove +payout
-  - bank bank-b            close    DESTRUCTIVE
+  - bank bank-b            close    DESTRUCTIVE; name Bank B → Sterling Bank
         stop routing; revoke 1 connection; settle 1 open transfer (net -₦50.50);
         pay out the insured part of ₦1.00 for 1 customer in cash (on_remove). Its database and history stay.
   - bank mfb               remove   DESTRUCTIVE
