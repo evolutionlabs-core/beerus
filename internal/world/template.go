@@ -81,7 +81,7 @@ func Generate(template string, value int64, banks []Institution, historyDays int
 	roster := retailRoster(value)
 	out := Template{Customers: []SeedCustomer{}, Accounts: []SeedAccount{}, Postings: []SeedPosting{}}
 	for _, b := range banks {
-		t := generateRetail(roster, value, b, historyDays, now, cal)
+		t := generateRetail(roster, value, b, banks, historyDays, now, cal)
 		out.Customers = append(out.Customers, t.Customers...)
 		out.Accounts = append(out.Accounts, t.Accounts...)
 		out.Postings = append(out.Postings, t.Postings...)

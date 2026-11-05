@@ -130,6 +130,7 @@ type seedAcct struct {
 type seedRun struct {
 	out    *Template
 	bank   *Institution
+	banks  []Institution
 	p      rosterPersona
 	seed   uint64
 	now    time.Time
@@ -141,7 +142,7 @@ type seedRun struct {
 	n      int
 }
 
-func generateRetail(roster []rosterPersona, value int64, bank Institution, historyDays int, now time.Time, cal *clock.Calendar) Template {
+func generateRetail(roster []rosterPersona, value int64, bank Institution, banks []Institution, historyDays int, now time.Time, cal *clock.Calendar) Template {
 	var out Template
 	today := clock.DateOf(now)
 	start := today.AddDays(-historyDays)
@@ -151,7 +152,7 @@ func generateRetail(roster []rosterPersona, value int64, bank Institution, histo
 		}
 		prefix := fmt.Sprintf("seed:%s:%d:%s:%s", TemplateRetail, value, bank.ID, p.id)
 		out.Customers = append(out.Customers, SeedCustomer{Key: prefix, Bank: bank.ID, Name: p.name, Phone: p.phone, DOB: p.dob, Username: p.username, Password: p.password})
-		r := &seedRun{out: &out, bank: &bank, p: p, seed: hash64(TemplateRetail, fmt.Sprint(value)), now: now, cal: cal, prefix: prefix}
+		r := &seedRun{out: &out, bank: &bank, banks: banks, p: p, seed: hash64(TemplateRetail, fmt.Sprint(value)), now: now, cal: cal, prefix: prefix}
 		for _, a := range p.accounts {
 			key := prefix + ":" + a.typ
 			name := accountName(&bank, a.name)
@@ -223,10 +224,38 @@ func (r *seedRun) amount(lo, hi, step int) int64 {
 	return int64(v) * 100
 }
 
-func (r *seedRun) counterparty() (string, Institution) {
-	banks := CounterpartyBanks()
-	name := counterpartyNames[r.rng.IntN(len(counterpartyNames))]
-	return name, banks[r.rng.IntN(len(banks))]
+func (r *seedRun) counterpartyName() string {
+	return counterpartyNames[r.rng.IntN(len(counterpartyNames))]
+}
+
+func (r *seedRun) counterpartyBank(key string) *Institution {
+	var best *Institution
+	var bestScore uint64
+	for i := range r.banks {
+		b := &r.banks[i]
+		score := hash64("counterparty", key, b.ID)
+		if best == nil || score > bestScore || (score == bestScore && b.ID < best.ID) {
+			best, bestScore = b, score
+		}
+	}
+	return best
+}
+
+func (r *seedRun) transfer(dir, name string, cpBank *Institution, short string) (string, string) {
+	if cpBank.ID != r.bank.ID {
+		return r.narr(dir, name, cpBank.Name, short), "nip"
+	}
+	if r.bank.Style == "digital" {
+		return r.narr(dir, name), "internal"
+	}
+	if dir == "in" {
+		return "TRF FRM " + strings.ToUpper(name), "internal"
+	}
+	return "TRF TO " + strings.ToUpper(name), "internal"
+}
+
+func (r *seedRun) nextKey(a *seedAcct, kind string) string {
+	return fmt.Sprintf("%s:%s:%03d:%s", a.key, r.d, r.n+1, kind)
 }
 
 func (r *seedRun) sessionRef() string {
@@ -270,13 +299,17 @@ func (r *seedRun) narr(kind string, args ...string) string {
 
 func (r *seedRun) inflow(a *seedAcct, amt int64, salary bool) {
 	t := r.at(retailInflowFromHour, retailInflowToHour)
-	cp, cpBank := r.counterparty()
+	cp := r.counterpartyName()
 	short := r.sessionRef()
 	if salary {
-		r.post(a, r.line(a, "salary", amt, t, r.narr("salary", retailEmployer), "nip", "", retailEmployer, cpBank.NIPCode))
+		cpBank := r.counterpartyBank(r.nextKey(a, "salary"))
+		_, channel := r.transfer("in", retailEmployer, cpBank, short)
+		r.post(a, r.line(a, "salary", amt, t, r.narr("salary", retailEmployer), channel, "", retailEmployer, cpBank.NIPCode))
 		return
 	}
-	r.post(a, r.line(a, "in", amt, t, r.narr("in", cp, cpBank.Name, short), "nip", "", cp, cpBank.NIPCode))
+	cpBank := r.counterpartyBank(r.nextKey(a, "in"))
+	narration, channel := r.transfer("in", cp, cpBank, short)
+	r.post(a, r.line(a, "in", amt, t, narration, channel, "", cp, cpBank.NIPCode))
 	if levy := charges.EMTL(amt, r.d); levy > 0 {
 		r.post(a, r.line(a, "emtl", -levy, t.Add(time.Second), r.narr("emtl", short), "charge", charges.CategoryLevy, "", ""))
 	}
@@ -301,12 +334,14 @@ func (r *seedRun) outflow(a *seedAcct) {
 	if amt == 0 {
 		return
 	}
-	cp, cpBank := r.counterparty()
+	cp := r.counterpartyName()
 	roll := r.rng.Float64()
 	short := r.sessionRef()
 	tr := charges.ForTransfer(amt, r.d, false)
+	cpBank := r.counterpartyBank(r.nextKey(a, "out"))
+	narration, channel := r.transfer("out", cp, cpBank, short)
 	lines := []SeedPosting{
-		r.line(a, "out", -amt, t, r.narr("out", cp, cpBank.Name, short), "nip", "", cp, cpBank.NIPCode),
+		r.line(a, "out", -amt, t, narration, channel, "", cp, cpBank.NIPCode),
 		r.line(a, "fee", -tr.Fee, t.Add(time.Second), r.narr("fee", short), "charge", charges.CategoryFee, "", ""),
 		r.line(a, "vat", -tr.VAT, t.Add(2*time.Second), r.narr("vat", short), "charge", charges.CategoryVAT, "", ""),
 	}

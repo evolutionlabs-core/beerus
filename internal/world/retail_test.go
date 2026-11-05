@@ -13,7 +13,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
-const retailGolden = "7c923319b9ce44e02651158d16ee74bee0c48be77e1263d7f4b4b3237cd0ee31"
+const retailGolden = "6ff600fca024ec852b427a4c32024856a1fd108cb56ba977c04fdd4b9cf4cedf"
 
 var goldenNow = time.Date(2026, time.January, 15, 12, 0, 0, 0, clock.Lagos)
 
@@ -84,18 +84,67 @@ func TestRetailIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestRetailBankDoesNotDependOnOtherBanks(t *testing.T) {
+func TestRetailAddingABankOnlyMovesCounterpartiesToIt(t *testing.T) {
 	defaults := DefaultInstitutions()
-	a, b := defaults[0], defaults[1]
-	want := onlyBank(generate(t, []Institution{a}, 90, goldenNow), a.ID)
-	if len(want.Customers) == 0 || len(want.Postings) == 0 {
-		t.Fatalf("bank-a has %d customers and %d postings, want some", len(want.Customers), len(want.Postings))
-	}
-	for _, banks := range [][]Institution{{a, b}, {b, a}, {a, b, bankC()}} {
-		got := onlyBank(generate(t, banks, 90, goldenNow), a.ID)
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("bank-a changes when seeded with %d banks", len(banks))
+	a, b, c := defaults[0], defaults[1], bankC()
+	for _, step := range []struct {
+		before, after []Institution
+		added         Institution
+	}{
+		{[]Institution{a}, []Institution{a, b}, b},
+		{[]Institution{a, b}, []Institution{a, b, c}, c},
+	} {
+		was := onlyBank(generate(t, step.before, 90, goldenNow), a.ID)
+		now := onlyBank(generate(t, step.after, 90, goldenNow), a.ID)
+		if !reflect.DeepEqual(was.Customers, now.Customers) || !reflect.DeepEqual(was.Accounts, now.Accounts) {
+			t.Fatalf("adding %s changes bank-a's customers or accounts", step.added.ID)
 		}
+		if len(was.Postings) != len(now.Postings) {
+			t.Fatalf("adding %s changes bank-a from %d to %d postings", step.added.ID, len(was.Postings), len(now.Postings))
+		}
+		moved := 0
+		for i, p := range now.Postings {
+			q := was.Postings[i]
+			if p.Key != q.Key || p.Amount != q.Amount || !p.PostedAt.Equal(q.PostedAt) || p.ValueDate != q.ValueDate || p.Counterparty != q.Counterparty || p.Category != q.Category {
+				t.Fatalf("adding %s changes posting %s to %+v", step.added.ID, q.Key, p)
+			}
+			if p.CounterpartyBank == q.CounterpartyBank {
+				if p.Narration != q.Narration || p.Channel != q.Channel {
+					t.Fatalf("adding %s changes the narration or channel of %s", step.added.ID, q.Key)
+				}
+				continue
+			}
+			if p.CounterpartyBank != step.added.NIPCode {
+				t.Fatalf("adding %s moves %s from %s to %s", step.added.ID, q.Key, q.CounterpartyBank, p.CounterpartyBank)
+			}
+			moved++
+		}
+		if moved == 0 {
+			t.Fatalf("adding %s moves no counterparties to it", step.added.ID)
+		}
+	}
+	ab := generate(t, []Institution{a, b}, 90, goldenNow)
+	ba := generate(t, []Institution{b, a}, 90, goldenNow)
+	if !reflect.DeepEqual(onlyBank(ab, a.ID), onlyBank(ba, a.ID)) {
+		t.Fatal("bank-a depends on the order of the banks")
+	}
+}
+
+func TestRetailOneBankTransfersAreInternal(t *testing.T) {
+	a := DefaultInstitutions()[0]
+	tmpl := generate(t, []Institution{a}, 90, goldenNow)
+	transfers := 0
+	for _, p := range tmpl.Postings {
+		switch kind(p) {
+		case "in", "out", "salary":
+			transfers++
+			if p.CounterpartyBank != a.NIPCode || p.Channel != "internal" || strings.HasPrefix(p.Narration, "NIP") {
+				t.Fatalf("one-bank transfer %s has bank %s, channel %q, narration %q", p.Key, p.CounterpartyBank, p.Channel, p.Narration)
+			}
+		}
+	}
+	if transfers == 0 {
+		t.Fatal("no transfers in a one-bank setup")
 	}
 }
 
