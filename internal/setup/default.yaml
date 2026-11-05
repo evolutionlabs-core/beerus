@@ -1,0 +1,14 @@
+apiVersion: beerus.dev/v1
+kind: Setup
+spec:
+  nip:
+    sessions: 4
+    tsq_after: 2m
+    tsq_attempts: 3
+  banks:
+    - id: bank-a
+      name: Bank A
+      type: commercial
+    - id: bank-b
+      name: Bank B
+      type: digital

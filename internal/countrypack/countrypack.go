@@ -35,6 +35,17 @@ type Declared struct {
 	Source string   `yaml:"source"`
 }
 
+type CodeRange struct {
+	First int `yaml:"first"`
+	Last  int `yaml:"last"`
+}
+
+type SimulatorCodes struct {
+	NIP    CodeRange `yaml:"nip"`
+	NUBAN  CodeRange `yaml:"nuban"`
+	Source string    `yaml:"source"`
+}
+
 type Phone struct {
 	CallingCode string `yaml:"calling_code"`
 	TrunkPrefix string `yaml:"trunk_prefix"`
@@ -48,7 +59,9 @@ type Pack struct {
 	Easter   []Easter   `yaml:"easter"`
 	Islamic  []Islamic  `yaml:"islamic"`
 	Declared []Declared `yaml:"declared"`
-	Phone    Phone      `yaml:"phone"`
+
+	SimulatorCodes SimulatorCodes `yaml:"simulator_codes"`
+	Phone          Phone          `yaml:"phone"`
 }
 
 func Nigeria() (*Pack, error) {
@@ -64,8 +77,23 @@ func Nigeria() (*Pack, error) {
 			return nil, fmt.Errorf("country pack NG: declared %d has no source", d.Year)
 		}
 	}
+	if err := p.SimulatorCodes.check(); err != nil {
+		return nil, fmt.Errorf("country pack NG: %w", err)
+	}
 	if p.Phone.CallingCode == "" || p.Phone.TrunkPrefix == "" || p.Phone.Source == "" {
 		return nil, fmt.Errorf("country pack NG: phone needs calling_code, trunk_prefix and source")
 	}
 	return &p, nil
+}
+
+func (s SimulatorCodes) check() error {
+	if s.Source == "" {
+		return fmt.Errorf("simulator_codes has no source")
+	}
+	for name, r := range map[string]CodeRange{"nip": s.NIP, "nuban": s.NUBAN} {
+		if r.First <= 0 || r.Last < r.First {
+			return fmt.Errorf("simulator_codes.%s must have 0 < first <= last, not %d to %d", name, r.First, r.Last)
+		}
+	}
+	return nil
 }
