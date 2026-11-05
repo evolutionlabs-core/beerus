@@ -14,6 +14,10 @@ islamic:
   - {name: Eid-el-Fitr, month: 10, day: 1, days: 2}
   - {name: Eid-el-Kabir, month: 12, day: 10, days: 2}
   - {name: Eid-el-Maulud, month: 3, day: 12, days: 1}
+simulator_codes:
+  nip: {first: 999001, last: 999999}
+  nuban: {first: 901, last: 999}
+  source: Beerus placeholder ranges for allocating codes to simulated banks. They are not real CBN or NIBSS allocations.
 declared:
   - year: 2022
     remove: [2022-05-04]
@@ -33,3 +37,7 @@ declared:
     add: [2026-03-19, 2026-08-25]
     remove: [2026-03-23, 2026-08-26]
     source: Eid-el-Fitr declared as Thursday 19 and Friday 20 March (https://interior.gov.ng/?p=1661); Eid-el-Maulud declared as Tuesday 25 August (https://interior.gov.ng/?p=1773)
+phone:
+  calling_code: "234"
+  trunk_prefix: "0"
+  source: "Nigeria's numbering plan filed with the ITU by the NCC, 2023: country code 234, national prefix 0. https://www.itu.int/dms_pub/itu-t/oth/02/02/T020200009C0002PDFE.pdf"
