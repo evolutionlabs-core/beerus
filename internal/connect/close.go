@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -238,7 +239,8 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 		}
 		return CloseResult{}, errors.Join(err, rerr)
 	}
-	a.detach(b, []int{3})
+	a.detach(b, setup.StepSite)
+	a.recordPhase(id, PhaseClosed)
 	res.Bank, _ = a.bankStatus(id)
 	a.poke()
 	if err := a.setMemberStatus(id, memberStatus(b)); err != nil {

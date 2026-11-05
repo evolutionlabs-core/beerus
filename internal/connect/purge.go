@@ -113,9 +113,9 @@ func (a *App) PurgeBank(id string) (PurgeResult, error) {
 		return PurgeResult{}, err
 	}
 	memberErr := a.removeMember(id)
-	a.detach(b, []int{3})
+	a.detach(b, setup.StepSite)
 	ls := a.ledgerFor(id)
-	a.detach(b, []int{2})
+	a.detach(b, setup.StepDatabase)
 	errs := []error{memberErr}
 	if ls != nil {
 		errs = append(errs, ls.Drop())

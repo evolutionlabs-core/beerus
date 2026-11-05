@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	mrand "math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -110,24 +111,27 @@ func freePorts(t *testing.T, n int) []int {
 	return ports
 }
 
-func bankPortBase(t *testing.T, banks int) int {
+const (
+	stackPortLow  = 20000
+	stackPortHigh = 45000
+)
+
+func stackPorts(t *testing.T, banks int) []int {
 	t.Helper()
 	offset := config.DefaultAPIPortOffset
-	for range 100 {
-		base := freePorts(t, 1)[0]
-		if base+2*offset+banks >= 65536 {
-			continue
-		}
+	need := 4 + banks
+	for range 200 {
+		base := stackPortLow + mrand.IntN(stackPortHigh-stackPortLow-need-offset)
 		free := true
-		for i := 1; i <= banks && free; i++ {
-			free = portOpen(base+i) && portOpen(base+i+offset)
+		for p := base; p < base+need && free; p++ {
+			free = portOpen(p) && (p < base+4 || portOpen(p+offset))
 		}
 		if free {
-			return base
+			return []int{base, base + 1, base + 2, base + 3}
 		}
 	}
-	t.Fatal("no free block of ports for the banks")
-	return 0
+	t.Fatal("no free block of ports for the stack")
+	return nil
 }
 
 func portOpen(p int) bool {
@@ -171,7 +175,7 @@ const stackStart = "2026-01-15T08:00:00+01:00"
 
 func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	t.Helper()
-	ports := append([]int{bankPortBase(t, len(setup.DefaultSpec("contract", clock.Date{Y: 2026, M: 1, D: 15}).Spec.Banks))}, freePorts(t, 3)...)
+	ports := stackPorts(t, len(setup.DefaultSpec("contract", clock.Date{Y: 2026, M: 1, D: 15}).Spec.Banks))
 	local := connect.DefaultLocal()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u

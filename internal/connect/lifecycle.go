@@ -19,11 +19,13 @@ import (
 )
 
 const (
-	PhaseProvisioning  = "provisioning"
-	PhaseActive        = "active"
-	PhaseSuspended     = "suspended"
-	PhaseRepairing     = "repairing"
-	PhaseClosed        = "closed"
+	PhaseProvisioning  = setup.PhaseProvisioning
+	PhaseActive        = setup.PhaseActive
+	PhaseSuspended     = setup.PhaseSuspended
+	PhaseRepairing     = setup.PhaseRepairing
+	PhaseClosing       = setup.PhaseClosing
+	PhaseClosed        = setup.PhaseClosed
+	PhaseTerminating   = setup.PhaseTerminating
 	driftEvery         = 5 * time.Second
 	defaultMaxBanks    = 6
 	connectionsPerBank = 8
@@ -34,10 +36,10 @@ var (
 	slugRe         = regexp.MustCompile(`[^a-z0-9]+`)
 	idRe           = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
 	databaseRe     = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
-	stepNames      = []string{"Record in control.json", "Register the bank", "Create database and ledger", "Start online banking", "Health check"}
 )
 
 type BankStep struct {
+	ID    string    `json:"id"`
 	Name  string    `json:"name"`
 	Done  bool      `json:"done"`
 	Error string    `json:"error,omitempty"`
@@ -51,38 +53,14 @@ type BankStatus struct {
 	Reason string     `json:"reason,omitempty"`
 	URL    string     `json:"online_banking"`
 	Steps  []BankStep `json:"steps"`
+
+	Attempts      int        `json:"attempts,omitempty"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 }
 
 type siteServer struct {
 	srv *http.Server
 	api *http.Server
-}
-
-func newStatus(b *config.Bank, done bool) *BankStatus {
-	st := &BankStatus{ID: b.ID, Name: b.Name, Phase: PhaseProvisioning, URL: b.URL()}
-	for _, n := range stepNames {
-		st.Steps = append(st.Steps, BankStep{Name: n, Done: done})
-	}
-	if done {
-		st.Phase = PhaseActive
-		if b.Suspended() {
-			st.Phase = PhaseSuspended
-		}
-	}
-	if b.Closed() {
-		st.Phase = PhaseClosed
-	}
-	return st
-}
-
-func (a *App) initLifecycle() {
-	a.status = map[string]*BankStatus{}
-	a.sites = map[string]*siteServer{}
-	a.strikes = map[string]int{}
-	for _, b := range a.cfg.Banks {
-		a.status[b.ID] = newStatus(b, a.worldOnly || a.ledgerFor(b.ID) != nil)
-		a.alignSuspensionLocked(b)
-	}
 }
 
 func (a *App) alignSuspensionLocked(b *config.Bank) {
@@ -417,106 +395,13 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 	a.alignSuspensionLocked(b)
 	a.mu.Unlock()
 	a.poke()
+	a.lifeMu.Lock()
+	phase := st.Phase
+	a.lifeMu.Unlock()
+	if phase == PhaseActive || phase == PhaseSuspended {
+		a.recordPhase(id, phase)
+	}
 	return a.setMemberStatus(id, memberStatus(b))
-}
-
-func (a *App) step(st *BankStatus, i int, run func() error) bool {
-	a.lifeMu.Lock()
-	done := st.Steps[i].Done
-	a.lifeMu.Unlock()
-	if done {
-		return true
-	}
-	err := run()
-	a.lifeMu.Lock()
-	defer a.lifeMu.Unlock()
-	st.Steps[i].At = a.clock.Real()
-	if err != nil {
-		st.Steps[i].Error = err.Error()
-		return false
-	}
-	st.Steps[i].Done, st.Steps[i].Error = true, ""
-	return true
-}
-
-func (a *App) reconcileBanks() {
-	if a.worldOnly {
-		return
-	}
-	a.checkDrift()
-	a.lifeMu.Lock()
-	pending := []*config.Bank{}
-	for _, b := range a.cfg.Banks {
-		if st := a.status[b.ID]; st != nil && (st.Phase == PhaseProvisioning || st.Phase == PhaseRepairing) {
-			pending = append(pending, b)
-		}
-	}
-	a.lifeMu.Unlock()
-	for _, b := range pending {
-		a.provision(b)
-	}
-}
-
-func (a *App) provision(b *config.Bank) {
-	a.lifeMu.Lock()
-	st := a.status[b.ID]
-	a.lifeMu.Unlock()
-	ok := a.step(st, 0, func() error {
-		return a.claimBank(b)
-	}) && a.step(st, 1, func() error {
-		a.mu.Lock()
-		err := a.world.AddInstitution(world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: b.Stable(), Style: b.Style()})
-		a.mu.Unlock()
-		if err != nil {
-			return err
-		}
-		return a.registerMember(b)
-	}) && a.step(st, 2, func() error {
-		a.mu.Lock()
-		ls := a.ledgerFor(b.ID)
-		a.mu.Unlock()
-		if ls == nil {
-			var err error
-			if ls, err = openLedgerSource(context.Background(), a.cfg, a.ctl, b, a.world); err != nil {
-				return err
-			}
-			a.mu.Lock()
-			a.addLedger(ls)
-			a.mu.Unlock()
-		}
-		a.attachMember(ls)
-		return nil
-	}) && a.step(st, 3, func() error {
-		return a.startBankSite(b)
-	}) && a.step(st, 4, func() error {
-		a.lifeMu.Lock()
-		serving := a.serving
-		a.lifeMu.Unlock()
-		if !serving {
-			return nil
-		}
-		c := &http.Client{Timeout: 5 * time.Second}
-		resp, err := c.Get(a.siteProbeURL(b))
-		if err != nil {
-			return err
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK && !(b.Suspended() && resp.StatusCode == http.StatusServiceUnavailable) {
-			return fmt.Errorf("online banking answered %d", resp.StatusCode)
-		}
-		return nil
-	})
-	if ok {
-		a.lifeMu.Lock()
-		st.Phase, st.Reason = PhaseActive, ""
-		if b.Suspended() {
-			st.Phase = PhaseSuspended
-		}
-		a.lifeMu.Unlock()
-		a.mu.Lock()
-		a.alignSuspensionLocked(b)
-		a.mu.Unlock()
-	}
 }
 
 func (a *App) startBankSite(b *config.Bank) error {
@@ -616,100 +501,6 @@ func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool)
 	}
 	st, _ := a.bankStatus(id)
 	writeJSON(w, http.StatusOK, st)
-}
-
-func (a *App) checkDrift() {
-	if time.Since(a.driftAt) < driftEvery && !a.driftDue.Swap(false) {
-		return
-	}
-	a.driftAt = time.Now()
-	a.lifeMu.Lock()
-	serving := a.serving
-	banks := []*config.Bank{}
-	for _, b := range a.cfg.Banks {
-		if st := a.status[b.ID]; st != nil && (st.Phase == PhaseActive || st.Phase == PhaseSuspended) {
-			banks = append(banks, b)
-		}
-	}
-	a.lifeMu.Unlock()
-	if !serving {
-		return
-	}
-	for _, b := range banks {
-		reason, redo := a.probe(b)
-		if reason == "" {
-			delete(a.strikes, b.ID)
-			continue
-		}
-		if a.strikes[b.ID]++; a.strikes[b.ID] < 2 {
-			a.driftDue.Store(true)
-			continue
-		}
-		delete(a.strikes, b.ID)
-		a.detach(b, redo)
-		a.log.Warn("bank drifted; repairing", "bank", b.ID, "reason", reason)
-		a.lifeMu.Lock()
-		st := a.status[b.ID]
-		st.Phase, st.Reason = PhaseRepairing, reason
-		for _, i := range redo {
-			st.Steps[i].Done, st.Steps[i].Error = false, ""
-		}
-		a.lifeMu.Unlock()
-	}
-}
-
-func (a *App) probe(b *config.Bank) (string, []int) {
-	a.mu.Lock()
-	ls := a.ledgerFor(b.ID)
-	a.mu.Unlock()
-	if ls == nil {
-		return "its ledger is not open", []int{2, 4}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := ls.Ping(ctx); err != nil {
-		return "its database cannot be reached: " + err.Error(), []int{2, 4}
-	}
-	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get(a.siteProbeURL(b))
-	if err == nil {
-		resp.Body.Close()
-		return "", nil
-	}
-	return "online banking is not answering", []int{3, 4}
-}
-
-func (a *App) detach(b *config.Bank, redo []int) {
-	if redo[0] == 2 {
-		a.mu.Lock()
-		var ls *ledgerSource
-		for i, l := range a.ledgers {
-			if l.inst.ID == b.ID {
-				ls = l
-				a.ledgers = append(a.ledgers[:i:i], a.ledgers[i+1:]...)
-				a.poolMu.Lock()
-				delete(a.pools, b.ID)
-				a.poolMu.Unlock()
-				break
-			}
-		}
-		s := a.nibss
-		a.mu.Unlock()
-		if s != nil {
-			s.Attach(b.ID, nil)
-		}
-		if ls != nil {
-			ls.Close()
-		}
-		return
-	}
-	a.lifeMu.Lock()
-	site := a.sites[b.ID]
-	delete(a.sites, b.ID)
-	a.lifeMu.Unlock()
-	if site != nil {
-		_ = site.srv.Close()
-	}
 }
 
 func (a *App) OpenAccount(bankID, persona, typ string) (world.Account, error) {

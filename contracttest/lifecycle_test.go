@@ -236,6 +236,7 @@ func TestBankRepairsDrift(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	checkProvisioned(t, storedBank(t, s.cfg.Dir, "bank-b"))
 	s.syncNow()
 	if r := s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+asOf, nil); r.Status != 409 || r.Code() != "reauth_required" {
 		t.Fatalf("consents live in the bank database, so a rebuilt bank should ask for consent again: %d %s", r.Status, r.Body)

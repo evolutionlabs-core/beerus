@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
@@ -72,6 +73,7 @@ func settlementAccount(member string) string {
 }
 
 type rtgs struct {
+	mmu     sync.Mutex
 	ctx     context.Context
 	cfg     *config.Config
 	ctl     *ctlStore
@@ -138,6 +140,8 @@ func (r *rtgs) setup() error {
 }
 
 func (r *rtgs) member(id string, settlement, vault int64) error {
+	r.mmu.Lock()
+	defer r.mmu.Unlock()
 	if r.members[id] {
 		return nil
 	}

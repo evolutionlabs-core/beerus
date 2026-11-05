@@ -225,14 +225,8 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		a.log.Error("NIP settlement", "err", err)
 	}
 	a.mu.Unlock()
-	a.initLifecycle()
-	for id := range unregistered {
-		if st := a.status[id]; st != nil && st.Phase != PhaseClosed {
-			st.Phase = PhaseProvisioning
-			for i := 1; i < len(st.Steps); i++ {
-				st.Steps[i].Done = false
-			}
-		}
+	for _, b := range a.initLifecycle(unregistered) {
+		a.provision(b)
 	}
 	return a, nil
 }
