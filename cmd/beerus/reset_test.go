@@ -1,0 +1,84 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
+)
+
+var resetToday = clock.Date{Y: 2026, M: 11, D: 3}
+
+func TestResetRefusesTheWrongName(t *testing.T) {
+	dir := t.TempDir()
+	if err := connect.Init(dir, setup.DefaultSpec("lagos", resetToday), connect.DefaultLocal(), resetToday); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := cmdReset([]string{"beerus", "--dir", dir}, &out); !errors.Is(err, connect.ErrWrongName) || !strings.Contains(err.Error(), `"lagos"`) {
+		t.Fatalf("reset with the wrong name: %v", err)
+	}
+	if err := cmdReset([]string{"--dir", dir}, &out); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("reset without a name: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, connect.SpecFile)); err != nil {
+		t.Fatalf("a refused reset touched the dir: %v", err)
+	}
+}
+
+func TestResetClearsAnOldDir(t *testing.T) {
+	url := os.Getenv("BEERUS_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set BEERUS_TEST_DATABASE_URL to run")
+	}
+	t.Setenv(config.DatabaseURLEnv, url)
+	dir := filepath.Join(t.TempDir(), "old-setup")
+	if err := os.MkdirAll(filepath.Join(dir, "banks", "bank-a"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "beerus.yaml"), []byte("seed: 7\ndatabase_url: postgres:///nowhere\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db := config.DatabaseName(dir, "bank-a")
+	s, err := nibss.Open(context.Background(), url, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if _, err := connect.Initialized(dir); !errors.Is(err, connect.ErrOldSetup) {
+		t.Fatalf("old dir before reset: %v", err)
+	}
+	var out bytes.Buffer
+	if err := cmdReset([]string{"old-setup", "--dir", dir}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), db) || !strings.Contains(out.String(), "Cleared "+dir) {
+		t.Fatalf("output: %s", out.String())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("left in the dir: %v", entries)
+	}
+	ok, err := connect.Initialized(dir)
+	if err != nil || ok {
+		t.Fatalf("after reset: %v %v", ok, err)
+	}
+	if err := connect.Init(dir, setup.DefaultSpec(defaultSetupName, resetToday), connect.DefaultLocal(), resetToday); err != nil {
+		t.Fatalf("up after reset: %v", err)
+	}
+	if _, err := connect.LoadConfig(dir); err != nil {
+		t.Fatalf("load after reset: %v", err)
+	}
+}

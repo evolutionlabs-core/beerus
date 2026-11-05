@@ -61,6 +61,7 @@ Usage:
   beerus bank purge <id> [--yes]
   beerus registry [list | add-client <id> --cert-cn CN --public-key FILE --redirect-uri URL [--name N] [--legal-name N] [--cac N] | consents [--bank ID]]
   beerus doctor [--dir .beerus] [--fix]
+  beerus reset <setup-name> [--dir .beerus]
   beerus trust [--dir .beerus]
   beerus untrust [--dir .beerus]
   beerus version
@@ -90,6 +91,8 @@ func main() {
 		err = cmdInfo(args)
 	case "doctor":
 		err = cmdDoctor(args)
+	case "reset":
+		err = cmdReset(args, os.Stdout)
 	case "partner":
 		err = cmdPartner(args)
 	case "trust":
