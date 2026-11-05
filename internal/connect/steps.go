@@ -313,10 +313,10 @@ func driftRepairs(phase string, done []string, missing []string) (redo []string,
 }
 
 func (a *App) checkDrift() {
-	if time.Since(a.driftAt) < driftEvery && !a.driftDue.Swap(false) {
+	if a.clock.Real().Sub(a.driftAt) < driftEvery && !a.driftDue.Swap(false) {
 		return
 	}
-	a.driftAt = time.Now()
+	a.driftAt = a.clock.Real()
 	stored, err := a.ctl.status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)

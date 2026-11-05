@@ -40,12 +40,12 @@ func openNIBSS(ctx context.Context, cfg *config.Config, ctl *ctlStore) (*nibss.S
 
 func (a *App) nibssStore() *nibss.Store {
 	a.mu.Lock()
-	if a.nibss != nil || a.worldOnly || a.nibssOpening || time.Since(a.nibssTried) < nibssRetry {
+	if a.nibss != nil || a.worldOnly || a.nibssOpening || a.clock.Real().Sub(a.nibssTried) < nibssRetry {
 		s := a.nibss
 		a.mu.Unlock()
 		return s
 	}
-	a.nibssTried, a.nibssOpening = time.Now(), true
+	a.nibssTried, a.nibssOpening = a.clock.Real(), true
 	a.mu.Unlock()
 	s, err := openNIBSS(context.Background(), a.cfg, a.ctl)
 	a.mu.Lock()
