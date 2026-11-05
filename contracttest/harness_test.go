@@ -265,6 +265,9 @@ func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ..
 			select {
 			case lastErr = <-done:
 				cancel()
+				if err := app.DropBankDatabases(); err != nil {
+					t.Errorf("drop bank database: %v", err)
+				}
 				continue
 			case <-time.After(300 * time.Millisecond):
 			}

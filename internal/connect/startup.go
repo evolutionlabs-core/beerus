@@ -358,7 +358,7 @@ func runtimeBank(b setup.Bank, r setup.Resource) *config.Bank {
 		Type:           b.Type,
 		NIPCode:        orDefault(b.NIPCode, r.Allocated.NIPCode),
 		NUBANCode:      orDefault(b.NUBANCode, r.Allocated.NUBANCode),
-		HistoryDays:    setup.BankTypeHistoryDays[b.Type],
+		HistoryDays:    typeHistoryDays[b.Type],
 		Port:           r.Allocated.Port,
 		APIPort:        r.Allocated.APIPort,
 		Database:       r.Allocated.Database,

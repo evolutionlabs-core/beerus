@@ -63,7 +63,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 		if b.ID != w.id || b.Type != w.typ || b.NIPCode != w.nip || b.NUBANCode != w.nuban || b.Port != w.port || b.APIPort != w.api || b.Database == "" {
 			t.Errorf("bank %d: %+v", i, b)
 		}
-		if b.HistoryDays != setup.BankTypeHistoryDays[w.typ] {
+		if b.HistoryDays != typeHistoryDays[w.typ] {
 			t.Errorf("%s history %d", b.ID, b.HistoryDays)
 		}
 	}

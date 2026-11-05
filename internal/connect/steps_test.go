@@ -3,6 +3,7 @@ package connect
 import (
 	"errors"
 	"log/slog"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -108,5 +109,11 @@ func TestFinalizerFailureBacksOff(t *testing.T) {
 	r := findResource(&st, setup.KindBank, "bank-b")
 	if r.Attempts != 1 || r.NextAttemptAt == nil || len(r.Done) != 0 || len(r.Conditions) != 1 || r.Conditions[0].Reason != setup.ReasonStepFailed {
 		t.Fatalf("after a failure: %+v", r)
+	}
+}
+
+func TestEveryBankTypeHasAHistory(t *testing.T) {
+	if !slices.Equal(slices.Sorted(maps.Keys(typeHistoryDays)), setup.BankTypes) {
+		t.Fatalf("history days for %v, bank types %v", slices.Sorted(maps.Keys(typeHistoryDays)), setup.BankTypes)
 	}
 }

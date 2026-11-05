@@ -32,10 +32,11 @@ const (
 )
 
 var (
-	ErrBankInvalid = errors.New("invalid bank")
-	slugRe         = regexp.MustCompile(`[^a-z0-9]+`)
-	idRe           = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
-	databaseRe     = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+	typeHistoryDays = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
+	ErrBankInvalid  = errors.New("invalid bank")
+	slugRe          = regexp.MustCompile(`[^a-z0-9]+`)
+	idRe            = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
+	databaseRe      = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 )
 
 type BankStep struct {
@@ -226,7 +227,7 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 	if typ == "" {
 		typ = "commercial"
 	}
-	days, ok := setup.BankTypeHistoryDays[typ]
+	days, ok := typeHistoryDays[typ]
 	if !ok {
 		return nil, invalid("type must be commercial, digital or microfinance")
 	}
