@@ -26,74 +26,75 @@ import (
 )
 
 type App struct {
-	mu         sync.Mutex
-	cfg        *config.Config
-	clock      *clock.Clock
-	world      *world.World
-	st         *State
-	ctl        *ctlStore
-	setupKey   uint64
-	key        config.SigningKey
-	ctlToken   string
-	log        *slog.Logger
-	isDirty    atomic.Bool
-	limiters   map[string]*rate.Limiter
-	idemLock   sync.Map
-	client     *http.Client
-	wake       chan struct{}
-	statePath  string
-	sending    chan struct{}
-	pmu        sync.RWMutex
-	swept      time.Time
-	ledgers    []*ledgerSource
-	rtgs       *rtgs
-	rtgsTried  time.Time
-	nibss      *nibss.Store
-	nibssTried time.Time
-	members    []nip.Participant
-	settling   bool
-	settleDone *sync.Cond
-	worldOnly  bool
-	personas   []string
-	lifeMu     sync.Mutex
-	recMu      sync.Mutex
-	stepMu     sync.Mutex
-	status     map[string]*BankStatus
-	sites      map[string]*siteServer
-	serving    bool
-	warnings   []string
-	driftAt    time.Time
-	driftDue   atomic.Bool
-	strikes    map[string]int
-	obMu       sync.Mutex
-	obs        map[string]*openbanking.Server
-	regMu      sync.Mutex
-	poolMu     sync.RWMutex
-	pools      map[string]*ledgerSource
-	flushMu    sync.Mutex
-	vault      *vault
-	obHTTP     *http.Client
-	role       string
-	bankID     string
-	coreURL    string
-	worldSum   string
-	replicated bool
-	synced     atomic.Bool
-	paused     atomic.Bool
-	pauseMu    sync.Mutex
-	pauseTimer *time.Timer
-	pullMu     sync.Mutex
-	pulledAt   time.Time
-	pullFailed time.Time
-	pullErr    error
-	pulling    *pullFlight
-	peers      *http.Client
-	eventMu    sync.Mutex
-	eventHTTP  map[string]*http.Client
-	bankWrap   func(http.RoundTripper) http.RoundTripper
-	obKey      *ecdsa.PrivateKey
-	metas      map[string]bankMeta
-	eventJTI   jtiSet
+	mu           sync.Mutex
+	cfg          *config.Config
+	clock        *clock.Clock
+	world        *world.World
+	st           *State
+	ctl          *ctlStore
+	setupKey     uint64
+	key          config.SigningKey
+	ctlToken     string
+	log          *slog.Logger
+	isDirty      atomic.Bool
+	limiters     map[string]*rate.Limiter
+	idemLock     sync.Map
+	client       *http.Client
+	wake         chan struct{}
+	statePath    string
+	sending      chan struct{}
+	pmu          sync.RWMutex
+	swept        time.Time
+	ledgers      []*ledgerSource
+	rtgs         *rtgs
+	rtgsTried    time.Time
+	nibss        *nibss.Store
+	nibssTried   time.Time
+	nibssOpening bool
+	members      []nip.Participant
+	settling     bool
+	settleDone   *sync.Cond
+	worldOnly    bool
+	personas     []string
+	lifeMu       sync.Mutex
+	recMu        sync.Mutex
+	stepMu       sync.Mutex
+	status       map[string]*BankStatus
+	sites        map[string]*siteServer
+	serving      bool
+	warnings     []string
+	driftAt      time.Time
+	driftDue     atomic.Bool
+	strikes      map[string]int
+	obMu         sync.Mutex
+	obs          map[string]*openbanking.Server
+	regMu        sync.Mutex
+	poolMu       sync.RWMutex
+	pools        map[string]*ledgerSource
+	flushMu      sync.Mutex
+	vault        *vault
+	obHTTP       *http.Client
+	role         string
+	bankID       string
+	coreURL      string
+	worldSum     string
+	replicated   bool
+	synced       atomic.Bool
+	paused       atomic.Bool
+	pauseMu      sync.Mutex
+	pauseTimer   *time.Timer
+	pullMu       sync.Mutex
+	pulledAt     time.Time
+	pullFailed   time.Time
+	pullErr      error
+	pulling      *pullFlight
+	peers        *http.Client
+	eventMu      sync.Mutex
+	eventHTTP    map[string]*http.Client
+	bankWrap     func(http.RoundTripper) http.RoundTripper
+	obKey        *ecdsa.PrivateKey
+	metas        map[string]bankMeta
+	eventJTI     jtiSet
 }
 
 type Options struct {
@@ -198,7 +199,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		}
 		a.addLedger(ls)
 	}
-	a.ensureNIBSSLocked()
+	a.nibssStore()
 	unregistered := map[string]bool{}
 	for _, b := range cfg.Banks {
 		if a.worldOnly {
@@ -357,6 +358,7 @@ func (a *App) Step() {
 		a.reconcileBanks()
 		a.recMu.Unlock()
 	}
+	a.nibssStore()
 	a.mu.Lock()
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {
@@ -367,7 +369,6 @@ func (a *App) Step() {
 	if err := a.ensureRTGS(); err != nil {
 		a.log.Error("CBN ledger", "err", err)
 	}
-	a.ensureNIBSSLocked()
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}

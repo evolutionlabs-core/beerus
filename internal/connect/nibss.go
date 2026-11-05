@@ -38,24 +38,25 @@ func openNIBSS(ctx context.Context, cfg *config.Config, ctl *ctlStore) (*nibss.S
 	return s, nil
 }
 
-func (a *App) ensureNIBSSLocked() {
-	if a.nibss != nil || a.worldOnly || time.Since(a.nibssTried) < nibssRetry {
-		return
-	}
-	a.nibssTried = time.Now()
-	s, err := openNIBSS(context.Background(), a.cfg, a.ctl)
-	if err != nil {
-		a.log.Error("NIBSS directory not ready; retrying", "err", err)
-		return
-	}
-	a.nibss = s
-}
-
 func (a *App) nibssStore() *nibss.Store {
 	a.mu.Lock()
+	if a.nibss != nil || a.worldOnly || a.nibssOpening || time.Since(a.nibssTried) < nibssRetry {
+		s := a.nibss
+		a.mu.Unlock()
+		return s
+	}
+	a.nibssTried, a.nibssOpening = time.Now(), true
+	a.mu.Unlock()
+	s, err := openNIBSS(context.Background(), a.cfg, a.ctl)
+	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.ensureNIBSSLocked()
-	return a.nibss
+	a.nibssOpening = false
+	if err != nil {
+		a.log.Error("NIBSS directory not ready; retrying", "err", err)
+		return nil
+	}
+	a.nibss = s
+	return s
 }
 
 func (a *App) dropNIBSS() error {
