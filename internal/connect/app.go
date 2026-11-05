@@ -19,6 +19,8 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
@@ -46,6 +48,9 @@ type App struct {
 	ledgers    []*ledgerSource
 	rtgs       *rtgs
 	rtgsTried  time.Time
+	nibss      *nibss.Store
+	nibssTried time.Time
+	members    []nip.Participant
 	settling   bool
 	settleDone *sync.Cond
 	worldOnly  bool
@@ -193,6 +198,20 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		}
 		a.addLedger(ls)
 	}
+	a.ensureNIBSSLocked()
+	unregistered := map[string]bool{}
+	for _, b := range cfg.Banks {
+		if a.worldOnly {
+			break
+		}
+		if err := a.registerMember(b); err != nil {
+			a.log.Error("bank not in the NIBSS directory; retrying in the background", "bank", b.ID, "err", err)
+			unregistered[b.ID] = true
+		}
+	}
+	for _, l := range a.ledgers {
+		a.attachMember(l)
+	}
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {
 			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
@@ -207,6 +226,14 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.mu.Unlock()
 	a.initLifecycle()
+	for id := range unregistered {
+		if st := a.status[id]; st != nil && st.Phase != PhaseClosed {
+			st.Phase = PhaseProvisioning
+			for i := 1; i < len(st.Steps); i++ {
+				st.Steps[i].Done = false
+			}
+		}
+	}
 	return a, nil
 }
 
@@ -249,6 +276,9 @@ func (a *App) closeLedgers() {
 	}
 	if a.rtgs != nil {
 		a.rtgs.Close()
+	}
+	if a.nibss != nil {
+		a.nibss.Close()
 	}
 }
 
@@ -343,6 +373,7 @@ func (a *App) Step() {
 	if err := a.ensureRTGS(); err != nil {
 		a.log.Error("CBN ledger", "err", err)
 	}
+	a.ensureNIBSSLocked()
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}

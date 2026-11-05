@@ -76,18 +76,6 @@ func (p reply) write(w http.ResponseWriter) {
 	_, _ = w.Write(p.body)
 }
 
-func (a *App) directoryLocked() *nip.Directory {
-	members := []nip.Participant{}
-	for _, b := range a.cfg.Banks {
-		members = append(members, nip.Participant{Code: b.NIPCode, Name: b.Name, BankID: b.ID})
-	}
-	outside := []nip.Participant{}
-	for _, o := range world.CounterpartyBanks() {
-		outside = append(outside, nip.Participant{Code: o.NIPCode, Name: o.Name})
-	}
-	return nip.NewDirectory(members, outside)
-}
-
 type nameEnquiry struct {
 	Code        string `json:"response_code"`
 	Message     string `json:"message"`

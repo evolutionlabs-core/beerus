@@ -241,6 +241,9 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 	a.detach(b, []int{3})
 	res.Bank, _ = a.bankStatus(id)
 	a.poke()
+	if err := a.setMemberStatus(id, memberStatus(b)); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 

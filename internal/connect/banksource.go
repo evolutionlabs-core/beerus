@@ -281,6 +281,7 @@ func (a *App) DropBankDatabases() error {
 	if a.rtgs != nil {
 		errs = append(errs, a.rtgs.Drop())
 	}
+	errs = append(errs, a.dropNIBSS())
 	return errors.Join(errs...)
 }
 

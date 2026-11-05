@@ -417,7 +417,7 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 	a.alignSuspensionLocked(b)
 	a.mu.Unlock()
 	a.poke()
-	return nil
+	return a.setMemberStatus(id, memberStatus(b))
 }
 
 func (a *App) step(st *BankStatus, i int, run func() error) bool {
@@ -465,22 +465,26 @@ func (a *App) provision(b *config.Bank) {
 		return a.claimBank(b)
 	}) && a.step(st, 1, func() error {
 		a.mu.Lock()
-		defer a.mu.Unlock()
-		return a.world.AddInstitution(world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: b.Stable(), Style: b.Style()})
-	}) && a.step(st, 2, func() error {
-		a.mu.Lock()
-		have := a.ledgerFor(b.ID) != nil
+		err := a.world.AddInstitution(world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: b.Stable(), Style: b.Style()})
 		a.mu.Unlock()
-		if have {
-			return nil
-		}
-		ls, err := openLedgerSource(context.Background(), a.cfg, a.ctl, b, a.world)
 		if err != nil {
 			return err
 		}
+		return a.registerMember(b)
+	}) && a.step(st, 2, func() error {
 		a.mu.Lock()
-		a.addLedger(ls)
+		ls := a.ledgerFor(b.ID)
 		a.mu.Unlock()
+		if ls == nil {
+			var err error
+			if ls, err = openLedgerSource(context.Background(), a.cfg, a.ctl, b, a.world); err != nil {
+				return err
+			}
+			a.mu.Lock()
+			a.addLedger(ls)
+			a.mu.Unlock()
+		}
+		a.attachMember(ls)
 		return nil
 	}) && a.step(st, 3, func() error {
 		return a.startBankSite(b)
@@ -689,7 +693,11 @@ func (a *App) detach(b *config.Bank, redo []int) {
 				break
 			}
 		}
+		s := a.nibss
 		a.mu.Unlock()
+		if s != nil {
+			s.Attach(b.ID, nil)
+		}
 		if ls != nil {
 			ls.Close()
 		}
