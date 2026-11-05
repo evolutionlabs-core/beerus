@@ -2,8 +2,11 @@ package nibss
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func consent(bank, id string, src int64, at time.Time) ConsentEvent {
@@ -74,7 +77,9 @@ func TestConsentLedgerRejectsBadInput(t *testing.T) {
 	wantErr(t, s.RecordConsent(ctx, consent("bank-a", "c1", -1, t0)), "consent c1 event: source seq -1 is negative")
 	bad := consent("bank-a", "c1", 1, t0)
 	bad.Status = "Maybe"
-	if err := s.RecordConsent(ctx, bad); err == nil {
-		t.Fatal("unknown consent status was stored")
+	err := s.RecordConsent(ctx, bad)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "consent_ledger_status_check" {
+		t.Fatalf("unknown consent status: %v", err)
 	}
 }

@@ -65,6 +65,8 @@ func checkBegin(x Session) error {
 		return fmt.Errorf("session %s starts pending, not %s", x.ID, x.Status)
 	case !slices.Contains([]string{"", OutcomeCredited, OutcomeFailed, OutcomeUnknown}, x.Outcome):
 		return fmt.Errorf("session %s cannot start with outcome %s", x.ID, x.Outcome)
+	case x.Outcome != "" && x.NextTSQAt == nil:
+		return fmt.Errorf("session %s holds outcome %s and needs a status query time", x.ID, x.Outcome)
 	case x.ResolvedAt != nil || x.Settlement != "" || x.TSQAttempts != 0:
 		return fmt.Errorf("session %s must start unresolved, unsettled and with no status queries", x.ID)
 	}
@@ -178,6 +180,9 @@ func (s *Store) Resolve(ctx context.Context, id, status, outcome string, at time
 		case curStatus == status && curOutcome == outcome:
 			return nil
 		case curStatus == SessionPending:
+			if (curOutcome == OutcomeCredited) != (status == SessionOK) && curOutcome != "" {
+				return fmt.Errorf("session %s holds outcome %s and cannot resolve as %s: %w", id, curOutcome, status, errTransition)
+			}
 			if at.Before(created) {
 				return fmt.Errorf("session %s cannot resolve at %s, before it began at %s", id, at.Format(time.RFC3339), created.Format(time.RFC3339))
 			}

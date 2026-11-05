@@ -217,6 +217,7 @@ func TestSetStatus(t *testing.T) {
 	if !errors.Is(err, ErrNoRecord) {
 		t.Fatalf("got %v, want ErrNoRecord", err)
 	}
+	wantErr(t, err, "no institution has id bank-x: 25 no record")
 }
 
 func TestOpenCreatesDatabase(t *testing.T) {

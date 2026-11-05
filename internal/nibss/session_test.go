@@ -134,9 +134,10 @@ func TestBeginRejectsBadInput(t *testing.T) {
 		{mod(func(x *Session) { x.CreatedAt = time.Time{} }), "session s4 needs a created time"},
 		{mod(func(x *Session) { x.Status = SessionOK }), "session s4 starts pending, not 00"},
 		{mod(func(x *Session) { x.Outcome = OutcomeReversed }), "session s4 cannot start with outcome reversed"},
+		{mod(func(x *Session) { x.Outcome = OutcomeUnknown }), "session s4 holds outcome unknown and needs a status query time"},
 		{mod(func(x *Session) { x.Settlement = "c1" }), "session s4 must start unresolved, unsettled and with no status queries"},
 		{mod(func(x *Session) { x.ToCode = "123456" }), "no bank has code 123456: 07 invalid account"},
-		{mod(func(x *Session) { x.ToCode = "999003"; x.Outcome = OutcomeUnknown }), "session s4: outside bank Bank C answers at once and cannot hold outcome unknown"},
+		{mod(func(x *Session) { x.ToCode = "999003"; x.Outcome = OutcomeUnknown; x.NextTSQAt = ptr(t0) }), "session s4: outside bank Bank C answers at once and cannot hold outcome unknown"},
 	}
 	for _, c := range cases {
 		_, err := s.Begin(ctx, c.x)
@@ -329,4 +330,29 @@ func TestNameEnquiry(t *testing.T) {
 	}
 	_, err = s.NameEnquiry(ctx, "999002", world.NUBAN("902", 1))
 	wantErr(t, err, "Bank B is terminating: 91 institution unavailable")
+}
+
+func TestResolveKeepsWithheldOutcome(t *testing.T) {
+	ctx := context.Background()
+	s := sessionStore(t)
+	for _, c := range []struct {
+		id, held, status, outcome, want string
+	}{
+		{"w1", OutcomeCredited, "91", OutcomeFailed, "session w1 holds outcome credited and cannot resolve as 91: status change not allowed"},
+		{"w2", OutcomeFailed, SessionOK, OutcomeCredited, "session w2 holds outcome failed and cannot resolve as 00: status change not allowed"},
+		{"w3", OutcomeUnknown, SessionOK, OutcomeCredited, "session w3 holds outcome unknown and cannot resolve as 00: status change not allowed"},
+	} {
+		x := transfer(c.id, "999002", t0)
+		x.Outcome, x.NextTSQAt = c.held, ptr(t0.Add(time.Minute))
+		if _, err := s.Begin(ctx, x); err != nil {
+			t.Fatal(err)
+		}
+		wantErr(t, s.Resolve(ctx, c.id, c.status, c.outcome, t0.Add(time.Minute)), c.want)
+	}
+	if err := s.Resolve(ctx, "w1", SessionOK, OutcomeCredited, t0.Add(time.Minute)); err != nil {
+		t.Fatalf("credited as 00: %v", err)
+	}
+	if err := s.Resolve(ctx, "w3", "96", OutcomeFailed, t0.Add(time.Minute)); err != nil {
+		t.Fatalf("unknown as failure: %v", err)
+	}
 }
