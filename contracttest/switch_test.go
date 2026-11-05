@@ -59,7 +59,7 @@ func TestNIPSwitch(t *testing.T) {
 		t.Fatalf("outside bank: %v", ne)
 	}
 	checked := 0
-	for _, l := range w.LinesFor(from.Key, time.Now()) {
+	for _, l := range w.LinesFor(from.Key, s.app.Clock().Now()) {
 		if l.Counterparty == nil || slices.ContainsFunc(s.cfg.Banks, func(b *config.Bank) bool { return b.NIPCode == l.Counterparty.BankCode }) {
 			continue
 		}
@@ -205,7 +205,7 @@ func TestEveryTransferPathIsIdempotent(t *testing.T) {
 	from, own, other := w.AccountsAt("adaeze", "bank-a")[0], w.AccountsAt("adaeze", "bank-a")[1], w.AccountsAt("tunde", "bank-a")[0]
 	debits := func() int {
 		n := 0
-		ls, err := w.Statement(from.Key, time.Now().Add(24*time.Hour))
+		ls, err := w.Statement(from.Key, s.app.Clock().Now().Add(24*time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}

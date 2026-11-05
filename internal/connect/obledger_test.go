@@ -9,14 +9,10 @@ import (
 	"testing"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 func TestConsentLedgerPages(t *testing.T) {
-	cfg, err := config.Init(t.TempDir(), config.InitOptions{Seed: 7, Today: clock.Date{Y: 2026, M: 11, D: 3}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
 	app, err := New(cfg, Options{WorldOnly: true, Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
 		t.Fatal(err)
@@ -73,10 +69,7 @@ func TestConsentLedgerPages(t *testing.T) {
 }
 
 func TestEventClientIsSharedPerDestination(t *testing.T) {
-	cfg, err := config.Init(t.TempDir(), config.InitOptions{Seed: 7, Today: clock.Date{Y: 2026, M: 11, D: 3}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
 	app, err := New(cfg, Options{WorldOnly: true, Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
 		t.Fatal(err)

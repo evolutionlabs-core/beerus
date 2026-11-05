@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"reflect"
 	"slices"
 	"strconv"
 	"sync"
@@ -220,14 +220,77 @@ func (a *App) claimBank(b *config.Bank) error {
 	return a.ctl.Claim(setup.KindBank, b.ID, bankOwned(b)...)
 }
 
-func loadOrCreateStore(dir string) (*ctlStore, error) {
-	s, err := openStore(dir)
-	if err == nil || !errors.Is(err, os.ErrNotExist) {
-		return s, err
+func specBank(b config.Bank, prev setup.Bank) setup.Bank {
+	return setup.Bank{
+		ID:             b.ID,
+		Name:           b.Name,
+		Type:           b.Type,
+		NIPCode:        b.NIPCode,
+		NUBANCode:      b.NUBANCode,
+		SettlesThrough: b.SettlesThrough,
+		State:          b.State,
+		NetDebitCap:    b.NetDebitCap,
+		Collateral:     b.Collateral,
+		OpenBanking:    setup.OpenBanking{ConsentMonths: b.API.ConsentMonths, RefreshDays: b.API.RefreshDays, DormantDays: b.API.DormantDays, AssertionSeconds: b.API.AssertionSeconds},
+		OnRemove:       prev.OnRemove,
 	}
-	key, err := newSetupKey()
+}
+
+func syncBanks(st *setup.Status, banks []config.Bank) (bool, error) {
+	prev := map[string]setup.Bank{}
+	for _, b := range st.Applied.Spec.Banks {
+		prev[b.ID] = b
+	}
+	changed := false
+	next := make([]setup.Bank, 0, len(banks))
+	keep := map[string]bool{}
+	for _, b := range banks {
+		keep[b.ID] = true
+		sb := specBank(b, prev[b.ID])
+		alloc := setup.Allocation{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Database: b.Database, Port: b.Port, APIPort: b.APIPort}
+		r := findResource(st, setup.KindBank, b.ID)
+		old, existed := prev[b.ID]
+		switch {
+		case r == nil || !existed:
+			r = ensureResource(st, setup.KindBank, b.ID)
+			r.Generation++
+			r.Phase = setup.PhaseProvisioning
+			r.Steps = map[string]string{setup.StepAllocate: stepDone}
+			changed = true
+		case !reflect.DeepEqual(old, sb):
+			r.Generation++
+			changed = true
+		}
+		if r.Allocated != alloc {
+			r.Allocated = alloc
+			changed = true
+		}
+		next = append(next, sb)
+	}
+	for id := range prev {
+		if !keep[id] {
+			st.Resources = slices.DeleteFunc(st.Resources, func(r setup.Resource) bool { return r.Kind == setup.KindBank && r.ID == id })
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	st.Applied.Spec.Banks = next
+	sum, err := specSum(st.Applied)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	return createStore(dir, setup.Status{Version: setup.StatusVersion, SetupKey: key})
+	st.AppliedSHA256 = sum
+	return true, nil
+}
+
+func (a *App) recordBanksLocked() (setup.Status, uint64, error) {
+	a.mu.Lock()
+	banks := make([]config.Bank, 0, len(a.cfg.Banks))
+	for _, b := range a.cfg.Banks {
+		banks = append(banks, *b)
+	}
+	a.mu.Unlock()
+	return a.ctl.change(func(st *setup.Status) (bool, error) { return syncBanks(st, banks) })
 }

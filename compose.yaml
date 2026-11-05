@@ -14,7 +14,6 @@ x-beerus: &beerus
     BEERUS_WIDGET_PORT: "7444"
     BEERUS_CONTROL_PORT: "7480"
     BEERUS_HEALTH_PORT: "7490"
-    BEERUS_BANK_PORT: "7445"
   volumes:
     - ${BEERUS_STATE:-state}:/state
 

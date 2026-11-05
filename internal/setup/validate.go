@@ -3,6 +3,7 @@ package setup
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
 	"slices"
@@ -13,11 +14,14 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
+var BankTypeHistoryDays = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
+
 var (
 	specIDPattern      = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
 	specPartnerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
 	specNIPPattern     = regexp.MustCompile(`^\d{6}$`)
-	specBankTypes      = []string{"commercial", "digital", "microfinance"}
+	specBankTypes      = slices.Sorted(maps.Keys(BankTypeHistoryDays))
+	specSystemIDs      = []string{SystemCBN, SystemNIBSS}
 	specStates         = []string{StateActive, StateSuspended, StateClosed}
 	specMoneyChoices   = []string{MoneyTransfer, MoneyPayout, MoneyLeave}
 )
@@ -184,6 +188,8 @@ func (c *specChecker) banks() {
 			c.add(p+".id", "%s.id is required. %s", p, specIDRule)
 		case !specIDPattern.MatchString(b.ID):
 			c.add(p+".id", "%s.id %q is not valid. %s", p, b.ID, specIDRule)
+		case slices.Contains(specSystemIDs, b.ID):
+			c.add(p+".id", "%s.id %s is reserved for the %s. Choose another id", p, b.ID, strings.ToUpper(b.ID))
 		case firstID[b.ID]:
 			c.add(p+".id", "%s.id %s is already used by another bank. Give each bank its own id", p, b.ID)
 		}

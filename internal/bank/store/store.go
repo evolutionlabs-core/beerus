@@ -46,7 +46,7 @@ func Open(ctx context.Context, url, name string, migrations ...Migration) (*Stor
 	}
 	c, err := admin(ctx, url)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reach Postgres for the bank ledger (%w); start Postgres or set ledger.database_url in beerus.yaml", err)
+		return nil, fmt.Errorf("cannot reach Postgres for the bank ledger (%w); start Postgres or set database_url in local.yaml", err)
 	}
 	defer c.Close(ctx)
 	ok, err := exists(ctx, c, name)

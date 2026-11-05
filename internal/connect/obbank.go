@@ -33,26 +33,6 @@ func (a *App) prepareOpenBanking() error {
 	if err := a.cfg.EnsureCertificates(); err != nil {
 		return err
 	}
-	used := map[int]bool{a.cfg.Connect.PartnerPort: true, a.cfg.Connect.WidgetPort: true, a.cfg.Connect.ControlPort: true}
-	for _, b := range a.cfg.Banks {
-		used[b.Port], used[b.APIPort] = true, true
-	}
-	changed := false
-	for _, b := range a.cfg.Banks {
-		if b.APIPort != 0 {
-			continue
-		}
-		p, err := a.cfg.AllocatePort(b.Port+a.cfg.APIPortOffset(), used, portFree)
-		if err != nil {
-			return fmt.Errorf("%s: bank API: %w", b.ID, err)
-		}
-		b.APIPort, used[p], changed = p, true, true
-	}
-	if changed {
-		if err := a.cfg.Save(); err != nil {
-			return err
-		}
-	}
 	return a.ensureRegistry()
 }
 

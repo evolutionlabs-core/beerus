@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -33,8 +34,7 @@ var (
 	slugRe         = regexp.MustCompile(`[^a-z0-9]+`)
 	idRe           = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
 	databaseRe     = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
-	stepNames      = []string{"Record in manifest", "Register the bank", "Create database and ledger", "Start online banking", "Health check"}
-	bankTypes      = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
+	stepNames      = []string{"Record in control.json", "Register the bank", "Create database and ledger", "Start online banking", "Health check"}
 )
 
 type BankStep struct {
@@ -76,9 +76,6 @@ func newStatus(b *config.Bank, done bool) *BankStatus {
 }
 
 func (a *App) initLifecycle() {
-	if raw, err := os.ReadFile(a.cfg.Path("beerus.yaml")); err == nil {
-		a.cfgSum = config.HashKey(string(raw))
-	}
 	a.status = map[string]*BankStatus{}
 	a.sites = map[string]*siteServer{}
 	a.strikes = map[string]int{}
@@ -146,22 +143,6 @@ func (a *App) warn(format string, args ...any) {
 	a.log.Warn(msg)
 }
 
-func (a *App) saveBanksLocked() error {
-	disk, err := config.Load(a.cfg.Dir)
-	if err != nil {
-		disk = a.cfg
-	} else {
-		disk.Banks = a.cfg.Banks
-	}
-	if err := disk.Save(); err != nil {
-		return err
-	}
-	if raw, err := os.ReadFile(a.cfg.Path("beerus.yaml")); err == nil {
-		a.cfgSum = config.HashKey(string(raw))
-	}
-	return nil
-}
-
 type BankRequest struct {
 	Name           string `json:"name"`
 	ID             string `json:"id"`
@@ -213,24 +194,31 @@ func (a *App) postgresRoom(ctx context.Context) error {
 
 func (a *App) CreateBank(req BankRequest) (*config.Bank, error) {
 	a.lifeMu.Lock()
-	defer a.lifeMu.Unlock()
 	if len(a.cfg.Banks) == 0 {
+		a.lifeMu.Unlock()
 		return nil, invalid("this setup runs the built-in banks without ledgers; create a new setup with beerus init to manage banks")
 	}
 	b, err := a.admit(req, 0, "")
 	if err != nil {
+		a.lifeMu.Unlock()
 		return nil, err
 	}
 	a.mu.Lock()
 	a.cfg.Banks = append(a.cfg.Banks, b)
 	a.mu.Unlock()
-	if err := a.saveBanksLocked(); err != nil {
+	st, v, err := a.recordBanksLocked()
+	if err != nil {
 		a.mu.Lock()
 		a.cfg.Banks = a.cfg.Banks[:len(a.cfg.Banks)-1]
 		a.mu.Unlock()
+		a.lifeMu.Unlock()
 		return nil, err
 	}
 	a.status[b.ID] = newStatus(b, false)
+	a.lifeMu.Unlock()
+	if err := a.ctl.flush(st, v); err != nil {
+		return nil, err
+	}
 	a.poke()
 	return b, nil
 }
@@ -260,7 +248,7 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 	if typ == "" {
 		typ = "commercial"
 	}
-	days, ok := bankTypes[typ]
+	days, ok := setup.BankTypeHistoryDays[typ]
 	if !ok {
 		return nil, invalid("type must be commercial, digital or microfinance")
 	}
@@ -415,12 +403,16 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 			st.Phase = PhaseSuspended
 		}
 	}
-	if err := a.saveBanksLocked(); err != nil {
+	saved, v, err := a.recordBanksLocked()
+	if err != nil {
 		b.State, st.Phase = prev, prevPhase
 		a.lifeMu.Unlock()
 		return err
 	}
 	a.lifeMu.Unlock()
+	if err := a.ctl.flush(saved, v); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	a.alignSuspensionLocked(b)
 	a.mu.Unlock()
@@ -451,7 +443,6 @@ func (a *App) reconcileBanks() {
 	if a.worldOnly {
 		return
 	}
-	a.watchConfig()
 	a.checkDrift()
 	a.lifeMu.Lock()
 	pending := []*config.Bank{}
@@ -623,106 +614,6 @@ func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool)
 	writeJSON(w, http.StatusOK, st)
 }
 
-func (a *App) watchConfig() {
-	if a.cfg.Dir == "" || time.Since(a.watched) < time.Second {
-		return
-	}
-	a.watched = time.Now()
-	raw, err := os.ReadFile(a.cfg.Path("beerus.yaml"))
-	if err != nil {
-		return
-	}
-	sum := config.HashKey(string(raw))
-	a.lifeMu.Lock()
-	same := sum == a.cfgSum
-	a.lifeMu.Unlock()
-	if !same {
-		a.applyConfig(sum)
-	}
-}
-
-func (a *App) applyConfig(sum string) {
-	disk, err := config.Load(a.cfg.Dir)
-	a.lifeMu.Lock()
-	a.cfgSum = sum
-	a.warnings = nil
-	if err != nil {
-		a.warn("beerus.yaml was not applied: %v", err)
-		a.lifeMu.Unlock()
-		return
-	}
-	if len(a.cfg.Banks) == 0 {
-		a.lifeMu.Unlock()
-		return
-	}
-	a.cfg.MaxBanks = disk.MaxBanks
-	known := map[string]*config.Bank{}
-	for _, b := range a.cfg.Banks {
-		known[b.ID] = b
-	}
-	seen := map[string]bool{}
-	suspend := map[string]bool{}
-	rewrite := false
-	for _, fb := range disk.Banks {
-		seen[fb.ID] = true
-		cur := known[fb.ID]
-		if cur == nil {
-			b, err := a.admit(BankRequest{Name: fb.Name, ID: fb.ID, Type: fb.Type, NIPCode: fb.NIPCode, NUBANCode: fb.NUBANCode, HistoryDays: fb.HistoryDays, SettlesThrough: fb.SettlesThrough}, fb.Port, fb.Database)
-			if err != nil {
-				a.warn("%s in beerus.yaml was not added: %s", fb.ID, strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
-				rewrite = true
-				continue
-			}
-			b.State = fb.State
-			a.mu.Lock()
-			a.cfg.Banks = append(a.cfg.Banks, b)
-			a.mu.Unlock()
-			a.status[b.ID] = newStatus(b, false)
-			rewrite = true
-			continue
-		}
-		switch {
-		case cur.Closed() && !fb.Closed():
-			a.warn("%s is closed and cannot be reopened; the edit was undone", fb.ID)
-			rewrite = true
-		case !cur.Closed() && fb.Closed():
-			a.warn("%s cannot be closed from beerus.yaml; use beerus bank close, which decides what happens to its customers' money", fb.ID)
-			rewrite = true
-		case cur.Suspended() != fb.Suspended():
-			suspend[fb.ID] = fb.Suspended()
-		}
-		if fb.NetDebitCap != cur.NetDebitCap || fb.Collateral != cur.Collateral {
-			a.mu.Lock()
-			cur.NetDebitCap, cur.Collateral = fb.NetDebitCap, fb.Collateral
-			a.mu.Unlock()
-		}
-		if fb.Name != cur.Name || fb.Type != cur.Type || fb.NIPCode != cur.NIPCode || fb.NUBANCode != cur.NUBANCode || fb.HistoryDays != cur.HistoryDays || fb.Port != cur.Port || (fb.APIPort != 0 && fb.APIPort != cur.APIPort) || fb.Database != cur.Database || fb.SettlesThrough != cur.SettlesThrough {
-			a.warn("only the state of %s can be changed in beerus.yaml; other edits were undone", fb.ID)
-			rewrite = true
-		}
-	}
-	for _, b := range a.cfg.Banks {
-		if !seen[b.ID] {
-			a.warn("%s was removed from beerus.yaml, but banks are removed with beerus bank purge; it was put back", b.ID)
-			rewrite = true
-		}
-	}
-	if rewrite {
-		if err := a.saveBanksLocked(); err != nil {
-			a.warn("beerus.yaml could not be saved: %v", err)
-		}
-	}
-	a.lifeMu.Unlock()
-	for id, s := range suspend {
-		if err := a.SetBankSuspended(id, s); err != nil {
-			a.lifeMu.Lock()
-			a.warn("%s: %v", id, err)
-			a.lifeMu.Unlock()
-		}
-	}
-	a.poke()
-}
-
 func (a *App) checkDrift() {
 	if time.Since(a.driftAt) < driftEvery && !a.driftDue.Swap(false) {
 		return
@@ -870,7 +761,7 @@ func CheckPorts(c *config.Config) error {
 		if running {
 			return fmt.Errorf("beerus is already running for %s; stop it (Ctrl+C in its terminal) before starting it again", c.Dir)
 		}
-		return fmt.Errorf("port %d is already in use by another program; free it or change it in beerus.yaml", p)
+		return fmt.Errorf("port %d is already in use by another program; free it or change it in local.yaml", p)
 	}
 	return nil
 }

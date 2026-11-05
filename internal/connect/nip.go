@@ -219,22 +219,25 @@ func (a *App) ctlNIPSettlement(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) SetNetDebitCap(id string, cap, collateral int64) error {
 	a.lifeMu.Lock()
-	defer a.lifeMu.Unlock()
 	b := a.cfg.Bank(id)
 	if b == nil {
+		a.lifeMu.Unlock()
 		return errNotFound
 	}
 	a.mu.Lock()
 	prevCap, prevCollateral := b.NetDebitCap, b.Collateral
 	b.NetDebitCap, b.Collateral = cap, collateral
 	a.mu.Unlock()
-	if err := a.saveBanksLocked(); err != nil {
+	st, v, err := a.recordBanksLocked()
+	if err != nil {
 		a.mu.Lock()
 		b.NetDebitCap, b.Collateral = prevCap, prevCollateral
 		a.mu.Unlock()
+		a.lifeMu.Unlock()
 		return err
 	}
-	return nil
+	a.lifeMu.Unlock()
+	return a.ctl.flush(st, v)
 }
 
 func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {

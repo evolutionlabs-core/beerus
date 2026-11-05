@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
@@ -216,19 +217,26 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 	st := a.status[id]
 	prev, prevPhase := b.State, st.Phase
 	b.State, st.Phase, st.Reason = "closed", PhaseClosed, ""
-	if err := a.saveBanksLocked(); err != nil {
+	saved, v, err := a.recordBanksLocked()
+	if err != nil {
 		b.State, st.Phase = prev, prevPhase
 		a.lifeMu.Unlock()
 		return CloseResult{}, err
 	}
 	a.lifeMu.Unlock()
+	if err := a.ctl.flush(saved, v); err != nil {
+		return CloseResult{}, err
+	}
 	res, err := a.closeWorld(id, imp, choice, req.To)
 	if err != nil {
 		a.lifeMu.Lock()
 		b.State, st.Phase = prev, prevPhase
-		_ = a.saveBanksLocked()
+		saved, v, rerr := a.recordBanksLocked()
 		a.lifeMu.Unlock()
-		return CloseResult{}, err
+		if rerr == nil {
+			rerr = a.ctl.flush(saved, v)
+		}
+		return CloseResult{}, errors.Join(err, rerr)
 	}
 	a.detach(b, []int{3})
 	res.Bank, _ = a.bankStatus(id)

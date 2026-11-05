@@ -80,12 +80,12 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if _, err := os.Stat(s.cfg.Path("snapshots", snap+".json")); !os.IsNotExist(err) {
 		t.Fatalf("snapshot file left behind: %v", err)
 	}
-	c, err := config.Load(s.cfg.Dir)
+	c, err := connect.LoadConfig(s.cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Bank("abuja-digital") != nil {
-		t.Fatal("beerus.yaml still lists the bank")
+		t.Fatal("the setup still lists the bank")
 	}
 	if o := s.owned(setup.KindBank, "abuja-digital"); o != nil {
 		t.Fatalf("the status store still claims %v", o)
@@ -209,27 +209,20 @@ func TestPurgeRules(t *testing.T) {
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
-	c, err := config.Load(s.cfg.Dir)
+	c, err := connect.LoadConfig(s.cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Banks = append(c.Banks, &config.Bank{ID: "bank-b", Name: "Bank B", Type: "digital", NIPCode: "999002", NUBANCode: "902", HistoryDays: 180, Port: s.cfg.Banks[0].Port + 1, Database: config.DatabaseName(c.Dir, "bank-b")})
-	if err := c.Save(); err != nil {
-		t.Fatal(err)
+	if c.Bank("bank-b") != nil {
+		t.Fatal("the setup still lists the purged bank")
 	}
 	again, err := connect.New(c, connect.Options{WorldOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(fmt.Sprint(again.BankWarnings()), "cannot come back") {
-		t.Fatalf("warnings after re-adding a purged bank: %v", again.BankWarnings())
-	}
 	for _, st := range again.BankStatuses() {
 		if st.ID == "bank-b" {
-			t.Fatal("a purged bank came back from beerus.yaml")
+			t.Fatal("a purged bank came back after a restart")
 		}
-	}
-	if c, _ := config.Load(s.cfg.Dir); c.Bank("bank-b") != nil {
-		t.Fatal("beerus.yaml still lists the purged bank")
 	}
 }

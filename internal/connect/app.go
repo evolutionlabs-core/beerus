@@ -56,9 +56,7 @@ type App struct {
 	status     map[string]*BankStatus
 	sites      map[string]*siteServer
 	serving    bool
-	cfgSum     string
 	warnings   []string
-	watched    time.Time
 	driftAt    time.Time
 	driftDue   atomic.Bool
 	strikes    map[string]int
@@ -143,7 +141,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	if a.client == nil {
 		a.client = &http.Client{Timeout: 15 * time.Second}
 	}
-	if a.ctl, err = loadOrCreateStore(cfg.Dir); err != nil {
+	if a.ctl, err = openStore(cfg.Dir); err != nil {
 		return nil, err
 	}
 	a.setupKey = a.ctl.setupKey()
@@ -154,7 +152,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	fresh := st == nil
 	if fresh {
 		st = newState()
-		st.Clock = clock.State{Pace: cfg.Pace}
+		st.Clock = clock.State{Pace: cfg.Pace, AnchorBusiness: cfg.Start}
 	} else if _, err := os.Stat(a.runningPath()); err == nil {
 		a.log.Warn("the last run did not shut down cleanly; starting a new world so partners resync", "old_world", st.WorldID)
 		st.WorldID = newID("wld")
@@ -172,26 +170,6 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New(st.Clock, o.Real)
-	purged, reserved := []string{}, []string{}
-	for _, p := range st.World.Purged {
-		if cfg.Bank(p.ID) != nil {
-			purged = append(purged, p.ID)
-			cfg.Banks = slices.DeleteFunc(cfg.Banks, func(b *config.Bank) bool { return b.ID == p.ID })
-		}
-	}
-	cbnDB := config.DatabaseName(cfg.Dir, cbnID)
-	cfg.Banks = slices.DeleteFunc(cfg.Banks, func(b *config.Bank) bool {
-		if reservedIDs[b.ID] || b.Database == cbnDB {
-			reserved = append(reserved, b.ID)
-			return true
-		}
-		return false
-	})
-	if len(purged)+len(reserved) > 0 {
-		if err := cfg.Save(); err != nil {
-			return nil, err
-		}
-	}
 	a.personas = o.Personas
 	a.world = world.New(a.worldConfig(genesis), st.World)
 	a.worldOnly = o.WorldOnly
@@ -229,12 +207,6 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.mu.Unlock()
 	a.initLifecycle()
-	for _, id := range purged {
-		a.warn("%s was purged and cannot come back; it was removed from beerus.yaml", id)
-	}
-	for _, id := range reserved {
-		a.warn("%s uses an id or database reserved for the CBN or NIBSS; it was removed from beerus.yaml", id)
-	}
 	return a, nil
 }
 
@@ -439,17 +411,6 @@ func (a *App) partnersSnapshot() []*config.Partner {
 	a.pmu.RLock()
 	defer a.pmu.RUnlock()
 	return append([]*config.Partner(nil), a.cfg.Partners...)
-}
-
-func (a *App) ReloadPartners() (int, error) {
-	fresh, err := config.Load(a.cfg.Dir)
-	if err != nil {
-		return 0, err
-	}
-	a.pmu.Lock()
-	defer a.pmu.Unlock()
-	a.cfg.Partners = fresh.Partners
-	return len(fresh.Partners), nil
 }
 
 type event struct {

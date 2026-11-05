@@ -9,15 +9,11 @@ import (
 	"testing"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 func calendarWarning(t *testing.T, state string) bool {
 	t.Helper()
-	cfg, err := config.Init(t.TempDir(), config.InitOptions{Seed: 7, Today: clock.Date{Y: 2026, M: 11, D: 3}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
 	if state != "" {
 		if err := os.WriteFile(cfg.Path("stub-state.json"), []byte(state), 0o600); err != nil {
 			t.Fatal(err)

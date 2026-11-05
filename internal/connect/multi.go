@@ -151,7 +151,7 @@ func (a *App) peerDoWithin(limit time.Duration, base, method, path string, in, o
 func newBankRole(cfg *config.Config, o Options) (*App, error) {
 	b := cfg.Bank(o.BankID)
 	if b == nil {
-		return nil, fmt.Errorf("no bank %q in %s", o.BankID, cfg.Path("beerus.yaml"))
+		return nil, fmt.Errorf("no bank %q in %s", o.BankID, cfg.Path(statusFile))
 	}
 	if o.CoreURL == "" {
 		return nil, errors.New("a bank needs --core or BEERUS_CORE_URL, the simulator's control URL")

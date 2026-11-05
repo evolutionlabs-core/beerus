@@ -279,7 +279,7 @@ const roomTemplates = `
 <ul class="mt-3 list-disc space-y-1.5 pl-5 text-muted">
 <li>The ledger database <span class="num text-ink">{{.Impact.Database}}</span> and its snapshot copies</li>
 <li>{{with len .Impact.Snapshots}}{{.}} snapshot{{if ne . 1}}s{{end}} that include{{if eq . 1}}s{{end}} this bank, since they could no longer be restored{{else}}No snapshots include this bank{{end}}</li>
-<li>Its entry in beerus.yaml and its online banking port</li>
+<li>Its entry in control.json and its online banking port</li>
 </ul>
 <h2 class="mt-6 text-[15px]">What stays</h2>
 <ul class="mt-3 list-disc space-y-1.5 pl-5 text-muted">

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/connect"
 )
 
 const trustName = "Beerus CBN Trust Anchor"
@@ -18,7 +18,7 @@ func cmdTrust(args []string, add bool) error {
 	fs := flag.NewFlagSet("trust", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	fs.Parse(args)
-	c, err := config.Load(*dir)
+	c, err := connect.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}

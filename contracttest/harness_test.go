@@ -110,6 +110,35 @@ func freePorts(t *testing.T, n int) []int {
 	return ports
 }
 
+func bankPortBase(t *testing.T, banks int) int {
+	t.Helper()
+	offset := config.DefaultAPIPortOffset
+	for range 100 {
+		base := freePorts(t, 1)[0]
+		if base+2*offset+banks >= 65536 {
+			continue
+		}
+		free := true
+		for i := 1; i <= banks && free; i++ {
+			free = portOpen(base+i) && portOpen(base+i+offset)
+		}
+		if free {
+			return base
+		}
+	}
+	t.Fatal("no free block of ports for the banks")
+	return 0
+}
+
+func portOpen(p int) bool {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+	if err != nil {
+		return false
+	}
+	l.Close()
+	return true
+}
+
 func newStack(t *testing.T) *Stack {
 	t.Helper()
 	return startStack(t, os.Getenv("BEERUS_CONTRACT_FULL") == "")
@@ -137,6 +166,38 @@ func newBankStackWith(t *testing.T, edit func(*config.Config)) *Stack {
 }
 
 const bankHistoryDays = 90
+
+const stackStart = "2026-01-15T08:00:00+01:00"
+
+func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
+	t.Helper()
+	ports := append([]int{bankPortBase(t, len(setup.DefaultSpec("contract", clock.Date{Y: 2026, M: 1, D: 15}).Spec.Banks))}, freePorts(t, 3)...)
+	local := connect.DefaultLocal()
+	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
+		local.DatabaseURL = u
+	}
+	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort = ports[0], ports[1], ports[2], ports[3]
+	start, err := time.Parse(time.RFC3339, stackStart)
+	if err != nil {
+		return nil, err
+	}
+	today := clock.DateOf(start)
+	spec := setup.DefaultSpec("contract", today)
+	spec.Spec.Start = stackStart
+	spec.Spec.Partners = []setup.Partner{{
+		ID:           "balance",
+		Name:         "Balance",
+		LegalName:    "Evolution Labs",
+		Purpose:      "to keep your books in sync with this account",
+		RedirectURIs: []string{"https://balance.localhost/bank_connections/callback"},
+		WebhookURL:   webhookURL,
+	}}
+	dir := t.TempDir()
+	if err := connect.Init(dir, spec, local, today); err != nil {
+		return nil, err
+	}
+	return connect.LoadConfig(dir)
+}
 
 func bankStackPersonas(worldOnly bool) []string {
 	if worldOnly {
@@ -166,7 +227,7 @@ func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ..
 		opts.Real = s.realNow
 	}
 	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
-		cfg, err := config.Load(dir)
+		cfg, err := connect.LoadConfig(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -177,40 +238,16 @@ func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ..
 		t.Cleanup(s.sink.srv.Close)
 		var lastErr error
 		for attempt := 0; attempt < 5 && s.app == nil; attempt++ {
-			ports := freePorts(t, 7)
-			cfg, err := config.Init(t.TempDir(), config.InitOptions{
-				Seed:        20261028,
-				Today:       clock.DateOf(time.Now()),
-				PartnerPort: ports[0],
-				WidgetPort:  ports[1],
-				ControlPort: ports[2],
-				BankPorts:   []int{ports[3], ports[4]},
-				APIPorts:    []int{ports[5], ports[6]},
-			})
+			cfg, err := initStack(t, s.sink.srv.URL+"/webhooks")
 			if err != nil {
-				t.Fatal(err)
-			}
-			cfg.DatabaseURL = os.Getenv("BEERUS_TEST_DATABASE_URL")
-			if _, err := cfg.AddPartner(config.PartnerOptions{
-				ID:           "balance",
-				Name:         "Balance",
-				LegalName:    "Evolution Labs",
-				Purpose:      "to keep your books in sync with this account",
-				RedirectURIs: []string{"https://balance.localhost/bank_connections/callback"},
-				WebhookURL:   s.sink.srv.URL + "/webhooks",
-			}); err != nil {
 				t.Fatal(err)
 			}
 			for _, edit := range edits {
 				edit(cfg)
 			}
 			if !worldOnly {
-				cfg.Genesis = clock.DateOf(time.Now()).AddDays(-bankHistoryDays).String()
 				for _, b := range cfg.Banks {
 					b.HistoryDays = min(b.HistoryDays, bankHistoryDays)
-				}
-				if err := cfg.Save(); err != nil {
-					t.Fatal(err)
 				}
 			}
 			app, err := connect.New(cfg, opts)

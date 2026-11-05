@@ -40,17 +40,17 @@ func (c *Config) AllocatePort(start int, used map[int]bool, free func(int) bool)
 			return p, nil
 		}
 	}
-	return 0, fmt.Errorf("no free port from %d to %d; free one or widen ports.window in beerus.yaml", start, end-1)
+	return 0, fmt.Errorf("no free port from %d to %d; free one or widen ports.window in local.yaml", start, end-1)
 }
 
 func (c *Config) validatePorts() error {
 	if c.Ports.APIOffset < 0 || c.Ports.Window < 0 {
-		return fmt.Errorf("beerus.yaml: ports.api_offset and ports.window cannot be negative")
+		return fmt.Errorf("ports.api_offset and ports.window cannot be negative")
 	}
 	for _, b := range c.Banks {
 		for name, v := range map[string]int{"consent_months": b.API.ConsentMonths, "refresh_days": b.API.RefreshDays, "dormant_days": b.API.DormantDays, "assertion_seconds": b.API.AssertionSeconds} {
 			if v < 0 {
-				return fmt.Errorf("beerus.yaml: bank %s open_banking.%s cannot be negative", b.ID, name)
+				return fmt.Errorf("bank %s open_banking.%s cannot be negative", b.ID, name)
 			}
 		}
 	}

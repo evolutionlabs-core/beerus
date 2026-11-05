@@ -18,6 +18,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 func envOr(key, fallback string) string {
@@ -59,7 +60,7 @@ func cmdRun(args []string) error {
 	case "cbn":
 		return runCBN(ctx, *dir, *bind, log)
 	case "sim":
-		c, err := config.Load(*dir)
+		c, err := connect.LoadConfig(*dir)
 		if err != nil {
 			return err
 		}
@@ -72,12 +73,12 @@ func cmdRun(args []string) error {
 	case "connect", "nibss":
 		return fmt.Errorf("%s runs inside the sim participant; start --participant sim", *participant)
 	}
-	c, err := config.Load(*dir)
+	c, err := connect.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}
 	if c.Bank(*participant) == nil {
-		return fmt.Errorf("%q is not a participant; banks in %s are %s", *participant, c.Path("beerus.yaml"), strings.Join(bankIDs(c), ", "))
+		return fmt.Errorf("%q is not a participant; banks in %s are %s", *participant, c.Dir, strings.Join(bankIDs(c), ", "))
 	}
 	app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleBank, BankID: *participant, CoreURL: *core})
 	if err != nil {
@@ -96,49 +97,27 @@ func bankIDs(c *config.Config) []string {
 }
 
 func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
-	if !config.Exists(dir) {
-		opts := config.InitOptions{Today: clock.DateOf(time.Now())}
-		var err error
-		if opts.Seed, err = envNumber("BEERUS_SEED", false); err != nil {
-			return err
-		}
-		for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &opts.PartnerPort, "BEERUS_WIDGET_PORT": &opts.WidgetPort, "BEERUS_CONTROL_PORT": &opts.ControlPort, "BEERUS_HEALTH_PORT": &opts.HealthPort, "BEERUS_BANK_PORT": &opts.BankPort} {
-			n, err := envNumber(key, true)
-			if err != nil {
-				return err
-			}
-			*dst = int(n)
-		}
-		if _, err := config.Init(dir, opts); err != nil {
-			return err
-		}
-	}
-	c, err := config.Load(dir)
+	ok, err := connect.Initialized(dir)
 	if err != nil {
 		return err
 	}
-	if len(c.Partners) == 0 {
-		if redirect := os.Getenv("BEERUS_PARTNER_REDIRECT_URI"); redirect != "" {
-			p := config.PartnerOptions{ID: os.Getenv("BEERUS_PARTNER_ID"), Name: os.Getenv("BEERUS_PARTNER_NAME"), LegalName: os.Getenv("BEERUS_PARTNER_LEGAL_NAME"), Purpose: os.Getenv("BEERUS_PARTNER_PURPOSE"), RedirectURIs: []string{redirect}, WebhookURL: os.Getenv("BEERUS_PARTNER_WEBHOOK_URL")}
-			if p.ID == "" || p.Name == "" || p.LegalName == "" || p.Purpose == "" {
-				return errors.New("BEERUS_PARTNER_REDIRECT_URI needs BEERUS_PARTNER_ID, BEERUS_PARTNER_NAME, BEERUS_PARTNER_LEGAL_NAME and BEERUS_PARTNER_PURPOSE")
-			}
-			if _, err := c.AddPartner(p); err != nil {
-				return err
-			}
+	if !ok {
+		if err := initFromEnv(dir); err != nil {
+			return err
 		}
 	}
-	if err := c.EnsureCertificates(); err != nil {
+	c, err := connect.LoadConfig(dir)
+	if err != nil {
 		return err
 	}
-	if err := c.Save(); err != nil {
+	if err := c.EnsureCertificates(); err != nil {
 		return err
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /ca.crt", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, c.Path("ca", "root.crt")) })
 	if c.Connect.HealthPort <= 0 {
-		return fmt.Errorf("%s has no health_port; set it to the port the cbn container listens on", c.Path("beerus.yaml"))
+		return fmt.Errorf("%s has no connect.health_port; set it to the port the cbn container listens on", c.Path(connect.LocalFile))
 	}
 	srv := &http.Server{Addr: net.JoinHostPort(bind, strconv.Itoa(c.Connect.HealthPort)), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -150,6 +129,29 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+func initFromEnv(dir string) error {
+	local := connect.DefaultLocal()
+	for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &local.Connect.PartnerPort, "BEERUS_WIDGET_PORT": &local.Connect.WidgetPort, "BEERUS_CONTROL_PORT": &local.Connect.ControlPort, "BEERUS_HEALTH_PORT": &local.Connect.HealthPort} {
+		n, err := envNumber(key, true)
+		if err != nil {
+			return err
+		}
+		if n != 0 {
+			*dst = int(n)
+		}
+	}
+	today := clock.DateOf(time.Now())
+	spec := setup.DefaultSpec(defaultSetupName, today)
+	if redirect := os.Getenv("BEERUS_PARTNER_REDIRECT_URI"); redirect != "" {
+		p := setup.Partner{ID: os.Getenv("BEERUS_PARTNER_ID"), Name: os.Getenv("BEERUS_PARTNER_NAME"), LegalName: os.Getenv("BEERUS_PARTNER_LEGAL_NAME"), Purpose: os.Getenv("BEERUS_PARTNER_PURPOSE"), RedirectURIs: []string{redirect}, WebhookURL: os.Getenv("BEERUS_PARTNER_WEBHOOK_URL")}
+		if p.ID == "" || p.Name == "" || p.LegalName == "" || p.Purpose == "" {
+			return errors.New("BEERUS_PARTNER_REDIRECT_URI needs BEERUS_PARTNER_ID, BEERUS_PARTNER_NAME, BEERUS_PARTNER_LEGAL_NAME and BEERUS_PARTNER_PURPOSE")
+		}
+		spec.Spec.Partners = append(spec.Spec.Partners, p)
+	}
+	return connect.Init(dir, spec, local, today)
 }
 
 func cmdHealth(args []string) error {

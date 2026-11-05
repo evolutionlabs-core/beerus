@@ -104,8 +104,11 @@ func (a *App) PurgeBank(id string) (PurgeResult, error) {
 	a.cfg.Banks = slices.DeleteFunc(slices.Clone(a.cfg.Banks), func(x *config.Bank) bool { return x.ID == id })
 	a.mu.Unlock()
 	delete(a.status, id)
-	err = a.saveBanksLocked()
+	saved, v, err := a.recordBanksLocked()
 	a.lifeMu.Unlock()
+	if err == nil {
+		err = a.ctl.flush(saved, v)
+	}
 	if err != nil {
 		return PurgeResult{}, err
 	}

@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -143,4 +145,17 @@ func TestNewSetupKeyIsRandom(t *testing.T) {
 	if a == 0 || a == b {
 		t.Fatalf("keys %d and %d", a, b)
 	}
+}
+
+func initTestConfig(t *testing.T, today clock.Date) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	if err := Init(dir, setup.DefaultSpec("beerus", today), DefaultLocal(), today); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
