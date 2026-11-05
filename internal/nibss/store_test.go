@@ -101,13 +101,9 @@ func testStore(t testing.TB) *Store {
 	return s
 }
 
-func addMember(t testing.TB, s *Store, id, name, code, nuban, status string) {
+func register(t testing.TB, s *Store, id, name, code, nuban string) {
 	t.Helper()
-	_, err := s.pool.Exec(context.Background(), `
-INSERT INTO institutions (id, name, nip_code, nuban_code, type, outside, status) VALUES ($1, $2, $3, $4, 'commercial', false, $5)
-ON CONFLICT (nip_code) DO UPDATE SET id = EXCLUDED.id, name = EXCLUDED.name, nuban_code = EXCLUDED.nuban_code, outside = false, status = EXCLUDED.status`,
-		id, name, code, nuban, status)
-	if err != nil {
+	if err := s.Register(context.Background(), Institution{ID: id, Name: name, NIPCode: code, NUBANCode: nuban, Type: "commercial"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -149,21 +145,21 @@ func TestOutsideLoadedFromPack(t *testing.T) {
 			t.Errorf("row %d = %+v, want %+v", i, dir[i], want[i])
 		}
 	}
-	addMember(t, s, "bank-a", "Bank A", "999001", "901", StatusActive)
+	register(t, s, "bank-a", "Member A", "999101", "901")
 	again, err := newStore(ctx, pool, packOutside(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	in, err := again.Institution(ctx, "999001")
+	in, err := again.Institution(ctx, "999101")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if in.ID != "bank-a" || in.Outside || in.NUBANCode != "901" {
-		t.Errorf("reopening overwrote the member bank: %+v", in)
+	if in.ID != "bank-a" || in.Outside || in.NUBANCode != "901" || in.Status != StatusActive {
+		t.Errorf("reopening changed the member bank: %+v", in)
 	}
 	dir, _ = again.Directory(ctx)
-	if len(dir) != 4 {
-		t.Errorf("reopening left %d rows, want 4", len(dir))
+	if len(dir) != 5 {
+		t.Errorf("reopening left %d rows, want 5", len(dir))
 	}
 }
 
@@ -185,7 +181,7 @@ func TestInstitutionUnknown(t *testing.T) {
 func TestSetStatus(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
-	addMember(t, s, "bank-c", "Bank C", "999003", "903", StatusActive)
+	register(t, s, "bank-c", "Bank Cee", "999103", "903")
 	steps := []struct {
 		to   string
 		want string
@@ -208,7 +204,7 @@ func TestSetStatus(t *testing.T) {
 			wantErr(t, err, st.want)
 		}
 	}
-	in, _ := s.Institution(ctx, "999003")
+	in, _ := s.Institution(ctx, "999103")
 	if in.Status != StatusRemoved {
 		t.Errorf("status %s, want removed", in.Status)
 	}

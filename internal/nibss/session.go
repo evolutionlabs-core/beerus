@@ -40,7 +40,7 @@ func (s *Store) NameEnquiry(ctx context.Context, code, nuban string) (string, er
 	if !world.ValidNUBAN(in.NUBANCode, nuban) {
 		return "", fmt.Errorf("%s is not a valid account number at %s: %w", nuban, in.Name, ErrInvalidAccount)
 	}
-	return "BENEFICIARY " + nuban[6:], nil
+	return world.CounterpartyName(nuban), nil
 }
 
 const sessionCols = `session_id, from_code, to_code, from_nuban, to_nuban, amount_minor, narration, status, outcome, tsq_attempts, next_tsq_at, created_at, resolved_at, settlement_session, closure`
@@ -199,11 +199,14 @@ func (s *Store) Resolve(ctx context.Context, id, status, outcome string, at time
 	})
 }
 
-func (s *Store) TSQ(ctx context.Context, id string) (Session, error) {
+func (s *Store) TSQ(ctx context.Context, id string, next time.Time) (Session, error) {
+	if next.IsZero() {
+		return Session{}, fmt.Errorf("session %s needs the next status query time", id)
+	}
 	x, err := scanSession(s.pool.QueryRow(ctx, `
-UPDATE nip_sessions SET tsq_attempts = tsq_attempts + 1
+UPDATE nip_sessions SET tsq_attempts = tsq_attempts + 1, next_tsq_at = $2
 WHERE session_id = $1 AND status = 'pending'
-RETURNING `+sessionCols, id))
+RETURNING `+sessionCols, id, next))
 	if errors.Is(err, pgx.ErrNoRows) {
 		x, err = scanSession(s.pool.QueryRow(ctx, `SELECT `+sessionCols+` FROM nip_sessions WHERE session_id = $1`, id))
 	}

@@ -47,6 +47,10 @@ func CounterpartyBanks() []Institution {
 	return out
 }
 
+func CounterpartyName(nuban string) string {
+	return counterpartyNames[hash64("counterparty-name", nuban)%uint64(len(counterpartyNames))]
+}
+
 func NIPFee(amount int64) int64 {
 	return charges.NIPFee(amount)
 }
