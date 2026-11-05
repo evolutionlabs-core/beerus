@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"regexp"
 	"slices"
+	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -25,11 +26,7 @@ var validName = regexp.MustCompile(`^beerus_[a-z0-9_]{1,50}$`)
 
 const maxConns = 8
 
-var (
-	ErrAskBank = errors.New("the account name comes from the receiving bank")
-
-	errTransition = errors.New("status change not allowed")
-)
+var errTransition = errors.New("status change not allowed")
 
 var transitions = map[string][]string{
 	StatusActive:      {StatusSuspended, StatusTerminating},
@@ -38,9 +35,16 @@ var transitions = map[string][]string{
 	StatusRemoved:     {},
 }
 
+type Participant interface {
+	NameEnquiry(ctx context.Context, nuban string) (string, error)
+}
+
 type Store struct {
 	pool  *pgxpool.Pool
 	phone countrypack.Phone
+
+	mu           sync.RWMutex
+	participants map[string]Participant
 }
 
 var _ Switch = (*Store)(nil)
@@ -105,7 +109,7 @@ func newStore(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 	if err := migrate(ctx, pool); err != nil {
 		return nil, err
 	}
-	return &Store{pool: pool, phone: p.Phone}, nil
+	return &Store{pool: pool, phone: p.Phone, participants: map[string]Participant{}}, nil
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
@@ -123,6 +127,22 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("run NIBSS migrations: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) Attach(id string, p Participant) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p == nil {
+		delete(s.participants, id)
+		return
+	}
+	s.participants[id] = p
+}
+
+func (s *Store) participant(id string) Participant {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.participants[id]
 }
 
 func (s *Store) Close() {

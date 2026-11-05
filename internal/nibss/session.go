@@ -34,7 +34,18 @@ func (s *Store) NameEnquiry(ctx context.Context, code, nuban string) (string, er
 	if !world.ValidNUBAN(in.NUBANCode, nuban) {
 		return "", fmt.Errorf("%s is not a valid account number at %s: %w", nuban, in.Name, ErrInvalidAccount)
 	}
-	return "", fmt.Errorf("%s: %w", in.Name, ErrAskBank)
+	p := s.participant(in.ID)
+	if p == nil {
+		return "", fmt.Errorf("%s is offline: %w", in.Name, ErrUnavailable)
+	}
+	name, err := p.NameEnquiry(ctx, nuban)
+	if errors.Is(err, ErrInvalidAccount) || errors.Is(err, ErrNoRecord) || errors.Is(err, ErrUnavailable) {
+		return "", err
+	}
+	if err != nil {
+		return "", fmt.Errorf("name enquiry at %s: %w", in.Name, err)
+	}
+	return name, nil
 }
 
 const sessionCols = `session_id, from_code, to_code, from_nuban, to_nuban, amount_minor, narration, status, outcome, tsq_attempts, next_tsq_at, created_at, resolved_at, settlement_session, closure`
