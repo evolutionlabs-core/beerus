@@ -328,7 +328,7 @@ func TestAuthenticate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replay, err := a.CreateCustomer(ctx, "cli:1", "Adaeze Okafor", "08030000001", dob, "22912345678", "adaeze", hash, t0)
+	replay, err := a.CreateCustomer(ctx, "cli:1", "Adaeze Okafor", "08030000001", dob, "22912345678", "adaeze", cheapHash(t, "correct horse"), t0)
 	if err != nil || replay.ID != c.ID {
 		t.Fatalf("replay with a username gave %+v %v", replay, err)
 	}

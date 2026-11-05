@@ -159,7 +159,7 @@ func (b *Bank) CreateCustomer(ctx context.Context, key, name, phone string, dob 
 	if err != nil {
 		return Customer{}, fmt.Errorf("read customer: %w", err)
 	}
-	if c.Name != name || c.Phone != phone || c.DOB != dob || c.BVN != bvn || c.Username != username || hash != passwordHash {
+	if c.Name != name || c.Phone != phone || c.DOB != dob || c.BVN != bvn || c.Username != username || (hash == "") != (passwordHash == "") {
 		return Customer{}, fmt.Errorf("create customer %s: %w", c.ID, ledger.ErrIdempotency)
 	}
 	return c, nil

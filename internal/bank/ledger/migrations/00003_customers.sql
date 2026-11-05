@@ -28,6 +28,8 @@ CREATE TABLE account_opens (
 
 ALTER TABLE gl_accounts ADD COLUMN closed_at timestamptz;
 
+CREATE INDEX gl_accounts_owner ON gl_accounts (owner, id) WHERE customer;
+
 -- +goose StatementBegin
 CREATE FUNCTION ledger_no_delete() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -46,4 +48,5 @@ DROP TABLE account_opens;
 DROP TABLE customers;
 DROP FUNCTION ledger_no_delete();
 DROP SEQUENCE nuban_serial;
+DROP INDEX gl_accounts_owner;
 ALTER TABLE gl_accounts DROP COLUMN closed_at;
