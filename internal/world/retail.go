@@ -121,10 +121,17 @@ func payday(d clock.Date, cal *clock.Calendar) bool {
 }
 
 type seedAcct struct {
-	key  string
-	typ  string
-	name string
-	st   *genState
+	key      string
+	typ      string
+	name     string
+	st       *genState
+	alerts   map[clock.Date]int
+	turnover map[clock.Date]int64
+}
+
+func monthOf(t time.Time) clock.Date {
+	d := clock.DateOf(t)
+	return clock.Date{Y: d.Y, M: d.M, D: 1}
 }
 
 type seedRun struct {
@@ -157,7 +164,7 @@ func generateRetail(roster []rosterPersona, value int64, bank Institution, banks
 			key := prefix + ":" + a.typ
 			name := accountName(&bank, a.name)
 			out.Accounts = append(out.Accounts, SeedAccount{Key: key, Bank: bank.ID, Customer: prefix, Product: a.typ, Name: name, Opening: a.opening, OpenedAt: start.Start()})
-			r.accts = append(r.accts, &seedAcct{key: key, typ: a.typ, name: name, st: &genState{projected: a.opening}})
+			r.accts = append(r.accts, &seedAcct{key: key, typ: a.typ, name: name, st: &genState{projected: a.opening}, alerts: map[clock.Date]int{}, turnover: map[clock.Date]int64{}})
 		}
 		for d := start; d.Before(today); d = d.AddDays(1) {
 			r.day(d)
@@ -304,10 +311,17 @@ func (r *seedRun) post(a *seedAcct, l SeedPosting) {
 		a.st.credits = append(a.st.credits, credit{l.PostedAt, l.Amount})
 	}
 	if l.Category == "" {
-		a.st.alerts++
+		a.alerts[monthOf(l.PostedAt)]++
 	}
 	if l.Amount < 0 && (l.Channel == "nip" || l.Channel == "internal") {
-		a.st.debitTurn += -l.Amount
+		a.turnover[monthOf(l.PostedAt)] += -l.Amount
+	}
+}
+
+func (r *seedRun) reverse(a *seedAcct, original, rev SeedPosting) {
+	r.post(a, rev)
+	if original.Amount < 0 && (original.Channel == "nip" || original.Channel == "internal") {
+		a.turnover[monthOf(original.PostedAt)] -= -original.Amount
 	}
 }
 
@@ -404,7 +418,7 @@ func (r *seedRun) outflow(a *seedAcct) {
 			rev.ValueDate = clock.DateOf(t)
 			rev.Narration = r.narr("rev", l.Narration)
 			rev.Channel = "reversal"
-			r.post(a, rev)
+			r.reverse(a, l, rev)
 		}
 		r.reserve(a, held)
 	default:
@@ -448,15 +462,16 @@ func (r *seedRun) monthEnd() {
 	for i, a := range r.accts {
 		st := a.st
 		t := r.d.Start().Add(retailMonthEndHour*time.Hour + time.Duration(i*10)*time.Minute)
-		if st.alerts > 0 {
-			sms := min(int64(st.alerts)*charges.SMSAlertFee, charges.SMSMonthlyCap)
+		m := monthOf(t)
+		if alerts := a.alerts[m]; alerts > 0 {
+			sms := min(int64(alerts)*charges.SMSAlertFee, charges.SMSMonthlyCap)
 			if st.projected-st.laterCredits(t) >= sms+charges.VAT(sms) {
 				r.post(a, r.line(a, "sms", -sms, t, r.narr("sms", month), "charge", charges.CategoryFee, "", ""))
 				r.post(a, r.line(a, "smsvat", -charges.VAT(sms), t.Add(time.Second), r.narr("smsvat", month), "charge", charges.CategoryVAT, "", ""))
 			}
 		}
-		if a.typ == "current" && st.debitTurn > 0 {
-			fee := (st.debitTurn*charges.MaintenancePerMille + 500) / 1000
+		if turn := a.turnover[m]; a.typ == "current" && turn > 0 {
+			fee := (turn*charges.MaintenancePerMille + 500) / 1000
 			room := (st.projected - st.laterCredits(t)) * 10000 / (10000 + charges.VATRateBasisPoints)
 			fee = min(fee, room)
 			if fee > 0 {
@@ -464,7 +479,7 @@ func (r *seedRun) monthEnd() {
 				r.post(a, r.line(a, "maintvat", -charges.VAT(fee), t.Add(3*time.Second), r.narr("maintvat", month), "charge", charges.CategoryVAT, "", ""))
 			}
 		}
-		st.alerts = 0
-		st.debitTurn = 0
+		delete(a.alerts, m)
+		delete(a.turnover, m)
 	}
 }

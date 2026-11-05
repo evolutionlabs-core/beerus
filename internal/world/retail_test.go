@@ -14,7 +14,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
-const retailGolden = "bc2671e759ca3cdd5e183c4b970e746d231bfaa65ee14dbc3cc1a2e0123f6b2a"
+const retailGolden = "098c7224ba85b6544c970a95e1fa6def0b34e8b09af35904a74a031a417eac34"
 
 var goldenNow = time.Date(2026, time.January, 15, 12, 0, 0, 0, clock.Lagos)
 
@@ -449,5 +449,48 @@ func TestGenerateWithNoBanksIsEmpty(t *testing.T) {
 	tmpl := generate(t, nil, 90, goldenNow)
 	if len(tmpl.Customers)+len(tmpl.Accounts)+len(tmpl.Postings) != 0 {
 		t.Fatalf("no banks gave %d customers", len(tmpl.Customers))
+	}
+}
+
+func TestRetailMaintenanceFeeLeavesOutReversedDebits(t *testing.T) {
+	tmpl := generate(t, DefaultInstitutions(), 365, goldenNow)
+	keys := byKey(tmpl.Postings)
+	type month struct {
+		account string
+		m       clock.Date
+	}
+	turnover := map[month]int64{}
+	reversed := map[month]int64{}
+	lateReversals := 0
+	for _, p := range tmpl.Postings {
+		if p.Amount >= 0 || (p.Channel != "nip" && p.Channel != "internal") {
+			continue
+		}
+		m := month{p.Account, monthOf(p.PostedAt)}
+		if rev, ok := keys[p.Key+":rev"]; ok {
+			reversed[m] += -p.Amount
+			if monthOf(rev.PostedAt) != m.m {
+				lateReversals++
+			}
+			continue
+		}
+		turnover[m] += -p.Amount
+	}
+	checked := 0
+	for _, p := range tmpl.Postings {
+		if kind(p) != "maint" {
+			continue
+		}
+		m := month{p.Account, monthOf(p.PostedAt)}
+		want := (turnover[m]*charges.MaintenancePerMille + 500) / 1000
+		if -p.Amount != want {
+			t.Fatalf("maintenance fee %s is %d, want %d on turnover %d", p.Key, -p.Amount, want, turnover[m])
+		}
+		if reversed[m] > 0 {
+			checked++
+		}
+	}
+	if checked == 0 || lateReversals == 0 {
+		t.Fatalf("%d maintenance fees in months with a reversed debit and %d reversals in a later month; want some of each", checked, lateReversals)
 	}
 }
