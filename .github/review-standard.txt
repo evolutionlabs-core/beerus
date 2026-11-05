@@ -1,29 +1,12 @@
-Beerus review standard. Beerus is a Go simulator of Nigerian banking (CBN, NIBSS NIP switch, banks with their own Postgres ledgers, open banking, the Connect aggregator). Flag any changed code that breaks a rule below and name the rule.
+Beerus review standard. Beerus is a Go simulator of Nigerian banking (CBN, NIBSS NIP switch, banks with their own Postgres ledgers, open banking, the Connect aggregator).
 
-Flag these (blocking)
+The code rules live in CLAUDE.md at the repo root. Flag any changed code that breaks one, and quote the rule.
 
-Data and logic
-- Hard-coded data that should be computed by a rule or configured: date lists, per-year tables, magic amounts, fixed IDs or ports, lists that silently stop working after some year. A rule (algorithm) or config/country-pack data is expected instead. Example of a past miss: Islamic holidays hard-coded as a list of dates for 2023-2028.
-- Silent limits: year bounds, max counts, "good enough for now" ranges, truncation without an error.
-- Facts about Nigerian banking (fees, VAT, stamp duty, NUBAN, NIP codes, session IDs, settlement, BVN, CBN open banking rules) that are wrong, unsourced, or presented as certain when they are placeholders.
-- Determinism: anything in world generation that depends on map order, time.Now, or the set of other personas/banks, so the same seed gives different history.
-- Changes to existing generated history or public behaviour that the PR does not state.
-- Money: int64 minor units only, no floats; overflow; both sides of every posting; books and CheckSettlement must balance.
-- Concurrency: locks held across network or DB calls, lock order (lifeMu before mu), races, goroutine leaks.
-- Boundaries: a participant reading another participant's state in-process where the PRD says it must go over the network (bank, NIBSS, CBN, Connect). Note it if the PR claims separation it does not deliver.
-- Security: secrets/keys/tokens in snapshots, logs, state files or the repo; missing cert-identity checks; token reuse; CSP weakened; inputs not validated.
-- Idempotency and replay: duplicate credits, retries that double-post.
-- Error handling: swallowed errors, panics on user input, unclear error text.
-
-Tests
-- Tests that assert the implementation instead of the behaviour, golden values regenerated without explaining why, tests skipped or weakened to pass, missing tests for new rules or edge cases (weekends, holidays, month ends, leap years, far-future years).
-- Slow tests added to the default run (the user cares about CI time).
-
-House rules (also blocking)
-- No code comments.
-- No new .md files in the repo (docs live in Notion). CLAUDE.md and README.md are the only ones allowed.
-- Code must follow CLAUDE.md at the repo root.
-- web/node_modules must never be committed.
-- UI and error text short and plain.
-- Code reads like the surrounding code: naming, idiom, file layout. No needless abstraction, dead code, or duplicated helpers.
-
+Then check what a rule list cannot:
+- Logic: follow the callers and check the change does what the PR says, including on weekends, holidays, month ends, leap years and far-future years.
+- Money: every posting balances, books and CheckSettlement still balance, retries cannot double-post.
+- Locks: no lock held across network, DB or file I/O, and the lock order in CLAUDE.md holds on every path.
+- Determinism: the same seed template and value still give the same data.
+- Boundaries: no participant reads another's state in-process where the PRD says it goes over the network, and the PR claims no separation it does not deliver.
+- Facts: Nigerian banking facts are sourced, or labelled as placeholders.
+- The PR body states every behaviour change, limit and placeholder in the diff.

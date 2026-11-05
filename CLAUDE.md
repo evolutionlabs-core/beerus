@@ -2,7 +2,13 @@
 
 Beerus is a faithful copy of Nigeria's banking infrastructure: banks, NIBSS, CBN settlement and open banking, all running from one binary. People use it to learn how the system works, and to build real apps while their licence is pending. Treat it as a real system, not a demo.
 
-The full guide, with examples for every rule, is the Notion page "Beerus coding guide". The design is the Notion page "Beerus control plane and banking core PRD". This file holds the rules every change must follow.
+This file is the single source of the code rules. Every agent reads it before writing code, and the review bot checks every PR against it, so code that follows it passes review the first time. The full guide, with examples for every rule, is the Notion page "Beerus coding guide". The design is the Notion page "Beerus control plane and banking core PRD".
+
+## How to work
+1. Read the PRD section for your task and the code around the change. Copy the patterns you find there: naming, file layout, error style, test style.
+2. Write the change and its tests together. Every new rule gets edge-case tests and a test of its failure message.
+3. Before you commit, run the checks below and go through "Mistakes we have made" at the end of this file.
+4. Write the PR body as described under "Commits and PRs". State every behaviour change, limit and placeholder.
 
 ## House rules (a reviewer blocks on these)
 - No code comments. Names carry the meaning. Test code has none either.
@@ -61,6 +67,8 @@ Use the toolchain's gofmt; the Homebrew one is older and CI disagrees with it.
 ## State
 - **Writes** are temp file then rename, mode 0600. Never `os.WriteFile` a state file directly.
 - **Secrets.** Keys, tokens and passwords never go into YAML, JSON state, snapshots or logs.
+- **Input.** Validate every input at the edge. User input never causes a panic.
+- **Security.** Check certificate identity on every mTLS call. Tokens are single-use where the PRD says so. Never weaken the CSP.
 - **Pruning.** Anything that accumulates is swept with a TTL.
 - **Counterparties.** Records copy counterparty details when they are written. They never look up a live directory later.
 
@@ -69,6 +77,7 @@ Use the toolchain's gofmt; the Homebrew one is older and CI disagrees with it.
 - **Balanced postings.** Every posting has both sides. Every settlement check must balance.
 - **Rates and dated rules.** Rates are integers, such as basis points. A dated rule gets a new entry; never edit an old one.
 - **Classification.** Classify money from structured fields (channel, category), never from narration text.
+- **Overflow.** Check sums and products of amounts for overflow.
 - **Idempotency.** Every write that can be retried carries a deterministic idempotency key and is safe to repeat. There is one idempotency mechanism; cover every branch.
 
 ## Time
@@ -87,7 +96,7 @@ Use the toolchain's gofmt; the Homebrew one is older and CI disagrees with it.
 
 ## Tests
 - **Speed.** Write fast unit tests beside the code first. Use `banktest.Schema(t)` for DB tests. In `contracttest`, `newStack` is the default; use `newBankStack` only for bank, settlement and lifecycle tests. CI time matters.
-- **Behaviour, exactly.** Assert behaviour, not implementation, and assert exact numbers. Never skip or weaken a test to make it pass.
+- **Behaviour, exactly.** Assert behaviour, not implementation, and assert exact numbers. Never skip or weaken a test to make it pass. If a golden value changes, say why in the PR.
 - **No sleeps.** Poll with a deadline instead of `time.Sleep`.
 - **Coverage.** Every new rule gets edge-case tests and a test of its failure message.
 
