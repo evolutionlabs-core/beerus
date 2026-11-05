@@ -92,8 +92,8 @@ func tombstone(id, name, nip, nuban string) nibss.Institution {
 	return nibss.Institution{ID: id, Name: name, NIPCode: nip, NUBANCode: nuban, Type: "commercial", Status: nibss.StatusRemoved}
 }
 
-func outside(name, nip, nuban string) nibss.Institution {
-	return nibss.Institution{ID: strings.ToLower(strings.ReplaceAll(name, " ", "-")), Name: name, NIPCode: nip, NUBANCode: nuban, Outside: true, Status: nibss.StatusActive}
+func member(id, name, nip, nuban string) nibss.Institution {
+	return nibss.Institution{ID: id, Name: name, NIPCode: nip, NUBANCode: nuban, Type: "commercial", Status: nibss.StatusActive}
 }
 
 type planCase struct {
@@ -766,10 +766,10 @@ func TestBuildAllocation(t *testing.T) {
 			},
 		},
 		{
-			name: "tombstones, outside rows and leaving banks hold their codes",
+			name: "tombstones, directory members and leaving banks hold their codes",
 			dir: []nibss.Institution{
 				tombstone("old", "Old Bank", "999003", "903"),
-				outside("Outside Bank", "999004", "000904"),
+				member("bank-z", "Bank Z", "999004", "000904"),
 			},
 			desired: func(s *Spec) {
 				dropBank(s, "bank-b")
@@ -826,22 +826,25 @@ func TestBuildAllocation(t *testing.T) {
 			errs: []string{"banks[bank-c].nuban_code 902 is already used by bank-b. Choose another code, or leave it out to have one allocated."},
 		},
 		{
-			name: "outside code reused by a bank in the file",
-			dir:  []nibss.Institution{outside("Outside Bank", "999003", "903")},
+			name: "explicit code of a directory member",
+			dir:  []nibss.Institution{member("bank-z", "Bank Z", "999003", "903")},
 			desired: func(s *Spec) {
 				c := newBank("bank-c", "Bank C")
 				c.NIPCode, c.NUBANCode = "999003", "903"
 				s.Spec.Banks = append(s.Spec.Banks, c)
 			},
-			want: []Action{create("bank-c", "999003", "903")},
+			errs: []string{
+				"banks[bank-c].nip_code 999003 is already used by bank-z. Choose another code, or leave it out to have one allocated.",
+				"banks[bank-c].nuban_code 903 is already used by bank-z. Choose another code, or leave it out to have one allocated.",
+			},
 		},
 		{
-			name: "outside name is not reserved",
-			dir:  []nibss.Institution{outside("Access Bank", "000014", "000014")},
+			name: "tombstone codes are never reused by allocation",
+			dir:  []nibss.Institution{tombstone("bank-c", "Bank C", "999003", "903")},
 			desired: func(s *Spec) {
-				s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "Access Bank"))
+				s.Spec.Banks = append(s.Spec.Banks, newBank("bank-d", "Bank D"))
 			},
-			want: []Action{create("bank-c", "999003", "903", "nip_code", "nuban_code")},
+			want: []Action{create("bank-d", "999004", "904", "nip_code", "nuban_code")},
 		},
 		{
 			name: "bad nuban code",
@@ -872,11 +875,11 @@ func TestBuildAllocation(t *testing.T) {
 func TestBuildFirstApply(t *testing.T) {
 	desired := spec()
 	desired.Spec.Banks[1].NIPCode, desired.Spec.Banks[1].NUBANCode = "", ""
-	dir := []nibss.Institution{outside("Bank A", "999001", "999001"), outside("Bank B", "999002", "999002")}
+	dir := []nibss.Institution{member("bank-a", "Bank A", "999001", "901"), member("bank-z", "Bank Z", "999002", "902")}
 	p := Build(desired, Status{}, dir, today)
 	want := []Action{
 		{Op: OpCreate, Kind: KindBank, ID: "bank-a", Fields: []FieldChange{{Path: "type", To: "commercial"}, {Path: "nip_code", To: "999001"}, {Path: "nuban_code", To: "901"}}},
-		{Op: OpCreate, Kind: KindBank, ID: "bank-b", Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{{Path: "type", To: "digital"}, {Path: "nip_code", To: "999003"}, {Path: "nuban_code", To: "902"}}},
+		{Op: OpCreate, Kind: KindBank, ID: "bank-b", Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{{Path: "type", To: "digital"}, {Path: "nip_code", To: "999003"}, {Path: "nuban_code", To: "903"}}},
 		{Op: OpCreate, Kind: KindPartner, ID: "balance", Fields: []FieldChange{{Path: "name", To: "Balance"}}},
 	}
 	if len(p.Errors) > 0 || !reflect.DeepEqual(p.Actions, want) {
@@ -888,7 +891,7 @@ func TestBuildAllocationRangeFull(t *testing.T) {
 	desired := spec()
 	var dir []nibss.Institution
 	for n := nipCodes.first; n <= nipCodes.last; n++ {
-		dir = append(dir, outside("x", strconv.Itoa(n), ""))
+		dir = append(dir, member("m-"+strconv.Itoa(n), "M", strconv.Itoa(n), ""))
 	}
 	desired.Spec.Banks = append(desired.Spec.Banks, Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", NUBANCode: "903"})
 	desired.Spec.Banks[0].NIPCode, desired.Spec.Banks[1].NIPCode = "", ""

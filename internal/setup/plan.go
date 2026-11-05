@@ -58,7 +58,7 @@ type planner struct {
 	wanted     map[string]Bank
 	resources  map[string]Resource
 	tombstones []nibss.Institution
-	outside    []nibss.Institution
+	members    []nibss.Institution
 	errs       []error
 }
 
@@ -106,11 +106,10 @@ func newPlanner(desired Spec, st Status, dir []nibss.Institution, today clock.Da
 	rows := append([]nibss.Institution(nil), dir...)
 	sort.Slice(rows, func(i, j int) bool { return rows[i].NIPCode < rows[j].NIPCode })
 	for _, in := range rows {
-		switch {
-		case in.Outside:
-			p.outside = append(p.outside, in)
-		case in.Status == nibss.StatusRemoved:
+		if in.Status == nibss.StatusRemoved {
 			p.tombstones = append(p.tombstones, in)
+		} else {
+			p.members = append(p.members, in)
 		}
 	}
 	return p
@@ -218,18 +217,9 @@ func (p *planner) allocate() map[string]codes {
 			usedNUBAN[n] = owner
 		}
 	}
-	declared := map[string]bool{}
-	for _, b := range p.desired.Spec.Banks {
-		if b.NIPCode != "" {
-			declared[b.NIPCode] = true
-		}
-	}
-	for _, in := range p.outside {
-		if declared[in.NIPCode] {
-			continue
-		}
-		usedNIP[in.NIPCode] = "outside institution " + in.Name
-		markNUBAN(in.NUBANCode, "outside institution "+in.Name)
+	for _, in := range p.members {
+		usedNIP[in.NIPCode] = in.ID
+		markNUBAN(in.NUBANCode, in.ID)
 	}
 	for _, in := range p.tombstones {
 		usedNIP[in.NIPCode] = "removed bank " + in.ID
