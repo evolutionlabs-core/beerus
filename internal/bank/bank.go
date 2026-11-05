@@ -2,8 +2,12 @@ package bank
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/charges"
@@ -166,7 +170,10 @@ func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.T
 	if len(s.SessionID) != 30 {
 		return ledger.Posted{}, charges.Transfer{}, fmt.Errorf("%w: session ID must be 30 digits", ledger.ErrInvalid)
 	}
-	c := charges.ForTransfer(s.Amount, clock.DateOf(s.At), false)
+	c := charges.Transfer{}
+	if !s.NoCharges {
+		c = charges.ForTransfer(s.Amount, clock.DateOf(s.At), false)
+	}
 	short := s.SessionID[18:]
 	narr := fmt.Sprintf("NIP TRF TO %s/%s/%s", s.Beneficiary, s.BankName, short)
 	cust := CustomerAccount(s.From)
@@ -191,7 +198,23 @@ func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.T
 }
 
 func (b *Bank) ReverseNIP(ctx context.Context, entryID int64, sessionID string, at time.Time) (ledger.Posted, error) {
-	return b.L.Reverse(ctx, entryID, "nip-rev:"+sessionID, at, "")
+	var key string
+	var session *string
+	err := b.L.Pool().QueryRow(ctx, `SELECT idempotency_key, session_id FROM journal_entries WHERE id = $1`, entryID).Scan(&key, &session)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ledger.Posted{}, fmt.Errorf("%w: entry %d does not exist", ledger.ErrInvalid, entryID)
+	}
+	if err != nil {
+		return ledger.Posted{}, fmt.Errorf("read NIP entry: %w", err)
+	}
+	if !strings.HasPrefix(key, clientKey("send_nip", "")) || session == nil || *session != sessionID {
+		return ledger.Posted{}, fmt.Errorf("%w: entry %d is not the NIP send for session %s", ledger.ErrInvalid, entryID, sessionID)
+	}
+	p, err := b.L.Reverse(ctx, entryID, "nip-rev:"+sessionID, at, "")
+	if err != nil {
+		return p, fmt.Errorf("reverse NIP session %s: %w", sessionID, err)
+	}
+	return p, nil
 }
 
 func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int64, sender, senderBank string, closure bool, at time.Time) (ledger.Posted, error) {
@@ -203,7 +226,7 @@ func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int6
 	}
 	narr := fmt.Sprintf("NIP TRF FRM %s/%s/%s", sender, senderBank, sessionID[18:])
 	lines := []ledger.Line{dr(NIPInward, amount, narr), cr(CustomerAccount(to), amount, narr)}
-	if levy := charges.EMTL(amount, clock.DateOf(at)); levy > 0 {
+	if levy := charges.EMTL(amount, clock.DateOf(at)); levy > 0 && !closure {
 		lines = append(lines, dr(CustomerAccount(to), levy, "EMTL "+sessionID[18:]), cr(StampPayable, levy, "EMTL "+sessionID[18:]))
 	}
 	e := entry("nip-in:"+sessionID, "nip_inward", at, narr, lines...)

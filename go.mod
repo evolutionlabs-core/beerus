@@ -8,6 +8,7 @@ require (
 	github.com/pb33f/libopenapi-validator v0.16.1
 	github.com/pressly/goose/v3 v3.29.0
 	go.yaml.in/yaml/v3 v3.0.5
+	golang.org/x/crypto v0.58.0
 	golang.org/x/time v0.16.0
 	pgregory.net/rapid v1.3.0
 )
