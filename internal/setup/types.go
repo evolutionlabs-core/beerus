@@ -189,7 +189,7 @@ type PartnerLocal struct {
 type Status struct {
 	Version       int        `json:"version"`
 	Setup         string     `json:"setup"`
-	SetupKey      uint64     `json:"setup_key"`
+	SetupKey      uint64     `json:"setup_key,string"`
 	Applied       Spec       `json:"applied"`
 	AppliedSHA256 string     `json:"applied_sha256"`
 	Resources     []Resource `json:"resources"`

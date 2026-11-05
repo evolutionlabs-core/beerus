@@ -17,15 +17,15 @@ const (
 )
 
 type Customer struct {
-	ID       string     `json:"id"`
-	Name     string     `json:"name"`
-	Phone    string     `json:"phone"`
-	BVN      string     `json:"bvn"`
-	Status   string     `json:"status"`
-	Username string     `json:"username,omitempty"`
-	DOB      clock.Date `json:"dob"`
-	Created  time.Time  `json:"created_at"`
-	ClosedAt *time.Time `json:"closed_at,omitempty"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Phone     string     `json:"phone"`
+	BVN       string     `json:"bvn"`
+	Status    string     `json:"status"`
+	Username  string     `json:"username,omitempty"`
+	DOB       clock.Date `json:"dob"`
+	CreatedAt time.Time  `json:"created_at"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
 }
 
 func (b *Bank) CreateCustomer(ctx context.Context, key, name, phone string, dob clock.Date, bvn, username, passwordHash string, at time.Time) (Customer, error) {

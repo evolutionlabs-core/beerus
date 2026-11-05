@@ -265,8 +265,8 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 		return nil, invalid("type must be commercial, digital or microfinance")
 	}
 	if req.HistoryDays > 0 {
-		if req.HistoryDays > 730 {
-			return nil, invalid("history_days must be at most 730")
+		if req.HistoryDays > world.MaxHistoryDays {
+			return nil, invalid("history_days must be at most %d", world.MaxHistoryDays)
 		}
 		days = req.HistoryDays
 	}
