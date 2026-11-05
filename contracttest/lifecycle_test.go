@@ -435,10 +435,7 @@ func TestCloseBank(t *testing.T) {
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
-	saved, err := connect.LoadConfig(s.cfg.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	saved := s.loadConfig()
 	if !saved.Bank("abuja-digital").Closed() {
 		t.Fatal("the closed state was not saved")
 	}

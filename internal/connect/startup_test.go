@@ -67,8 +67,8 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 			t.Errorf("%s history %d", b.ID, b.HistoryDays)
 		}
 	}
-	if cfg.Genesis != "2024-11-03" {
-		t.Errorf("genesis %s, want start − 730 days", cfg.Genesis)
+	if cfg.Genesis != "2024-10-04" {
+		t.Errorf("genesis %s, want start − 760 days", cfg.Genesis)
 	}
 	if !cfg.Start.Equal(time.Date(2026, 11, 3, 8, 0, 0, 0, clock.Lagos)) {
 		t.Errorf("start %v", cfg.Start)

@@ -80,10 +80,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if _, err := os.Stat(s.cfg.Path("snapshots", snap+".json")); !os.IsNotExist(err) {
 		t.Fatalf("snapshot file left behind: %v", err)
 	}
-	c, err := connect.LoadConfig(s.cfg.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := s.loadConfig()
 	if c.Bank("abuja-digital") != nil {
 		t.Fatal("the setup still lists the bank")
 	}
@@ -209,10 +206,7 @@ func TestPurgeRules(t *testing.T) {
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
-	c, err := connect.LoadConfig(s.cfg.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := s.loadConfig()
 	if c.Bank("bank-b") != nil {
 		t.Fatal("the setup still lists the purged bank")
 	}

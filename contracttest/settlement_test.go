@@ -89,10 +89,7 @@ func TestNIPSessionsCannotChangeOnALiveSetup(t *testing.T) {
 	}
 	s := newBankStack(t)
 	checkSettled(t, s.app)
-	cfg, err := connect.LoadConfig(s.cfg.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := s.loadConfig()
 	cfg.NIPSessions = 12
 	if _, err := connect.New(cfg, connect.Options{}); err == nil || !strings.Contains(err.Error(), "nip_sessions must stay 4") {
 		t.Fatalf("starting with a different schedule: %v", err)

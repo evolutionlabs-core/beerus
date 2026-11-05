@@ -246,9 +246,7 @@ func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ..
 				edit(cfg)
 			}
 			if !worldOnly {
-				for _, b := range cfg.Banks {
-					b.HistoryDays = min(b.HistoryDays, bankHistoryDays)
-				}
+				shortHistory(cfg)
 			}
 			app, err := connect.New(cfg, opts)
 			if err != nil {
@@ -322,6 +320,25 @@ func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ..
 		}
 	})
 	return s
+}
+
+func shortHistory(cfg *config.Config) {
+	cfg.Genesis = clock.DateOf(cfg.Start).AddDays(-bankHistoryDays).String()
+	for _, b := range cfg.Banks {
+		b.HistoryDays = min(b.HistoryDays, bankHistoryDays)
+	}
+}
+
+func (s *Stack) loadConfig() *config.Config {
+	s.t.Helper()
+	cfg, err := connect.LoadConfig(s.cfg.Dir)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	if !s.worldOnly {
+		shortHistory(cfg)
+	}
+	return cfg
 }
 
 func (s *Stack) owned(kind, id string) []setup.Owned {

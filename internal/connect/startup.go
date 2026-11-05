@@ -14,7 +14,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
@@ -23,7 +22,8 @@ const (
 	oldSpecFile = "beerus.yaml"
 	statusFile  = "control.json"
 
-	generatorSeed int64 = 20261028
+	generatorSeed        int64 = 20261028
+	generatorGenesisDays       = 760
 
 	defaultDatabaseURL  = "postgres:///postgres"
 	defaultConnectHost  = "connect.localhost"
@@ -298,7 +298,7 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 		Pace:        local.Pace,
 		Start:       start,
 		Seed:        generatorSeed,
-		Genesis:     clock.DateOf(start).AddDays(-world.MaxHistoryDays).String(),
+		Genesis:     clock.DateOf(start).AddDays(-generatorGenesisDays).String(),
 		NIPSessions: spec.NIP.Sessions,
 		Ports:       config.Ports{APIOffset: local.Ports.APIOffset, Window: local.Ports.Window},
 		Connect: config.Connect{
