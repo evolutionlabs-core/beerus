@@ -33,3 +33,14 @@ declared:
     add: [2026-03-19, 2026-08-25]
     remove: [2026-03-23, 2026-08-26]
     source: Eid-el-Fitr declared as Thursday 19 and Friday 20 March (https://interior.gov.ng/?p=1661); Eid-el-Maulud declared as Tuesday 25 August (https://interior.gov.ng/?p=1773)
+outside_banks:
+  source: "Placeholder: these are Beerus banks, not real institutions, and the codes are invented. NIP bank codes have 3 or 6 digits (https://developer.providusbank.com/transfer-services/getnipaccount)."
+  banks:
+    - {name: Bank A, nip_code: "999001", type: commercial}
+    - {name: Bank B, nip_code: "999002", type: digital}
+    - {name: Bank C, nip_code: "999003", type: commercial}
+    - {name: Bank D Microfinance, nip_code: "999004", type: microfinance}
+phone:
+  calling_code: "234"
+  trunk_prefix: "0"
+  source: "Nigeria's numbering plan filed with the ITU by the NCC, 2023: country code 234, national prefix 0. https://www.itu.int/dms_pub/itu-t/oth/02/02/T020200009C0002PDFE.pdf"

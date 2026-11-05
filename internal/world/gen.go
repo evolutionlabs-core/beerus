@@ -8,6 +8,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 )
 
 const buffer = 2000000
@@ -24,8 +25,18 @@ type cpBank struct {
 	name string
 }
 
-var counterpartyBanks = []cpBank{
-	{"999001", "Bank A"}, {"999002", "Bank B"}, {"999003", "Bank C"}, {"999004", "Bank D Microfinance"},
+var counterpartyBanks = mustCounterpartyBanks()
+
+func mustCounterpartyBanks() []cpBank {
+	p, err := countrypack.Nigeria()
+	if err != nil {
+		panic(err)
+	}
+	out := make([]cpBank, 0, len(p.Outside.Banks))
+	for _, b := range p.Outside.Banks {
+		out = append(out, cpBank{code: b.NIPCode, name: b.Name})
+	}
+	return out
 }
 
 func CounterpartyBanks() []Institution {
