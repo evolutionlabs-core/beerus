@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 )
 
@@ -887,10 +888,19 @@ func TestBuildFirstApply(t *testing.T) {
 	}
 }
 
+func simulatorCodes(t *testing.T) countrypack.SimulatorCodes {
+	t.Helper()
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pack.SimulatorCodes
+}
+
 func TestBuildAllocationRangeFull(t *testing.T) {
 	desired := spec()
 	var dir []nibss.Institution
-	for n := nipCodes.first; n <= nipCodes.last; n++ {
+	for n := simulatorCodes(t).NIP.First; n <= simulatorCodes(t).NIP.Last; n++ {
 		dir = append(dir, member("m-"+strconv.Itoa(n), "M", strconv.Itoa(n), ""))
 	}
 	desired.Spec.Banks = append(desired.Spec.Banks, Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", NUBANCode: "903"})
@@ -910,7 +920,7 @@ func TestBuildAllocationRangeFull(t *testing.T) {
 func TestBuildNUBANRangeFull(t *testing.T) {
 	desired := spec()
 	var dir []nibss.Institution
-	for n := nubanCodes.first; n <= nubanCodes.last; n++ {
+	for n := simulatorCodes(t).NUBAN.First; n <= simulatorCodes(t).NUBAN.Last; n++ {
 		dir = append(dir, tombstone("old-"+strconv.Itoa(n), "Old "+strconv.Itoa(n), "", strconv.Itoa(n)))
 	}
 	desired.Spec.Banks = append(desired.Spec.Banks, Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", NIPCode: "999003"})

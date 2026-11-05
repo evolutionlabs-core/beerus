@@ -100,9 +100,9 @@ func createSummary(a Action) string {
 		switch f.Path {
 		case "type", "name":
 			s = f.To
-		case nipCodes.field:
+		case fieldNIPCode:
 			s = "NIP " + f.To
-		case nubanCodes.field:
+		case fieldNUBANCode:
 			s = "NUBAN " + f.To
 		case "settles_through":
 			s = "settles through " + f.To

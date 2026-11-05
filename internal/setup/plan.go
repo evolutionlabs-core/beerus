@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
@@ -23,17 +24,15 @@ const (
 
 	ownedDatabase = "database"
 	ownedSnapshot = "snapshot"
+
+	fieldNIPCode   = "nip_code"
+	fieldNUBANCode = "nuban_code"
 )
 
 type codeRange struct {
 	field       string
 	first, last int
 }
-
-var (
-	nipCodes   = codeRange{field: "nip_code", first: 999001, last: 999999}
-	nubanCodes = codeRange{field: "nuban_code", first: 901, last: 999}
-)
 
 type planError struct {
 	msg  string
@@ -60,10 +59,19 @@ type planner struct {
 	tombstones []nibss.Institution
 	members    []nibss.Institution
 	errs       []error
+	nipCodes   codeRange
+	nubanCodes codeRange
 }
 
 func Build(desired Spec, st Status, dir []nibss.Institution, today clock.Date) Plan {
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return Plan{Setup: desired.Metadata.Name, Errors: []error{fmt.Errorf("load simulator code ranges: %w", err)}}
+	}
 	p := newPlanner(desired, st, dir, today)
+	c := pack.SimulatorCodes
+	p.nipCodes = codeRange{field: fieldNIPCode, first: c.NIP.First, last: c.NIP.Last}
+	p.nubanCodes = codeRange{field: fieldNUBANCode, first: c.NUBAN.First, last: c.NUBAN.Last}
 	var actions []Action
 	if a, ok := p.setupAction(); ok {
 		actions = append(actions, a)
@@ -261,26 +269,26 @@ func (p *planner) allocate() map[string]codes {
 			continue
 		}
 		if c.nip == "" {
-			code, ok := nipCodes.next(func(s string) bool { _, used := usedNIP[s]; return used })
+			code, ok := p.nipCodes.next(func(s string) bool { _, used := usedNIP[s]; return used })
 			if !ok {
-				p.full(b.ID, nipCodes)
+				p.full(b.ID, p.nipCodes)
 			} else {
 				c.nip = code
-				c.allocated = append(c.allocated, nipCodes.field)
+				c.allocated = append(c.allocated, fieldNIPCode)
 				usedNIP[code] = b.ID
 			}
 		}
 		if c.nuban == "" {
-			code, ok := nubanCodes.next(func(s string) bool {
+			code, ok := p.nubanCodes.next(func(s string) bool {
 				n, _ := world.NormaliseBankCode(s)
 				_, used := usedNUBAN[n]
 				return used
 			})
 			if !ok {
-				p.full(b.ID, nubanCodes)
+				p.full(b.ID, p.nubanCodes)
 			} else {
 				c.nuban = code
-				c.allocated = append(c.allocated, nubanCodes.field)
+				c.allocated = append(c.allocated, fieldNUBANCode)
 				markNUBAN(code, b.ID)
 			}
 		}
@@ -380,8 +388,8 @@ func (p *planner) createAction(b Bank, c codes) (Action, bool) {
 	}
 	fields := []FieldChange{
 		{Path: "type", To: b.Type},
-		{Path: nipCodes.field, To: c.nip},
-		{Path: nubanCodes.field, To: c.nuban},
+		{Path: fieldNIPCode, To: c.nip},
+		{Path: fieldNUBANCode, To: c.nuban},
 	}
 	if b.SettlesThrough != "" {
 		fields = append(fields, FieldChange{Path: "settles_through", To: b.SettlesThrough})
