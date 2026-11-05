@@ -21,7 +21,8 @@ Tests
 
 House rules (also blocking)
 - No code comments.
-- No new .md files in the repo (docs live in Notion).
+- No new .md files in the repo (docs live in Notion). CLAUDE.md and README.md are the only ones allowed.
+- Code must follow CLAUDE.md at the repo root.
 - web/node_modules must never be committed.
 - UI and error text short and plain.
 - Code reads like the surrounding code: naming, idiom, file layout. No needless abstraction, dead code, or duplicated helpers.

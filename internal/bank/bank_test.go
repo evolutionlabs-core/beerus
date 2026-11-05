@@ -71,7 +71,7 @@ func TestNIPTransferEntriesMatchPRD(t *testing.T) {
 	ctx := context.Background()
 	a := newBank(t, "bank-a", "999001", "901", 1)
 	sid := "999001260302090000000000000001"
-	before := bal(t, a.Bank, bank.Customer(a.custs[0]))
+	before := bal(t, a.Bank, bank.CustomerAccount(a.custs[0]))
 	_, c, err := a.SendNIP(ctx, bank.NIPSend{Key: "send-1", From: a.custs[0], Amount: 10000000, SessionID: sid, Beneficiary: "CHIDI OKAFOR", BankName: "BANK B", At: t0.Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
@@ -79,13 +79,13 @@ func TestNIPTransferEntriesMatchPRD(t *testing.T) {
 	if c.Fee != 5000 || c.VAT != 375 || c.StampDuty != 5000 {
 		t.Fatalf("charges %+v, want ₦50, ₦3.75 and ₦50", c)
 	}
-	if got := before - bal(t, a.Bank, bank.Customer(a.custs[0])); got != 10010375 {
+	if got := before - bal(t, a.Bank, bank.CustomerAccount(a.custs[0])); got != 10010375 {
 		t.Fatalf("customer debited %d, want 10010375", got)
 	}
 	if bal(t, a.Bank, bank.NIPOutward) != 10000000 || bal(t, a.Bank, bank.FeeIncome) != 5000 || bal(t, a.Bank, bank.VATPayable) != 375 || bal(t, a.Bank, bank.StampPayable) != 5000 {
 		t.Fatal("payables do not match the PRD example")
 	}
-	evs, _ := a.L.Events(ctx, bank.Customer(a.custs[0]), 1, 10)
+	evs, _ := a.L.Events(ctx, bank.CustomerAccount(a.custs[0]), 1, 10)
 	if len(evs) != 4 {
 		t.Fatalf("want 4 separate statement lines, got %d", len(evs))
 	}
@@ -154,7 +154,7 @@ func TestMoneyIsConservedAcrossBanksUnderFaults(t *testing.T) {
 		var sum int64
 		for _, b := range banks {
 			for _, n := range b.custs {
-				sum += bal(t, b.Bank, bank.Customer(n))
+				sum += bal(t, b.Bank, bank.CustomerAccount(n))
 			}
 			sum += bal(t, b.Bank, bank.FeeIncome) + bal(t, b.Bank, bank.VATPayable) + bal(t, b.Bank, bank.StampPayable)
 		}
@@ -199,7 +199,7 @@ func TestMoneyIsConservedAcrossBanksUnderFaults(t *testing.T) {
 			receiverCredits := outcome == "success" || outcome == "timeout_success"
 			if receiverCredits {
 				for k := 0; k <= dupes; k++ {
-					r, err := to.ReceiveNIP(ctx, sid, dst, amount, "Y", from.P.Name, clockAt)
+					r, err := to.ReceiveNIP(ctx, sid, dst, amount, "Y", from.P.Name, false, clockAt)
 					if err != nil {
 						rt.Fatal(err)
 					}
@@ -267,7 +267,7 @@ func TestConcurrentPostingKeepsInvariants(t *testing.T) {
 	a := newBank(t, "bank-a", "999001", "901", 6)
 	start := int64(0)
 	for _, n := range a.custs {
-		start += bal(t, a.Bank, bank.Customer(n))
+		start += bal(t, a.Bank, bank.CustomerAccount(n))
 	}
 	var wg sync.WaitGroup
 	errs := make(chan error, 1000)
@@ -298,7 +298,7 @@ func TestConcurrentPostingKeepsInvariants(t *testing.T) {
 	}
 	end := int64(0)
 	for _, n := range a.custs {
-		v := bal(t, a.Bank, bank.Customer(n))
+		v := bal(t, a.Bank, bank.CustomerAccount(n))
 		if v < 0 {
 			t.Fatalf("negative balance %d", v)
 		}
@@ -320,7 +320,7 @@ func TestMonthEndChargesOnce(t *testing.T) {
 		}
 	}
 	end := time.Date(2026, 3, 31, 23, 30, 0, 0, clock.Lagos)
-	before := bal(t, a.Bank, bank.Customer(a.custs[0]))
+	before := bal(t, a.Bank, bank.CustomerAccount(a.custs[0]))
 	r, err := a.MonthEnd(ctx, time.March, 2026, end)
 	if err != nil {
 		t.Fatal(err)
@@ -329,7 +329,7 @@ func TestMonthEndChargesOnce(t *testing.T) {
 		t.Fatalf("charged %d accounts", r.Accounts)
 	}
 	want := int64(4*400) + 120 + 3000 + 225
-	if got := before - bal(t, a.Bank, bank.Customer(a.custs[0])); got != want {
+	if got := before - bal(t, a.Bank, bank.CustomerAccount(a.custs[0])); got != want {
 		t.Fatalf("sender charged %d, want %d", got, want)
 	}
 	again, err := a.MonthEnd(ctx, time.March, 2026, end)
@@ -357,19 +357,19 @@ func TestReviewRegressions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.L.SetStatus(ctx, bank.Customer(c0), "frozen"); err != nil {
+	if err := a.L.SetStatus(ctx, bank.CustomerAccount(c0), "frozen"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.ReverseNIP(ctx, sent.EntryID, sid, at.Add(time.Hour)); err != nil {
 		t.Fatalf("refund to a frozen account, or a client key colliding with the reversal key: %v", err)
 	}
-	if _, err := a.ReceiveNIP(ctx, "123", c1, 100, "X", "Y", at); !errors.Is(err, ledger.ErrInvalid) {
+	if _, err := a.ReceiveNIP(ctx, "123", c1, 100, "X", "Y", false, at); !errors.Is(err, ledger.ErrInvalid) {
 		t.Fatalf("short session ID: %v", err)
 	}
 	if _, err := a.MonthEnd(ctx, time.March, 2026, time.Date(2026, 3, 31, 23, 0, 0, 0, clock.Lagos)); err != nil {
 		t.Fatalf("month end with a frozen customer: %v", err)
 	}
-	if v := bal(t, a.Bank, bank.Customer(c1)); v >= 50000000 {
+	if v := bal(t, a.Bank, bank.CustomerAccount(c1)); v >= 50000000 {
 		t.Fatal("month end skipped the other customers")
 	}
 	if _, err := a.OpenCustomer(ctx, "9020000019", "Stranger", "current", "someone-else", 3); err != nil {

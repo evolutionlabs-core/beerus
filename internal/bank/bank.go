@@ -38,7 +38,7 @@ func New(l *ledger.Ledger, p Profile) *Bank {
 	return &Bank{L: l, P: p}
 }
 
-func Customer(nuban string) string {
+func CustomerAccount(nuban string) string {
 	return "CUST:" + nuban
 }
 
@@ -89,7 +89,7 @@ func (b *Bank) Genesis(ctx context.Context, settlement, vault int64, at time.Tim
 }
 
 func (b *Bank) OpenCustomer(ctx context.Context, nuban, name, product, owner string, tier int) (ledger.Account, error) {
-	return b.L.OpenAccount(ctx, ledger.Account{Code: Customer(nuban), Name: name, Kind: ledger.Liability, Customer: true, NUBAN: nuban, Product: product, Owner: owner, KYCTier: tier})
+	return b.L.OpenAccount(ctx, ledger.Account{Code: CustomerAccount(nuban), Name: name, Kind: ledger.Liability, Customer: true, NUBAN: nuban, Product: product, Owner: owner, KYCTier: tier})
 }
 
 func clientKey(op, key string) string {
@@ -109,7 +109,7 @@ func (b *Bank) CashDeposit(ctx context.Context, key, nuban string, amount int64,
 	}
 	return b.L.Post(ctx, entry(clientKey("cash_deposit", key), "cash_deposit", at, "CASH DEPOSIT",
 		dr(Vault, amount, "Cash deposit"),
-		cr(Customer(nuban), amount, "CASH DEPOSIT")))
+		cr(CustomerAccount(nuban), amount, "CASH DEPOSIT")))
 }
 
 func (b *Bank) CashWithdrawal(ctx context.Context, key, nuban string, amount int64, at time.Time) (ledger.Posted, error) {
@@ -117,7 +117,7 @@ func (b *Bank) CashWithdrawal(ctx context.Context, key, nuban string, amount int
 		return ledger.Posted{}, err
 	}
 	e := entry(clientKey("cash_withdrawal", key), "cash_withdrawal", at, "CASH WITHDRAWAL",
-		dr(Customer(nuban), amount, "CASH WITHDRAWAL"),
+		dr(CustomerAccount(nuban), amount, "CASH WITHDRAWAL"),
 		cr(Vault, amount, "Cash withdrawal"))
 	e.LimitedAmount = amount
 	return b.L.Post(ctx, e)
@@ -130,11 +130,11 @@ func (b *Bank) OwnTransfer(ctx context.Context, key, from, to string, amount int
 	if from == to {
 		return ledger.Posted{}, fmt.Errorf("%w: same account", ledger.ErrInvalid)
 	}
-	fa, err := b.L.Account(ctx, Customer(from))
+	fa, err := b.L.Account(ctx, CustomerAccount(from))
 	if err != nil {
 		return ledger.Posted{}, err
 	}
-	ta, err := b.L.Account(ctx, Customer(to))
+	ta, err := b.L.Account(ctx, CustomerAccount(to))
 	if err != nil {
 		return ledger.Posted{}, err
 	}
@@ -142,8 +142,8 @@ func (b *Bank) OwnTransfer(ctx context.Context, key, from, to string, amount int
 		return ledger.Posted{}, fmt.Errorf("%w: own-account transfers need the same owner", ledger.ErrInvalid)
 	}
 	e := entry(clientKey("own_transfer", key), "transfer", at, "OWN ACCOUNT TRANSFER",
-		dr(Customer(from), amount, "TRF TO "+to),
-		cr(Customer(to), amount, "TRF FRM "+from))
+		dr(CustomerAccount(from), amount, "TRF TO "+to),
+		cr(CustomerAccount(to), amount, "TRF FRM "+from))
 	e.LimitedAmount = amount
 	return b.L.Post(ctx, e)
 }
@@ -156,6 +156,7 @@ type NIPSend struct {
 	Beneficiary string
 	BankName    string
 	At          time.Time
+	NoCharges   bool
 }
 
 func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.Transfer, error) {
@@ -168,7 +169,7 @@ func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.T
 	c := charges.ForTransfer(s.Amount, clock.DateOf(s.At), false)
 	short := s.SessionID[18:]
 	narr := fmt.Sprintf("NIP TRF TO %s/%s/%s", s.Beneficiary, s.BankName, short)
-	cust := Customer(s.From)
+	cust := CustomerAccount(s.From)
 	lines := []ledger.Line{
 		dr(cust, s.Amount, narr),
 		cr(NIPOutward, s.Amount, narr),
@@ -193,7 +194,7 @@ func (b *Bank) ReverseNIP(ctx context.Context, entryID int64, sessionID string, 
 	return b.L.Reverse(ctx, entryID, "nip-rev:"+sessionID, at, "")
 }
 
-func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int64, sender, senderBank string, at time.Time) (ledger.Posted, error) {
+func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int64, sender, senderBank string, closure bool, at time.Time) (ledger.Posted, error) {
 	if err := positive(amount); err != nil {
 		return ledger.Posted{}, err
 	}
@@ -201,9 +202,9 @@ func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int6
 		return ledger.Posted{}, fmt.Errorf("%w: session ID must be 30 digits", ledger.ErrInvalid)
 	}
 	narr := fmt.Sprintf("NIP TRF FRM %s/%s/%s", sender, senderBank, sessionID[18:])
-	lines := []ledger.Line{dr(NIPInward, amount, narr), cr(Customer(to), amount, narr)}
+	lines := []ledger.Line{dr(NIPInward, amount, narr), cr(CustomerAccount(to), amount, narr)}
 	if levy := charges.EMTL(amount, clock.DateOf(at)); levy > 0 {
-		lines = append(lines, dr(Customer(to), levy, "EMTL "+sessionID[18:]), cr(StampPayable, levy, "EMTL "+sessionID[18:]))
+		lines = append(lines, dr(CustomerAccount(to), levy, "EMTL "+sessionID[18:]), cr(StampPayable, levy, "EMTL "+sessionID[18:]))
 	}
 	e := entry("nip-in:"+sessionID, "nip_inward", at, narr, lines...)
 	e.SessionID = sessionID

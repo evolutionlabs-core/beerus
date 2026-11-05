@@ -1,0 +1,33 @@
+apiVersion: beerus.dev/v1
+kind: Setup
+metadata:
+  name: lagos-dev
+spec:
+  start: 2026-11-04T08:00:00+01:00
+  nip:
+    sessions: 4
+  holidays:
+    add: [2026-12-28]
+  banks:
+    - id: bank-a
+      name: Kuda
+      type: digital
+      nip_code: "999001"
+      nuban_code: "901"
+    - id: bank-b
+      name: Sterling Bank
+      type: commercial
+      nip_code: "999002"
+      nuban_code: "902"
+      net_debit_cap: 50000000000
+      on_remove: {money: transfer, to: bank-c}
+    - id: bank-c
+      name: Access Bank
+      type: commercial
+  partners:
+    - id: balance
+      name: Balance
+      legal_name: Balance Technologies Ltd
+      purpose: account information
+      redirect_uris: [https://localhost:3000/callback]
+      webhook_url: https://localhost:3000/webhooks
