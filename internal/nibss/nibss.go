@@ -27,6 +27,8 @@ var (
 	ErrUnavailable    = errors.New("91 institution unavailable")
 	ErrInvalidAccount = errors.New("07 invalid account")
 	ErrNoRecord       = errors.New("25 no record")
+
+	ErrUnknownInstitution = errors.New("not in the NIBSS directory")
 )
 
 type Institution struct {
@@ -35,7 +37,6 @@ type Institution struct {
 	NIPCode   string `json:"nip_code"`
 	NUBANCode string `json:"nuban_code"`
 	Type      string `json:"type"`
-	Outside   bool   `json:"outside"`
 	Status    string `json:"status"`
 }
 
@@ -70,12 +71,13 @@ type ConsentEvent struct {
 type Switch interface {
 	Directory(ctx context.Context) ([]Institution, error)
 	Institution(ctx context.Context, code string) (Institution, error)
+	Register(ctx context.Context, in Institution) error
 	SetStatus(ctx context.Context, id, status string) error
 	EnrolBVN(ctx context.Context, name, phone string, dob clock.Date) (string, error)
 	NameEnquiry(ctx context.Context, code, nuban string) (string, error)
 	Begin(ctx context.Context, s Session) (Session, error)
 	Resolve(ctx context.Context, id, status, outcome string, at time.Time) error
-	TSQ(ctx context.Context, id string) (Session, error)
+	TSQ(ctx context.Context, id string, next time.Time) (Session, error)
 	Due(ctx context.Context, at time.Time) ([]Session, error)
 	Unsettled(ctx context.Context, upTo time.Time) ([]Session, error)
 	MarkSettled(ctx context.Context, ids []string, session string) error

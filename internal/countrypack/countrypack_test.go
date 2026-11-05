@@ -40,3 +40,13 @@ func TestSimulatorCodesCheck(t *testing.T) {
 		t.Errorf("valid codes: %v", err)
 	}
 }
+
+func TestPhone(t *testing.T) {
+	p, err := Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phone.CallingCode != "234" || p.Phone.TrunkPrefix != "0" || p.Phone.Source == "" {
+		t.Errorf("phone: %+v", p.Phone)
+	}
+}

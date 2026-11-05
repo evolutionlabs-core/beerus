@@ -46,6 +46,12 @@ type SimulatorCodes struct {
 	Source string    `yaml:"source"`
 }
 
+type Phone struct {
+	CallingCode string `yaml:"calling_code"`
+	TrunkPrefix string `yaml:"trunk_prefix"`
+	Source      string `yaml:"source"`
+}
+
 type Pack struct {
 	Country  string     `yaml:"country"`
 	Version  string     `yaml:"version"`
@@ -55,6 +61,7 @@ type Pack struct {
 	Declared []Declared `yaml:"declared"`
 
 	SimulatorCodes SimulatorCodes `yaml:"simulator_codes"`
+	Phone          Phone          `yaml:"phone"`
 }
 
 func Nigeria() (*Pack, error) {
@@ -72,6 +79,9 @@ func Nigeria() (*Pack, error) {
 	}
 	if err := p.SimulatorCodes.check(); err != nil {
 		return nil, fmt.Errorf("country pack NG: %w", err)
+	}
+	if p.Phone.CallingCode == "" || p.Phone.TrunkPrefix == "" || p.Phone.Source == "" {
+		return nil, fmt.Errorf("country pack NG: phone needs calling_code, trunk_prefix and source")
 	}
 	return &p, nil
 }

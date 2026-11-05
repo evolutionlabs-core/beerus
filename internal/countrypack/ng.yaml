@@ -37,3 +37,7 @@ declared:
     add: [2026-03-19, 2026-08-25]
     remove: [2026-03-23, 2026-08-26]
     source: Eid-el-Fitr declared as Thursday 19 and Friday 20 March (https://interior.gov.ng/?p=1661); Eid-el-Maulud declared as Tuesday 25 August (https://interior.gov.ng/?p=1773)
+phone:
+  calling_code: "234"
+  trunk_prefix: "0"
+  source: "Nigeria's numbering plan filed with the ITU by the NCC, 2023: country code 234, national prefix 0. https://www.itu.int/dms_pub/itu-t/oth/02/02/T020200009C0002PDFE.pdf"
