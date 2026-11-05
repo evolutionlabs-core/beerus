@@ -3,6 +3,7 @@ package world
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
@@ -13,8 +14,6 @@ const (
 	TemplateRetail   = "retail"
 	MaxHistoryDays   = 730
 )
-
-var errNotBuilt = errors.New("not built")
 
 type SeedCustomer struct {
 	Key      string     `json:"key"`
@@ -60,5 +59,32 @@ func Generate(template string, value int64, banks []Institution, historyDays int
 	if historyDays < 0 || historyDays > MaxHistoryDays {
 		return Template{}, fmt.Errorf("history is %d days; it must be 0 to %d", historyDays, MaxHistoryDays)
 	}
-	return Template{}, errNotBuilt
+	if template != TemplateRetail {
+		return Template{}, fmt.Errorf("unknown template %q; known templates: %s", template, strings.Join(knownTemplates, ", "))
+	}
+	if cal == nil {
+		return Template{}, errors.New("generate seed: no holiday calendar")
+	}
+	seen := map[string]bool{}
+	for i, b := range banks {
+		if b.ID == "" {
+			return Template{}, fmt.Errorf("bank %d in the list has no id", i+1)
+		}
+		if b.Style != "traditional" && b.Style != "digital" {
+			return Template{}, fmt.Errorf("bank %s has style %q; it must be traditional or digital", b.ID, b.Style)
+		}
+		if seen[b.ID] {
+			return Template{}, fmt.Errorf("bank %s is listed twice", b.ID)
+		}
+		seen[b.ID] = true
+	}
+	roster := retailRoster(value)
+	out := Template{Customers: []SeedCustomer{}, Accounts: []SeedAccount{}, Postings: []SeedPosting{}}
+	for _, b := range banks {
+		t := generateRetail(roster, value, b, banks, historyDays, now, cal)
+		out.Customers = append(out.Customers, t.Customers...)
+		out.Accounts = append(out.Accounts, t.Accounts...)
+		out.Postings = append(out.Postings, t.Postings...)
+	}
+	return out, nil
 }
