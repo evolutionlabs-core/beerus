@@ -127,8 +127,8 @@ type Bank struct {
 	NUBANCode      string      `yaml:"nuban_code,omitempty" json:"nuban_code,omitempty"`
 	SettlesThrough string      `yaml:"settles_through,omitempty" json:"settles_through,omitempty"`
 	State          string      `yaml:"state,omitempty" json:"state,omitempty"`
-	NetDebitCap    int64       `yaml:"net_debit_cap,omitempty" json:"net_debit_cap,omitempty"`
-	Collateral     int64       `yaml:"collateral,omitempty" json:"collateral,omitempty"`
+	NetDebitCap    int64       `yaml:"net_debit_cap_minor,omitempty" json:"net_debit_cap_minor,omitempty"`
+	Collateral     int64       `yaml:"collateral_minor,omitempty" json:"collateral_minor,omitempty"`
 	OpenBanking    OpenBanking `yaml:"open_banking,omitempty" json:"open_banking,omitempty"`
 	OnRemove       *Removal    `yaml:"on_remove,omitempty" json:"on_remove,omitempty"`
 }
@@ -241,19 +241,19 @@ type Seeded struct {
 	Value       int64     `json:"value"`
 	HistoryDays int       `json:"history_days"`
 	Generator   int       `json:"generator"`
-	At          time.Time `json:"at"`
+	SeededAt    time.Time `json:"seeded_at"`
 }
 
 type Condition struct {
-	Type    string    `json:"type"`
-	Status  string    `json:"status"`
-	Reason  string    `json:"reason"`
-	Message string    `json:"message"`
-	At      time.Time `json:"at"`
+	Type      string    `json:"type"`
+	Status    string    `json:"status"`
+	Reason    string    `json:"reason"`
+	Message   string    `json:"message"`
+	ChangedAt time.Time `json:"changed_at"`
 }
 
 type Event struct {
-	At      time.Time `json:"at"`
+	LastAt  time.Time `json:"last_at"`
 	Reason  string    `json:"reason"`
 	Message string    `json:"message"`
 	Count   int       `json:"count"`

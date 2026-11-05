@@ -22,7 +22,7 @@ spec:
       type: commercial
       nip_code: "999001"
       nuban_code: "901"
-      net_debit_cap: 1.5
+      net_debit_cap_minor: 1.5
     - id: bank-b
       name: Bank B
       type: digital

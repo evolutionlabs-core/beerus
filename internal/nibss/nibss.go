@@ -63,7 +63,7 @@ type ConsentEvent struct {
 	ConsentID string    `json:"consent_id"`
 	ClientID  string    `json:"client_id"`
 	Status    string    `json:"status"`
-	At        time.Time `json:"at"`
+	ChangedAt time.Time `json:"changed_at"`
 	SourceSeq int64     `json:"source_seq"`
 }
 

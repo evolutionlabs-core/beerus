@@ -2,6 +2,7 @@ package world
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
@@ -39,7 +40,7 @@ type SeedPosting struct {
 	Key              string     `json:"key"`
 	Bank             string     `json:"bank"`
 	Account          string     `json:"account"`
-	At               time.Time  `json:"at"`
+	PostedAt         time.Time  `json:"posted_at"`
 	ValueDate        clock.Date `json:"value_date"`
 	Amount           int64      `json:"amount_minor"`
 	Narration        string     `json:"narration"`
@@ -56,5 +57,8 @@ type Template struct {
 }
 
 func Generate(template string, value int64, banks []Institution, historyDays int, now time.Time, cal *clock.Calendar) (Template, error) {
+	if historyDays < 0 || historyDays > MaxHistoryDays {
+		return Template{}, fmt.Errorf("history is %d days; it must be 0 to %d", historyDays, MaxHistoryDays)
+	}
 	return Template{}, errNotBuilt
 }

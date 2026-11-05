@@ -19,7 +19,7 @@ spec:
       type: commercial
       nip_code: "999002"
       nuban_code: "902"
-      net_debit_cap: 50000000000
+      net_debit_cap_minor: 50000000000
       on_remove: {money: transfer, to: bank-c}
     - id: bank-c
       name: Access Bank
