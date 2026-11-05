@@ -363,3 +363,40 @@ func TestAttachConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestResolveKeepsWithheldOutcome(t *testing.T) {
+	ctx := context.Background()
+	s := sessionStore(t)
+	begin := func(id, held string) {
+		x := transfer(id, "999002", t0)
+		x.Outcome, x.NextTSQAt = held, ptr(t0.Add(time.Minute))
+		if _, err := s.Begin(ctx, x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at := t0.Add(time.Minute)
+	begin("w1", OutcomeCredited)
+	wantErr(t, s.Resolve(ctx, "w1", "91", OutcomeFailed, at), "session w1 holds outcome credited and cannot resolve as 91: status change not allowed")
+	if err := s.Resolve(ctx, "w1", SessionOK, OutcomeCredited, at); err != nil {
+		t.Fatalf("credited as 00: %v", err)
+	}
+	begin("w2", OutcomeFailed)
+	wantErr(t, s.Resolve(ctx, "w2", SessionOK, OutcomeCredited, at), "session w2 holds outcome failed and cannot resolve as 00: status change not allowed")
+	if err := s.Resolve(ctx, "w2", "96", OutcomeFailed, at); err != nil {
+		t.Fatalf("failed as 96: %v", err)
+	}
+	begin("w3", OutcomeUnknown)
+	if err := s.Resolve(ctx, "w3", SessionOK, OutcomeCredited, at); err != nil {
+		t.Fatalf("unknown as 00: %v", err)
+	}
+	begin("w4", OutcomeUnknown)
+	if err := s.Resolve(ctx, "w4", "91", OutcomeFailed, at); err != nil {
+		t.Fatalf("unknown as 91: %v", err)
+	}
+	for id, want := range map[string]string{"w1": SessionOK, "w2": "96", "w3": SessionOK, "w4": "91"} {
+		q, err := s.TSQ(ctx, id, at)
+		if err != nil || q.Status != want {
+			t.Errorf("%s: %+v, %v; want status %s", id, q, err, want)
+		}
+	}
+}

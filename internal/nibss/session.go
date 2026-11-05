@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -174,11 +175,11 @@ func (s *Store) Resolve(ctx context.Context, id, status, outcome string, at time
 		case curStatus == status && curOutcome == outcome:
 			return nil
 		case curStatus == SessionPending:
-			if (curOutcome == OutcomeCredited) != (status == SessionOK) && curOutcome != "" {
+			if (curOutcome == OutcomeCredited && status != SessionOK) || (curOutcome == OutcomeFailed && status == SessionOK) {
 				return fmt.Errorf("session %s holds outcome %s and cannot resolve as %s: %w", id, curOutcome, status, errTransition)
 			}
 			if at.Before(created) {
-				return fmt.Errorf("session %s cannot resolve at %s, before it began at %s", id, at.Format(time.RFC3339), created.Format(time.RFC3339))
+				return fmt.Errorf("session %s cannot resolve at %s, before it began at %s", id, at.In(clock.Lagos).Format(time.RFC3339), created.In(clock.Lagos).Format(time.RFC3339))
 			}
 			_, err = tx.Exec(ctx, `UPDATE nip_sessions SET status = $2, outcome = $3, resolved_at = $4, next_tsq_at = NULL WHERE session_id = $1`, id, status, outcome, at)
 		case curStatus == status && curOutcome == OutcomeFailed && outcome == OutcomeReversed:
