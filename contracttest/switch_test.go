@@ -259,7 +259,7 @@ func TestStatusQueryReportsReversal(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, l := range ls {
-		if l.Channel == "nip" && l.SessionID != "" {
+		if l.Channel == "nip" && l.SessionID != "" && l.Amount == -2500000 && !l.At.Before(now) {
 			sid = l.SessionID
 		}
 	}

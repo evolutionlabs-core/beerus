@@ -51,7 +51,7 @@ func (b *Bank) EnsureCustomer(ctx context.Context, nuban, name, product, owner s
 	}
 	_, err := b.L.Post(ctx, entry("opening:"+nuban, "opening", at, "OPENING BALANCE",
 		dr(Vault, opening, "Opening balance"),
-		cr(Customer(nuban), opening, "OPENING BALANCE")))
+		cr(CustomerAccount(nuban), opening, "OPENING BALANCE")))
 	return err
 }
 
@@ -162,7 +162,7 @@ func (b *Bank) insertFeed(ctx context.Context, accountID int64, l FeedLine, entr
 }
 
 func (b *Bank) RecordLine(ctx context.Context, l FeedLine) error {
-	acct, err := b.L.Account(ctx, Customer(l.NUBAN))
+	acct, err := b.L.Account(ctx, CustomerAccount(l.NUBAN))
 	if err != nil {
 		return err
 	}
@@ -185,9 +185,9 @@ func (b *Bank) RecordLine(ctx context.Context, l FeedLine) error {
 	}
 	var lines []ledger.Line
 	if l.Amount > 0 {
-		lines = []ledger.Line{dr(other, amt, l.Narration), cr(Customer(l.NUBAN), amt, l.Narration)}
+		lines = []ledger.Line{dr(other, amt, l.Narration), cr(CustomerAccount(l.NUBAN), amt, l.Narration)}
 	} else {
-		lines = []ledger.Line{dr(Customer(l.NUBAN), amt, l.Narration), cr(other, amt, l.Narration)}
+		lines = []ledger.Line{dr(CustomerAccount(l.NUBAN), amt, l.Narration), cr(other, amt, l.Narration)}
 	}
 	e := ledger.Entry{Key: "line:" + l.Key, Kind: kindOf(l), PostingDate: clock.DateOf(l.BookedAt), ValueDate: l.ValueDate, PostedAt: l.BookedAt, Narration: l.Narration, SessionID: l.SessionID, Lines: lines, AllowOverdraft: true}
 	p, err := b.L.Post(ctx, e)
@@ -203,7 +203,7 @@ func (b *Bank) RecordLine(ctx context.Context, l FeedLine) error {
 
 func (b *Bank) Watermark(ctx context.Context, nuban string) (time.Time, error) {
 	var wm *time.Time
-	err := b.L.Pool().QueryRow(ctx, `SELECT h.watermark FROM feed_heads h JOIN gl_accounts a ON a.id = h.account_id WHERE a.code = $1`, Customer(nuban)).Scan(&wm)
+	err := b.L.Pool().QueryRow(ctx, `SELECT h.watermark FROM feed_heads h JOIN gl_accounts a ON a.id = h.account_id WHERE a.code = $1`, CustomerAccount(nuban)).Scan(&wm)
 	if errors.Is(err, pgx.ErrNoRows) || wm == nil {
 		return time.Time{}, nil
 	}
@@ -211,7 +211,7 @@ func (b *Bank) Watermark(ctx context.Context, nuban string) (time.Time, error) {
 }
 
 func (b *Bank) SetWatermark(ctx context.Context, nuban string, at time.Time) error {
-	acct, err := b.L.Account(ctx, Customer(nuban))
+	acct, err := b.L.Account(ctx, CustomerAccount(nuban))
 	if err != nil {
 		return err
 	}
@@ -227,7 +227,7 @@ func (b *Bank) Feed(ctx context.Context, nuban string, at time.Time, from clock.
 			(NOT f.pending AND f.booked_at <= $2 AND f.booked_at >= $3)
 			OR (f.pending AND f.appeared_at <= $2 AND f.appeared_at >= $3 AND NOT EXISTS (
 				SELECT 1 FROM account_feed q WHERE q.account_id = f.account_id AND q.line_key = f.line_key AND NOT q.pending AND q.booked_at <= $2)))
-		ORDER BY f.seq`, Customer(nuban), at, from.Start())
+		ORDER BY f.seq`, CustomerAccount(nuban), at, from.Start())
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func (b *Bank) Feed(ctx context.Context, nuban string, at time.Time, from clock.
 func (b *Bank) BalanceAt(ctx context.Context, nuban string, at time.Time) (int64, error) {
 	var bal *int64
 	err := b.L.Pool().QueryRow(ctx, `SELECT f.balance_after FROM account_feed f JOIN gl_accounts a ON a.id = f.account_id
-		WHERE a.code = $1 AND NOT f.pending AND f.booked_at <= $2 ORDER BY f.seq DESC LIMIT 1`, Customer(nuban), at).Scan(&bal)
+		WHERE a.code = $1 AND NOT f.pending AND f.booked_at <= $2 ORDER BY f.seq DESC LIMIT 1`, CustomerAccount(nuban), at).Scan(&bal)
 	if err == nil && bal != nil {
 		return *bal, nil
 	}
@@ -270,7 +270,7 @@ func (b *Bank) BalanceAt(ctx context.Context, nuban string, at time.Time) (int64
 	}
 	var opening int64
 	err = b.L.Pool().QueryRow(ctx, `SELECT coalesce(sum(-jl.amount), 0) FROM journal_lines jl JOIN journal_entries je ON je.id = jl.entry_id JOIN gl_accounts a ON a.id = jl.account_id
-		WHERE a.code = $1 AND je.kind = 'opening'`, Customer(nuban)).Scan(&opening)
+		WHERE a.code = $1 AND je.kind = 'opening'`, CustomerAccount(nuban)).Scan(&opening)
 	return opening, err
 }
 
@@ -278,6 +278,6 @@ func (b *Bank) PendingAt(ctx context.Context, nuban string, at time.Time) (int64
 	var sum int64
 	err := b.L.Pool().QueryRow(ctx, `SELECT coalesce(sum(f.amount), 0) FROM account_feed f JOIN gl_accounts a ON a.id = f.account_id
 		WHERE a.code = $1 AND f.pending AND f.appeared_at <= $2 AND NOT EXISTS (
-			SELECT 1 FROM account_feed q WHERE q.account_id = f.account_id AND q.line_key = f.line_key AND NOT q.pending AND q.booked_at <= $2)`, Customer(nuban), at).Scan(&sum)
+			SELECT 1 FROM account_feed q WHERE q.account_id = f.account_id AND q.line_key = f.line_key AND NOT q.pending AND q.booked_at <= $2)`, CustomerAccount(nuban), at).Scan(&sum)
 	return sum, err
 }

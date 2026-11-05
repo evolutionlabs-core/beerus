@@ -337,7 +337,7 @@ func (a *App) VerifyBank() (BankCheck, error) {
 			if err != nil {
 				return out, err
 			}
-			book, err := l.b.L.Balance(l.ctx, bank.Customer(acc.NUBAN))
+			book, err := l.b.L.Balance(l.ctx, bank.CustomerAccount(acc.NUBAN))
 			if err != nil {
 				return out, err
 			}
