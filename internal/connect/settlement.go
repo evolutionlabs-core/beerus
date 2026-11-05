@@ -256,11 +256,18 @@ func (r *rtgs) Close() {
 }
 
 func (a *App) ensureRTGS() error {
-	if a.rtgs != nil || a.worldOnly || len(a.cfg.Banks) == 0 || time.Since(a.rtgsTried) < 10*time.Second {
+	a.mu.Lock()
+	if a.rtgs != nil || a.worldOnly || a.rtgsOpening || len(a.cfg.Banks) == 0 || a.clock.Real().Sub(a.rtgsTried) < 10*time.Second {
+		a.mu.Unlock()
 		return nil
 	}
-	a.rtgsTried = time.Now()
-	r, err := openRTGS(context.Background(), a.cfg, a.ctl, a.world.Config().Genesis.Start())
+	a.rtgsTried, a.rtgsOpening = a.clock.Real(), true
+	genesis := a.world.Config().Genesis.Start()
+	a.mu.Unlock()
+	r, err := openRTGS(context.Background(), a.cfg, a.ctl, genesis)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.rtgsOpening = false
 	if errors.Is(err, errSessions) {
 		return err
 	}

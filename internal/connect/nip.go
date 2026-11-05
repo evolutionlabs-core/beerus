@@ -216,16 +216,12 @@ func (a *App) SetNetDebitCap(id string, cap, collateral int64) error {
 	prevCap, prevCollateral := b.NetDebitCap, b.Collateral
 	b.NetDebitCap, b.Collateral = cap, collateral
 	a.mu.Unlock()
-	st, v, err := a.recordBanks()
-	if err != nil {
+	a.lifeMu.Unlock()
+	return a.saveBanks(func() {
 		a.mu.Lock()
 		b.NetDebitCap, b.Collateral = prevCap, prevCollateral
 		a.mu.Unlock()
-		a.lifeMu.Unlock()
-		return err
-	}
-	a.lifeMu.Unlock()
-	return a.ctl.flush(st, v)
+	})
 }
 
 func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {

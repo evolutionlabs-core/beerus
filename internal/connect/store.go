@@ -96,30 +96,26 @@ func (s *ctlStore) setupKey() uint64 {
 	return s.st.SetupKey
 }
 
-func (s *ctlStore) change(fn func(*setup.Status) (bool, error)) (setup.Status, uint64, error) {
+func (s *ctlStore) change(fn func(*setup.Status) (bool, error)) (uint64, error) {
 	if s.readOnly {
-		return setup.Status{}, 0, errStoreReadOnly
+		return 0, errStoreReadOnly
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	work, err := cloneStatus(s.st)
 	if err != nil {
-		return setup.Status{}, 0, err
+		return 0, err
 	}
 	changed, err := fn(&work)
 	if err != nil || !changed {
-		return setup.Status{}, 0, err
-	}
-	out, err := cloneStatus(work)
-	if err != nil {
-		return setup.Status{}, 0, err
+		return 0, err
 	}
 	s.st = work
 	s.version++
-	return out, s.version, nil
+	return s.version, nil
 }
 
-func (s *ctlStore) flush(st setup.Status, version uint64) error {
+func (s *ctlStore) flush(version uint64) error {
 	if version == 0 {
 		return nil
 	}
@@ -128,19 +124,26 @@ func (s *ctlStore) flush(st setup.Status, version uint64) error {
 	if version <= s.written {
 		return nil
 	}
+	s.mu.Lock()
+	st, err := cloneStatus(s.st)
+	latest := s.version
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	if err := setup.SaveStatus(s.dir, st); err != nil {
 		return err
 	}
-	s.written = version
+	s.written = latest
 	return nil
 }
 
 func (s *ctlStore) update(fn func(*setup.Status) (bool, error)) error {
-	st, v, err := s.change(fn)
+	v, err := s.change(fn)
 	if err != nil {
 		return err
 	}
-	return s.flush(st, v)
+	return s.flush(v)
 }
 
 func findResource(st *setup.Status, kind, id string) *setup.Resource {
@@ -269,7 +272,6 @@ func syncBanks(st *setup.Status, banks []config.Bank) (bool, error) {
 	}
 	for id := range prev {
 		if !keep[id] {
-			st.Resources = slices.DeleteFunc(st.Resources, func(r setup.Resource) bool { return r.Kind == setup.KindBank && r.ID == id })
 			changed = true
 		}
 	}
@@ -285,7 +287,7 @@ func syncBanks(st *setup.Status, banks []config.Bank) (bool, error) {
 	return true, nil
 }
 
-func (a *App) recordBanks() (setup.Status, uint64, error) {
+func (a *App) recordBanks() (uint64, error) {
 	a.mu.Lock()
 	banks := make([]config.Bank, 0, len(a.cfg.Banks))
 	for _, b := range a.cfg.Banks {
@@ -293,4 +295,20 @@ func (a *App) recordBanks() (setup.Status, uint64, error) {
 	}
 	a.mu.Unlock()
 	return a.ctl.change(func(st *setup.Status) (bool, error) { return syncBanks(st, banks) })
+}
+
+func (a *App) saveBanks(undo func()) error {
+	v, err := a.recordBanks()
+	if err == nil {
+		if err = a.ctl.flush(v); err == nil {
+			return nil
+		}
+	}
+	a.lifeMu.Lock()
+	undo()
+	a.lifeMu.Unlock()
+	if v, rerr := a.recordBanks(); rerr == nil {
+		_ = a.ctl.flush(v)
+	}
+	return err
 }

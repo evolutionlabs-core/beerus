@@ -247,8 +247,8 @@ func (a *App) bankCerts(b *config.Bank) error {
 }
 
 func (a *App) cbnMember(b *config.Bank) error {
-	a.mu.Lock()
 	err := a.ensureRTGS()
+	a.mu.Lock()
 	r := a.rtgs
 	a.mu.Unlock()
 	if err != nil {

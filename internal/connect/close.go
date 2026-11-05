@@ -218,26 +218,17 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 	st := a.status[id]
 	prev, prevPhase := b.State, st.Phase
 	b.State, st.Phase, st.Reason = "closed", PhaseClosed, ""
-	saved, v, err := a.recordBanks()
-	if err != nil {
-		b.State, st.Phase = prev, prevPhase
-		a.lifeMu.Unlock()
-		return CloseResult{}, err
-	}
 	a.lifeMu.Unlock()
-	if err := a.ctl.flush(saved, v); err != nil {
+	undo := func() { b.State, st.Phase = prev, prevPhase }
+	if err := a.saveBanks(undo); err != nil {
 		return CloseResult{}, err
 	}
 	res, err := a.closeWorld(id, imp, choice, req.To)
 	if err != nil {
 		a.lifeMu.Lock()
-		b.State, st.Phase = prev, prevPhase
-		saved, v, rerr := a.recordBanks()
+		undo()
 		a.lifeMu.Unlock()
-		if rerr == nil {
-			rerr = a.ctl.flush(saved, v)
-		}
-		return CloseResult{}, errors.Join(err, rerr)
+		return CloseResult{}, errors.Join(err, a.saveBanks(func() {}))
 	}
 	a.detach(b, setup.StepSite)
 	a.recordPhase(id, PhaseClosed)

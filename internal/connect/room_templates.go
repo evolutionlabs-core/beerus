@@ -302,7 +302,7 @@ const roomTemplates = `
 <div class="grid gap-4 sm:grid-cols-2">
 <label class="block sm:col-span-2"><span class="mb-1.5 block text-[12.5px] text-muted">Name</span><input class="field" type="text" name="name" maxlength="40" value="{{.Form.Get "name"}}" required autofocus></label>
 <label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Type</span><select name="type" class="field"><option value="commercial" {{if eq "commercial" (.Form.Get "type")}}selected{{end}}>Commercial</option><option value="digital" {{if eq "digital" (.Form.Get "type")}}selected{{end}}>Digital</option><option value="microfinance" {{if eq "microfinance" (.Form.Get "type")}}selected{{end}}>Microfinance</option></select></label>
-<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">History kept (days)</span><input class="field font-mono" type="text" name="history_days" inputmode="numeric" value="{{.Form.Get "history_days"}}" placeholder="Default for the type"></label>
+
 <label class="block sm:col-span-2"><span class="mb-1.5 block text-[12.5px] text-muted">Settles through</span><select name="settles_through" class="field"><option value="">Not needed</option>{{range .Banks}}{{if ne .Type "microfinance"}}<option value="{{.ID}}" {{if eq .ID ($.Form.Get "settles_through")}}selected{{end}}>{{.Name}}</option>{{end}}{{end}}</select></label>
 </div>
 <div class="mt-6 flex items-center justify-end gap-2"><a href="/ui" class="btn text-muted hover:text-ink">Cancel</a><button type="submit" class="btn btn-primary">Create bank</button></div>

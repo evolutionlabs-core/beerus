@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -38,8 +39,14 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return rep, err
 	}
+	live := setup.Status{}
+	for _, r := range st.Resources {
+		if r.Kind != setup.KindBank || c.Bank(r.ID) != nil {
+			live.Resources = append(live.Resources, r)
+		}
+	}
 	expected := map[string]bool{}
-	for name := range owned(st, ownedDatabase, ownedSnapshot) {
+	for name := range owned(live, ownedDatabase, ownedSnapshot) {
 		expected[name] = true
 	}
 	cbn := config.DatabaseName(c.Dir, cbnID)
@@ -109,6 +116,11 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 	for _, r := range st.Resources {
 		if r.Kind == setup.KindBank && byID[r.ID] == nil {
 			rep.StaleOwned = append(rep.StaleOwned, r.ID)
+			for _, o := range r.Owned {
+				if (o.Kind == ownedDatabase || o.Kind == ownedSnapshot) && !slices.Contains(rep.Orphans, o.Name) {
+					rep.Orphans = append(rep.Orphans, o.Name)
+				}
+			}
 		}
 	}
 	if !fix || rep.Clean() {

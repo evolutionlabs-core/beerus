@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,7 +29,6 @@ const (
 	PhaseClosed        = setup.PhaseClosed
 	PhaseTerminating   = setup.PhaseTerminating
 	driftEvery         = 5 * time.Second
-	defaultMaxBanks    = 6
 	connectionsPerBank = 8
 )
 
@@ -186,17 +186,14 @@ func (a *App) CreateBank(req BankRequest) (*config.Bank, error) {
 	a.mu.Lock()
 	a.cfg.Banks = append(a.cfg.Banks, b)
 	a.mu.Unlock()
-	st, v, err := a.recordBanks()
-	if err != nil {
-		a.mu.Lock()
-		a.cfg.Banks = a.cfg.Banks[:len(a.cfg.Banks)-1]
-		a.mu.Unlock()
-		a.lifeMu.Unlock()
-		return nil, err
-	}
 	a.status[b.ID] = newStatus(b, false)
 	a.lifeMu.Unlock()
-	if err := a.ctl.flush(st, v); err != nil {
+	if err := a.saveBanks(func() {
+		a.mu.Lock()
+		a.cfg.Banks = slices.DeleteFunc(slices.Clone(a.cfg.Banks), func(x *config.Bank) bool { return x == b })
+		a.mu.Unlock()
+		delete(a.status, b.ID)
+	}); err != nil {
 		return nil, err
 	}
 	a.poke()
@@ -232,18 +229,8 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 	if !ok {
 		return nil, invalid("type must be commercial, digital or microfinance")
 	}
-	if req.HistoryDays > 0 {
-		if req.HistoryDays > world.MaxHistoryDays {
-			return nil, invalid("history_days must be at most %d", world.MaxHistoryDays)
-		}
-		days = req.HistoryDays
-	}
-	max := a.cfg.MaxBanks
-	if max == 0 {
-		max = defaultMaxBanks
-	}
-	if len(a.cfg.Banks) >= max {
-		return nil, invalid("this setup already has %d banks, the limit set by max_banks", max)
+	if req.HistoryDays != 0 {
+		return nil, invalid("history_days can no longer be set; it follows the bank type")
 	}
 	usedNIP, usedNUBAN := map[string]bool{}, map[string]bool{}
 	markNUBAN := func(code string) {
@@ -379,14 +366,8 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 			st.Phase = PhaseSuspended
 		}
 	}
-	saved, v, err := a.recordBanks()
-	if err != nil {
-		b.State, st.Phase = prev, prevPhase
-		a.lifeMu.Unlock()
-		return err
-	}
 	a.lifeMu.Unlock()
-	if err := a.ctl.flush(saved, v); err != nil {
+	if err := a.saveBanks(func() { b.State, st.Phase = prev, prevPhase }); err != nil {
 		return err
 	}
 	a.mu.Lock()

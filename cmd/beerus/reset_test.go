@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
@@ -80,5 +81,42 @@ func TestResetClearsAnOldDir(t *testing.T) {
 	}
 	if _, err := connect.LoadConfig(dir); err != nil {
 		t.Fatalf("load after reset: %v", err)
+	}
+}
+
+func TestResetDropsOwnedDatabasesOutsideThePrefix(t *testing.T) {
+	url := os.Getenv("BEERUS_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set BEERUS_TEST_DATABASE_URL to run")
+	}
+	t.Setenv(config.DatabaseURLEnv, url)
+	dir := t.TempDir()
+	if err := connect.Init(dir, setup.DefaultSpec(defaultSetupName, resetToday), connect.DefaultLocal(), resetToday); err != nil {
+		t.Fatal(err)
+	}
+	custom := "beerus_custom_" + config.HashKey(dir)[:8]
+	s, err := nibss.Open(context.Background(), url, custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	st, err := setup.LoadStatus(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Resources[0].Owned = append(st.Resources[0].Owned, setup.Owned{Kind: "database", Name: custom})
+	if err := setup.SaveStatus(dir, st); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := cmdReset([]string{defaultSetupName, "--dir", dir}, &out); err != nil {
+		t.Fatal(err)
+	}
+	left, err := store.List(context.Background(), url, custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 || !strings.Contains(out.String(), custom) {
+		t.Fatalf("custom database left: %v; output: %s", left, out.String())
 	}
 }

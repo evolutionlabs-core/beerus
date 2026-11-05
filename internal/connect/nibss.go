@@ -49,14 +49,52 @@ func (a *App) nibssStore() *nibss.Store {
 	a.mu.Unlock()
 	s, err := openNIBSS(context.Background(), a.cfg, a.ctl)
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.nibssOpening = false
 	if err != nil {
+		a.mu.Unlock()
 		a.log.Error("NIBSS directory not ready; retrying", "err", err)
 		return nil
 	}
 	a.nibss = s
+	a.mu.Unlock()
+	if err := a.syncDirectory(s); err != nil {
+		a.log.Error("NIBSS directory out of date", "err", err)
+	}
 	return s
+}
+
+func (a *App) syncDirectory(s *nibss.Store) error {
+	ctx := context.Background()
+	list, err := s.Directory(ctx)
+	if err != nil {
+		return fmt.Errorf("read the NIBSS directory: %w", err)
+	}
+	want := map[string]string{}
+	a.mu.Lock()
+	for _, b := range a.cfg.Banks {
+		want[b.ID] = memberStatus(b)
+	}
+	a.mu.Unlock()
+	for _, in := range list {
+		status, member := want[in.ID]
+		switch {
+		case in.Status == nibss.StatusRemoved:
+		case !member:
+			for _, next := range []string{nibss.StatusTerminating, nibss.StatusRemoved} {
+				if in.Status == next {
+					continue
+				}
+				if err := s.SetStatus(ctx, in.ID, next); err != nil {
+					return fmt.Errorf("set NIBSS status of %s to %s: %w", in.ID, next, err)
+				}
+			}
+		case in.Status != status && in.Status != nibss.StatusTerminating:
+			if err := s.SetStatus(ctx, in.ID, status); err != nil {
+				return fmt.Errorf("set NIBSS status of %s to %s: %w", in.ID, status, err)
+			}
+		}
+	}
+	return a.refreshDirectory()
 }
 
 func (a *App) dropNIBSS() error {
@@ -178,7 +216,7 @@ func (a *App) refreshDirectory() error {
 
 func (a *App) directoryLocked() *nip.Directory {
 	members := a.members
-	if a.worldOnly || a.role == RoleBank {
+	if a.worldOnly || a.role == RoleBank || a.nibss == nil {
 		members = nil
 		for _, b := range a.cfg.Banks {
 			members = append(members, nip.Participant{Code: b.NIPCode, Name: b.Name, BankID: b.ID})

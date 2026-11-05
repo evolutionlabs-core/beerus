@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -16,7 +18,7 @@ import (
 )
 
 var (
-	ErrRunning   = errors.New("Beerus is running; stop it first")
+	ErrRunning   = errors.New("Beerus is running; stop it first, or delete the running file if it is not")
 	ErrWrongName = errors.New("the name does not match this setup")
 )
 
@@ -125,6 +127,16 @@ func Reset(ctx context.Context, dir, databaseURL string) ([]string, error) {
 			names = append(names, n)
 		}
 	}
+	st, err := setup.LoadStatus(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	for n := range owned(st, ownedDatabase, ownedSnapshot) {
+		if !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
 	if err := store.DropDatabases(ctx, databaseURL, names); err != nil {
 		return nil, fmt.Errorf("drop databases of %s: %w", dir, err)
 	}

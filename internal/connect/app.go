@@ -44,10 +44,12 @@ type App struct {
 	statePath    string
 	sending      chan struct{}
 	pmu          sync.RWMutex
+	partnerMu    sync.Mutex
 	swept        time.Time
 	ledgers      []*ledgerSource
 	rtgs         *rtgs
 	rtgsTried    time.Time
+	rtgsOpening  bool
 	nibss        *nibss.Store
 	nibssTried   time.Time
 	nibssOpening bool
@@ -359,15 +361,15 @@ func (a *App) Step() {
 		a.recMu.Unlock()
 	}
 	a.nibssStore()
+	if err := a.ensureRTGS(); err != nil {
+		a.log.Error("CBN ledger", "err", err)
+	}
 	a.mu.Lock()
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {
 			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
 			a.driftDue.Store(true)
 		}
-	}
-	if err := a.ensureRTGS(); err != nil {
-		a.log.Error("CBN ledger", "err", err)
 	}
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)

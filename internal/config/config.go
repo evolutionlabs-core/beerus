@@ -124,7 +124,6 @@ type Holidays struct {
 type Config struct {
 	DatabaseURL string     `yaml:"database_url"`
 	Banks       []*Bank    `yaml:"banks,omitempty"`
-	MaxBanks    int        `yaml:"max_banks,omitempty"`
 	NIPSessions int        `yaml:"nip_sessions,omitempty"`
 	Ports       Ports      `yaml:"ports,omitempty"`
 	Seed        int64      `yaml:"seed"`

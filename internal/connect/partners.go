@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -21,16 +22,32 @@ type PartnerRequest struct {
 	WebhookURL   string   `json:"webhook_url"`
 }
 
-func (a *App) AddPartner(req PartnerRequest) (string, error) {
+var errPartnerBusy = invalid("another partner change is running; try again")
+
+func (a *App) AddPartner(req PartnerRequest) (key string, err error) {
+	if !a.partnerMu.TryLock() {
+		return "", errPartnerBusy
+	}
+	defer a.partnerMu.Unlock()
 	o := config.PartnerOptions{ID: req.ID, Name: req.Name, LegalName: req.LegalName, Purpose: req.Purpose, RedirectURIs: req.RedirectURIs, WebhookURL: req.WebhookURL}
 	if err := o.Check(); err != nil {
 		return "", invalid("%s", err.Error())
 	}
-	if a.partnerOf(o.ID) != nil {
+	st, err := a.ctl.status()
+	if err != nil {
+		return "", err
+	}
+	if a.partnerOf(o.ID) != nil || findResource(&st, setup.KindPartner, o.ID) != nil {
 		return "", invalid("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
 	}
 	sp := setup.Partner{ID: o.ID, Name: orDefault(o.Name, o.ID), LegalName: o.LegalName, Purpose: o.Purpose, RedirectURIs: o.RedirectURIs, WebhookURL: o.WebhookURL}
-	key, err := writeAPIKey(a.cfg.Dir, o.ID)
+	dir := a.cfg.Path("partners", o.ID)
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(dir)
+		}
+	}()
+	key, err = writeAPIKey(a.cfg.Dir, o.ID)
 	if err != nil {
 		return "", err
 	}
@@ -59,15 +76,29 @@ func (a *App) AddPartner(req PartnerRequest) (string, error) {
 	return key, nil
 }
 
-func (a *App) RotatePartner(id string) (string, error) {
+func (a *App) RotatePartner(id string) (key string, err error) {
+	if !a.partnerMu.TryLock() {
+		return "", errPartnerBusy
+	}
+	defer a.partnerMu.Unlock()
 	cur := a.partnerOf(id)
 	if cur == nil {
 		return "", errNotFound
 	}
-	if err := os.Remove(a.cfg.Path("partners", id, "client.crt")); err != nil && !errors.Is(err, os.ErrNotExist) {
+	dir := a.cfg.Path("partners", id)
+	saved, err := readFiles(dir)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, writeFiles(dir, saved))
+		}
+	}()
+	if err := os.Remove(filepath.Join(dir, "client.crt")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("remove old certificate of %s: %w", id, err)
 	}
-	key, err := writeAPIKey(a.cfg.Dir, id)
+	key, err = writeAPIKey(a.cfg.Dir, id)
 	if err != nil {
 		return "", err
 	}
@@ -89,6 +120,10 @@ func (a *App) RotatePartner(id string) (string, error) {
 }
 
 func (a *App) RemovePartner(id string) error {
+	if !a.partnerMu.TryLock() {
+		return errPartnerBusy
+	}
+	defer a.partnerMu.Unlock()
 	if a.partnerOf(id) == nil {
 		return errNotFound
 	}
@@ -103,6 +138,40 @@ func (a *App) RemovePartner(id string) error {
 	a.replacePartner(id, nil)
 	if err := os.RemoveAll(a.cfg.Path("partners", id)); err != nil {
 		return fmt.Errorf("remove partners/%s: %w", id, err)
+	}
+	return nil
+}
+
+func readFiles(dir string) (map[string][]byte, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	out := map[string][]byte{}
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", e.Name(), err)
+		}
+		out[e.Name()] = raw
+	}
+	return out, nil
+}
+
+func writeFiles(dir string, files map[string][]byte) error {
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("restore %s: %w", dir, err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("restore %s: %w", dir, err)
+	}
+	for name, raw := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
+			return fmt.Errorf("restore %s: %w", name, err)
+		}
 	}
 	return nil
 }

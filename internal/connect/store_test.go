@@ -66,8 +66,8 @@ func TestStoreClaimIsIdempotent(t *testing.T) {
 
 func TestStoreSkipsOlderCopies(t *testing.T) {
 	s := testStore(t)
-	add := func(name string) (setup.Status, uint64) {
-		st, v, err := s.change(func(st *setup.Status) (bool, error) {
+	add := func(name string) uint64 {
+		v, err := s.change(func(st *setup.Status) (bool, error) {
 			r := ensureResource(st, setup.KindBank, "bank-a")
 			r.Owned = append(r.Owned, setup.Owned{Kind: ownedPort, Name: name})
 			return true, nil
@@ -75,18 +75,41 @@ func TestStoreSkipsOlderCopies(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return st, v
+		return v
 	}
-	older, ov := add("1")
-	newer, nv := add("2")
-	if err := s.flush(newer, nv); err != nil {
+	ov := add("1")
+	nv := add("2")
+	if err := s.flush(nv); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.flush(older, ov); err != nil {
+	if err := s.flush(ov); err != nil {
 		t.Fatal(err)
 	}
 	if got := diskStatus(t, s).Resources[0].Owned; len(got) != 2 {
 		t.Fatalf("an older copy overwrote a newer one: %+v", got)
+	}
+}
+
+func TestStoreFlushWritesLatestAfterFailedWrite(t *testing.T) {
+	s := testStore(t)
+	add := func(name string) uint64 {
+		v, err := s.change(func(st *setup.Status) (bool, error) {
+			r := ensureResource(st, setup.KindBank, "bank-a")
+			r.Owned = append(r.Owned, setup.Owned{Kind: ownedPort, Name: name})
+			return true, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	ov := add("1")
+	add("2")
+	if err := s.flush(ov); err != nil {
+		t.Fatal(err)
+	}
+	if got := diskStatus(t, s).Resources[0].Owned; len(got) != 2 {
+		t.Fatalf("an older flush wrote an older state: %+v", got)
 	}
 }
 
