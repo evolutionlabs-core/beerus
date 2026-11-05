@@ -218,7 +218,7 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 	st := a.status[id]
 	prev, prevPhase := b.State, st.Phase
 	b.State, st.Phase, st.Reason = "closed", PhaseClosed, ""
-	saved, v, err := a.recordBanksLocked()
+	saved, v, err := a.recordBanks()
 	if err != nil {
 		b.State, st.Phase = prev, prevPhase
 		a.lifeMu.Unlock()
@@ -232,7 +232,7 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 	if err != nil {
 		a.lifeMu.Lock()
 		b.State, st.Phase = prev, prevPhase
-		saved, v, rerr := a.recordBanksLocked()
+		saved, v, rerr := a.recordBanks()
 		a.lifeMu.Unlock()
 		if rerr == nil {
 			rerr = a.ctl.flush(saved, v)

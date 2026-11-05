@@ -186,7 +186,7 @@ func (a *App) CreateBank(req BankRequest) (*config.Bank, error) {
 	a.mu.Lock()
 	a.cfg.Banks = append(a.cfg.Banks, b)
 	a.mu.Unlock()
-	st, v, err := a.recordBanksLocked()
+	st, v, err := a.recordBanks()
 	if err != nil {
 		a.mu.Lock()
 		a.cfg.Banks = a.cfg.Banks[:len(a.cfg.Banks)-1]
@@ -379,7 +379,7 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 			st.Phase = PhaseSuspended
 		}
 	}
-	saved, v, err := a.recordBanksLocked()
+	saved, v, err := a.recordBanks()
 	if err != nil {
 		b.State, st.Phase = prev, prevPhase
 		a.lifeMu.Unlock()

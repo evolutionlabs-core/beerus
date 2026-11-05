@@ -216,7 +216,7 @@ func (a *App) SetNetDebitCap(id string, cap, collateral int64) error {
 	prevCap, prevCollateral := b.NetDebitCap, b.Collateral
 	b.NetDebitCap, b.Collateral = cap, collateral
 	a.mu.Unlock()
-	st, v, err := a.recordBanksLocked()
+	st, v, err := a.recordBanks()
 	if err != nil {
 		a.mu.Lock()
 		b.NetDebitCap, b.Collateral = prevCap, prevCollateral

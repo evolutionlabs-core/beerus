@@ -285,7 +285,7 @@ func syncBanks(st *setup.Status, banks []config.Bank) (bool, error) {
 	return true, nil
 }
 
-func (a *App) recordBanksLocked() (setup.Status, uint64, error) {
+func (a *App) recordBanks() (setup.Status, uint64, error) {
 	a.mu.Lock()
 	banks := make([]config.Bank, 0, len(a.cfg.Banks))
 	for _, b := range a.cfg.Banks {
