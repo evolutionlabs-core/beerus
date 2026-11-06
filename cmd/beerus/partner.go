@@ -4,13 +4,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/connect"
 )
 
 type multi []string
@@ -47,32 +47,11 @@ func cmdPartner(args []string) error {
 		id, rest = rest[0], rest[1:]
 	}
 	fs.Parse(rest)
-	c, err := config.Load(*dir)
+	c, err := connect.LoadConfig(*dir)
 	if err != nil {
-		return fmt.Errorf("%w (run beerus init or beerus up first)", err)
+		return err
 	}
 	switch sub {
-	case "add":
-		key, err := c.AddPartner(config.PartnerOptions{ID: id, Name: *name, LegalName: *legal, Purpose: *purpose, RedirectURIs: redirects, WebhookURL: *hook})
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Registered %s.\n\n", id)
-		return printCredentials(c, id, key)
-	case "rotate-key":
-		key, err := c.RotatePartner(id)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Issued new credentials for %s. The old API key and certificate stop working once Beerus reloads.\n\n", id)
-		return printCredentials(c, id, key)
-	case "remove":
-		if err := c.RemovePartner(id); err != nil {
-			return err
-		}
-		fmt.Printf("Removed %s. Its key and certificate no longer work.\n", id)
-		reload(c)
-		return nil
 	case "list":
 		if len(c.Partners) == 0 {
 			fmt.Println("No partner apps. Add one with beerus partner add.")
@@ -85,15 +64,48 @@ func cmdPartner(args []string) error {
 		}
 		return w.Flush()
 	}
+	ctl, err := newCtlFor(c)
+	if err != nil {
+		return err
+	}
+	switch sub {
+	case "add":
+		out, err := ctl.do("POST", "/partners", map[string]any{"id": id, "name": *name, "legal_name": *legal, "purpose": *purpose, "redirect_uris": []string(redirects), "webhook_url": *hook})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Registered %s.\n\n", id)
+		return printCredentials(*dir, id, fmt.Sprint(out["api_key"]))
+	case "rotate-key":
+		out, err := ctl.do("POST", "/partners/"+url.PathEscape(id)+"/rotate-key", nil)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Issued new credentials for %s. The old API key and certificate no longer work.\n\n", id)
+		return printCredentials(*dir, id, fmt.Sprint(out["api_key"]))
+	case "remove":
+		if _, err := ctl.do("DELETE", "/partners/"+url.PathEscape(id), nil); err != nil {
+			return err
+		}
+		fmt.Printf("Removed %s. Its key and certificate no longer work.\n", id)
+		return nil
+	}
 	return errors.New(partnerUsage)
 }
 
-func printCredentials(c *config.Config, id, key string) error {
+func printCredentials(dir, id, key string) error {
+	c, err := connect.LoadConfig(dir)
+	if err != nil {
+		return err
+	}
 	k, err := config.WebhookKey(c)
 	if err != nil {
 		return err
 	}
 	p := c.Partner(id)
+	if p == nil {
+		return fmt.Errorf("partner %s is not in the setup", id)
+	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintf(w, "API key\t%s\t(shown once; also in %s)\n", key, c.Path("partners", id, "api-key"))
 	fmt.Fprintf(w, "Partner API\t%s\n", c.PartnerURL())
@@ -103,27 +115,5 @@ func printCredentials(c *config.Config, id, key string) error {
 	fmt.Fprintf(w, "Redirect URIs\t%s\n", strings.Join(p.RedirectURIs, ", "))
 	fmt.Fprintf(w, "Webhook URL\t%s\n", p.WebhookURL)
 	fmt.Fprintf(w, "Webhook public key\t%s\n", k.PublicWH())
-	if err := w.Flush(); err != nil {
-		return err
-	}
-	reload(c)
-	return nil
-}
-
-func reload(c *config.Config) {
-	tok, err := config.ReadSecret(c.Path("control-token"))
-	if err != nil {
-		return
-	}
-	req, _ := http.NewRequest("POST", c.ControlURL()+"/partners/reload", nil)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
-	if err != nil {
-		fmt.Println("\nBeerus is not running; the change applies when you start it.")
-		return
-	}
-	resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		fmt.Println("\nThe running Beerus picked up the change.")
-	}
+	return w.Flush()
 }

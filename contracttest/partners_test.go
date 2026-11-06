@@ -2,11 +2,14 @@ package contracttest
 
 import (
 	"crypto/tls"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/connect"
 )
 
 func partnerClient(t *testing.T, s *Stack, id string) *http.Client {
@@ -39,21 +42,13 @@ func TestPartnerLifecycle(t *testing.T) {
 	oldClient := partnerClient(t, s, "balance")
 	oldKey := s.apiKey
 
-	cfg, err := config.Load(s.cfg.Dir)
-	if err != nil {
-		t.Fatal(err)
+	otherKey := fmt.Sprint(s.ctl("POST", "/partners", map[string]any{"id": "ledgerly", "redirect_uris": []string{"https://ledgerly.localhost/cb"}})["api_key"])
+	if _, err := s.ctlTry("POST", "/partners", map[string]any{"id": "ledgerly", "redirect_uris": []string{"https://x.localhost/cb"}}); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("a duplicate partner was accepted: %v", err)
 	}
-	otherKey, err := cfg.AddPartner(config.PartnerOptions{ID: "ledgerly", RedirectURIs: []string{"https://ledgerly.localhost/cb"}})
-	if err != nil {
-		t.Fatal(err)
+	if _, err := s.ctlTry("POST", "/partners", map[string]any{"id": "Bad ID", "redirect_uris": []string{"https://x.localhost/cb"}}); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
+		t.Fatalf("an invalid partner ID was accepted: %v", err)
 	}
-	if _, err := cfg.AddPartner(config.PartnerOptions{ID: "ledgerly", RedirectURIs: []string{"https://x.localhost/cb"}}); err == nil {
-		t.Fatal("a duplicate partner was accepted")
-	}
-	if _, err := cfg.AddPartner(config.PartnerOptions{ID: "Bad ID", RedirectURIs: []string{"https://x.localhost/cb"}}); err == nil {
-		t.Fatal("an invalid partner ID was accepted")
-	}
-	s.ctl("POST", "/partners/reload", nil)
 	other := partnerClient(t, s, "ledgerly")
 	if code := rawGet(t, s, other, otherKey, "/v1/webhook_keys"); code != 200 {
 		t.Fatalf("a newly added partner got %d", code)
@@ -65,11 +60,7 @@ func TestPartnerLifecycle(t *testing.T) {
 		t.Fatalf("Balance's key with another partner's certificate got %d", code)
 	}
 
-	newKey, err := cfg.RotatePartner("balance")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.ctl("POST", "/partners/reload", nil)
+	newKey := fmt.Sprint(s.ctl("POST", "/partners/balance/rotate-key", nil)["api_key"])
 	if code := rawGet(t, s, oldClient, oldKey, "/v1/webhook_keys"); code == 200 {
 		t.Fatal("the old key and certificate still work after rotation")
 	}
@@ -80,10 +71,14 @@ func TestPartnerLifecycle(t *testing.T) {
 		t.Fatalf("the new credentials got %d", code)
 	}
 
-	if err := cfg.RemovePartner("ledgerly"); err != nil {
+	s.ctl("DELETE", "/partners/ledgerly", nil)
+	saved, err := connect.LoadConfig(s.cfg.Dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	s.ctl("POST", "/partners/reload", nil)
+	if saved.Partner("ledgerly") != nil || saved.Partner("balance").APIKeySHA256 != config.HashKey(newKey) {
+		t.Fatal("the partner changes were not saved")
+	}
 	if code := rawGet(t, s, other, otherKey, "/v1/webhook_keys"); code == 200 {
 		t.Fatal("a removed partner still has access")
 	}

@@ -19,8 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"go.yaml.in/yaml/v3"
-
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -126,7 +124,6 @@ type Holidays struct {
 type Config struct {
 	DatabaseURL string     `yaml:"database_url"`
 	Banks       []*Bank    `yaml:"banks,omitempty"`
-	MaxBanks    int        `yaml:"max_banks,omitempty"`
 	NIPSessions int        `yaml:"nip_sessions,omitempty"`
 	Ports       Ports      `yaml:"ports,omitempty"`
 	Seed        int64      `yaml:"seed"`
@@ -136,10 +133,8 @@ type Config struct {
 	Partners    []*Partner `yaml:"partners"`
 	Holidays    *Holidays  `yaml:"holidays,omitempty"`
 	Dir         string     `yaml:"-"`
+	Start       time.Time  `yaml:"-"`
 	calendar    *clock.Calendar
-
-	savedDatabaseURL string
-	databaseFromEnv  bool
 }
 
 const DatabaseURLEnv = "BEERUS_DATABASE_URL"
@@ -158,7 +153,7 @@ func (c *Config) buildCalendar() error {
 		for _, s := range list {
 			d, err := clock.ParseDate(s)
 			if err != nil {
-				return nil, fmt.Errorf("beerus.yaml: holidays.%s: %q is not a date (use YYYY-MM-DD)", name, s)
+				return nil, fmt.Errorf("holidays.%s: %q is not a date (use YYYY-MM-DD)", name, s)
 			}
 			out = append(out, d)
 		}
@@ -188,7 +183,7 @@ func (c *Config) Sessions() int {
 func (c *Config) validateSessions() error {
 	n := c.Sessions()
 	if n < 1 || 24*60%n != 0 {
-		return fmt.Errorf("beerus.yaml: nip_sessions must be a whole number of sessions that divides a day into whole minutes, such as 1, 2, 4, 6, 12 or 24, not %d", n)
+		return fmt.Errorf("nip sessions must be a whole number of sessions that divides a day into whole minutes, such as 1, 2, 4, 6, 12 or 24, not %d", n)
 	}
 	return nil
 }
@@ -269,58 +264,20 @@ func HashKey(key string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func Load(dir string) (*Config, error) {
-	b, err := os.ReadFile(filepath.Join(dir, "beerus.yaml"))
-	if err != nil {
-		return nil, err
-	}
-	c := &Config{}
-	if err := yaml.Unmarshal(b, c); err != nil {
-		return nil, fmt.Errorf("beerus.yaml: %w", err)
-	}
-	c.Dir = dir
-	if u := os.Getenv(DatabaseURLEnv); u != "" {
-		if c.DatabaseURL != u {
-			c.savedDatabaseURL = c.DatabaseURL
-		}
-		c.DatabaseURL, c.databaseFromEnv = u, true
-	}
-	if c.Seed == 0 {
-		return nil, errors.New("beerus.yaml: seed is required")
-	}
+func (c *Config) Finish() error {
 	if _, err := c.GenesisDate(); err != nil {
-		return nil, fmt.Errorf("beerus.yaml: genesis: %w", err)
+		return fmt.Errorf("genesis: %w", err)
 	}
 	if err := c.validateSessions(); err != nil {
-		return nil, err
+		return err
 	}
 	if err := c.validatePorts(); err != nil {
-		return nil, err
+		return err
 	}
 	if c.Pace <= 0 {
 		c.Pace = 1
 	}
-	if err := c.buildCalendar(); err != nil {
-		return nil, err
-	}
-	return c, nil
-}
-
-func (c *Config) Save() error {
-	out := *c
-	if c.databaseFromEnv {
-		out.DatabaseURL = c.savedDatabaseURL
-	}
-	b, err := yaml.Marshal(&out)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(c.Path("beerus.yaml"), b, 0o600)
-}
-
-func Exists(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "beerus.yaml"))
-	return err == nil
+	return c.buildCalendar()
 }
 
 func randomToken(prefix string, n int) (string, error) {
@@ -331,94 +288,55 @@ func randomToken(prefix string, n int) (string, error) {
 	return prefix + strings.TrimRight(base64.RawURLEncoding.EncodeToString(b), "="), nil
 }
 
-type InitOptions struct {
-	Seed        int64
-	Today       clock.Date
-	PartnerPort int
-	WidgetPort  int
-	ControlPort int
-	HealthPort  int
-	BankPort    int
-	BankPorts   []int
-	APIPorts    []int
-}
-
-func Init(dir string, o InitOptions) (*Config, error) {
-	if Exists(dir) {
-		return nil, fmt.Errorf("%s already holds a Beerus setup", dir)
-	}
+func Prepare(c *Config) error {
 	for _, sub := range []string{"ca", "connect", "partners", "webhook", "snapshots"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
-			return nil, err
-		}
-	}
-	if o.Seed == 0 {
-		o.Seed = 20261028
-	}
-	if o.PartnerPort == 0 {
-		o.PartnerPort = 7443
-	}
-	if o.WidgetPort == 0 {
-		o.WidgetPort = 7444
-	}
-	if o.ControlPort == 0 {
-		o.ControlPort = 7480
-	}
-	if o.HealthPort == 0 {
-		o.HealthPort = 7490
-	}
-	if o.BankPort == 0 {
-		o.BankPort = 7445
-	}
-	c := &Config{
-		Dir:     dir,
-		Seed:    o.Seed,
-		Genesis: o.Today.AddDays(-760).String(),
-		Pace:    1,
-		Connect: Connect{
-			Host:         "connect.localhost",
-			PartnerPort:  o.PartnerPort,
-			WidgetPort:   o.WidgetPort,
-			ControlPort:  o.ControlPort,
-			HealthPort:   o.HealthPort,
-			LegalName:    "Beerus Connect Limited",
-			BrandName:    "Beerus Connect",
-			RegistryID:   "OBR-T2-000001",
-			CACNumber:    "RC 0000001",
-			SyncInterval: "1m",
-			RefreshEvery: "1m",
-		},
-	}
-	c.Banks = []*Bank{
-		{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "999001", NUBANCode: "901", HistoryDays: 730, Port: o.BankPort, Database: DatabaseName(dir, "bank-a")},
-		{ID: "bank-b", Name: "Bank B", Type: "digital", NIPCode: "999002", NUBANCode: "902", HistoryDays: 180, Port: o.BankPort + 1, Database: DatabaseName(dir, "bank-b")},
-	}
-	if len(o.BankPorts) == 2 {
-		c.Banks[0].Port, c.Banks[1].Port = o.BankPorts[0], o.BankPorts[1]
-	}
-	for i, b := range c.Banks {
-		b.APIPort = b.Port + c.APIPortOffset()
-		if len(o.APIPorts) == len(c.Banks) {
-			b.APIPort = o.APIPorts[i]
+		if err := os.MkdirAll(c.Path(sub), 0o700); err != nil {
+			return fmt.Errorf("create %s: %w", sub, err)
 		}
 	}
 	if err := c.EnsureCertificates(); err != nil {
-		return nil, err
+		return fmt.Errorf("issue certificates: %w", err)
 	}
 	if _, err := WebhookKey(c); err != nil {
-		return nil, err
+		return fmt.Errorf("webhook key: %w", err)
+	}
+	if _, err := os.Stat(c.Path("control-token")); err == nil {
+		return nil
 	}
 	token, err := randomToken("ctl_", 24)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("control token: %w", err)
 	}
-	if err := os.WriteFile(c.Path("control-token"), []byte(token+"\n"), 0o600); err != nil {
-		return nil, err
+	if err := WriteSecret(c.Path("control-token"), token+"\n"); err != nil {
+		return fmt.Errorf("control token: %w", err)
 	}
-	if err := c.Save(); err != nil {
-		return nil, err
+	return nil
+}
+
+func NewAPIKey() (string, error) {
+	return randomToken("bk_test_", 24)
+}
+
+func WriteSecret(path, body string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
 	}
-	return c, nil
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if _, err := tmp.WriteString(body); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 const (
@@ -644,15 +562,12 @@ type PartnerOptions struct {
 	WebhookURL   string
 }
 
-func (c *Config) AddPartner(o PartnerOptions) (string, error) {
+func (o PartnerOptions) Check() error {
 	if !partnerID.MatchString(o.ID) {
-		return "", errors.New("partner ID must be lowercase letters, digits and dashes, up to 40 characters")
-	}
-	if c.Partner(o.ID) != nil {
-		return "", fmt.Errorf("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
+		return errors.New("partner ID must be lowercase letters, digits and dashes, up to 40 characters")
 	}
 	if len(o.RedirectURIs) == 0 {
-		return "", errors.New("at least one redirect URI is required")
+		return errors.New("at least one redirect URI is required")
 	}
 	for _, u := range append(append([]string{}, o.RedirectURIs...), o.WebhookURL) {
 		if u == "" {
@@ -660,71 +575,8 @@ func (c *Config) AddPartner(o PartnerOptions) (string, error) {
 		}
 		parsed, err := url.Parse(u)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return "", fmt.Errorf("%q is not an http or https URL", u)
+			return fmt.Errorf("%q is not an http or https URL", u)
 		}
 	}
-	if o.Name == "" {
-		o.Name = o.ID
-	}
-	if o.LegalName == "" {
-		o.LegalName = o.Name
-	}
-	if o.Purpose == "" {
-		o.Purpose = "to read your account details, balances and transactions"
-	}
-	key, err := randomToken("bk_test_", 24)
-	if err != nil {
-		return "", err
-	}
-	p := &Partner{ID: o.ID, Name: o.Name, LegalName: o.LegalName, Purpose: o.Purpose, CertCN: o.ID, APIKeySHA256: HashKey(key), RedirectURIs: o.RedirectURIs, WebhookURL: o.WebhookURL}
-	if err := os.MkdirAll(c.Path("partners", o.ID), 0o700); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(c.Path("partners", o.ID, "api-key"), []byte(key+"\n"), 0o600); err != nil {
-		return "", err
-	}
-	c.Partners = append(c.Partners, p)
-	if err := c.EnsureCertificates(); err != nil {
-		return "", err
-	}
-	return key, c.Save()
-}
-
-func (c *Config) RotatePartner(id string) (string, error) {
-	p := c.Partner(id)
-	if p == nil {
-		return "", fmt.Errorf("no partner %s", id)
-	}
-	key, err := randomToken("bk_test_", 24)
-	if err != nil {
-		return "", err
-	}
-	if err := os.Remove(c.Path("partners", id, "client.crt")); err != nil && !os.IsNotExist(err) {
-		return "", err
-	}
-	if err := os.WriteFile(c.Path("partners", id, "api-key"), []byte(key+"\n"), 0o600); err != nil {
-		return "", err
-	}
-	p.APIKeySHA256 = HashKey(key)
-	if err := c.EnsureCertificates(); err != nil {
-		return "", err
-	}
-	return key, c.Save()
-}
-
-func (c *Config) RemovePartner(id string) error {
-	if c.Partner(id) == nil {
-		return fmt.Errorf("no partner %s", id)
-	}
-	keep := c.Partners[:0]
-	for _, p := range c.Partners {
-		if p.ID != id {
-			keep = append(keep, p)
-		}
-	}
-	c.Partners = keep
-	if err := c.Save(); err != nil {
-		return err
-	}
-	return os.RemoveAll(c.Path("partners", id))
+	return nil
 }

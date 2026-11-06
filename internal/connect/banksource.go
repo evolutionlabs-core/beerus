@@ -14,6 +14,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -26,30 +27,20 @@ type ledgerSource struct {
 	inst    world.Institution
 	marks   map[string]time.Time
 	cfg     *config.Config
+	ctl     *ctlStore
 	settled time.Time
 }
 
-func openLedgerSource(ctx context.Context, cfg *config.Config, b *config.Bank, w *world.World) (*ledgerSource, error) {
+func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, b *config.Bank, w *world.World) (*ledgerSource, error) {
 	inst, ok := w.Institution(b.ID)
 	if !ok {
 		return nil, fmt.Errorf("bank %q is not in the world", b.ID)
-	}
-	if err := cfg.Claim("database", b.Database, b.ID); err != nil {
-		return nil, err
-	}
-	if err := cfg.Claim("port", fmt.Sprint(b.Port), b.ID); err != nil {
-		return nil, err
-	}
-	if b.APIPort != 0 {
-		if err := cfg.Claim("port", fmt.Sprint(b.APIPort), b.ID); err != nil {
-			return nil, err
-		}
 	}
 	st, err := store.Open(ctx, cfg.DatabaseURL, b.Database, openbanking.Migrate)
 	if err != nil {
 		return nil, err
 	}
-	s := &ledgerSource{ctx: ctx, st: st, w: w, inst: inst, cfg: cfg, marks: map[string]time.Time{}}
+	s := &ledgerSource{ctx: ctx, st: st, w: w, inst: inst, cfg: cfg, ctl: ctl, marks: map[string]time.Time{}}
 	if err := s.setup(); err != nil {
 		st.Close()
 		return nil, err
@@ -208,7 +199,7 @@ func snapID(id string) string {
 func (s *ledgerSource) Snapshot(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.cfg.Claim("database_snapshot", s.st.Name()+"_snap_"+snapID(id), s.inst.ID); err != nil {
+	if err := s.ctl.Claim(setup.KindBank, s.inst.ID, setup.Owned{Kind: ownedSnapshot, Name: s.snapshotName(id)}); err != nil {
 		return err
 	}
 	if err := s.st.Snapshot(s.ctx, snapID(id)); err != nil {
@@ -220,11 +211,15 @@ func (s *ledgerSource) Snapshot(id string) error {
 func (s *ledgerSource) DropSnapshot(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name := s.st.Name() + "_snap_" + snapID(id)
+	name := s.snapshotName(id)
 	if err := store.DropDatabases(s.ctx, s.st.URL(), []string{name}); err != nil {
 		return err
 	}
-	return s.cfg.Release("database_snapshot", name)
+	return s.ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name})
+}
+
+func (s *ledgerSource) snapshotName(id string) string {
+	return s.st.Name() + "_snap_" + snapID(id)
 }
 
 func (s *ledgerSource) HasSnapshot(id string) (bool, error) {
@@ -286,6 +281,7 @@ func (a *App) DropBankDatabases() error {
 	if a.rtgs != nil {
 		errs = append(errs, a.rtgs.Drop())
 	}
+	errs = append(errs, a.dropNIBSS())
 	return errors.Join(errs...)
 }
 
@@ -303,7 +299,7 @@ func (s *ledgerSource) Drop() error {
 	if err := s.st.Drop(context.Background()); err != nil {
 		return err
 	}
-	return s.cfg.ReleaseBank(s.inst.ID)
+	return s.ctl.forget(setup.KindBank, s.inst.ID)
 }
 
 type BankCheck struct {

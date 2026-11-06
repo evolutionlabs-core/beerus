@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 type bankBrowser struct {
@@ -166,17 +168,15 @@ func TestEveryDeclaredBankHasOnlineBanking(t *testing.T) {
 	if b.loc != "/accounts" || !strings.Contains(b.last, "Bank B") {
 		t.Fatalf("Bank B sign-in ended at %s", b.loc)
 	}
-	man, err := s.cfg.Manifest()
-	if err != nil {
-		t.Fatal(err)
-	}
 	dbs := 0
-	for _, r := range man.Resources {
-		if r.Kind == "database" && r.Bank != "" {
-			dbs++
+	for _, b := range s.cfg.Banks {
+		for _, o := range s.owned(setup.KindBank, b.ID) {
+			if o.Kind == "database" {
+				dbs++
+			}
 		}
 	}
 	if dbs != 2 {
-		t.Fatalf("manifest lists %d bank databases: %+v", dbs, man.Resources)
+		t.Fatalf("the status store lists %d bank databases", dbs)
 	}
 }

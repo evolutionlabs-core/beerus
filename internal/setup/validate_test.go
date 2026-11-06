@@ -49,6 +49,8 @@ func TestValidateRules(t *testing.T) {
 		{"no banks", func(s *Spec) { s.Spec.Banks = nil }, []string{"banks is empty. Add at least one bank."}},
 		{"no bank id", func(s *Spec) { s.Spec.Banks[1].ID = "" }, []string{"banks[1].id is required. Use 2 to 31 lowercase letters, digits or hyphens, starting with a letter."}},
 		{"bad bank id", func(s *Spec) { s.Spec.Banks[1].ID = "Bank_B" }, []string{`banks[Bank_B].id "Bank_B" is not valid. Use 2 to 31 lowercase letters, digits or hyphens, starting with a letter.`}},
+		{"cbn as a bank id", func(s *Spec) { s.Spec.Banks[1].ID = "cbn" }, []string{"banks[cbn].id cbn is reserved for the CBN. Choose another id."}},
+		{"nibss as a bank id", func(s *Spec) { s.Spec.Banks[1].ID = "nibss" }, []string{"banks[nibss].id nibss is reserved for the NIBSS. Choose another id."}},
 		{"no bank name", func(s *Spec) { s.Spec.Banks[0].Name = "" }, []string{"banks[bank-a].name is required. Add the bank's name."}},
 		{"same name in another case", func(s *Spec) { s.Spec.Banks[1].Name = "BANK A" }, []string{`banks[bank-b].name "BANK A" is already used by bank-a. Give each bank its own name.`}},
 		{"no type", func(s *Spec) { s.Spec.Banks[0].Type = "" }, []string{"banks[bank-a].type is required. Use commercial, digital or microfinance."}},

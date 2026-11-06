@@ -11,7 +11,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 )
 
@@ -33,7 +32,7 @@ func TestNIPSettlement(t *testing.T) {
 	}
 	s := newBankStack(t)
 	first := checkSettled(t, s.app)
-	if first.Sessions == 0 || time.Since(first.SettledThrough) > 4*24*time.Hour {
+	if first.Sessions == 0 || s.app.Clock().Now().Sub(first.SettledThrough) > 4*24*time.Hour {
 		t.Fatalf("settlement after start-up: %+v", first)
 	}
 	w := s.app.World()
@@ -90,10 +89,7 @@ func TestNIPSessionsCannotChangeOnALiveSetup(t *testing.T) {
 	}
 	s := newBankStack(t)
 	checkSettled(t, s.app)
-	cfg, err := config.Load(s.cfg.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := s.loadConfig()
 	cfg.NIPSessions = 12
 	if _, err := connect.New(cfg, connect.Options{}); err == nil || !strings.Contains(err.Error(), "nip_sessions must stay 4") {
 		t.Fatalf("starting with a different schedule: %v", err)
@@ -111,7 +107,7 @@ func TestSettlementCheckDoesNotTrustTheBooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	at := time.Now()
+	at := s.app.Clock().Now()
 	_, err = ledger.New(st.Pool, nil).Post(context.Background(), ledger.Entry{
 		Key: "tamper", Kind: "feed", PostingDate: clock.DateOf(at), PostedAt: at, Narration: "Tamper",
 		Lines: []ledger.Line{{Account: bank.Vault, Amount: 100}, {Account: bank.NIPInward, Amount: -100}},

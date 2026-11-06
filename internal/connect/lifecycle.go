@@ -8,40 +8,44 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
-	PhaseProvisioning  = "provisioning"
-	PhaseActive        = "active"
-	PhaseSuspended     = "suspended"
-	PhaseRepairing     = "repairing"
-	PhaseClosed        = "closed"
+	PhaseProvisioning  = setup.PhaseProvisioning
+	PhaseActive        = setup.PhaseActive
+	PhaseSuspended     = setup.PhaseSuspended
+	PhaseRepairing     = setup.PhaseRepairing
+	PhaseClosing       = setup.PhaseClosing
+	PhaseClosed        = setup.PhaseClosed
+	PhaseTerminating   = setup.PhaseTerminating
 	driftEvery         = 5 * time.Second
-	defaultMaxBanks    = 6
 	connectionsPerBank = 8
 )
 
 var (
-	ErrBankInvalid = errors.New("invalid bank")
-	slugRe         = regexp.MustCompile(`[^a-z0-9]+`)
-	idRe           = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
-	databaseRe     = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
-	stepNames      = []string{"Record in manifest", "Register the bank", "Create database and ledger", "Start online banking", "Health check"}
-	bankTypes      = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
+	typeHistoryDays = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
+	ErrBankInvalid  = errors.New("invalid bank")
+	slugRe          = regexp.MustCompile(`[^a-z0-9]+`)
+	idRe            = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
+	databaseRe      = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 )
 
 type BankStep struct {
-	Name  string    `json:"name"`
-	Done  bool      `json:"done"`
-	Error string    `json:"error,omitempty"`
-	At    time.Time `json:"at,omitempty"`
+	ID    string     `json:"id"`
+	Name  string     `json:"name"`
+	Done  bool       `json:"done"`
+	Error string     `json:"error,omitempty"`
+	At    *time.Time `json:"at,omitempty"`
 }
 
 type BankStatus struct {
@@ -51,41 +55,14 @@ type BankStatus struct {
 	Reason string     `json:"reason,omitempty"`
 	URL    string     `json:"online_banking"`
 	Steps  []BankStep `json:"steps"`
+
+	Attempts      int        `json:"attempts,omitempty"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 }
 
 type siteServer struct {
 	srv *http.Server
 	api *http.Server
-}
-
-func newStatus(b *config.Bank, done bool) *BankStatus {
-	st := &BankStatus{ID: b.ID, Name: b.Name, Phase: PhaseProvisioning, URL: b.URL()}
-	for _, n := range stepNames {
-		st.Steps = append(st.Steps, BankStep{Name: n, Done: done})
-	}
-	if done {
-		st.Phase = PhaseActive
-		if b.Suspended() {
-			st.Phase = PhaseSuspended
-		}
-	}
-	if b.Closed() {
-		st.Phase = PhaseClosed
-	}
-	return st
-}
-
-func (a *App) initLifecycle() {
-	if raw, err := os.ReadFile(a.cfg.Path("beerus.yaml")); err == nil {
-		a.cfgSum = config.HashKey(string(raw))
-	}
-	a.status = map[string]*BankStatus{}
-	a.sites = map[string]*siteServer{}
-	a.strikes = map[string]int{}
-	for _, b := range a.cfg.Banks {
-		a.status[b.ID] = newStatus(b, a.worldOnly || a.ledgerFor(b.ID) != nil)
-		a.alignSuspensionLocked(b)
-	}
 }
 
 func (a *App) alignSuspensionLocked(b *config.Bank) {
@@ -146,22 +123,6 @@ func (a *App) warn(format string, args ...any) {
 	a.log.Warn(msg)
 }
 
-func (a *App) saveBanksLocked() error {
-	disk, err := config.Load(a.cfg.Dir)
-	if err != nil {
-		disk = a.cfg
-	} else {
-		disk.Banks = a.cfg.Banks
-	}
-	if err := disk.Save(); err != nil {
-		return err
-	}
-	if raw, err := os.ReadFile(a.cfg.Path("beerus.yaml")); err == nil {
-		a.cfgSum = config.HashKey(string(raw))
-	}
-	return nil
-}
-
 type BankRequest struct {
 	Name           string `json:"name"`
 	ID             string `json:"id"`
@@ -213,24 +174,28 @@ func (a *App) postgresRoom(ctx context.Context) error {
 
 func (a *App) CreateBank(req BankRequest) (*config.Bank, error) {
 	a.lifeMu.Lock()
-	defer a.lifeMu.Unlock()
 	if len(a.cfg.Banks) == 0 {
+		a.lifeMu.Unlock()
 		return nil, invalid("this setup runs the built-in banks without ledgers; create a new setup with beerus init to manage banks")
 	}
 	b, err := a.admit(req, 0, "")
 	if err != nil {
+		a.lifeMu.Unlock()
 		return nil, err
 	}
 	a.mu.Lock()
 	a.cfg.Banks = append(a.cfg.Banks, b)
 	a.mu.Unlock()
-	if err := a.saveBanksLocked(); err != nil {
+	a.status[b.ID] = newStatus(b, false)
+	a.lifeMu.Unlock()
+	if err := a.saveBanks(func() {
 		a.mu.Lock()
-		a.cfg.Banks = a.cfg.Banks[:len(a.cfg.Banks)-1]
+		a.cfg.Banks = slices.DeleteFunc(slices.Clone(a.cfg.Banks), func(x *config.Bank) bool { return x == b })
 		a.mu.Unlock()
+		delete(a.status, b.ID)
+	}); err != nil {
 		return nil, err
 	}
-	a.status[b.ID] = newStatus(b, false)
 	a.poke()
 	return b, nil
 }
@@ -260,22 +225,12 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 	if typ == "" {
 		typ = "commercial"
 	}
-	days, ok := bankTypes[typ]
+	days, ok := typeHistoryDays[typ]
 	if !ok {
 		return nil, invalid("type must be commercial, digital or microfinance")
 	}
-	if req.HistoryDays > 0 {
-		if req.HistoryDays > world.MaxHistoryDays {
-			return nil, invalid("history_days must be at most %d", world.MaxHistoryDays)
-		}
-		days = req.HistoryDays
-	}
-	max := a.cfg.MaxBanks
-	if max == 0 {
-		max = defaultMaxBanks
-	}
-	if len(a.cfg.Banks) >= max {
-		return nil, invalid("this setup already has %d banks, the limit set by max_banks", max)
+	if req.HistoryDays != 0 {
+		return nil, invalid("history_days can no longer be set; it follows the bank type")
 	}
 	usedNIP, usedNUBAN := map[string]bool{}, map[string]bool{}
 	markNUBAN := func(code string) {
@@ -292,21 +247,6 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 		}
 		usedNIP[p.NIPCode] = true
 		markNUBAN(p.NUBANCode)
-	}
-	declared := map[string]bool{}
-	for _, b := range a.cfg.Banks {
-		declared[b.NIPCode] = true
-	}
-	reservedNIP := map[string]bool{}
-	for _, o := range world.CounterpartyBanks() {
-		if declared[o.NIPCode] {
-			continue
-		}
-		reservedNIP[o.NIPCode] = true
-		markNUBAN(o.NIPCode)
-		if strings.EqualFold(o.Name, name) || strings.Trim(slugRe.ReplaceAllString(strings.ToLower(o.Name), "-"), "-") == id {
-			return nil, invalid("%q is the name of an outside bank that transfers already use", o.Name)
-		}
 	}
 	usedPort := map[int]bool{a.cfg.Connect.PartnerPort: true, a.cfg.Connect.WidgetPort: true, a.cfg.Connect.ControlPort: true, a.cfg.Connect.HealthPort: true}
 	maxPort := 0
@@ -326,26 +266,37 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 			maxPort = b.Port
 		}
 	}
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return nil, fmt.Errorf("load simulator code ranges: %w", err)
+	}
+	codes := pack.SimulatorCodes
 	nip := req.NIPCode
 	if nip == "" {
-		for n := 999005; n < 999999; n++ {
+		for n := codes.NIP.First; n <= codes.NIP.Last; n++ {
 			c := strconv.Itoa(n)
-			if !usedNIP[c] && !reservedNIP[c] {
+			if !usedNIP[c] {
 				nip = c
 				break
 			}
 		}
-	} else if !regexp.MustCompile(`^\d{6}$`).MatchString(nip) || usedNIP[nip] || reservedNIP[nip] {
+		if nip == "" {
+			return nil, invalid("all NIP codes from %d to %d are taken. Set nip_code by hand, or purge a bank", codes.NIP.First, codes.NIP.Last)
+		}
+	} else if !regexp.MustCompile(`^\d{6}$`).MatchString(nip) || usedNIP[nip] {
 		return nil, invalid("nip_code %q must be 6 digits and not already used", nip)
 	}
 	nuban := req.NUBANCode
 	if nuban == "" {
-		for n := 903; n < 999; n++ {
+		for n := codes.NUBAN.First; n <= codes.NUBAN.Last; n++ {
 			c := strconv.Itoa(n)
 			if norm, _ := world.NormaliseBankCode(c); !usedNUBAN[norm] {
 				nuban = c
 				break
 			}
+		}
+		if nuban == "" {
+			return nil, invalid("all NUBAN codes from %d to %d are taken. Set nuban_code by hand, or purge a bank", codes.NUBAN.First, codes.NUBAN.Last)
 		}
 	} else if norm, err := world.NormaliseBankCode(nuban); err != nil || (len(nuban) == 6 && nuban[0] != '9') || usedNUBAN[norm] {
 		return nil, invalid("nuban_code %q must be 3 digits, or 5 or 6 digits starting with 9, and not already used", nuban)
@@ -415,119 +366,21 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 			st.Phase = PhaseSuspended
 		}
 	}
-	if err := a.saveBanksLocked(); err != nil {
-		b.State, st.Phase = prev, prevPhase
-		a.lifeMu.Unlock()
+	a.lifeMu.Unlock()
+	if err := a.saveBanks(func() { b.State, st.Phase = prev, prevPhase }); err != nil {
 		return err
 	}
-	a.lifeMu.Unlock()
 	a.mu.Lock()
 	a.alignSuspensionLocked(b)
 	a.mu.Unlock()
 	a.poke()
-	return nil
-}
-
-func (a *App) step(st *BankStatus, i int, run func() error) bool {
 	a.lifeMu.Lock()
-	done := st.Steps[i].Done
+	phase := st.Phase
 	a.lifeMu.Unlock()
-	if done {
-		return true
+	if phase == PhaseActive || phase == PhaseSuspended {
+		a.recordPhase(id, phase)
 	}
-	err := run()
-	a.lifeMu.Lock()
-	defer a.lifeMu.Unlock()
-	st.Steps[i].At = a.clock.Real()
-	if err != nil {
-		st.Steps[i].Error = err.Error()
-		return false
-	}
-	st.Steps[i].Done, st.Steps[i].Error = true, ""
-	return true
-}
-
-func (a *App) reconcileBanks() {
-	if a.worldOnly {
-		return
-	}
-	a.watchConfig()
-	a.checkDrift()
-	a.lifeMu.Lock()
-	pending := []*config.Bank{}
-	for _, b := range a.cfg.Banks {
-		if st := a.status[b.ID]; st != nil && (st.Phase == PhaseProvisioning || st.Phase == PhaseRepairing) {
-			pending = append(pending, b)
-		}
-	}
-	a.lifeMu.Unlock()
-	for _, b := range pending {
-		a.provision(b)
-	}
-}
-
-func (a *App) provision(b *config.Bank) {
-	a.lifeMu.Lock()
-	st := a.status[b.ID]
-	a.lifeMu.Unlock()
-	ok := a.step(st, 0, func() error {
-		if err := a.cfg.Claim("database", b.Database, b.ID); err != nil {
-			return err
-		}
-		if err := a.cfg.Claim("port", strconv.Itoa(b.APIPort), b.ID); err != nil {
-			return err
-		}
-		return a.cfg.Claim("port", strconv.Itoa(b.Port), b.ID)
-	}) && a.step(st, 1, func() error {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		return a.world.AddInstitution(world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: b.Stable(), Style: b.Style()})
-	}) && a.step(st, 2, func() error {
-		a.mu.Lock()
-		have := a.ledgerFor(b.ID) != nil
-		a.mu.Unlock()
-		if have {
-			return nil
-		}
-		ls, err := openLedgerSource(context.Background(), a.cfg, b, a.world)
-		if err != nil {
-			return err
-		}
-		a.mu.Lock()
-		a.addLedger(ls)
-		a.mu.Unlock()
-		return nil
-	}) && a.step(st, 3, func() error {
-		return a.startBankSite(b)
-	}) && a.step(st, 4, func() error {
-		a.lifeMu.Lock()
-		serving := a.serving
-		a.lifeMu.Unlock()
-		if !serving {
-			return nil
-		}
-		c := &http.Client{Timeout: 5 * time.Second}
-		resp, err := c.Get(a.siteProbeURL(b))
-		if err != nil {
-			return err
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK && !(b.Suspended() && resp.StatusCode == http.StatusServiceUnavailable) {
-			return fmt.Errorf("online banking answered %d", resp.StatusCode)
-		}
-		return nil
-	})
-	if ok {
-		a.lifeMu.Lock()
-		st.Phase, st.Reason = PhaseActive, ""
-		if b.Suspended() {
-			st.Phase = PhaseSuspended
-		}
-		a.lifeMu.Unlock()
-		a.mu.Lock()
-		a.alignSuspensionLocked(b)
-		a.mu.Unlock()
-	}
+	return a.setMemberStatus(id, memberStatus(b))
 }
 
 func (a *App) startBankSite(b *config.Bank) error {
@@ -629,196 +482,6 @@ func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool)
 	writeJSON(w, http.StatusOK, st)
 }
 
-func (a *App) watchConfig() {
-	if a.cfg.Dir == "" || time.Since(a.watched) < time.Second {
-		return
-	}
-	a.watched = time.Now()
-	raw, err := os.ReadFile(a.cfg.Path("beerus.yaml"))
-	if err != nil {
-		return
-	}
-	sum := config.HashKey(string(raw))
-	a.lifeMu.Lock()
-	same := sum == a.cfgSum
-	a.lifeMu.Unlock()
-	if !same {
-		a.applyConfig(sum)
-	}
-}
-
-func (a *App) applyConfig(sum string) {
-	disk, err := config.Load(a.cfg.Dir)
-	a.lifeMu.Lock()
-	a.cfgSum = sum
-	a.warnings = nil
-	if err != nil {
-		a.warn("beerus.yaml was not applied: %v", err)
-		a.lifeMu.Unlock()
-		return
-	}
-	if len(a.cfg.Banks) == 0 {
-		a.lifeMu.Unlock()
-		return
-	}
-	a.cfg.MaxBanks = disk.MaxBanks
-	known := map[string]*config.Bank{}
-	for _, b := range a.cfg.Banks {
-		known[b.ID] = b
-	}
-	seen := map[string]bool{}
-	suspend := map[string]bool{}
-	rewrite := false
-	for _, fb := range disk.Banks {
-		seen[fb.ID] = true
-		cur := known[fb.ID]
-		if cur == nil {
-			b, err := a.admit(BankRequest{Name: fb.Name, ID: fb.ID, Type: fb.Type, NIPCode: fb.NIPCode, NUBANCode: fb.NUBANCode, HistoryDays: fb.HistoryDays, SettlesThrough: fb.SettlesThrough}, fb.Port, fb.Database)
-			if err != nil {
-				a.warn("%s in beerus.yaml was not added: %s", fb.ID, strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
-				rewrite = true
-				continue
-			}
-			b.State = fb.State
-			a.mu.Lock()
-			a.cfg.Banks = append(a.cfg.Banks, b)
-			a.mu.Unlock()
-			a.status[b.ID] = newStatus(b, false)
-			rewrite = true
-			continue
-		}
-		switch {
-		case cur.Closed() && !fb.Closed():
-			a.warn("%s is closed and cannot be reopened; the edit was undone", fb.ID)
-			rewrite = true
-		case !cur.Closed() && fb.Closed():
-			a.warn("%s cannot be closed from beerus.yaml; use beerus bank close, which decides what happens to its customers' money", fb.ID)
-			rewrite = true
-		case cur.Suspended() != fb.Suspended():
-			suspend[fb.ID] = fb.Suspended()
-		}
-		if fb.NetDebitCap != cur.NetDebitCap || fb.Collateral != cur.Collateral {
-			a.mu.Lock()
-			cur.NetDebitCap, cur.Collateral = fb.NetDebitCap, fb.Collateral
-			a.mu.Unlock()
-		}
-		if fb.Name != cur.Name || fb.Type != cur.Type || fb.NIPCode != cur.NIPCode || fb.NUBANCode != cur.NUBANCode || fb.HistoryDays != cur.HistoryDays || fb.Port != cur.Port || (fb.APIPort != 0 && fb.APIPort != cur.APIPort) || fb.Database != cur.Database || fb.SettlesThrough != cur.SettlesThrough {
-			a.warn("only the state of %s can be changed in beerus.yaml; other edits were undone", fb.ID)
-			rewrite = true
-		}
-	}
-	for _, b := range a.cfg.Banks {
-		if !seen[b.ID] {
-			a.warn("%s was removed from beerus.yaml, but banks are removed with beerus bank purge; it was put back", b.ID)
-			rewrite = true
-		}
-	}
-	if rewrite {
-		if err := a.saveBanksLocked(); err != nil {
-			a.warn("beerus.yaml could not be saved: %v", err)
-		}
-	}
-	a.lifeMu.Unlock()
-	for id, s := range suspend {
-		if err := a.SetBankSuspended(id, s); err != nil {
-			a.lifeMu.Lock()
-			a.warn("%s: %v", id, err)
-			a.lifeMu.Unlock()
-		}
-	}
-	a.poke()
-}
-
-func (a *App) checkDrift() {
-	if time.Since(a.driftAt) < driftEvery && !a.driftDue.Swap(false) {
-		return
-	}
-	a.driftAt = time.Now()
-	a.lifeMu.Lock()
-	serving := a.serving
-	banks := []*config.Bank{}
-	for _, b := range a.cfg.Banks {
-		if st := a.status[b.ID]; st != nil && (st.Phase == PhaseActive || st.Phase == PhaseSuspended) {
-			banks = append(banks, b)
-		}
-	}
-	a.lifeMu.Unlock()
-	if !serving {
-		return
-	}
-	for _, b := range banks {
-		reason, redo := a.probe(b)
-		if reason == "" {
-			delete(a.strikes, b.ID)
-			continue
-		}
-		if a.strikes[b.ID]++; a.strikes[b.ID] < 2 {
-			a.driftDue.Store(true)
-			continue
-		}
-		delete(a.strikes, b.ID)
-		a.detach(b, redo)
-		a.log.Warn("bank drifted; repairing", "bank", b.ID, "reason", reason)
-		a.lifeMu.Lock()
-		st := a.status[b.ID]
-		st.Phase, st.Reason = PhaseRepairing, reason
-		for _, i := range redo {
-			st.Steps[i].Done, st.Steps[i].Error = false, ""
-		}
-		a.lifeMu.Unlock()
-	}
-}
-
-func (a *App) probe(b *config.Bank) (string, []int) {
-	a.mu.Lock()
-	ls := a.ledgerFor(b.ID)
-	a.mu.Unlock()
-	if ls == nil {
-		return "its ledger is not open", []int{2, 4}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := ls.Ping(ctx); err != nil {
-		return "its database cannot be reached: " + err.Error(), []int{2, 4}
-	}
-	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get(a.siteProbeURL(b))
-	if err == nil {
-		resp.Body.Close()
-		return "", nil
-	}
-	return "online banking is not answering", []int{3, 4}
-}
-
-func (a *App) detach(b *config.Bank, redo []int) {
-	if redo[0] == 2 {
-		a.mu.Lock()
-		var ls *ledgerSource
-		for i, l := range a.ledgers {
-			if l.inst.ID == b.ID {
-				ls = l
-				a.ledgers = append(a.ledgers[:i:i], a.ledgers[i+1:]...)
-				a.poolMu.Lock()
-				delete(a.pools, b.ID)
-				a.poolMu.Unlock()
-				break
-			}
-		}
-		a.mu.Unlock()
-		if ls != nil {
-			ls.Close()
-		}
-		return
-	}
-	a.lifeMu.Lock()
-	site := a.sites[b.ID]
-	delete(a.sites, b.ID)
-	a.lifeMu.Unlock()
-	if site != nil {
-		_ = site.srv.Close()
-	}
-}
-
 func (a *App) OpenAccount(bankID, persona, typ string) (world.Account, error) {
 	if _, ok := a.world.Institution(bankID); !ok || a.world.Purged(bankID) {
 		return world.Account{}, errNotFound
@@ -876,7 +539,7 @@ func CheckPorts(c *config.Config) error {
 		if running {
 			return fmt.Errorf("beerus is already running for %s; stop it (Ctrl+C in its terminal) before starting it again", c.Dir)
 		}
-		return fmt.Errorf("port %d is already in use by another program; free it or change it in beerus.yaml", p)
+		return fmt.Errorf("port %d is already in use by another program; free it or change it in local.yaml", p)
 	}
 	return nil
 }

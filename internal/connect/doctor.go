@@ -12,6 +12,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 type DoctorReport struct {
@@ -19,22 +20,35 @@ type DoctorReport struct {
 	Orphans       []string `json:"orphans"`
 	Missing       []string `json:"missing"`
 	DeadSnapshots []string `json:"dead_snapshots"`
-	StaleManifest []string `json:"stale_manifest"`
+	StaleOwned    []string `json:"stale_owned"`
 	Fixed         bool     `json:"fixed"`
 }
 
 func (r DoctorReport) Clean() bool {
-	return len(r.Orphans)+len(r.DeadSnapshots)+len(r.StaleManifest) == 0
+	return len(r.Orphans)+len(r.DeadSnapshots)+len(r.StaleOwned) == 0
 }
 
 func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, error) {
-	rep := DoctorReport{Databases: []string{}, Orphans: []string{}, Missing: []string{}, DeadSnapshots: []string{}, StaleManifest: []string{}}
+	rep := DoctorReport{Databases: []string{}, Orphans: []string{}, Missing: []string{}, DeadSnapshots: []string{}, StaleOwned: []string{}}
 	if fix {
 		if _, err := os.Stat(c.Path("running")); err == nil {
 			return rep, errors.New("beerus up is running; stop it before using --fix (or delete " + c.Path("running") + " if it is not)")
 		}
 	}
+	st, err := setup.LoadStatus(c.Dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return rep, err
+	}
+	live := setup.Status{}
+	for _, r := range st.Resources {
+		if r.Kind != setup.KindBank || c.Bank(r.ID) != nil {
+			live.Resources = append(live.Resources, r)
+		}
+	}
 	expected := map[string]bool{}
+	for name := range owned(live, ownedDatabase, ownedSnapshot) {
+		expected[name] = true
+	}
 	cbn := config.DatabaseName(c.Dir, cbnID)
 	if len(c.Banks) > 0 {
 		expected[cbn] = true
@@ -99,13 +113,14 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		}
 	}
 	sort.Strings(rep.Missing)
-	m, err := c.Manifest()
-	if err != nil {
-		return rep, err
-	}
-	for _, r := range m.Resources {
-		if r.Bank != "" && byID[r.Bank] == nil && !slices.Contains(rep.StaleManifest, r.Bank) {
-			rep.StaleManifest = append(rep.StaleManifest, r.Bank)
+	for _, r := range st.Resources {
+		if r.Kind == setup.KindBank && byID[r.ID] == nil {
+			rep.StaleOwned = append(rep.StaleOwned, r.ID)
+			for _, o := range r.Owned {
+				if (o.Kind == ownedDatabase || o.Kind == ownedSnapshot) && !slices.Contains(rep.Orphans, o.Name) {
+					rep.Orphans = append(rep.Orphans, o.Name)
+				}
+			}
 		}
 	}
 	if !fix || rep.Clean() {
@@ -119,9 +134,15 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 			return rep, err
 		}
 	}
-	for _, bank := range rep.StaleManifest {
-		if err := c.ReleaseBank(bank); err != nil {
+	if len(rep.StaleOwned) > 0 {
+		ctl, err := openStore(c.Dir)
+		if err != nil {
 			return rep, err
+		}
+		for _, bank := range rep.StaleOwned {
+			if err := ctl.forget(setup.KindBank, bank); err != nil {
+				return rep, err
+			}
 		}
 	}
 	rep.Fixed = true

@@ -19,76 +19,84 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 type App struct {
-	mu         sync.Mutex
-	cfg        *config.Config
-	clock      *clock.Clock
-	world      *world.World
-	st         *State
-	key        config.SigningKey
-	ctlToken   string
-	log        *slog.Logger
-	isDirty    atomic.Bool
-	limiters   map[string]*rate.Limiter
-	idemLock   sync.Map
-	client     *http.Client
-	wake       chan struct{}
-	statePath  string
-	sending    chan struct{}
-	pmu        sync.RWMutex
-	swept      time.Time
-	ledgers    []*ledgerSource
-	rtgs       *rtgs
-	rtgsTried  time.Time
-	settling   bool
-	settleDone *sync.Cond
-	worldOnly  bool
-	personas   []string
-	lifeMu     sync.Mutex
-	recMu      sync.Mutex
-	stepMu     sync.Mutex
-	status     map[string]*BankStatus
-	sites      map[string]*siteServer
-	serving    bool
-	cfgSum     string
-	warnings   []string
-	watched    time.Time
-	driftAt    time.Time
-	driftDue   atomic.Bool
-	strikes    map[string]int
-	obMu       sync.Mutex
-	obs        map[string]*openbanking.Server
-	regMu      sync.Mutex
-	poolMu     sync.RWMutex
-	pools      map[string]*ledgerSource
-	flushMu    sync.Mutex
-	vault      *vault
-	obHTTP     *http.Client
-	role       string
-	bankID     string
-	coreURL    string
-	worldSum   string
-	replicated bool
-	synced     atomic.Bool
-	paused     atomic.Bool
-	pauseMu    sync.Mutex
-	pauseTimer *time.Timer
-	pullMu     sync.Mutex
-	pulledAt   time.Time
-	pullFailed time.Time
-	pullErr    error
-	pulling    *pullFlight
-	peers      *http.Client
-	eventMu    sync.Mutex
-	eventHTTP  map[string]*http.Client
-	bankWrap   func(http.RoundTripper) http.RoundTripper
-	obKey      *ecdsa.PrivateKey
-	metas      map[string]bankMeta
-	eventJTI   jtiSet
+	mu           sync.Mutex
+	cfg          *config.Config
+	clock        *clock.Clock
+	world        *world.World
+	st           *State
+	ctl          *ctlStore
+	setupKey     uint64
+	key          config.SigningKey
+	ctlToken     string
+	log          *slog.Logger
+	isDirty      atomic.Bool
+	limiters     map[string]*rate.Limiter
+	idemLock     sync.Map
+	client       *http.Client
+	wake         chan struct{}
+	statePath    string
+	sending      chan struct{}
+	pmu          sync.RWMutex
+	partnerMu    sync.Mutex
+	swept        time.Time
+	ledgers      []*ledgerSource
+	rtgs         *rtgs
+	rtgsTried    time.Time
+	rtgsOpening  bool
+	nibss        *nibss.Store
+	nibssTried   time.Time
+	nibssOpening bool
+	members      []nip.Participant
+	settling     bool
+	settleDone   *sync.Cond
+	worldOnly    bool
+	personas     []string
+	lifeMu       sync.Mutex
+	recMu        sync.Mutex
+	stepMu       sync.Mutex
+	status       map[string]*BankStatus
+	sites        map[string]*siteServer
+	serving      bool
+	warnings     []string
+	driftAt      time.Time
+	driftDue     atomic.Bool
+	strikes      map[string]int
+	obMu         sync.Mutex
+	obs          map[string]*openbanking.Server
+	regMu        sync.Mutex
+	poolMu       sync.RWMutex
+	pools        map[string]*ledgerSource
+	flushMu      sync.Mutex
+	vault        *vault
+	obHTTP       *http.Client
+	role         string
+	bankID       string
+	coreURL      string
+	worldSum     string
+	replicated   bool
+	synced       atomic.Bool
+	paused       atomic.Bool
+	pauseMu      sync.Mutex
+	pauseTimer   *time.Timer
+	pullMu       sync.Mutex
+	pulledAt     time.Time
+	pullFailed   time.Time
+	pullErr      error
+	pulling      *pullFlight
+	peers        *http.Client
+	eventMu      sync.Mutex
+	eventHTTP    map[string]*http.Client
+	bankWrap     func(http.RoundTripper) http.RoundTripper
+	obKey        *ecdsa.PrivateKey
+	metas        map[string]bankMeta
+	eventJTI     jtiSet
 }
 
 type Options struct {
@@ -141,6 +149,10 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	if a.client == nil {
 		a.client = &http.Client{Timeout: 15 * time.Second}
 	}
+	if a.ctl, err = openStore(cfg.Dir); err != nil {
+		return nil, err
+	}
+	a.setupKey = a.ctl.setupKey()
 	st, err := loadState(a.statePath)
 	if err != nil {
 		return nil, fmt.Errorf("stub state: %w", err)
@@ -148,7 +160,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	fresh := st == nil
 	if fresh {
 		st = newState()
-		st.Clock = clock.State{Pace: cfg.Pace}
+		st.Clock = clock.State{Pace: cfg.Pace, AnchorBusiness: cfg.Start}
 	} else if _, err := os.Stat(a.runningPath()); err == nil {
 		a.log.Warn("the last run did not shut down cleanly; starting a new world so partners resync", "old_world", st.WorldID)
 		st.WorldID = newID("wld")
@@ -166,26 +178,6 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New(st.Clock, o.Real)
-	purged, reserved := []string{}, []string{}
-	for _, p := range st.World.Purged {
-		if cfg.Bank(p.ID) != nil {
-			purged = append(purged, p.ID)
-			cfg.Banks = slices.DeleteFunc(cfg.Banks, func(b *config.Bank) bool { return b.ID == p.ID })
-		}
-	}
-	cbnDB := config.DatabaseName(cfg.Dir, cbnID)
-	cfg.Banks = slices.DeleteFunc(cfg.Banks, func(b *config.Bank) bool {
-		if reservedIDs[b.ID] || b.Database == cbnDB {
-			reserved = append(reserved, b.ID)
-			return true
-		}
-		return false
-	})
-	if len(purged)+len(reserved) > 0 {
-		if err := cfg.Save(); err != nil {
-			return nil, err
-		}
-	}
 	a.personas = o.Personas
 	a.world = world.New(a.worldConfig(genesis), st.World)
 	a.worldOnly = o.WorldOnly
@@ -199,12 +191,29 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		if a.worldOnly {
 			break
 		}
-		ls, err := openLedgerSource(context.Background(), cfg, b, a.world)
+		if err := a.claimBank(b); err != nil {
+			return nil, err
+		}
+		ls, err := openLedgerSource(context.Background(), cfg, a.ctl, b, a.world)
 		if err != nil {
 			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
 			continue
 		}
 		a.addLedger(ls)
+	}
+	a.nibssStore()
+	unregistered := map[string]bool{}
+	for _, b := range cfg.Banks {
+		if a.worldOnly {
+			break
+		}
+		if err := a.registerMember(b); err != nil {
+			a.log.Error("bank not in the NIBSS directory; retrying in the background", "bank", b.ID, "err", err)
+			unregistered[b.ID] = true
+		}
+	}
+	for _, l := range a.ledgers {
+		a.attachMember(l)
 	}
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {
@@ -219,12 +228,8 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		a.log.Error("NIP settlement", "err", err)
 	}
 	a.mu.Unlock()
-	a.initLifecycle()
-	for _, id := range purged {
-		a.warn("%s was purged and cannot come back; it was removed from beerus.yaml", id)
-	}
-	for _, id := range reserved {
-		a.warn("%s uses an id or database reserved for the CBN or NIBSS; it was removed from beerus.yaml", id)
+	for _, b := range a.initLifecycle(unregistered) {
+		a.provision(b)
 	}
 	return a, nil
 }
@@ -268,6 +273,9 @@ func (a *App) closeLedgers() {
 	}
 	if a.rtgs != nil {
 		a.rtgs.Close()
+	}
+	if a.nibss != nil {
+		a.nibss.Close()
 	}
 }
 
@@ -352,15 +360,16 @@ func (a *App) Step() {
 		a.reconcileBanks()
 		a.recMu.Unlock()
 	}
+	a.nibssStore()
+	if err := a.ensureRTGS(); err != nil {
+		a.log.Error("CBN ledger", "err", err)
+	}
 	a.mu.Lock()
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {
 			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
 			a.driftDue.Store(true)
 		}
-	}
-	if err := a.ensureRTGS(); err != nil {
-		a.log.Error("CBN ledger", "err", err)
 	}
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
@@ -430,17 +439,6 @@ func (a *App) partnersSnapshot() []*config.Partner {
 	a.pmu.RLock()
 	defer a.pmu.RUnlock()
 	return append([]*config.Partner(nil), a.cfg.Partners...)
-}
-
-func (a *App) ReloadPartners() (int, error) {
-	fresh, err := config.Load(a.cfg.Dir)
-	if err != nil {
-		return 0, err
-	}
-	a.pmu.Lock()
-	defer a.pmu.Unlock()
-	a.cfg.Partners = fresh.Partners
-	return len(fresh.Partners), nil
 }
 
 type event struct {

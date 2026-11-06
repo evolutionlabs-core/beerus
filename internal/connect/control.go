@@ -54,14 +54,9 @@ func (a *App) ControlHandler() http.Handler {
 		a.poke()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 	})
-	mux.HandleFunc("POST /partners/reload", func(w http.ResponseWriter, r *http.Request) {
-		n, err := a.ReloadPartners()
-		if err != nil {
-			writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]int{"partners": n})
-	})
+	mux.HandleFunc("POST /partners", a.ctlAddPartner)
+	mux.HandleFunc("POST /partners/{id}/rotate-key", a.ctlRotatePartner)
+	mux.HandleFunc("DELETE /partners/{id}", a.ctlRemovePartner)
 	mux.HandleFunc("GET /registry/clients", a.ctlRegistryClients)
 	mux.HandleFunc("POST /registry/clients", a.ctlRegistryAdd)
 	mux.HandleFunc("GET /registry/consents", a.ctlConsentLedger)
@@ -429,7 +424,7 @@ type snapshotMeta struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
 	BusinessTime string    `json:"business_time"`
-	Seed         int64     `json:"seed"`
+	SetupKey     uint64    `json:"setup_key,string"`
 	Schema       int       `json:"schema"`
 	TakenReal    time.Time `json:"taken_real"`
 	Banks        []string  `json:"banks,omitempty"`
@@ -482,7 +477,7 @@ func (a *App) TakeSnapshot(name string) (meta snapshotMeta, err error) {
 	for _, ls := range cp.LinkSessions {
 		ls.OTP, ls.Verifier, ls.BankState = "", "", ""
 	}
-	meta = snapshotMeta{ID: newID("snap"), Name: name, BusinessTime: ts(a.clock.Now()), Seed: a.cfg.Seed, Schema: schemaVersion, TakenReal: a.clock.Real()}
+	meta = snapshotMeta{ID: newID("snap"), Name: name, BusinessTime: ts(a.clock.Now()), SetupKey: a.setupKey, Schema: schemaVersion, TakenReal: a.clock.Real()}
 	for _, l := range a.ledgers {
 		if err := l.Sync(a.clock.Now()); err != nil {
 			return snapshotMeta{}, err
@@ -516,8 +511,11 @@ func (a *App) RestoreSnapshot(id string) (result string, err error) {
 	if err := json.Unmarshal(b, &f); err != nil {
 		return "", err
 	}
-	if f.Meta.Schema != schemaVersion || f.Meta.Seed != a.cfg.Seed {
-		return "", fmt.Errorf("snapshot %s was taken with schema %d and seed %d; this setup uses schema %d and seed %d", id, f.Meta.Schema, f.Meta.Seed, schemaVersion, a.cfg.Seed)
+	if f.Meta.SetupKey != a.setupKey {
+		return "", fmt.Errorf("snapshot %s was taken in another setup and cannot be restored here", id)
+	}
+	if f.Meta.Schema != schemaVersion {
+		return "", fmt.Errorf("snapshot %s was taken with schema %d; this setup uses schema %d", id, f.Meta.Schema, schemaVersion)
 	}
 	for _, p := range a.world.PurgedInstitutions() {
 		kept := false

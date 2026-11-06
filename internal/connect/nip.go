@@ -76,18 +76,6 @@ func (p reply) write(w http.ResponseWriter) {
 	_, _ = w.Write(p.body)
 }
 
-func (a *App) directoryLocked() *nip.Directory {
-	members := []nip.Participant{}
-	for _, b := range a.cfg.Banks {
-		members = append(members, nip.Participant{Code: b.NIPCode, Name: b.Name, BankID: b.ID})
-	}
-	outside := []nip.Participant{}
-	for _, o := range world.CounterpartyBanks() {
-		outside = append(outside, nip.Participant{Code: o.NIPCode, Name: o.Name})
-	}
-	return nip.NewDirectory(members, outside)
-}
-
 type nameEnquiry struct {
 	Code        string `json:"response_code"`
 	Message     string `json:"message"`
@@ -219,22 +207,21 @@ func (a *App) ctlNIPSettlement(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) SetNetDebitCap(id string, cap, collateral int64) error {
 	a.lifeMu.Lock()
-	defer a.lifeMu.Unlock()
 	b := a.cfg.Bank(id)
 	if b == nil {
+		a.lifeMu.Unlock()
 		return errNotFound
 	}
 	a.mu.Lock()
 	prevCap, prevCollateral := b.NetDebitCap, b.Collateral
 	b.NetDebitCap, b.Collateral = cap, collateral
 	a.mu.Unlock()
-	if err := a.saveBanksLocked(); err != nil {
+	a.lifeMu.Unlock()
+	return a.saveBanks(func() {
 		a.mu.Lock()
 		b.NetDebitCap, b.Collateral = prevCap, prevCollateral
 		a.mu.Unlock()
-		return err
-	}
-	return nil
+	})
 }
 
 func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
@@ -425,7 +412,7 @@ func (a *App) nipTransferLocked(r *http.Request, req world.TransferRequest, rt w
 	sid := req.SessionID
 	if sid == "" {
 		a.st.NIP.Sessions++
-		sid = nip.SessionID(a.cfg.Seed, rt.FromInst.NIPCode, now, int(a.st.NIP.Sessions))
+		sid = nip.SessionID(int64(a.setupKey), rt.FromInst.NIPCode, now, int(a.st.NIP.Sessions))
 	}
 	t := NIPFailure{SessionID: sid, FromBank: rt.FromInst.ID, ToCode: rt.ToInst.NIPCode, Amount: req.Amount, At: now}
 	if a.bankUnavailable(rt.FromInst.ID, now) {

@@ -21,14 +21,17 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 var version = "0.1.0"
 
+const defaultSetupName = "beerus"
+
 const usage = `Beerus simulates a Nigerian banking ecosystem on your machine.
 
 Usage:
-  beerus init [--dir .beerus] [--seed N] [--partner-port 7443] [--widget-port 7444] [--control-port 7480] [--health-port 7490]
+  beerus init [--dir .beerus] [--partner-port 7443] [--widget-port 7444] [--control-port 7480] [--health-port 7490]
   beerus up [--dir .beerus]
   beerus run --participant cbn|sim|bank-a|bank-b [--dir .beerus] [--bind 0.0.0.0] [--core URL]
   beerus compose [--dir .beerus]
@@ -51,13 +54,14 @@ Usage:
   beerus webhooks [replay <delivery-id>]
   beerus snapshot [take [name] | restore <id>]
   beerus bank [list]
-  beerus bank create --name NAME [--type commercial|digital|microfinance] [--id ID] [--nip-code N] [--nuban-code N] [--history-days N] [--settles-through ID]
+  beerus bank create --name NAME [--type commercial|digital|microfinance] [--id ID] [--nip-code N] [--nuban-code N] [--settles-through ID]
   beerus bank suspend|resume <id>
   beerus bank open-account <id> --persona ID [--type current|savings]
   beerus bank close <id> --to BANK [--money transfer|payout|leave] [--customers a=payout,b=leave] [--dry-run] [--yes]
   beerus bank purge <id> [--yes]
   beerus registry [list | add-client <id> --cert-cn CN --public-key FILE --redirect-uri URL [--name N] [--legal-name N] [--cac N] | consents [--bank ID]]
   beerus doctor [--dir .beerus] [--fix]
+  beerus reset <setup-name> [--dir .beerus]
   beerus trust [--dir .beerus]
   beerus untrust [--dir .beerus]
   beerus version
@@ -87,6 +91,8 @@ func main() {
 		err = cmdInfo(args)
 	case "doctor":
 		err = cmdDoctor(args)
+	case "reset":
+		err = cmdReset(args, os.Stdout)
 	case "partner":
 		err = cmdPartner(args)
 	case "trust":
@@ -116,18 +122,21 @@ func defaultDir() string {
 func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	seed := fs.Int64("seed", 20261028, "world seed")
-	pp := fs.Int("partner-port", 7443, "partner API port")
-	wp := fs.Int("widget-port", 7444, "widget port")
-	cp := fs.Int("control-port", 7480, "control API port")
-	hp := fs.Int("health-port", 7490, "health port of the cbn container")
-	bp := fs.Int("bank-port", 7445, "first online banking port; each bank takes the next one")
+	local := connect.DefaultLocal()
+	fs.IntVar(&local.Connect.PartnerPort, "partner-port", local.Connect.PartnerPort, "partner API port; banks take the next free ports")
+	fs.IntVar(&local.Connect.WidgetPort, "widget-port", local.Connect.WidgetPort, "widget port")
+	fs.IntVar(&local.Connect.ControlPort, "control-port", local.Connect.ControlPort, "control API port")
+	fs.IntVar(&local.Connect.HealthPort, "health-port", local.Connect.HealthPort, "health port of the cbn container")
 	fs.Parse(args)
-	c, err := config.Init(*dir, config.InitOptions{Seed: *seed, Today: clock.DateOf(time.Now()), PartnerPort: *pp, WidgetPort: *wp, ControlPort: *cp, HealthPort: *hp, BankPort: *bp})
+	today := clock.DateOf(time.Now())
+	if err := connect.Init(*dir, setup.DefaultSpec(defaultSetupName, today), local, today); err != nil {
+		return err
+	}
+	c, err := connect.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Created %s.\n\n", c.Dir)
+	fmt.Printf("Created %s. The setup is in %s; machine settings are in %s.\n\n", c.Dir, c.Path(connect.SpecFile), c.Path(connect.LocalFile))
 	return printInfo(c)
 }
 
@@ -166,7 +175,7 @@ func cmdInfo(args []string) error {
 	fs := flag.NewFlagSet("info", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	fs.Parse(args)
-	c, err := config.Load(*dir)
+	c, err := connect.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}
@@ -176,9 +185,9 @@ func cmdInfo(args []string) error {
 func cmdDoctor(args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	fix := fs.Bool("fix", false, "drop leftover databases, delete snapshots that can no longer be restored and tidy the manifest")
+	fix := fs.Bool("fix", false, "drop leftover databases, delete snapshots that can no longer be restored and forget banks that no longer exist")
 	fs.Parse(args)
-	c, err := config.Load(*dir)
+	c, err := connect.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}
@@ -198,7 +207,7 @@ func cmdDoctor(args []string) error {
 	fmt.Printf("%d databases belong to %s.\n", len(rep.Databases), c.Dir)
 	list("Leftover databases:", rep.Orphans)
 	list("Snapshots that can no longer be restored:", rep.DeadSnapshots)
-	list("Manifest entries for banks that no longer exist:", rep.StaleManifest)
+	list("Status entries for banks that no longer exist:", rep.StaleOwned)
 	list("Missing databases (beerus up recreates bank databases; missing snapshot copies cannot be restored):", rep.Missing)
 	switch {
 	case rep.Fixed:
@@ -215,13 +224,17 @@ func cmdUp(args []string) error {
 	fs := flag.NewFlagSet("up", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	fs.Parse(args)
-	if !config.Exists(*dir) {
+	ok, err := connect.Initialized(*dir)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		if err := cmdInit([]string{"--dir", *dir}); err != nil {
 			return err
 		}
 		fmt.Println()
 	}
-	c, err := config.Load(*dir)
+	c, err := connect.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}
@@ -229,9 +242,6 @@ func cmdUp(args []string) error {
 		return err
 	}
 	if err := c.EnsureCertificates(); err != nil {
-		return err
-	}
-	if err := c.Save(); err != nil {
 		return err
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -260,10 +270,14 @@ type ctl struct {
 }
 
 func newCtl() (*ctl, error) {
-	c, err := config.Load(defaultDir())
+	c, err := connect.LoadConfig(defaultDir())
 	if err != nil {
-		return nil, fmt.Errorf("%w (run beerus init or set BEERUS_DIR)", err)
+		return nil, fmt.Errorf("%w (run beerus up or set BEERUS_DIR)", err)
 	}
+	return newCtlFor(c)
+}
+
+func newCtlFor(c *config.Config) (*ctl, error) {
 	tok, err := config.ReadSecret(c.Path("control-token"))
 	if err != nil {
 		return nil, err
@@ -478,13 +492,12 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		id := fs.String("id", "", "bank ID, derived from the name when empty")
 		nip := fs.String("nip-code", "", "6-digit NIP institution code, assigned when empty")
 		nuban := fs.String("nuban-code", "", "3-digit NUBAN bank code, assigned when empty")
-		days := fs.Int("history-days", 0, "days of history the bank serves")
 		via := fs.String("settles-through", "", "bank a microfinance bank settles through")
 		fs.Parse(args[1:])
 		if *name == "" {
 			return nil, errors.New("usage: beerus bank create --name NAME")
 		}
-		out, err := c.do("POST", "/banks", map[string]any{"name": *name, "type": *typ, "id": *id, "nip_code": *nip, "nuban_code": *nuban, "history_days": *days, "settles_through": *via})
+		out, err := c.do("POST", "/banks", map[string]any{"name": *name, "type": *typ, "id": *id, "nip_code": *nip, "nuban_code": *nuban, "settles_through": *via})
 		if err != nil {
 			return nil, err
 		}
@@ -525,7 +538,7 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		if !*yes {
 			out, err := c.do("GET", "/banks/"+args[1]+"/purge", nil)
 			if err == nil {
-				out["next"] = "Nothing was purged. Run again with --yes to delete the bank's database, its snapshot copies and its beerus.yaml entry; purging cannot be undone."
+				out["next"] = "Nothing was purged. Run again with --yes to delete the bank's database, its snapshot copies and its entry in the setup; purging cannot be undone."
 			}
 			return out, err
 		}

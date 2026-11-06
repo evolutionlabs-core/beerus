@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 type stallWriter struct {
@@ -30,10 +29,7 @@ func (w *stallWriter) Write(b []byte) (int, error) {
 
 func newTestApp(t *testing.T) *App {
 	t.Helper()
-	cfg, err := config.Init(t.TempDir(), config.InitOptions{Seed: 7, Today: clock.DateOf(time.Now()), PartnerPort: 1, WidgetPort: 2, ControlPort: 3, BankPorts: []int{4, 5}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := initTestConfig(t, clock.DateOf(time.Now()))
 	a, err := New(cfg, Options{WorldOnly: true})
 	if err != nil {
 		t.Fatal(err)

@@ -1,11 +1,13 @@
 package connect
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -216,23 +218,25 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 	st := a.status[id]
 	prev, prevPhase := b.State, st.Phase
 	b.State, st.Phase, st.Reason = "closed", PhaseClosed, ""
-	if err := a.saveBanksLocked(); err != nil {
-		b.State, st.Phase = prev, prevPhase
-		a.lifeMu.Unlock()
+	a.lifeMu.Unlock()
+	undo := func() { b.State, st.Phase = prev, prevPhase }
+	if err := a.saveBanks(undo); err != nil {
 		return CloseResult{}, err
 	}
-	a.lifeMu.Unlock()
 	res, err := a.closeWorld(id, imp, choice, req.To)
 	if err != nil {
 		a.lifeMu.Lock()
-		b.State, st.Phase = prev, prevPhase
-		_ = a.saveBanksLocked()
+		undo()
 		a.lifeMu.Unlock()
-		return CloseResult{}, err
+		return CloseResult{}, errors.Join(err, a.saveBanks(func() {}))
 	}
-	a.detach(b, []int{3})
+	a.detach(b, setup.StepSite)
+	a.recordPhase(id, PhaseClosed)
 	res.Bank, _ = a.bankStatus(id)
 	a.poke()
+	if err := a.setMemberStatus(id, memberStatus(b)); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 

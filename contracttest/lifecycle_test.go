@@ -15,6 +15,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -56,27 +57,24 @@ func TestCreateBank(t *testing.T) {
 		if step.(map[string]any)["done"] != true {
 			t.Fatalf("step not done: %v", step)
 		}
+		if at, ok := step.(map[string]any)["at"]; ok && strings.HasPrefix(fmt.Sprint(at), "0001-") {
+			t.Fatalf("step has no real time: %v", step)
+		}
 	}
-	cfg, err := config.Load(s.cfg.Dir)
+	cfg, err := connect.LoadConfig(s.cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	b := cfg.Bank("abuja-digital")
-	if b == nil || b.Type != "digital" || b.NIPCode == "" || b.NIPCode == "999003" || b.NIPCode == "999004" || b.Database != config.DatabaseName(cfg.Dir, "abuja-digital") {
+	if b == nil || b.Type != "digital" || b.NIPCode != "999003" || b.NUBANCode != "903" || b.Database != config.DatabaseName(cfg.Dir, "abuja-digital") {
 		t.Fatalf("saved bank: %+v", b)
 	}
-	m, err := cfg.Manifest()
-	if err != nil {
-		t.Fatal(err)
-	}
 	claimed := map[string]bool{}
-	for _, r := range m.Resources {
-		if r.Bank == "abuja-digital" {
-			claimed[r.Kind] = true
-		}
+	for _, o := range s.owned(setup.KindBank, "abuja-digital") {
+		claimed[o.Kind] = true
 	}
 	if !claimed["database"] || !claimed["port"] {
-		t.Fatalf("manifest: %+v", m.Resources)
+		t.Fatalf("owned: %+v", s.owned(setup.KindBank, "abuja-digital"))
 	}
 	resp, err := http.Get(b.URL() + "/login")
 	if err != nil {
@@ -103,10 +101,8 @@ func TestCreateBank(t *testing.T) {
 	}
 	for _, bad := range []map[string]any{
 		{"name": "Abuja Digital"},
-		{"name": "Bank C"},
-		{"name": "bank d microfinance"},
 		{"name": "Bank E", "type": "credit-union"},
-		{"name": "Bank F", "nip_code": "999003"},
+		{"name": "Bank F", "nip_code": "99903"},
 		{"name": "Bank G", "nip_code": b.NIPCode},
 		{"name": "Bank H", "history_days": 5000},
 		{"name": "Bank I", "settles_through": "nowhere"},
@@ -166,7 +162,7 @@ func TestSuspendBank(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("online banking while suspended: %d", resp.StatusCode)
 	}
-	cfg, err := config.Load(s.cfg.Dir)
+	cfg, err := connect.LoadConfig(s.cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +208,8 @@ func TestBankRepairsDrift(t *testing.T) {
 	s := newBankStack(t)
 	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
-	before := s.must(s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+s.today().AddDays(-1).String(), nil), 200).JSON["ledger_balance"]
+	asOf := s.today().AddDays(-1).String()
+	before := s.must(s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+asOf, nil), 200).JSON["ledger_balance"]
 	pc, err := pgx.ParseConfig(s.cfg.DatabaseURL)
 	if err != nil {
 		t.Fatal(err)
@@ -240,12 +237,13 @@ func TestBankRepairsDrift(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	checkProvisioned(t, storedBank(t, s.cfg.Dir, "bank-b"))
 	s.syncNow()
-	if r := s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+s.today().AddDays(-1).String(), nil); r.Status != 409 || r.Code() != "reauth_required" {
+	if r := s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+asOf, nil); r.Status != 409 || r.Code() != "reauth_required" {
 		t.Fatalf("consents live in the bank database, so a rebuilt bank should ask for consent again: %d %s", r.Status, r.Body)
 	}
 	s.connect("chidi", "bank-b", s.today().AddDays(-10))
-	after := s.must(s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+s.today().AddDays(-1).String(), nil), 200).JSON["ledger_balance"]
+	after := s.must(s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+asOf, nil), 200).JSON["ledger_balance"]
 	if fmt.Sprint(before) != fmt.Sprint(after) {
 		t.Fatalf("balance changed across the repair: %v then %v", before, after)
 	}
@@ -258,76 +256,6 @@ func TestBankRepairsDrift(t *testing.T) {
 		t.Fatalf("sign-in after repair: %.300s", b.last)
 	}
 	checkSettled(t, s.app)
-}
-
-func TestBanksFollowConfigFile(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	s := newBankStack(t)
-	edit := func(change func(c *config.Config)) {
-		t.Helper()
-		c, err := config.Load(s.cfg.Dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		change(c)
-		if err := c.Save(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	edit(func(c *config.Config) {
-		c.Banks = append(c.Banks, &config.Bank{ID: "kano-digital", Name: "Kano Digital", Type: "digital"})
-	})
-	s.waitPhase("kano-digital", connect.PhaseActive, 60*time.Second)
-	saved, err := config.Load(s.cfg.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kb := saved.Bank("kano-digital")
-	if kb == nil || kb.Port == 0 || kb.NIPCode == "" || kb.Database == "" || kb.HistoryDays != 180 {
-		t.Fatalf("defaults were not written back: %+v", kb)
-	}
-	resp, err := http.Get(kb.URL() + "/login")
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("online banking: %d", resp.StatusCode)
-	}
-	edit(func(c *config.Config) { c.Bank("kano-digital").State = "suspended" })
-	s.waitPhase("kano-digital", connect.PhaseSuspended, 10*time.Second)
-	edit(func(c *config.Config) { c.Bank("kano-digital").State = "" })
-	s.waitPhase("kano-digital", connect.PhaseActive, 10*time.Second)
-	edit(func(c *config.Config) { c.Bank("bank-a").NetDebitCap, c.Bank("bank-a").Collateral = 123400, 567800 })
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) && s.position("bank-a")["net_debit_cap_minor"] != float64(123400) {
-		time.Sleep(200 * time.Millisecond)
-	}
-	if row := s.position("bank-a"); row["net_debit_cap_minor"] != float64(123400) || row["collateral_minor"] != float64(567800) || row["cap_source"] != "configured" {
-		t.Fatalf("the cap edited in beerus.yaml was not applied: %v", row)
-	}
-	edit(func(c *config.Config) {
-		c.Banks = append(c.Banks, &config.Bank{ID: "copycat", Name: "Copycat", NIPCode: c.Bank("bank-a").NIPCode})
-		c.Bank("bank-a").Name = "Renamed"
-	})
-	deadline = time.Now().Add(10 * time.Second)
-	var warnings []any
-	for time.Now().Before(deadline) && len(warnings) < 2 {
-		warnings, _ = s.ctl("GET", "/banks", nil)["warnings"].([]any)
-		time.Sleep(200 * time.Millisecond)
-	}
-	if len(warnings) != 2 || !strings.Contains(fmt.Sprint(warnings), "copycat") || !strings.Contains(fmt.Sprint(warnings), "bank-a") {
-		t.Fatalf("warnings: %v", warnings)
-	}
-	saved, err = config.Load(s.cfg.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if saved.Bank("copycat") != nil || saved.Bank("bank-a").Name != "Bank A" {
-		t.Fatal("rejected edits were not undone in beerus.yaml")
-	}
 }
 
 func TestOpenAccountAtNewBank(t *testing.T) {
@@ -505,31 +433,15 @@ func TestCloseBank(t *testing.T) {
 	if _, err := s.ctlTry("POST", "/banks/abuja-digital/accounts", map[string]any{"persona": "chidi"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
 		t.Fatalf("open account at a closed bank: %v", err)
 	}
-	c, err := config.Load(s.cfg.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Bank("abuja-digital").State = ""
-	if err := c.Save(); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	var warnings []any
-	for time.Now().Before(deadline) && len(warnings) == 0 {
-		warnings, _ = s.ctl("GET", "/banks", nil)["warnings"].([]any)
-		time.Sleep(200 * time.Millisecond)
-	}
-	if !strings.Contains(fmt.Sprint(warnings), "cannot be reopened") {
-		t.Fatalf("warnings: %v", warnings)
-	}
-	if c, _ := config.Load(s.cfg.Dir); !c.Bank("abuja-digital").Closed() {
-		t.Fatal("reopening in beerus.yaml was not undone")
-	}
 	s.waitPhase("abuja-digital", connect.PhaseClosed, time.Second)
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
-	again, err := connect.New(s.cfg, connect.Options{WorldOnly: true})
+	saved := s.loadConfig()
+	if !saved.Bank("abuja-digital").Closed() {
+		t.Fatal("the closed state was not saved")
+	}
+	again, err := connect.New(saved, connect.Options{WorldOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}

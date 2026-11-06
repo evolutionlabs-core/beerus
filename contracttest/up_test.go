@@ -13,7 +13,7 @@ func TestSecondUpIsRefused(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newStack(t)
-	before, err := os.ReadFile(s.cfg.Path("beerus.yaml"))
+	before, err := os.ReadFile(s.cfg.Path("control.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,8 +26,8 @@ func TestSecondUpIsRefused(t *testing.T) {
 	if err := connect.CheckPorts(s.cfg); err == nil || !strings.Contains(err.Error(), "another program") {
 		t.Fatalf("start with a busy port and no run marker: %v", err)
 	}
-	after, _ := os.ReadFile(s.cfg.Path("beerus.yaml"))
+	after, _ := os.ReadFile(s.cfg.Path("control.json"))
 	if string(after) != string(before) {
-		t.Fatal("checking the ports changed beerus.yaml")
+		t.Fatal("checking the ports changed control.json")
 	}
 }

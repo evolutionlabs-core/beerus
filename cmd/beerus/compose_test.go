@@ -8,13 +8,26 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-func TestComposeFollowsTheSetup(t *testing.T) {
-	c, err := config.Init(t.TempDir(), config.InitOptions{Today: clock.DateOf(time.Now())})
+func newSetup(t *testing.T, local setup.Local) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	today := clock.DateOf(time.Now())
+	if err := connect.Init(dir, setup.DefaultSpec(defaultSetupName, today), local, today); err != nil {
+		t.Fatal(err)
+	}
+	c, err := connect.LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return c
+}
+
+func TestComposeFollowsTheSetup(t *testing.T) {
+	c := newSetup(t, connect.DefaultLocal())
 	out, err := renderCompose(c)
 	if err != nil {
 		t.Fatal(err)
@@ -29,18 +42,13 @@ func TestComposeFollowsTheSetup(t *testing.T) {
 	c.Banks = append(c.Banks, &config.Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", Port: 7460, APIPort: 7470})
 	c.Banks[0].State = "closed"
 	c.Connect.Host = "connect.example.localhost"
-	if err := c.Save(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.AddPartner(config.PartnerOptions{ID: "ledger", Name: "Ledger", LegalName: "Ledger Ltd", Purpose: "to reconcile", RedirectURIs: []string{"https://ledger.localhost/cb"}}); err != nil {
-		t.Fatal(err)
-	}
+	c.Partners = append(c.Partners, &config.Partner{ID: "ledger", Name: "Ledger", LegalName: "Ledger Ltd", Purpose: "to reconcile", RedirectURIs: []string{"https://ledger.localhost/cb"}})
 	out, err = renderCompose(c)
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(out)
-	for _, want := range []string{"  bank-b:", "  bank-c:", "127.0.0.1:7460:7460", "bank-c.localhost", "connect.example.localhost", "BEERUS_BANK_PORT: \"7446\"", "BEERUS_BIND: 0.0.0.0"} {
+	for _, want := range []string{"  bank-b:", "  bank-c:", "127.0.0.1:7460:7460", "bank-c.localhost", "connect.example.localhost", "BEERUS_BIND: 0.0.0.0"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("compose file lacks %q", want)
 		}
@@ -53,10 +61,9 @@ func TestComposeFollowsTheSetup(t *testing.T) {
 }
 
 func TestComposeFollowsTheHealthPort(t *testing.T) {
-	c, err := config.Init(t.TempDir(), config.InitOptions{Today: clock.DateOf(time.Now()), HealthPort: 7555})
-	if err != nil {
-		t.Fatal(err)
-	}
+	local := connect.DefaultLocal()
+	local.Connect.HealthPort = 7555
+	c := newSetup(t, local)
 	out, err := renderCompose(c)
 	if err != nil {
 		t.Fatal(err)

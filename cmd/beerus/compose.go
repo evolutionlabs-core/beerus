@@ -8,6 +8,7 @@ import (
 	"text/template"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/connect"
 )
 
 const composeFile = `name: beerus
@@ -26,7 +27,6 @@ x-beerus: &beerus
     BEERUS_WIDGET_PORT: "{{.WidgetPort}}"
     BEERUS_CONTROL_PORT: "{{.ControlPort}}"
     BEERUS_HEALTH_PORT: "{{.HealthPort}}"
-    BEERUS_BANK_PORT: "{{.FirstBankPort}}"
   volumes:
     - ${BEERUS_STATE:-state}:/state
 
@@ -113,10 +113,10 @@ volumes:
 `
 
 type composeData struct {
-	PartnerPort, WidgetPort, ControlPort, HealthPort, FirstBankPort int
-	ConnectHost                                                     string
-	NeedsPartner                                                    bool
-	Banks                                                           []*config.Bank
+	PartnerPort, WidgetPort, ControlPort, HealthPort int
+	ConnectHost                                      string
+	NeedsPartner                                     bool
+	Banks                                            []*config.Bank
 }
 
 func renderCompose(c *config.Config) ([]byte, error) {
@@ -127,12 +127,11 @@ func renderCompose(c *config.Config) ([]byte, error) {
 		}
 	}
 	if len(d.Banks) == 0 {
-		return nil, fmt.Errorf("%s has no open banks to run", c.Path("beerus.yaml"))
+		return nil, fmt.Errorf("%s has no open banks to run", c.Dir)
 	}
 	if d.HealthPort <= 0 {
-		return nil, fmt.Errorf("%s has no health_port; set it to the port the cbn container listens on", c.Path("beerus.yaml"))
+		return nil, fmt.Errorf("%s has no connect.health_port; set it to the port the cbn container listens on", c.Path(connect.LocalFile))
 	}
-	d.FirstBankPort = d.Banks[0].Port
 	var out bytes.Buffer
 	if err := template.Must(template.New("compose").Parse(composeFile)).Execute(&out, d); err != nil {
 		return nil, err
@@ -144,7 +143,7 @@ func cmdCompose(args []string) error {
 	fs := flag.NewFlagSet("compose", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	fs.Parse(args)
-	c, err := config.Load(*dir)
+	c, err := connect.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}

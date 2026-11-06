@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,7 +11,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 type PurgeImpact struct {
@@ -99,23 +102,32 @@ func (a *App) PurgeBank(id string) (PurgeResult, error) {
 	}
 	a.lifeMu.Lock()
 	b := a.cfg.Bank(id)
+	st := a.status[id]
 	a.mu.Lock()
-	a.cfg.Banks = slices.DeleteFunc(slices.Clone(a.cfg.Banks), func(x *config.Bank) bool { return x.ID == id })
+	banks := a.cfg.Banks
+	a.cfg.Banks = slices.DeleteFunc(slices.Clone(banks), func(x *config.Bank) bool { return x.ID == id })
 	a.mu.Unlock()
 	delete(a.status, id)
-	err = a.saveBanksLocked()
 	a.lifeMu.Unlock()
-	if err != nil {
+	if err := a.saveBanks(func() {
+		a.mu.Lock()
+		a.cfg.Banks = banks
+		a.mu.Unlock()
+		a.status[id] = st
+	}); err != nil {
 		return PurgeResult{}, err
 	}
-	a.detach(b, []int{3})
+	memberErr := a.removeMember(id)
+	a.detach(b, setup.StepSite)
 	ls := a.ledgerFor(id)
-	a.detach(b, []int{2})
-	var errs []error
+	a.detach(b, setup.StepDatabase)
+	errs := []error{memberErr}
 	if ls != nil {
 		errs = append(errs, ls.Drop())
+	} else if err := store.DropDatabases(context.Background(), a.cfg.DatabaseURL, []string{b.Database}); err != nil {
+		errs = append(errs, err)
 	} else {
-		errs = append(errs, a.cfg.ReleaseBank(id))
+		errs = append(errs, a.ctl.forget(setup.KindBank, id))
 	}
 	for _, snap := range imp.Snapshots {
 		a.mu.Lock()

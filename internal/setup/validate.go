@@ -13,11 +13,13 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
+var BankTypes = []string{"commercial", "digital", "microfinance"}
+
 var (
 	specIDPattern      = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
 	specPartnerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
 	specNIPPattern     = regexp.MustCompile(`^\d{6}$`)
-	specBankTypes      = []string{"commercial", "digital", "microfinance"}
+	specSystemIDs      = []string{SystemCBN, SystemNIBSS}
 	specStates         = []string{StateActive, StateSuspended, StateClosed}
 	specMoneyChoices   = []string{MoneyTransfer, MoneyPayout, MoneyLeave}
 )
@@ -184,6 +186,8 @@ func (c *specChecker) banks() {
 			c.add(p+".id", "%s.id is required. %s", p, specIDRule)
 		case !specIDPattern.MatchString(b.ID):
 			c.add(p+".id", "%s.id %q is not valid. %s", p, b.ID, specIDRule)
+		case slices.Contains(specSystemIDs, b.ID):
+			c.add(p+".id", "%s.id %s is reserved for the %s. Choose another id", p, b.ID, strings.ToUpper(b.ID))
 		case firstID[b.ID]:
 			c.add(p+".id", "%s.id %s is already used by another bank. Give each bank its own id", p, b.ID)
 		}
@@ -232,9 +236,9 @@ func (c *specChecker) bankCodes(p string, b Bank, nips, nubans map[string]string
 func (c *specChecker) bankRules(p string, b Bank, byID map[string]Bank) {
 	switch {
 	case b.Type == "":
-		c.add(p+".type", "%s.type is required. Use %s", p, specChoices(specBankTypes))
-	case !slices.Contains(specBankTypes, b.Type):
-		c.add(p+".type", "%s.type %q is not a bank type. Use %s", p, b.Type, specChoices(specBankTypes))
+		c.add(p+".type", "%s.type is required. Use %s", p, specChoices(BankTypes))
+	case !slices.Contains(BankTypes, b.Type):
+		c.add(p+".type", "%s.type %q is not a bank type. Use %s", p, b.Type, specChoices(BankTypes))
 	}
 	if b.State != "" || c.s.has(p+".state") {
 		if !slices.Contains(specStates, b.State) {

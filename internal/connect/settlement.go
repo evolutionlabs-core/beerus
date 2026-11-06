@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
@@ -14,6 +15,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -71,8 +73,10 @@ func settlementAccount(member string) string {
 }
 
 type rtgs struct {
+	mmu     sync.Mutex
 	ctx     context.Context
 	cfg     *config.Config
+	ctl     *ctlStore
 	st      *store.Store
 	l       *ledger.Ledger
 	genesis time.Time
@@ -80,16 +84,16 @@ type rtgs struct {
 	through time.Time
 }
 
-func openRTGS(ctx context.Context, cfg *config.Config, genesis time.Time) (*rtgs, error) {
+func openRTGS(ctx context.Context, cfg *config.Config, ctl *ctlStore, genesis time.Time) (*rtgs, error) {
 	name := config.DatabaseName(cfg.Dir, cbnID)
-	if err := cfg.Claim("database", name, ""); err != nil {
+	if err := ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
 		return nil, err
 	}
 	st, err := store.Open(ctx, cfg.DatabaseURL, name)
 	if err != nil {
 		return nil, err
 	}
-	r := &rtgs{ctx: ctx, cfg: cfg, st: st, genesis: genesis}
+	r := &rtgs{ctx: ctx, cfg: cfg, ctl: ctl, st: st, genesis: genesis}
 	if err := r.setup(); err != nil {
 		st.Close()
 		return nil, err
@@ -136,6 +140,8 @@ func (r *rtgs) setup() error {
 }
 
 func (r *rtgs) member(id string, settlement, vault int64) error {
+	r.mmu.Lock()
+	defer r.mmu.Unlock()
 	if r.members[id] {
 		return nil
 	}
@@ -193,7 +199,7 @@ func (r *rtgs) Balance(member string) (int64, error) {
 
 func (r *rtgs) Snapshot(id string) error {
 	name := r.st.Name() + "_snap_" + snapID(id)
-	if err := r.cfg.Claim("database_snapshot", name, ""); err != nil {
+	if err := r.ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: ownedSnapshot, Name: name}); err != nil {
 		return err
 	}
 	if err := r.st.Snapshot(r.ctx, snapID(id)); err != nil {
@@ -235,14 +241,14 @@ func (r *rtgs) DropSnapshot(id string) error {
 	if err := store.DropDatabases(r.ctx, r.st.URL(), []string{name}); err != nil {
 		return err
 	}
-	return r.cfg.Release("database_snapshot", name)
+	return r.ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name})
 }
 
 func (r *rtgs) Drop() error {
 	if err := r.st.Drop(r.ctx); err != nil {
 		return err
 	}
-	return r.cfg.Release("database", r.st.Name())
+	return r.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: r.st.Name()})
 }
 
 func (r *rtgs) Close() {
@@ -250,11 +256,18 @@ func (r *rtgs) Close() {
 }
 
 func (a *App) ensureRTGS() error {
-	if a.rtgs != nil || a.worldOnly || len(a.cfg.Banks) == 0 || time.Since(a.rtgsTried) < 10*time.Second {
+	a.mu.Lock()
+	if a.rtgs != nil || a.worldOnly || a.rtgsOpening || len(a.cfg.Banks) == 0 || a.clock.Real().Sub(a.rtgsTried) < 10*time.Second {
+		a.mu.Unlock()
 		return nil
 	}
-	a.rtgsTried = time.Now()
-	r, err := openRTGS(context.Background(), a.cfg, a.world.Config().Genesis.Start())
+	a.rtgsTried, a.rtgsOpening = a.clock.Real(), true
+	genesis := a.world.Config().Genesis.Start()
+	a.mu.Unlock()
+	r, err := openRTGS(context.Background(), a.cfg, a.ctl, genesis)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.rtgsOpening = false
 	if errors.Is(err, errSessions) {
 		return err
 	}
