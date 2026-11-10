@@ -137,11 +137,14 @@ func (s *ctlStore) flush(version uint64) error {
 	return nil
 }
 
-func (s *ctlStore) saved() error {
+func (s *ctlStore) durableStatus() (setup.Status, error) {
 	s.mu.Lock()
 	v := s.version
 	s.mu.Unlock()
-	return s.flush(v)
+	if err := s.flush(v); err != nil {
+		return setup.Status{}, err
+	}
+	return s.status()
 }
 
 func (s *ctlStore) update(fn func(*setup.Status) (bool, error)) error {
