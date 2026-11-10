@@ -526,7 +526,7 @@ func offlinePlan(dir string, req applyRequest) ([]byte, planReply, error) {
 	if len(errs) > 0 {
 		return nil, planReply{}, errors.Join(errs...)
 	}
-	reply, err := connect.PlanOffline(dir, spec, clock.DateOf(time.Now()))
+	reply, err := connect.PlanOffline(dir, spec)
 	if err != nil {
 		return nil, planReply{}, err
 	}

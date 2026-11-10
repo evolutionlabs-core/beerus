@@ -413,7 +413,27 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 		t.Fatalf("purge at the prompt with --json: %+v", closeJSON)
 	}
 
+	if _, err := cl.send("POST", "/clock/advance", map[string]string{"by": "365d"}); err != nil {
+		t.Fatal(err)
+	}
+	soon := mustStatus(t, dir).Applied
+	soon.Spec.Holidays.Add = []string{time.Now().AddDate(0, 0, 30).Format("2006-01-02")}
+	holiday, err := setup.Export(soon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holidayFile := filepath.Join(t.TempDir(), "holiday.yaml")
+	if err := os.WriteFile(holidayFile, holiday, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	live := d(cmdDiff, "", false, "-f", holidayFile)
+	if live.code != 1 || !strings.Contains(live.err, "holidays") {
+		t.Fatalf("a holiday in the past of the business clock, live: %+v", live)
+	}
 	stop()
+	if off := d(cmdDiff, "", false, "-f", holidayFile); off.code != live.code || off.err != live.err {
+		t.Fatalf("offline and live diff disagree:\n%+v\n%+v", off, live)
+	}
 	if r := d(cmdReset2, "", false, "wrong"); r.code != 1 || !strings.Contains(r.err, `holds setup "cli", not "wrong"`) {
 		t.Fatalf("reset with the wrong name: %+v", r)
 	}
