@@ -698,7 +698,7 @@ func (a *App) startAdmitted(ad *admission) {
 }
 
 func (a *App) Resource(kind, id string) (setup.Resource, error) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.durableStatus()
 	if err != nil {
 		return setup.Resource{}, err
 	}
@@ -711,7 +711,7 @@ func (a *App) Resource(kind, id string) (setup.Resource, error) {
 }
 
 func (a *App) resources(kind string, limit int, cursor string) ([]setup.Resource, string, error) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.durableStatus()
 	if err != nil {
 		return nil, "", err
 	}
@@ -738,7 +738,7 @@ func (a *App) waitGone(kind, id string) (bool, error) {
 		_, err := a.Resource(kind, id)
 		switch {
 		case errors.Is(err, errNotFound):
-			return true, a.ctl.saved()
+			return true, nil
 		case err != nil:
 			return false, err
 		}
