@@ -322,7 +322,7 @@ func finished(t target, r *setup.Resource) bool {
 		return r == nil
 	case setup.OpClose:
 		return r != nil && r.Phase == setup.PhaseClosed
-	case opFinish:
+	case opFinish, setup.OpUpdate:
 		return r == nil || ready(*r)
 	}
 	return r != nil && ready(*r)
@@ -503,6 +503,31 @@ func cmdApply(e *cli, args []string) error {
 	return e.runApply(c, req, *wait, *asJSON)
 }
 
+func (e *cli) livePlan(dir string, req applyRequest) ([]byte, planReply, error) {
+	c, err := e.client(dir)
+	if err != nil {
+		return nil, planReply{}, err
+	}
+	return e.plan(c, req)
+}
+
+func offlinePlan(dir string, req applyRequest) ([]byte, planReply, error) {
+	spec, errs := setup.Parse(req.File, []byte(req.Spec))
+	if len(errs) > 0 {
+		return nil, planReply{}, errors.Join(errs...)
+	}
+	reply, err := connect.PlanOffline(dir, spec, clock.DateOf(time.Now()))
+	if err != nil {
+		return nil, planReply{}, err
+	}
+	raw, err := json.Marshal(reply)
+	if err != nil {
+		return nil, planReply{}, fmt.Errorf("encode plan: %w", err)
+	}
+	p, err := decode[planReply](raw, "plan")
+	return raw, p, err
+}
+
 func cmdDiff(e *cli, args []string) error {
 	fs, dir, asJSON := e.flagset("diff")
 	file := fs.String("f", "", "setup file; defaults to setup.yaml in the state directory")
@@ -512,15 +537,17 @@ func cmdDiff(e *cli, args []string) error {
 	if fs.NArg() > 0 {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
-	c, err := e.client(*dir)
-	if err != nil {
+	if _, err := loadApplied(*dir); err != nil {
 		return err
 	}
 	req, err := specRequest(*dir, *file)
 	if err != nil {
 		return err
 	}
-	raw, p, err := e.plan(c, req)
+	raw, p, err := e.livePlan(*dir, req)
+	if errors.Is(err, errNotRunning) {
+		raw, p, err = offlinePlan(*dir, req)
+	}
 	if err != nil {
 		return err
 	}

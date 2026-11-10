@@ -82,7 +82,6 @@ func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
 		args []string
 	}{
 		{cmdApply, []string{"--dir", dir}},
-		{cmdDiff, []string{"--dir", dir}},
 		{cmdGet, []string{"banks", "--dir", dir}},
 		{cmdDescribe, []string{"bank", "bank-a", "--dir", dir}},
 	} {
@@ -100,6 +99,20 @@ func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(file); !strings.Contains(string(raw), "bank-b") || !strings.Contains(string(raw), "nuban_code: \"902\"") && !strings.Contains(string(raw), "nuban_code: 902") {
 		t.Fatalf("export should pin the codes:\n%s", raw)
+	}
+	if r := invoke(cmdDiff, "", false, "--dir", dir, "-f", file); r.code != 0 || r.out != "No changes.\n" {
+		t.Fatalf("offline diff of the export: %+v", r)
+	}
+	body, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed := filepath.Join(dir, "renamed.yaml")
+	if err := os.WriteFile(renamed, []byte(strings.Replace(string(body), "name: Bank B", "name: Zenith Bank", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := invoke(cmdDiff, "", false, "--dir", dir, "-f", renamed); r.code != exitChanges || !strings.Contains(r.out, "~ bank bank-b") || !strings.Contains(r.out, "Zenith Bank") {
+		t.Fatalf("offline diff of a rename: %+v", r)
 	}
 	if r := invoke(cmdVerify, "", false, "--dir", dir); r.code != 0 || !regexp.MustCompile(`^setup sha256:[0-9a-f]{64}\n$`).MatchString(r.out) {
 		t.Fatalf("verify: %+v", r)
@@ -345,8 +358,14 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 		t.Fatalf("close without a money decision: %+v", r)
 	}
 	r = d(cmdBankEnd, "", false, "purge", "bank-b", "--yes", "--money", "transfer", "--to", "bank-a", "--settle-now", "--wait", "90s")
-	if r.code != 0 || strings.Contains(banks(), "bank-b") {
+	if r.code != 0 || !strings.Contains(r.out, "~ bank bank-b") || !strings.Contains(r.out, "on_remove.money") || strings.Contains(banks(), "bank-b") {
 		t.Fatalf("purge with a money decision: %+v\n%s", r, banks())
+	}
+	if tombs := mustStatus(t, dir).Tombstones; len(tombs) != 1 || tombs[0].ID != "bank-b" || tombs[0].Status != "removed" {
+		t.Fatalf("tombstones cached after the purge: %+v", tombs)
+	}
+	if _, err := cl.send("POST", "/banks/bank-c/purge", map[string]bool{"bogus": true}); err == nil || !strings.Contains(err.Error(), "settle_now") {
+		t.Fatalf("purge with an unknown field: %v", err)
 	}
 	moved, err := cl.do("GET", "/banks/bank-a/customers", nil)
 	if err != nil || !strings.Contains(fmt.Sprint(moved["data"]), "Ada Obi") {

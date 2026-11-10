@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -76,7 +77,7 @@ func (a *App) snapshotsWith(id string) ([]string, error) {
 	return out, nil
 }
 
-func (a *App) PurgeBank(id string) (setup.Resource, error) {
+func (a *App) PurgeBank(id string, settleNow bool) (setup.Resource, error) {
 	err := a.applyEdit(func(sp *setup.Spec) error {
 		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
 		if i < 0 {
@@ -84,7 +85,7 @@ func (a *App) PurgeBank(id string) (setup.Resource, error) {
 		}
 		sp.Spec.Banks = slices.Delete(sp.Spec.Banks, i, i+1)
 		return nil
-	}, ApplyOptions{Prune: true})
+	}, ApplyOptions{Prune: true, SettleNow: settleNow})
 	if err != nil {
 		return setup.Resource{}, err
 	}
@@ -132,12 +133,14 @@ func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("purge %s: %w", id, err)
 	}
-	if err := a.readBackPurge(r); err != nil {
+	tomb, err := a.readBackPurge(r)
+	if err != nil {
 		return nil, err
 	}
 	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
 		st.Applied.Spec.Banks = slices.DeleteFunc(st.Applied.Spec.Banks, func(x setup.Bank) bool { return x.ID == id })
 		st.Resources = slices.DeleteFunc(st.Resources, func(x setup.Resource) bool { return x.Kind == setup.KindBank && x.ID == id })
+		keepTombstone(st, tomb)
 		return true, resum(st)
 	}); err != nil {
 		return nil, err
@@ -170,32 +173,32 @@ func (a *App) dropBankRows(id string) {
 	a.dirty()
 }
 
-func (a *App) readBackPurge(r setup.Resource) error {
+func (a *App) readBackPurge(r setup.Resource) (nibss.Institution, error) {
 	id := r.ID
 	if r.Allocated.Database != "" {
 		left, err := store.List(context.Background(), a.cfg.DatabaseURL, r.Allocated.Database)
 		if err != nil {
-			return fmt.Errorf("read back the databases of %s: %w", id, err)
+			return nibss.Institution{}, fmt.Errorf("read back the databases of %s: %w", id, err)
 		}
 		if slices.Contains(left, r.Allocated.Database) {
-			return fmt.Errorf("database %s of %s still exists after the purge", r.Allocated.Database, id)
+			return nibss.Institution{}, fmt.Errorf("database %s of %s still exists after the purge", r.Allocated.Database, id)
 		}
 	}
 	if _, err := os.Stat(a.cfg.Path("banks", id)); !os.IsNotExist(err) {
-		return fmt.Errorf("banks/%s still exists after the purge", id)
+		return nibss.Institution{}, fmt.Errorf("banks/%s still exists after the purge", id)
 	}
 	sw := a.nibssStore()
 	if sw == nil {
-		return errors.New("NIBSS is not open, so its tombstone for the bank cannot be read back; try again soon")
+		return nibss.Institution{}, errors.New("NIBSS is not open, so its tombstone for the bank cannot be read back; try again soon")
 	}
 	in, err := sw.Institution(context.Background(), r.Allocated.NIPCode)
 	if err != nil {
-		return fmt.Errorf("read back the NIBSS status of %s: %w", id, err)
+		return nibss.Institution{}, fmt.Errorf("read back the NIBSS status of %s: %w", id, err)
 	}
 	if in.Status != nibss.StatusRemoved {
-		return fmt.Errorf("NIBSS shows %s as %s, not %s", id, in.Status, nibss.StatusRemoved)
+		return nibss.Institution{}, fmt.Errorf("NIBSS shows %s as %s, not %s", id, in.Status, nibss.StatusRemoved)
 	}
-	return nil
+	return in, nil
 }
 
 func (a *App) dropSnapshotEverywhere(snap string) error {
@@ -275,7 +278,14 @@ func (a *App) ctlPurgeImpact(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlPurgeBank(w http.ResponseWriter, r *http.Request) {
-	res, err := a.PurgeBank(r.PathValue("id"))
+	var req struct {
+		SettleNow bool `json:"settle_now"`
+	}
+	if err := decodeBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send nothing or {"settle_now":true}.`)
+		return
+	}
+	res, err := a.PurgeBank(r.PathValue("id"), req.SettleNow)
 	if err != nil {
 		a.bankError(w, r, err)
 		return

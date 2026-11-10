@@ -3,6 +3,8 @@ package setup
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/evolutionlabs-core/beerus/internal/nibss"
 )
 
 const (
@@ -187,12 +189,13 @@ type PartnerLocal struct {
 }
 
 type Status struct {
-	Version       int        `json:"version"`
-	Setup         string     `json:"setup"`
-	SetupKey      uint64     `json:"setup_key,string"`
-	Applied       Spec       `json:"applied"`
-	AppliedSHA256 string     `json:"applied_sha256"`
-	Resources     []Resource `json:"resources"`
+	Version       int                 `json:"version"`
+	Setup         string              `json:"setup"`
+	SetupKey      uint64              `json:"setup_key,string"`
+	Applied       Spec                `json:"applied"`
+	AppliedSHA256 string              `json:"applied_sha256"`
+	Resources     []Resource          `json:"resources"`
+	Tombstones    []nibss.Institution `json:"tombstones,omitempty"`
 }
 
 type Resource struct {

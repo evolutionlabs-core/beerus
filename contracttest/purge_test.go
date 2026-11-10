@@ -317,7 +317,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	if tr, err := r.app.Transfer(connect.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 4_000_000, Key: "restart-1"}); err != nil || tr.Status != "success" {
 		t.Fatalf("transfer: %+v %v", tr, err)
 	}
-	if _, err := r.app.PurgeBank("bank-b"); err != nil {
+	if _, err := r.app.PurgeBank("bank-b", false); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "settle-inflight to wait", func() bool {
