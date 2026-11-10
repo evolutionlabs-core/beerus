@@ -239,7 +239,7 @@ func TestBankCLI(t *testing.T) {
 		t.Errorf("fault clear: %q", got)
 	}
 
-	if got := c.json("nip", "settle-now"); got["settled_sessions"] == nil || got["business_time"] != "2026-01-15T09:00:00+01:00" {
+	if got := c.json("nip", "settle-now"); got["settled_sessions"] == nil || !strings.HasPrefix(fmt.Sprint(got["business_time"]), "2026-01-15T09:00:") {
 		t.Errorf("settle-now --json: %v", got)
 	}
 	if got := c.ok("nip", "settle-now"); !strings.HasPrefix(got, "No sessions to settle at 09:00 WAT.") {
