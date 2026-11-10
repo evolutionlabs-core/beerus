@@ -8,13 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -32,7 +29,13 @@ const usage = `Beerus simulates a Nigerian banking ecosystem on your machine.
 
 Usage:
   beerus init [--dir .beerus] [--partner-port 7443] [--widget-port 7444] [--control-port 7480] [--health-port 7490]
-  beerus up [--dir .beerus]
+  beerus up [-f file] [--prune] [--dir .beerus]
+  beerus apply [-f file] [--prune] [--money transfer|payout|leave --to BANK --customer ID=CHOICE] [--settle-now] [--wait 5m] [--json]
+  beerus diff [-f file] [--json]
+  beerus get banks|partners [--limit N] [--cursor C] [--json]
+  beerus describe bank|partner <id> [--json]
+  beerus export [-o file] [--json]
+  beerus verify [--json]
   beerus run --participant cbn|sim|bank-a|bank-b [--dir .beerus] [--bind 0.0.0.0] [--core URL]
   beerus compose [--dir .beerus]
   beerus health URL [--token-file FILE]
@@ -65,11 +68,11 @@ Usage:
   beerus bank [list]
   beerus bank create --name NAME [--type commercial|digital|microfinance] [--id ID] [--nip-code N] [--nuban-code N] [--settles-through ID]
   beerus bank suspend|resume <id>
-  beerus bank close <id> --to BANK [--money transfer|payout|leave] [--customers a=payout,b=leave] [--dry-run] [--yes]
-  beerus bank purge <id> [--yes]
+  beerus bank close <id> [--money transfer|payout|leave --to BANK --customer ID=CHOICE] [--settle-now] [--wait 5m] [--yes] [--json]
+  beerus bank purge <id> [--money transfer|payout|leave --to BANK --customer ID=CHOICE] [--settle-now] [--wait 5m] [--yes] [--json]
   beerus registry [list | add-client <id> --cert-cn CN --public-key FILE --redirect-uri URL [--name N] [--legal-name N] [--cac N] | consents [--bank ID]]
   beerus doctor [--dir .beerus] [--fix]
-  beerus reset <setup-name> [--dir .beerus]
+  beerus reset <setup-name> [--dir .beerus] [--json]
   beerus trust [--dir .beerus]
   beerus untrust [--dir .beerus]
   beerus version
@@ -89,6 +92,23 @@ func main() {
 		err = cmdInit(args)
 	case "up":
 		err = cmdUp(args)
+	case "apply":
+		os.Exit(runSetup(cmdApply, args))
+	case "diff":
+		os.Exit(runSetup(cmdDiff, args))
+	case "get":
+		os.Exit(runSetup(cmdGet, args))
+	case "describe":
+		os.Exit(runSetup(cmdDescribe, args))
+	case "export":
+		os.Exit(runSetup(cmdExport, args))
+	case "verify":
+		os.Exit(runSetup(cmdVerify, args))
+	case "bank":
+		if len(args) > 0 && (args[0] == "close" || args[0] == "purge") {
+			os.Exit(runSetup(cmdBankEnd, args))
+		}
+		err = cmdControl(cmd, args)
 	case "run":
 		err = cmdRun(args)
 	case "compose":
@@ -226,46 +246,6 @@ func cmdDoctor(args []string) error {
 		fmt.Println("Run beerus doctor --fix to clean this up.")
 	}
 	return nil
-}
-
-func cmdUp(args []string) error {
-	fs := flag.NewFlagSet("up", flag.ExitOnError)
-	dir := fs.String("dir", defaultDir(), "state directory")
-	fs.Parse(args)
-	ok, err := connect.Initialized(*dir)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		if err := cmdInit([]string{"--dir", *dir}); err != nil {
-			return err
-		}
-		fmt.Println()
-	}
-	c, err := connect.LoadConfig(*dir)
-	if err != nil {
-		return err
-	}
-	if err := connect.CheckPorts(c); err != nil {
-		return err
-	}
-	if err := c.EnsureCertificates(); err != nil {
-		return err
-	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	app, err := connect.New(c, connect.Options{Logger: log})
-	if err != nil {
-		return err
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	fmt.Printf("Beerus Connect (stub) is running. Business time %s, world %s.\n\n", app.Clock().Now().Format(time.RFC1123), app.WorldID())
-	if err := printInfo(c); err != nil {
-		return err
-	}
-	fmt.Printf("\nControl room        %s\n", app.RoomURL())
-	fmt.Println("\nPress Ctrl+C to stop.")
-	return app.Serve(ctx)
 }
 
 type ctl struct {
@@ -503,47 +483,8 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		return waitBank(c, fmt.Sprint(out["id"]))
 	case (args[0] == "suspend" || args[0] == "resume") && len(args) == 2:
 		return c.do("POST", "/banks/"+args[1]+"/"+args[0], nil)
-	case args[0] == "close" && len(args) >= 2:
-		fs := flag.NewFlagSet("bank close", flag.ExitOnError)
-		dry := fs.Bool("dry-run", false, "show what closing the bank would affect, without closing it")
-		money := fs.String("money", "transfer", "what happens to customers' money: transfer, payout or leave")
-		to := fs.String("to", "", "bank that receives transferred or paid-out money")
-		each := fs.String("customers", "", "choices for single customers, such as cus_1=payout,cus_2=leave")
-		yes := fs.Bool("yes", false, "close the bank; this cannot be undone")
-		fs.Parse(args[2:])
-		if *dry || !*yes {
-			out, err := c.do("GET", "/banks/"+args[1]+"/close", nil)
-			if err == nil && !*dry {
-				out["next"] = "Nothing was closed. Run again with --yes to close the bank; closing cannot be undone."
-			}
-			return out, err
-		}
-		customers := map[string]string{}
-		for _, kv := range strings.Split(*each, ",") {
-			if kv == "" {
-				continue
-			}
-			k, v, ok := strings.Cut(kv, "=")
-			if !ok {
-				return nil, errors.New("--customers takes customer=choice pairs, such as cus_1=payout")
-			}
-			customers[strings.TrimSpace(k)] = strings.TrimSpace(v)
-		}
-		return c.do("POST", "/banks/"+args[1]+"/close", map[string]any{"money": *money, "to": *to, "customers": customers})
-	case args[0] == "purge" && len(args) >= 2:
-		fs := flag.NewFlagSet("bank purge", flag.ExitOnError)
-		yes := fs.Bool("yes", false, "purge the bank; this cannot be undone")
-		fs.Parse(args[2:])
-		if !*yes {
-			out, err := c.do("GET", "/banks/"+args[1]+"/purge", nil)
-			if err == nil {
-				out["next"] = "Nothing was purged. Run again with --yes to delete the bank's database, its snapshot copies and its entry in the setup; purging cannot be undone."
-			}
-			return out, err
-		}
-		return c.do("POST", "/banks/"+args[1]+"/purge", nil)
 	}
-	return nil, errors.New("usage: beerus bank [list [--state STATE] | create --name NAME | suspend <id> | resume <id> | close <id> --to BANK [--money transfer|payout|leave] --yes | purge <id> --yes]")
+	return nil, errors.New("usage: beerus bank [list [--state STATE] | create --name NAME | suspend <id> | resume <id> | close <id> | purge <id>]")
 }
 
 func waitBank(c *ctl, id string) (map[string]any, error) {

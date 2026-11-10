@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 func cmdReset(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("reset", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
+	asJSON := fs.Bool("json", false, "print the dropped databases as JSON")
 	var name string
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		name, args = args[0], args[1:]
@@ -24,7 +26,7 @@ func cmdReset(args []string, out io.Writer) error {
 		name = fs.Arg(0)
 	}
 	if name == "" {
-		return errors.New("usage: beerus reset <setup-name> [--dir .beerus]")
+		return errors.New("usage: beerus reset <setup-name> [--dir .beerus] [--json]")
 	}
 	t, err := connect.FindResetTarget(*dir)
 	if err != nil {
@@ -35,6 +37,14 @@ func cmdReset(args []string, out io.Writer) error {
 	}
 	dropped, err := connect.Reset(context.Background(), t.Dir, t.DatabaseURL)
 	if err != nil {
+		return err
+	}
+	if *asJSON {
+		raw, err := json.MarshalIndent(map[string]any{"dir": t.Dir, "dropped": append([]string{}, dropped...)}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode reset result: %w", err)
+		}
+		_, err = fmt.Fprintln(out, string(raw))
 		return err
 	}
 	if len(dropped) == 0 {
