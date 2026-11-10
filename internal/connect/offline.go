@@ -29,15 +29,17 @@ func PlanOffline(dir string, desired setup.Spec, today clock.Date) (PlanReply, e
 	if errs := setup.Validate(desired); len(errs) > 0 {
 		return PlanReply{}, planFailure(errs)
 	}
+	warning := ""
 	rows, err := offlineDirectory(cfg)
 	if err != nil {
 		rows = slices.Clone(st.Tombstones)
+		warning = fmt.Sprintf("NIBSS is not reachable (%v); the plan uses only the removed banks cached in %s, so it cannot check codes against live banks.", err, statusFile)
 	}
 	plan := setup.Build(desired, st, rows, today)
 	if len(plan.Errors) > 0 {
 		return PlanReply{}, planFailure(plan.Errors)
 	}
-	return PlanReply{Plan: plan, Text: setup.Render(plan), Changed: changes(plan)}, nil
+	return PlanReply{Plan: plan, Text: setup.Render(plan), Changed: changes(plan), Warning: warning}, nil
 }
 
 func offlineDirectory(cfg *config.Config) ([]nibss.Institution, error) {

@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,7 +112,7 @@ func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
 	if err := os.WriteFile(renamed, []byte(strings.Replace(string(body), "name: Bank B", "name: Zenith Bank", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if r := invoke(cmdDiff, "", false, "--dir", dir, "-f", renamed); r.code != exitChanges || !strings.Contains(r.out, "~ bank bank-b") || !strings.Contains(r.out, "Zenith Bank") {
+	if r := invoke(cmdDiff, "", false, "--dir", dir, "-f", renamed); r.code != exitChanges || !strings.Contains(r.out, "~ bank bank-b") || !strings.Contains(r.out, "Zenith Bank") || !strings.Contains(r.err, "beerus: NIBSS is not reachable (") || !strings.Contains(r.err, "cannot check codes against live banks.") {
 		t.Fatalf("offline diff of a rename: %+v", r)
 	}
 	if r := invoke(cmdVerify, "", false, "--dir", dir); r.code != 0 || !regexp.MustCompile(`^setup sha256:[0-9a-f]{64}\n$`).MatchString(r.out) {
@@ -151,6 +152,23 @@ func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
 	if r := invoke(cmdDiff, "", false, "--dir", t.TempDir()); r.code != 1 || !strings.Contains(r.err, "holds no Beerus setup; run beerus up to make one") {
 		t.Errorf("diff in an empty dir: %+v", r)
 	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func jsonEqual(t *testing.T, a, b string) {
@@ -204,7 +222,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	var upOut, upErr bytes.Buffer
+	var upOut, upErr lockedBuffer
 	died := make(chan error, 1)
 	go func() {
 		e := &cli{in: bufio.NewReader(strings.NewReader("")), out: &upOut, errOut: &upErr}
@@ -289,13 +307,19 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := cl.send("GET", "/resources?kind=cat", nil); err == nil || !strings.Contains(err.Error(), "Use bank, partner or system") {
+		t.Fatalf("an unknown kind: %v", err)
+	}
+	if paged := banks("--limit", "1"); strings.Count(paged, "\nbank-") != 1 || !strings.Contains(paged, "More: run again with --cursor bank/bank-a") {
+		t.Fatalf("one bank per page:\n%s", paged)
+	}
 	for _, c := range []struct {
 		name string
 		fn   func(*cli, []string) error
 		args []string
 		path string
 	}{
-		{"get", cmdGet, []string{"banks"}, "/resources"},
+		{"get", cmdGet, []string{"banks"}, "/resources?kind=bank"},
 		{"describe", cmdDescribe, []string{"bank", "bank-c"}, "/resources/bank/bank-c"},
 	} {
 		api, err := cl.send("GET", c.path, nil)
