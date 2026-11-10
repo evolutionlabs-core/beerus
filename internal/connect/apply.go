@@ -110,6 +110,9 @@ func (a *App) applyEdit(edit func(*setup.Spec) error, opt ApplyOptions) error {
 }
 
 func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt ApplyOptions) (setup.Plan, error) {
+	if opt.SettleNow {
+		return setup.Plan{}, applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "settle_now is not supported yet. Run beerus nip settle-now after the removal starts, or advance the clock.")
+	}
 	st, err := a.ctl.status()
 	if err != nil {
 		return setup.Plan{}, err
