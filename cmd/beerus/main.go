@@ -45,18 +45,16 @@ Usage:
   beerus scenarios
   beerus scenario run <file.yaml>
   beerus scenario <name> --connection ID
-  beerus customer create --bank ID --name N --phone P --dob YYYY-MM-DD [--username U --password-stdin]
-  beerus customer close <id> --bank ID
-  beerus customers --bank ID [--limit N] [--cursor C]
-  beerus account open --bank ID --customer ID [--type current|savings]
-  beerus account close <nuban> --bank ID
-  beerus accounts --bank ID [--customer ID] [--limit N] [--cursor C]
-  beerus deposit|withdraw <nuban> --bank ID --amount NAIRA
-  beerus statement <nuban> --bank ID [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit N] [--cursor C]
-  beerus transfer --from-bank ID --from NUBAN --to NUBAN [--to-bank ID] --amount NAIRA [--narration TEXT]
-  beerus nip name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions | settlement | settle-now
-  beerus faults
-  beerus fault add down --bank ID [--for 1h] | add timeout --bank ID --outcome credited|failed|unknown [--count N] | clear [--bank ID]
+  beerus use <bank>
+  beerus customer create [--bank ID] --name N --phone P --dob YYYY-MM-DD [--username U --password-stdin] | close <id>
+  beerus customers [--bank ID] [--limit N] [--cursor C]
+  beerus account open [--bank ID] --customer ID --type current|savings | close <nuban>
+  beerus accounts [--bank ID] [--customer ID] [--limit N] [--cursor C]
+  beerus deposit|withdraw <nuban> [--bank ID] --amount NAIRA
+  beerus statement <nuban> [--bank ID] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit N] [--cursor C]
+  beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT]
+  beerus nip status <session_id> | settle-now | name-enquiry <bank_code> <nuban> | participants | positions | settlement
+  beerus fault down [--bank ID] [--for 1h] | timeout [--bank ID] --outcome credited|failed|unknown [--count N] | list | clear [--bank ID]
   beerus connections
   beerus revoke <connection-id>
   beerus sync
@@ -75,6 +73,7 @@ Usage:
   beerus version
 
 The state directory defaults to .beerus, or $BEERUS_DIR when set.
+Banking commands use the bank chosen by beerus use when --bank is left out, and take --json to print the API response.
 `
 
 func main() {
@@ -107,6 +106,10 @@ func main() {
 		err = cmdTrust(args, true)
 	case "untrust":
 		err = cmdTrust(args, false)
+	case "use":
+		err = cmdUse(args)
+	case "customer", "customers", "account", "accounts", "statement", "deposit", "withdraw", "transfer", "fault", "nip":
+		err = cmdBanking(cmd, args)
 	case "version":
 		fmt.Println("beerus", version)
 	case "help", "-h", "--help":
@@ -368,33 +371,6 @@ func cmdControl(cmd string, args []string) error {
 		conn := fs.String("connection", "", "connection ID")
 		fs.Parse(args[1:])
 		out, err = c.do("POST", "/scenarios/"+args[0], map[string]any{"connection_id": *conn})
-	case "customer":
-		out, err = cmdCustomer(c, args)
-	case "account":
-		out, err = cmdAccount(c, args)
-	case "customers", "accounts", "statement":
-		out, err = cmdList(c, cmd, args)
-	case "deposit", "withdraw":
-		out, err = cmdCash(c, cmd, args)
-	case "faults":
-		out, err = c.do("GET", "/faults", nil)
-	case "fault":
-		out, err = cmdFault(c, args)
-	case "transfer":
-		out, err = cmdTransfer(c, args)
-	case "nip":
-		switch {
-		case len(args) == 3 && args[0] == "name-enquiry":
-			out, err = c.do("GET", "/nip/name-enquiry?bank_code="+url.QueryEscape(args[1])+"&account_number="+url.QueryEscape(args[2]), nil)
-		case len(args) == 2 && args[0] == "status":
-			out, err = c.do("GET", "/nip/sessions/"+url.PathEscape(args[1]), nil)
-		case len(args) == 1 && (args[0] == "participants" || args[0] == "positions" || args[0] == "settlement"):
-			out, err = c.do("GET", "/nip/"+args[0], nil)
-		case len(args) == 1 && args[0] == "settle-now":
-			out, err = c.do("POST", "/nip/settle-now", nil)
-		default:
-			return errors.New("usage: beerus nip [name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions | settlement | settle-now]")
-		}
 	case "connections":
 		out, err = c.do("GET", "/connections", nil)
 	case "revoke":
