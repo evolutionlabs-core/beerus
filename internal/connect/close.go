@@ -432,10 +432,10 @@ func (a *App) closeBooks(id string, imp CloseImpact, choice map[string]string, t
 			}
 		}
 	}
-	return a.closeOutcome(id, imp, choice, from, now)
+	return a.closeOutcome(id, imp, choice, from)
 }
 
-func (a *App) closeOutcome(id string, imp CloseImpact, choice map[string]string, from *ledgerSource, now time.Time) (CloseResult, error) {
+func (a *App) closeOutcome(id string, imp CloseImpact, choice map[string]string, from *ledgerSource) (CloseResult, error) {
 	b := a.bankByID(id)
 	sw := a.nibssStore()
 	if b == nil || sw == nil {
@@ -478,8 +478,9 @@ func (a *App) closeOutcome(id string, imp CloseImpact, choice map[string]string,
 		}
 	}
 	held := map[string]int64{}
+	readAt := a.clock.Now()
 	for _, acc := range imp.Accounts {
-		bal, err := bk.BalanceAt(from.ctx, acc.NUBAN, now)
+		bal, err := bk.BalanceAt(from.ctx, acc.NUBAN, readAt)
 		if err != nil {
 			return CloseResult{}, fmt.Errorf("read back the balance of %s: %w", acc.NUBAN, err)
 		}

@@ -144,7 +144,29 @@ func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt Apply
 	a.requestSettleNow(opt, settling)
 	a.startAdmitted(ad)
 	a.poke()
-	return pl.plan, nil
+	plan := pl.plan
+	plan.Actions = append(slices.Clone(plan.Actions), retargetActions(pl.st, retarget, opt.Money)...)
+	return plan, nil
+}
+
+func retargetActions(st setup.Status, retarget map[string]bool, rm *setup.Removal) []setup.Action {
+	var out []setup.Action
+	for _, r := range st.Resources {
+		if !retarget[r.ID] || r.Kind != setup.KindBank {
+			continue
+		}
+		a := setup.Action{Op: setup.OpUpdate, Kind: setup.KindBank, ID: r.ID}
+		old := setup.Removal{}
+		if r.Money != nil {
+			old = *r.Money
+		}
+		a.Fields = append(a.Fields, setup.FieldChange{Path: "on_remove.money", From: old.Money, To: rm.Money})
+		if old.To != rm.To {
+			a.Fields = append(a.Fields, setup.FieldChange{Path: "on_remove.to", From: old.To, To: rm.To})
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 func settleTargets(pl planned) []string {

@@ -747,7 +747,7 @@ func (a *App) roomPurgeBank(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(r.PostForm.Get("confirm")) != id {
 			err = invalid("type %s to confirm", id)
 		} else {
-			_, err = a.PurgeBank(id)
+			_, err = a.PurgeBank(id, false)
 		}
 		switch {
 		case err == nil:
