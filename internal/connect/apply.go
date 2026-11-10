@@ -743,7 +743,7 @@ func (a *App) waitGone(kind, id string) (bool, error) {
 		_, err := a.Resource(kind, id)
 		switch {
 		case errors.Is(err, errNotFound):
-			return true, nil
+			return true, a.ctl.saved()
 		case err != nil:
 			return false, err
 		}
