@@ -287,6 +287,10 @@ func addMinor(a, b int64) (int64, bool) {
 func (a *App) settle(now time.Time, adhoc bool) (int, error) {
 	a.gate.RLock()
 	defer a.gate.RUnlock()
+	return a.settleGated(now, adhoc)
+}
+
+func (a *App) settleGated(now time.Time, adhoc bool) (int, error) {
 	a.mu.Lock()
 	for a.settling {
 		a.settleDone.Wait()
@@ -341,13 +345,13 @@ func (a *App) settle(now time.Time, adhoc bool) (int, error) {
 		groups[c] = append(groups[c], x)
 	}
 	for _, c := range slices.SortedFunc(maps.Keys(groups), func(x, y time.Time) int { return x.Compare(y) }) {
-		key := sched.key(c)
-		if adhoc {
-			key = "adhoc:" + c.In(clock.Lagos).Format(time.RFC3339Nano)
-		}
 		ids := make([]string, 0, len(groups[c]))
 		for _, x := range groups[c] {
 			ids = append(ids, x.ID)
+		}
+		key := sched.key(c)
+		if adhoc {
+			key = "adhoc:" + c.In(clock.Lagos).Format(time.RFC3339Nano) + ":" + ids[0]
 		}
 		if err := sw.MarkSettled(ctx, ids, key, c); err != nil {
 			return 0, err
@@ -440,14 +444,13 @@ func (a *App) CheckSettlement() (SettlementCheck, error) {
 		return out, err
 	}
 	a.mu.Lock()
-	r := a.rtgs
 	ledgers := slices.Clone(a.ledgers)
 	a.mu.Unlock()
-	sw := a.nibssStore()
-	if r == nil || sw == nil {
-		return out, nil
+	books, err := a.settlementBooks()
+	if err != nil {
+		return out, err
 	}
-	ctx := context.Background()
+	ctx, r := books.ctx, books.r
 	if err := r.l.Pool().QueryRow(ctx, `SELECT count(*) FROM journal_entries WHERE kind = 'session'`).Scan(&out.Sessions); err != nil {
 		return out, fmt.Errorf("count CBN sessions: %w", err)
 	}
@@ -458,72 +461,12 @@ func (a *App) CheckSettlement() (SettlementCheck, error) {
 	if c.TrialBalance != 0 || len(c.UnbalancedEntries) > 0 {
 		out.Problems = append(out.Problems, fmt.Sprintf("the CBN's books do not balance: %d", c.TrialBalance))
 	}
-	nibssNets, err := sw.SettledNets(ctx)
-	if err != nil {
-		return out, err
-	}
-	cbnNets, err := r.sessionNets()
-	if err != nil {
-		return out, err
-	}
-	open, err := sw.Open(ctx)
-	if err != nil {
-		return out, err
-	}
 	for _, l := range ledgers {
-		code, id := l.inst.NIPCode, l.inst.ID
-		b := l.Bank()
-		posted, err := b.Settlements(ctx)
+		problems, err := books.check(l)
 		if err != nil {
 			return out, err
 		}
-		keys := map[string]bool{}
-		for k := range nibssNets[code] {
-			keys[k] = true
-		}
-		for k := range posted {
-			keys[k] = true
-		}
-		for k := range cbnNets[id] {
-			keys[k] = true
-		}
-		for _, k := range slices.Sorted(maps.Keys(keys)) {
-			n, p, m := nibssNets[code][k], posted[k], cbnNets[id][k]
-			if n != p || n != m {
-				out.Problems = append(out.Problems, fmt.Sprintf("session %s at %s: NIBSS nets %d, the bank posted %d and the CBN moved %d", k, id, n, p, m))
-			}
-		}
-		var want position
-		for _, x := range open {
-			if x.FromCode == code {
-				want.outward += x.Amount
-			}
-			if x.ToCode == code && (x.Status == nibss.SessionOK || x.Outcome == nibss.OutcomeCredited) {
-				want.inward += x.Amount
-			}
-		}
-		owe, err := b.L.Balance(ctx, bank.NIPOutward)
-		if err != nil {
-			return out, err
-		}
-		due, err := b.L.Balance(ctx, bank.NIPInward)
-		if err != nil {
-			return out, err
-		}
-		if owe != want.outward || due != want.inward {
-			out.Problems = append(out.Problems, fmt.Sprintf("%s has NIP payable %d and receivable %d, but its open NIBSS sessions come to %d and %d", id, owe, due, want.outward, want.inward))
-		}
-		held, err := b.L.Balance(ctx, bank.Settlement)
-		if err != nil {
-			return out, err
-		}
-		rtgsBal, err := r.Balance(id)
-		if err != nil {
-			return out, err
-		}
-		if held != rtgsBal {
-			out.Problems = append(out.Problems, fmt.Sprintf("%s's books show %d at the CBN, but the CBN shows %d", id, held, rtgsBal))
-		}
+		out.Problems = append(out.Problems, problems...)
 	}
 	return out, nil
 }
@@ -549,4 +492,95 @@ func (r *rtgs) sessionNets() (map[string]map[string]int64, error) {
 		out[member][key] = net
 	}
 	return out, rows.Err()
+}
+
+type settlementBooks struct {
+	r         *rtgs
+	ctx       context.Context
+	nibssNets map[string]map[string]int64
+	cbnNets   map[string]map[string]int64
+	open      []nibss.Session
+}
+
+func (a *App) settlementBooks() (settlementBooks, error) {
+	a.mu.Lock()
+	r := a.rtgs
+	a.mu.Unlock()
+	sw := a.nibssStore()
+	if r == nil || sw == nil {
+		return settlementBooks{}, errors.New("the CBN ledger or NIBSS is not open yet; try again soon")
+	}
+	ctx := context.Background()
+	nibssNets, err := sw.SettledNets(ctx)
+	if err != nil {
+		return settlementBooks{}, err
+	}
+	cbnNets, err := r.sessionNets()
+	if err != nil {
+		return settlementBooks{}, err
+	}
+	open, err := sw.Open(ctx)
+	if err != nil {
+		return settlementBooks{}, err
+	}
+	return settlementBooks{r: r, ctx: ctx, nibssNets: nibssNets, cbnNets: cbnNets, open: open}, nil
+}
+
+func (s settlementBooks) check(l *ledgerSource) ([]string, error) {
+	var out []string
+	ctx := s.ctx
+	code, id := l.inst.NIPCode, l.inst.ID
+	b := l.Bank()
+	posted, err := b.Settlements(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys := map[string]bool{}
+	for k := range s.nibssNets[code] {
+		keys[k] = true
+	}
+	for k := range posted {
+		keys[k] = true
+	}
+	for k := range s.cbnNets[id] {
+		keys[k] = true
+	}
+	for _, k := range slices.Sorted(maps.Keys(keys)) {
+		n, p, m := s.nibssNets[code][k], posted[k], s.cbnNets[id][k]
+		if n != p || n != m {
+			out = append(out, fmt.Sprintf("session %s at %s: NIBSS nets %d, the bank posted %d and the CBN moved %d", k, id, n, p, m))
+		}
+	}
+	var want position
+	for _, x := range s.open {
+		if x.FromCode == code {
+			want.outward += x.Amount
+		}
+		if x.ToCode == code && (x.Status == nibss.SessionOK || x.Outcome == nibss.OutcomeCredited) {
+			want.inward += x.Amount
+		}
+	}
+	owe, err := b.L.Balance(ctx, bank.NIPOutward)
+	if err != nil {
+		return nil, err
+	}
+	due, err := b.L.Balance(ctx, bank.NIPInward)
+	if err != nil {
+		return nil, err
+	}
+	if owe != want.outward || due != want.inward {
+		out = append(out, fmt.Sprintf("%s has NIP payable %d and receivable %d, but its open NIBSS sessions come to %d and %d", id, owe, due, want.outward, want.inward))
+	}
+	held, err := b.L.Balance(ctx, bank.Settlement)
+	if err != nil {
+		return nil, err
+	}
+	rtgsBal, err := s.r.Balance(id)
+	if err != nil {
+		return nil, err
+	}
+	if held != rtgsBal {
+		out = append(out, fmt.Sprintf("%s's books show %d at the CBN, but the CBN shows %d", id, held, rtgsBal))
+	}
+	return out, nil
 }

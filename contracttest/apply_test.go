@@ -44,7 +44,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 		})
 	}
 
-	if _, err := post("/apply", applied(), map[string]any{"prune": true, "settle_now": true}); err == nil || !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "settle_now is not supported yet") {
+	if _, err := post("/apply", applied(), map[string]any{"prune": true, "settle_now": true}); err == nil || !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "settle_now needs a bank that is being closed or removed. Nothing was changed.") {
 		t.Fatalf("settle_now: %v", err)
 	}
 	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": strings.Repeat("x", 41)}); err == nil || !strings.Contains(err.Error(), "has 41 characters. Use 1 to 40") {
@@ -151,7 +151,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 		return sum
 	}
 	home, held := s.persona("adaeze"), total(s.persona("adaeze"))
-	if _, err := post("/apply", byeC, map[string]any{"prune": true}); err != nil {
+	if _, err := post("/apply", byeC, map[string]any{"prune": true, "settle_now": true}); err != nil {
 		t.Fatal(err)
 	}
 	s.waitBlocked("bank-c", setup.ReasonMoneyDecisionNeeded, "Abuja Digital holds ₦100.00 for 1 customer. Run beerus apply --prune --money transfer --to <bank>.")
@@ -164,9 +164,8 @@ func TestApplyFromTheSpec(t *testing.T) {
 	if _, err := post("/apply", byeC, map[string]any{"prune": true, "money": moveTo}); err != nil {
 		t.Fatal(err)
 	}
-	s.waitBlocked("bank-c", setup.ReasonSettlementPending, "NIP sessions with this bank have not settled")
-	s.ctl("POST", "/nip/settle-now", nil)
 	s.waitGone("bank", "bank-c")
+	checkSettled(t, s.app)
 	if got := total(home); got != held+10000 {
 		t.Fatalf("adaeze holds %d at bank-a after bank-c sent her money, want %d", got, held+10000)
 	}
@@ -236,5 +235,29 @@ func TestApplyFromTheSpec(t *testing.T) {
 	}
 	if _, err := s.ctlTry("GET", "/resources?limit=0", nil); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
 		t.Fatalf("a bad limit: %v", err)
+	}
+
+	revoked := func() int {
+		n := 0
+		for key := range s.consentTrail("bank-a") {
+			if strings.Contains(key, " Revoked/") {
+				n++
+			}
+		}
+		return n
+	}
+	s.connect("adaeze", "bank-a", s.today().AddDays(-3))
+	revokedBefore := revoked()
+	noBalance := applied()
+	noBalance.Spec.Partners = slices.DeleteFunc(noBalance.Spec.Partners, func(p setup.Partner) bool { return p.ID == "balance" })
+	if _, err := post("/apply", noBalance, map[string]any{"prune": true}); err != nil {
+		t.Fatal(err)
+	}
+	s.waitGone("partner", "balance")
+	if got := revoked(); got != revokedBefore+1 {
+		t.Fatalf("the removed partner's connection was revoked at the bank %d times, want 1", got-revokedBefore)
+	}
+	if rows := s.ctl("GET", "/connections", nil)["data"].([]any); len(rows) != 0 {
+		t.Fatalf("the removed partner's connections are still stored: %v", rows)
 	}
 }

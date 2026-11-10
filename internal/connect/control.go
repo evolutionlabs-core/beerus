@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 func (a *App) ControlHandler() http.Handler {
@@ -489,10 +490,21 @@ func (a *App) RestoreSnapshot(id string) (result string, err error) {
 	if !f.Meta.NIBSS {
 		return "", fmt.Errorf("snapshot %s has no copy of NIBSS", id)
 	}
-	for _, b := range a.bankList() {
-		if phase := a.bankPhase(b.ID); phase == PhaseClosing || phase == PhaseTerminating {
-			return "", fmt.Errorf("%s is %s, so a snapshot cannot be restored until that finishes", b.Name, phase)
+	stored, err := a.ctl.status()
+	if err != nil {
+		return "", fmt.Errorf("read control.json: %w", err)
+	}
+	for _, r := range stored.Resources {
+		if r.Phase != setup.PhaseClosing && r.Phase != setup.PhaseTerminating {
+			continue
 		}
+		name := r.ID
+		if b := a.bankByID(r.ID); b != nil && r.Kind == setup.KindBank {
+			name = b.Name
+		} else if r.Kind == setup.KindPartner {
+			name = "partner " + r.ID
+		}
+		return "", fmt.Errorf("%s is %s, so a snapshot cannot be restored until that finishes", name, r.Phase)
 	}
 	a.mu.Lock()
 	for _, bid := range f.Meta.Banks {

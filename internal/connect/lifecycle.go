@@ -182,7 +182,14 @@ func (a *App) CreateBank(req BankRequest) (BankStatus, error) {
 	if id == "" {
 		id = strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
 	}
-	err := a.applyEdit(func(sp *setup.Spec) error {
+	stored, err := a.ctl.status()
+	if err != nil {
+		return BankStatus{}, fmt.Errorf("read control.json: %w", err)
+	}
+	if r := findResource(&stored, setup.KindBank, id); r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
+		return BankStatus{}, applyFail(http.StatusConflict, codeBeingRemoved, "banks[%s] is being removed and cannot be added back until removal finishes. Wait for it.", id)
+	}
+	err = a.applyEdit(func(sp *setup.Spec) error {
 		nb := setup.Bank{ID: id, Name: name, Type: orDefault(req.Type, "commercial"), NIPCode: req.NIPCode, NUBANCode: req.NUBANCode, SettlesThrough: req.SettlesThrough}
 		if nb.SettlesThrough == "" && nb.Type == "microfinance" {
 			for _, b := range sp.Spec.Banks {

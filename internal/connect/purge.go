@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -45,11 +44,13 @@ func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
 			out.Blockers = append(out.Blockers, other.Name+" settles through this bank; purge it first")
 		}
 	}
-	waiting, err := a.unsettledWith(b.NIPCode)
+	waiting, err := a.inflightWith(b.NIPCode, id)
 	if err != nil {
 		return PurgeImpact{}, err
 	}
-	out.Blockers = append(out.Blockers, waiting...)
+	if waiting != "" {
+		out.Blockers = append(out.Blockers, waiting)
+	}
 	a.mu.Lock()
 	for _, c := range a.st.Connections {
 		if c.Institution == id {
@@ -57,47 +58,6 @@ func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
 		}
 	}
 	a.mu.Unlock()
-	return out, nil
-}
-
-func (a *App) unsettledWith(code string) ([]string, error) {
-	sw := a.nibssStore()
-	if sw == nil {
-		return nil, errors.New("NIBSS is not available right now")
-	}
-	sessions, err := sw.Open(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("check open NIP sessions: %w", err)
-	}
-	waiting := 0
-	for _, x := range sessions {
-		if x.FromCode == code || x.ToCode == code {
-			waiting++
-		}
-	}
-	var out []string
-	switch {
-	case waiting == 1:
-		out = append(out, "1 NIP session with this bank has not settled; wait for the next settlement or run beerus nip settle-now")
-	case waiting > 1:
-		out = append(out, fmt.Sprintf("%d NIP sessions with this bank have not settled; wait for the next settlement or run beerus nip settle-now", waiting))
-	}
-	unposted, err := sw.Unposted(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("check unposted settlements: %w", err)
-	}
-	awaiting := 0
-	for _, settlement := range unposted {
-		if slices.ContainsFunc(settlement.Sessions, func(x nibss.Session) bool { return x.FromCode == code || x.ToCode == code }) {
-			awaiting++
-		}
-	}
-	switch {
-	case awaiting == 1:
-		out = append(out, "1 settlement with this bank has not been posted to the books; wait for the next step and try again")
-	case awaiting > 1:
-		out = append(out, fmt.Sprintf("%d settlements with this bank have not been posted to the books; wait for the next step and try again", awaiting))
-	}
 	return out, nil
 }
 
@@ -133,12 +93,12 @@ func (a *App) PurgeBank(id string) (setup.Resource, error) {
 
 func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
-	waiting, err := a.unsettledWith(r.Allocated.NIPCode)
+	waiting, err := a.inflightWith(r.Allocated.NIPCode, id)
 	if err != nil {
 		return nil, err
 	}
-	if len(waiting) > 0 {
-		return a.blocked(setup.ReasonSettlementPending, "%s", strings.Join(waiting, "; ")), nil
+	if waiting != "" {
+		return a.blocked(setup.ReasonSettlementPending, "%s", waiting), nil
 	}
 	b := a.bankByID(id)
 	snaps, err := a.snapshotsWith(id)
@@ -164,9 +124,16 @@ func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
 	for _, snap := range snaps {
 		errs = append(errs, a.dropSnapshotEverywhere(snap))
 	}
+	a.obMu.Lock()
+	delete(a.obs, id)
+	a.obMu.Unlock()
 	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.removeMember(id))
+	a.dropBankRows(id)
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("purge %s: %w", id, err)
+	}
+	if err := a.readBackPurge(r); err != nil {
+		return nil, err
 	}
 	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
 		st.Applied.Spec.Banks = slices.DeleteFunc(st.Applied.Spec.Banks, func(x setup.Bank) bool { return x.ID == id })
@@ -175,6 +142,7 @@ func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
 	}); err != nil {
 		return nil, err
 	}
+	a.clearSettleNow(setup.KindBank, id)
 	a.lifeMu.Lock()
 	a.mu.Lock()
 	a.cfg.Banks = slices.DeleteFunc(slices.Clone(a.cfg.Banks), func(x *config.Bank) bool { return x.ID == id })
@@ -183,6 +151,51 @@ func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
 	a.lifeMu.Unlock()
 	a.poke()
 	return nil, nil
+}
+
+func (a *App) dropBankRows(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for cid, c := range a.st.Connections {
+		if c.Institution == id {
+			a.vaultDrop(cid)
+		}
+	}
+	for lid, l := range a.st.LinkSessions {
+		if l.Institution == id {
+			delete(a.st.LinkSessions, lid)
+		}
+	}
+	a.st.Revokes = slices.DeleteFunc(a.st.Revokes, func(p PendingRevoke) bool { return p.Bank == id })
+	a.dirty()
+}
+
+func (a *App) readBackPurge(r setup.Resource) error {
+	id := r.ID
+	if r.Allocated.Database != "" {
+		left, err := store.List(context.Background(), a.cfg.DatabaseURL, r.Allocated.Database)
+		if err != nil {
+			return fmt.Errorf("read back the databases of %s: %w", id, err)
+		}
+		if slices.Contains(left, r.Allocated.Database) {
+			return fmt.Errorf("database %s of %s still exists after the purge", r.Allocated.Database, id)
+		}
+	}
+	if _, err := os.Stat(a.cfg.Path("banks", id)); !os.IsNotExist(err) {
+		return fmt.Errorf("banks/%s still exists after the purge", id)
+	}
+	sw := a.nibssStore()
+	if sw == nil {
+		return errors.New("NIBSS is not open, so its tombstone for the bank cannot be read back; try again soon")
+	}
+	in, err := sw.Institution(context.Background(), r.Allocated.NIPCode)
+	if err != nil {
+		return fmt.Errorf("read back the NIBSS status of %s: %w", id, err)
+	}
+	if in.Status != nibss.StatusRemoved {
+		return fmt.Errorf("NIBSS shows %s as %s, not %s", id, in.Status, nibss.StatusRemoved)
+	}
+	return nil
 }
 
 func (a *App) dropSnapshotEverywhere(snap string) error {
@@ -208,6 +221,7 @@ func (a *App) purgePartner(r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
 	a.partnerMu.Lock()
 	defer a.partnerMu.Unlock()
+	a.dropPartnerRows(id)
 	if err := os.RemoveAll(a.cfg.Path("partners", id)); err != nil {
 		return nil, fmt.Errorf("remove partners/%s: %w", id, err)
 	}
@@ -220,6 +234,35 @@ func (a *App) purgePartner(r setup.Resource) (*setup.Condition, error) {
 	}
 	a.replacePartner(id, nil)
 	return nil, nil
+}
+
+func (a *App) dropPartnerRows(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for cid, c := range a.st.Connections {
+		if c.PartnerID == id {
+			a.vaultDrop(cid)
+			delete(a.st.Connections, cid)
+		}
+	}
+	for aid, acct := range a.st.Accounts {
+		if acct.PartnerID == id {
+			delete(a.st.Accounts, aid)
+			delete(a.st.Feeds, aid)
+		}
+	}
+	for rid, ref := range a.st.Refreshes {
+		if a.st.Accounts[ref.AccountID] == nil {
+			delete(a.st.Refreshes, rid)
+		}
+	}
+	for lid, l := range a.st.LinkSessions {
+		if l.PartnerID == id {
+			delete(a.st.LinkSessions, lid)
+		}
+	}
+	a.st.Deliveries = slices.DeleteFunc(a.st.Deliveries, func(d *Delivery) bool { return d.PartnerID == id })
+	a.dirty()
 }
 
 func (a *App) ctlPurgeImpact(w http.ResponseWriter, r *http.Request) {

@@ -128,6 +128,52 @@ func (b *Bank) CashWithdrawal(ctx context.Context, key, nuban string, amount int
 	return b.L.Post(ctx, e)
 }
 
+func (b *Bank) ClosurePayout(ctx context.Context, key, nuban string, amount int64, at time.Time) (ledger.Posted, error) {
+	if err := positive(amount); err != nil {
+		return ledger.Posted{}, err
+	}
+	e := entry(clientKey("closure_payout", key), "closure_payout", at, "NDIC PAYOUT",
+		via(dr(CustomerAccount(nuban), amount, "NDIC PAYOUT"), "branch", nil),
+		cr(Vault, amount, "NDIC payout in cash"))
+	e.AllowOverdraft = true
+	return b.L.Post(ctx, e)
+}
+
+func (b *Bank) ClosurePayouts(ctx context.Context) (map[string]int64, error) {
+	rows, err := b.L.Pool().Query(ctx, `SELECT a.nuban, sum(jl.amount)::bigint FROM journal_lines jl
+		JOIN journal_entries je ON je.id = jl.entry_id JOIN gl_accounts a ON a.id = jl.account_id
+		WHERE je.kind = 'closure_payout' AND a.customer GROUP BY a.nuban`)
+	if err != nil {
+		return nil, fmt.Errorf("read closure payouts: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var nuban string
+		var paid int64
+		if err := rows.Scan(&nuban, &paid); err != nil {
+			return nil, fmt.Errorf("read closure payouts: %w", err)
+		}
+		out[nuban] = paid
+	}
+	return out, rows.Err()
+}
+
+func (b *Bank) FreezeAccount(ctx context.Context, nuban string) error {
+	if err := b.L.SetStatus(ctx, CustomerAccount(nuban), "frozen"); err != nil {
+		return fmt.Errorf("freeze account %s: %w", nuban, err)
+	}
+	return nil
+}
+
+func (b *Bank) AccountStatus(ctx context.Context, nuban string) (string, error) {
+	a, err := b.L.AccountByNUBAN(ctx, nuban)
+	if err != nil {
+		return "", fmt.Errorf("read account %s: %w", nuban, err)
+	}
+	return a.Status, nil
+}
+
 func (b *Bank) OwnTransfer(ctx context.Context, key, from, to string, amount int64, narration string, at time.Time) (ledger.Posted, error) {
 	if err := positive(amount); err != nil {
 		return ledger.Posted{}, err
@@ -202,7 +248,9 @@ func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.T
 	}
 	e := entry(clientKey("send_nip", s.Key), "transfer", s.At, narr, lines...)
 	e.SessionID = s.SessionID
-	e.LimitedAmount = s.Amount
+	if !s.NoCharges {
+		e.LimitedAmount = s.Amount
+	}
 	p, err := b.L.Post(ctx, e)
 	return p, c, err
 }

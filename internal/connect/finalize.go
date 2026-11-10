@@ -29,15 +29,15 @@ func finalizerNames(list []finalizer) []string {
 
 var bankFinalizers = []finalizer{
 	{name: setup.FinalizerStopRouting, run: (*App).stopRouting},
-	{name: setup.FinalizerRevokeConnections},
-	{name: setup.FinalizerSettleInflight},
+	{name: setup.FinalizerRevokeConnections, run: (*App).revokeBankConnections},
+	{name: setup.FinalizerSettleInflight, run: (*App).settleInflight},
 	{name: setup.FinalizerDecideMoney, run: (*App).decideMoney},
-	{name: setup.FinalizerSettleMoves},
+	{name: setup.FinalizerSettleMoves, run: (*App).settleMoves},
 	{name: setup.FinalizerPurgeOwned, run: (*App).purgeBank},
 }
 
 var partnerFinalizers = []finalizer{
-	{name: setup.FinalizerRevokeConnections},
+	{name: setup.FinalizerRevokeConnections, run: (*App).revokePartnerConnections},
 	{name: setup.FinalizerPurgeOwned, run: (*App).purgePartner},
 }
 

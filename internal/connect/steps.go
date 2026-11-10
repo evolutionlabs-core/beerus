@@ -165,11 +165,15 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 func (a *App) reconcileBanks() {
 	a.checkDrift()
 	now := a.clock.Real()
+	stored, err := a.ctl.status()
+	if err != nil {
+		a.log.Error("read control.json", "err", err)
+	}
 	a.lifeMu.Lock()
 	pending := []*config.Bank{}
 	for _, b := range a.cfg.Banks {
 		st := a.status[b.ID]
-		if st == nil || (st.Phase != PhaseProvisioning && st.Phase != PhaseRepairing) {
+		if st == nil || (st.Phase != PhaseProvisioning && st.Phase != PhaseRepairing && !a.needsRepairLocked(st, stored)) {
 			continue
 		}
 		if st.NextAttemptAt != nil && now.Before(*st.NextAttemptAt) {
@@ -183,6 +187,17 @@ func (a *App) reconcileBanks() {
 	}
 	a.reconcileChanges()
 	a.advanceFinalizers(finalizerLists)
+}
+
+func (a *App) needsRepairLocked(st *BankStatus, stored setup.Status) bool {
+	if st.Phase != PhaseClosing && st.Phase != PhaseTerminating {
+		return false
+	}
+	r := findResource(&stored, setup.KindBank, st.ID)
+	if r == nil || nextFinalizer(*r) == setup.FinalizerPurgeOwned || slices.Contains(r.Done, setup.FinalizerPurgeOwned) {
+		return false
+	}
+	return slices.ContainsFunc(st.Steps, func(s BankStep) bool { return !s.Done })
 }
 
 func (a *App) provision(b *config.Bank) {
@@ -213,14 +228,23 @@ func (a *App) provision(b *config.Bank) {
 	}) && a.step(st, setup.StepCBN, func() error {
 		return a.cbnMember(b)
 	}) && a.step(st, setup.StepSite, func() error {
+		if b.Closed() {
+			return nil
+		}
 		if err := a.startBankSite(b); err != nil {
 			return err
 		}
 		return a.probeSite(b)
 	}) && a.step(st, setup.StepAPI, func() error {
+		if b.Closed() {
+			return nil
+		}
 		return a.checkBankAPI(b)
 	})
-	if !ok {
+	a.lifeMu.Lock()
+	leaving := st.Phase == PhaseClosing || st.Phase == PhaseTerminating
+	a.lifeMu.Unlock()
+	if !ok || leaving {
 		return
 	}
 	phase := runningPhase(b)
@@ -379,6 +403,9 @@ func (a *App) probe(b *config.Bank) (string, []string) {
 	defer cancel()
 	if err := ls.Ping(ctx); err != nil {
 		return "its database cannot be reached: " + err.Error(), rebuild
+	}
+	if b.Closed() {
+		return "", nil
 	}
 	c := &http.Client{Timeout: 5 * time.Second}
 	resp, err := c.Get(a.siteProbeURL(b))

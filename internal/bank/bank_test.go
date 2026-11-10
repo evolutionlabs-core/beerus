@@ -418,5 +418,27 @@ func TestReviewRegressions(t *testing.T) {
 	if _, err := a.CashWithdrawal(ctx, "t1wd", "9020000027", 10000000, at); !errors.Is(err, ledger.ErrDailyLimit) {
 		t.Fatalf("tier 1 cash withdrawal over the daily limit: %v", err)
 	}
+	to := bank.Counterparty{Name: "X", BankName: "Y"}
+	if _, _, err := a.SendNIP(ctx, bank.NIPSend{Key: "t1nip", From: "9020000027", Amount: 10000000, SessionID: "999001260302100000000000000071", To: to, At: at}); !errors.Is(err, ledger.ErrDailyLimit) {
+		t.Fatalf("tier 1 NIP send over the daily limit: %v", err)
+	}
+	if _, _, err := a.SendNIP(ctx, bank.NIPSend{Key: "close:bank-a:9020000027", From: "9020000027", Amount: 10000000, SessionID: "999001260302100000000000000072", To: to, At: at, NoCharges: true}); err != nil {
+		t.Fatalf("a closure send must bypass the daily limit: %v", err)
+	}
+	if _, err := a.ClosurePayout(ctx, "close:bank-a:9020000027", "9020000027", 1000000, at); err != nil {
+		t.Fatalf("closure payout over the daily limit: %v", err)
+	}
+	if _, err := a.ClosurePayout(ctx, "close:bank-a:9020000027", "9020000027", 1000000, at); err != nil {
+		t.Fatalf("a repeated closure payout: %v", err)
+	}
+	if paid, err := a.ClosurePayouts(ctx); err != nil || paid["9020000027"] != 1000000 {
+		t.Fatalf("closure payouts %v %v, want one payout of 1000000", paid, err)
+	}
+	if err := a.FreezeAccount(ctx, "9020000027"); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := a.AccountStatus(ctx, "9020000027"); err != nil || status != "frozen" {
+		t.Fatalf("account status %q %v", status, err)
+	}
 	mustOK(t, a.L)
 }

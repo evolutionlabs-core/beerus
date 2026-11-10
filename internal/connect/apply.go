@@ -110,9 +110,6 @@ func (a *App) applyEdit(edit func(*setup.Spec) error, opt ApplyOptions) error {
 }
 
 func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt ApplyOptions) (setup.Plan, error) {
-	if opt.SettleNow {
-		return setup.Plan{}, applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "settle_now is not supported yet. Run beerus nip settle-now after the removal starts, or advance the clock.")
-	}
 	st, err := a.ctl.status()
 	if err != nil {
 		return setup.Plan{}, err
@@ -129,7 +126,12 @@ func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt Apply
 		return pl.plan, err
 	}
 	retarget := retargeted(pl.st, opt.Money)
+	settling := settleTargets(pl)
+	if opt.SettleNow && len(settling) == 0 {
+		return pl.plan, applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "settle_now needs a bank that is being closed or removed. Nothing was changed.")
+	}
 	if !changes(pl.plan) && len(retarget) == 0 {
+		a.requestSettleNow(opt, settling)
 		return pl.plan, nil
 	}
 	ad, err := a.prepare(pl, opt.Money, retarget)
@@ -139,9 +141,34 @@ func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt Apply
 	if err := a.ctl.update(func(st *setup.Status) (bool, error) { return admit(st, ad) }); err != nil {
 		return pl.plan, errors.Join(fmt.Errorf("admit the plan: %w", err), a.discardPartners(ad))
 	}
+	a.requestSettleNow(opt, settling)
 	a.startAdmitted(ad)
 	a.poke()
 	return pl.plan, nil
+}
+
+func settleTargets(pl planned) []string {
+	var out []string
+	for _, act := range pl.plan.Actions {
+		if act.Kind == setup.KindBank && (act.Op == setup.OpClose || act.Op == setup.OpRemove) && !slices.Contains(out, act.ID) {
+			out = append(out, act.ID)
+		}
+	}
+	for _, r := range pl.st.Resources {
+		if r.Kind == setup.KindBank && (r.Phase == setup.PhaseClosing || r.Phase == setup.PhaseTerminating) && !slices.Contains(out, r.ID) {
+			out = append(out, r.ID)
+		}
+	}
+	return out
+}
+
+func (a *App) requestSettleNow(opt ApplyOptions, ids []string) {
+	if !opt.SettleNow {
+		return
+	}
+	for _, id := range ids {
+		a.markSettleNow(setup.KindBank, id)
+	}
 }
 
 func changes(p setup.Plan) bool {

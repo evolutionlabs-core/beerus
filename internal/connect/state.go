@@ -215,6 +215,7 @@ type PendingRevoke struct {
 
 type State struct {
 	Revokes        []PendingRevoke            `json:"revokes,omitempty"`
+	SettleNow      []string                   `json:"settle_now,omitempty"`
 	Registry       map[string]*RegistryClient `json:"registry"`
 	ConsentLedger  []ConsentRecord            `json:"consent_ledger"`
 	Access         []AccessEvent              `json:"access"`

@@ -212,6 +212,24 @@ func (a *App) setMemberStatus(id, status string) error {
 	return a.refreshDirectory()
 }
 
+func (a *App) stopRouting(r setup.Resource) (*setup.Condition, error) {
+	sw := a.nibssStore()
+	if sw == nil {
+		return nil, errors.New("NIBSS is not open, so routing to the bank cannot be stopped; try again soon")
+	}
+	if err := a.setMemberStatus(r.ID, nibss.StatusTerminating); err != nil {
+		return nil, err
+	}
+	in, err := sw.Institution(context.Background(), r.Allocated.NIPCode)
+	if err != nil {
+		return nil, fmt.Errorf("read back the NIBSS status of %s: %w", r.ID, err)
+	}
+	if in.Status != nibss.StatusTerminating {
+		return nil, fmt.Errorf("NIBSS shows %s as %s, not %s", r.ID, in.Status, nibss.StatusTerminating)
+	}
+	return nil, nil
+}
+
 func (a *App) removeMember(id string) error {
 	a.mu.Lock()
 	s := a.nibss
