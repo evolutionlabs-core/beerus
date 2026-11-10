@@ -715,12 +715,12 @@ func (a *App) Resource(kind, id string) (setup.Resource, error) {
 	return setup.Resource{}, errNotFound
 }
 
-func (a *App) resources(limit int, cursor string) ([]setup.Resource, string, error) {
+func (a *App) resources(kind string, limit int, cursor string) ([]setup.Resource, string, error) {
 	st, err := a.ctl.status()
 	if err != nil {
 		return nil, "", err
 	}
-	all := st.Resources
+	all := slices.DeleteFunc(st.Resources, func(r setup.Resource) bool { return kind != "" && !strings.EqualFold(r.Kind, kind) })
 	sort.Slice(all, func(i, j int) bool { return resourceKey(all[i]) < resourceKey(all[j]) })
 	start := sort.Search(len(all), func(i int) bool { return cursor == "" || resourceKey(all[i]) > cursor })
 	page := all[start:]
@@ -779,6 +779,7 @@ type planBody struct {
 	Text     string   `json:"text"`
 	Changed  bool     `json:"changed"`
 	KeyFiles []string `json:"api_key_files,omitempty"`
+	Warning  string   `json:"warning,omitempty"`
 }
 
 func (a *App) planBody(p setup.Plan) planBody {
@@ -852,7 +853,12 @@ func (a *App) ctlResources(w http.ResponseWriter, r *http.Request) {
 		a.bankingError(w, r, err)
 		return
 	}
-	data, next, err := a.resources(limit, cursor)
+	kind := r.URL.Query().Get("kind")
+	if kind != "" && !slices.ContainsFunc([]string{setup.KindBank, setup.KindPartner, setup.KindSystem}, func(k string) bool { return strings.EqualFold(k, kind) }) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("kind %q is not known. Use bank, partner or system.", kind))
+		return
+	}
+	data, next, err := a.resources(kind, limit, cursor)
 	if err != nil {
 		a.applyFailed(w, r, err)
 		return

@@ -203,6 +203,7 @@ type planReply struct {
 	Changed  bool           `json:"changed"`
 	Actions  []setup.Action `json:"actions"`
 	KeyFiles []string       `json:"api_key_files"`
+	Warning  string         `json:"warning"`
 }
 
 type resourcePage struct {
@@ -551,6 +552,9 @@ func cmdDiff(e *cli, args []string) error {
 	if err != nil {
 		return err
 	}
+	if p.Warning != "" {
+		fmt.Fprintln(e.errOut, "beerus:", p.Warning)
+	}
 	if *asJSON {
 		err = e.printJSON(raw)
 	} else {
@@ -618,7 +622,7 @@ func cmdGet(e *cli, args []string) error {
 	if err != nil {
 		return err
 	}
-	raw, err := c.send("GET", "/resources"+listQuery(*limit, *cursor, nil), nil)
+	raw, err := c.send("GET", "/resources"+listQuery(*limit, *cursor, url.Values{"kind": {strings.ToLower(kind)}}), nil)
 	if err != nil {
 		return err
 	}
@@ -633,9 +637,6 @@ func cmdGet(e *cli, args []string) error {
 	w := tabwriter.NewWriter(e.out, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tNAME\tPHASE\tREADY\tGEN\tMESSAGE")
 	for _, r := range page.Data {
-		if r.Kind != kind {
-			continue
-		}
 		msg := strings.Join(blockers(r), "; ")
 		ok := "no"
 		if ready(r) {
@@ -922,7 +923,7 @@ func cmdBankEnd(e *cli, args []string) error {
 	return e.runApply(c, req, *wait, *asJSON)
 }
 
-func (e *cli) startApply(ctx context.Context, c *ctl, req applyRequest, died <-chan error) error {
+func (e *cli) startApply(ctx context.Context, c *ctl, req applyRequest, served <-chan struct{}) error {
 	deadline := time.NewTimer(startTimeout)
 	defer deadline.Stop()
 	tick := time.NewTicker(startRetry)
@@ -947,8 +948,8 @@ func (e *cli) startApply(ctx context.Context, c *ctl, req applyRequest, died <-c
 			return err
 		}
 		select {
-		case serr := <-died:
-			return errors.Join(err, serr)
+		case <-served:
+			return fmt.Errorf("beerus stopped while applying the setup file: %w", err)
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
@@ -1026,27 +1027,34 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 	fmt.Fprintf(e.out, "\nControl room        %s\n", app.RoomURL())
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	died := make(chan error, 1)
-	go func() { died <- app.Serve(serveCtx) }()
+	served := make(chan struct{})
+	var serveErr error
+	go func() {
+		serveErr = app.Serve(serveCtx)
+		close(served)
+	}()
 	if !fresh {
 		if *file == "" {
 			if req, err = specRequest(*dir, ""); err != nil {
 				cancel()
-				return errors.Join(err, <-died)
+				<-served
+				return errors.Join(err, serveErr)
 			}
 		}
 		req.Prune = *prune
 		cl, err := newCtlFor(c)
 		if err == nil {
-			err = e.startApply(serveCtx, cl, req, died)
+			err = e.startApply(serveCtx, cl, req, served)
 		}
 		if err != nil {
 			cancel()
-			return errors.Join(err, <-died)
+			<-served
+			return errors.Join(err, serveErr)
 		}
 	} else {
 		fmt.Fprintln(e.out, "\n"+upHint)
 	}
 	fmt.Fprintln(e.out, "\nPress Ctrl+C to stop.")
-	return <-died
+	<-served
+	return serveErr
 }
