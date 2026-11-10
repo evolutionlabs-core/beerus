@@ -26,8 +26,9 @@ This file is the single source of the code rules. Every agent reads it before wr
 ```bash
 go vet ./...
 $(go env GOROOT)/bin/gofmt -l .
-go test -race -count=1 ./...
+go test -short -count=1 ./...
 ```
+`-short` skips the contract tests that start a full stack, so the run takes under 10 seconds. CI runs everything with `-race`.
 Use the toolchain's gofmt; the Homebrew one is older and CI disagrees with it.
 
 ## Layout
