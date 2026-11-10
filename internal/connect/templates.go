@@ -61,74 +61,6 @@ var pages = template.Must(template.New("").Funcs(uiFuncs).Funcs(template.FuncMap
 {{template "cancel" .}}
 {{template "foot" .}}{{end}}
 
-{{define "login"}}{{template "head" .}}
-{{template "steps" 2}}
-<h1 class="text-[22px] leading-snug">Sign in to {{.Brand}}</h1>
-<p class="mt-2 text-[13.5px] leading-relaxed text-muted">Use your online banking details. {{.PartnerName}} never sees them.</p>
-{{template "error" .}}
-<form method="post" action="/bank/login" class="mt-6 space-y-4">
-<input type="hidden" name="csrf" value="{{.CSRF}}">
-<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Username</span><input class="field" type="text" name="username" autocomplete="username" required autofocus></label>
-<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Password</span><input class="field" type="password" name="password" autocomplete="current-password" required></label>
-<button type="submit" class="btn btn-primary mt-2 w-full">Continue</button>
-</form>
-{{template "cancel" .}}
-{{template "foot" .}}{{end}}
-
-{{define "otp"}}{{template "head" .}}
-{{template "steps" 3}}
-<h1 class="text-[22px] leading-snug">Verify it's you</h1>
-<p class="mt-2 text-[13.5px] leading-relaxed text-muted">We sent a 6-digit code to the phone number on your account.</p>
-<div class="mt-5 rounded-xl border border-line bg-raised px-3.5 py-3">
-<div class="flex items-center justify-between text-[12px] text-muted"><span class="flex items-center gap-1.5"><svg viewBox="0 0 16 16" class="size-3.5" fill="none" aria-hidden="true"><path d="M2.5 4.5h11v7h-6l-3 2.5v-2.5h-2v-7Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>Messages · {{.Brand}}</span><span>now</span></div>
-<p class="mt-1.5 text-[13.5px] leading-relaxed">Your {{.Brand}} verification code is <span class="num text-ink">{{.OTP}}</span>. It expires in 5 minutes. Never share this code with anyone.</p>
-</div>
-{{template "error" .}}
-<form method="post" action="/bank/otp" class="mt-5 space-y-4">
-<input type="hidden" name="csrf" value="{{.CSRF}}">
-<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Verification code</span><input class="field h-13 text-center font-mono text-[20px] tracking-[0.4em]" type="text" name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required autofocus></label>
-<button type="submit" class="btn btn-primary w-full">Verify</button>
-</form>
-{{template "cancel" .}}
-{{template "foot" .}}{{end}}
-
-{{define "consent"}}{{template "head" .}}
-{{template "steps" 4}}
-<h1 class="text-[22px] leading-snug">Share account data with {{.PartnerName}}</h1>
-<p class="mt-2 text-[13.5px] leading-relaxed text-muted">{{.ConnectBrand}}, on behalf of {{.PartnerName}}, is asking for access {{.Purpose}}.</p>
-<dl class="mt-6 grid grid-cols-[124px_1fr] gap-x-4 gap-y-2.5 text-[13px]">
-<dt class="text-muted">Receiving party</dt><dd>{{.ConnectLegal}}</dd>
-<dt class="text-muted">Registry number</dt><dd class="num">{{.RegistryID}}</dd>
-<dt class="text-muted">CAC number</dt><dd class="num">{{.CAC}}</dd>
-<dt class="text-muted">Acting for</dt><dd>{{.PartnerLegal}} ({{.PartnerName}})</dd>
-<dt class="text-muted">Access</dt><dd>Account details, balances and transactions. Read only.</dd>
-<dt class="text-muted">History from</dt><dd>{{.Start}}{{if .Effective}} <span class="text-muted">· {{.Brand}} keeps history from {{.Effective}}</span>{{end}}</dd>
-<dt class="text-muted">Duration</dt><dd>12 months, until {{.Until}}</dd>
-<dt class="text-muted">Frequency</dt><dd>Several times a day, and when {{.PartnerName}} asks</dd>
-</dl>
-<div class="my-6 h-px bg-line"></div>
-{{template "error" .}}
-<form method="post" action="/bank/consent">
-<input type="hidden" name="csrf" value="{{.CSRF}}">
-<p class="mb-2.5 text-[12.5px] text-muted">Accounts to share</p>
-<div class="space-y-2">
-{{range .Accounts}}<label class="flex cursor-pointer items-start gap-3 rounded-xl border border-line px-3.5 py-3 transition-colors hover:border-line-strong has-[:checked]:border-line-strong has-[:checked]:bg-raised">
-<input type="checkbox" name="account" value="{{.Key}}" class="mt-1 accent-[var(--primary)]" {{if .Checked}}checked{{end}}>
-<span class="flex-1"><span class="block text-[14px]">{{.Name}}</span><span class="block text-[12.5px] text-muted"><span class="capitalize">{{.Type}}</span> · <span class="num">{{.NUBAN}}</span></span></span>
-</label>{{end}}
-<label class="flex cursor-pointer items-start gap-3 rounded-xl border border-line px-3.5 py-3 transition-colors hover:border-line-strong">
-<input type="checkbox" name="analytics" value="yes" class="mt-1 accent-[var(--primary)]">
-<span class="flex-1"><span class="block text-[14px]">Anonymised analytics</span><span class="block text-[12.5px] text-muted">Optional. You can connect without it.</span></span>
-</label>
-</div>
-<p class="mt-5 text-[12.5px] leading-relaxed text-muted">You can withdraw access at any time from {{.Brand}}'s connected apps or from {{.ConnectBrand}}'s customer page. When you do, {{.ConnectBrand}} stops collecting data and deletes what it holds within 30 days. {{.PartnerName}} keeps records already in your books under its own privacy notice.</p>
-<div class="mt-6 grid grid-cols-2 gap-2">
-<button type="submit" name="action" value="decline" class="btn btn-secondary w-full">Decline</button>
-<button type="submit" name="action" value="approve" class="btn btn-primary w-full">Approve</button>
-</div>
-</form>
-{{template "foot" .}}{{end}}
-
 {{define "message"}}{{template "head" .}}
 <h1 class="text-[22px] leading-snug">{{.Heading}}</h1>
 <p class="mt-2 text-[13.5px] leading-relaxed text-muted">{{.Message}}</p>
@@ -139,6 +71,7 @@ var pages = template.Must(template.New("").Funcs(uiFuncs).Funcs(template.FuncMap
 <p class="mt-2 text-[13.5px] leading-relaxed text-muted">Sign in with your online banking details to see the apps that read your accounts through {{.ConnectBrand}}, and to withdraw access.</p>
 {{template "error" .}}
 <form method="post" action="/customer/login" class="mt-6 space-y-4">
+<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Bank</span><select class="field" name="bank" required>{{range .Banks}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
 <label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Username</span><input class="field" type="text" name="username" autocomplete="username" required autofocus></label>
 <label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Password</span><input class="field" type="password" name="password" autocomplete="current-password" required></label>
 <button type="submit" class="btn btn-primary mt-2 w-full">Sign in</button>

@@ -3,13 +3,10 @@ package connect
 import (
 	"fmt"
 	"net/url"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
@@ -42,56 +39,42 @@ type wireTxn struct {
 	HadPending   bool   `json:"had_pending"`
 }
 
-func (w wireTxn) presented() (world.Presented, error) {
+type bankLine struct {
+	Key          string
+	Pending      bool
+	HadPending   bool
+	Amount       int64
+	BookedAt     time.Time
+	ValueDate    clock.Date
+	Narration    string
+	Counterparty *Counterparty
+	SessionID    string
+	BankRef      string
+	Channel      string
+	BalanceAfter int64
+	Seq          int64
+}
+
+func (w wireTxn) presented() (bankLine, error) {
 	vd, err := clock.ParseDate(w.ValueDate)
 	if err != nil {
-		return world.Presented{}, err
+		return bankLine{}, err
 	}
-	p := world.Presented{Key: w.ID, Pending: w.Status == "pending", HadPending: w.HadPending, Amount: w.Amount, ValueDate: vd, Narration: w.Description, SessionID: w.SessionID, BankRef: w.BankRef, Channel: w.Channel, Seq: w.Sequence}
+	p := bankLine{Key: w.ID, Pending: w.Status == "pending", HadPending: w.HadPending, Amount: w.Amount, ValueDate: vd, Narration: w.Description, SessionID: w.SessionID, BankRef: w.BankRef, Channel: w.Channel, Seq: w.Sequence}
 	if !p.Pending {
 		p.BalanceAfter = w.BalanceAfter
 		if w.BookedAt != nil {
 			bt, err := time.Parse(time.RFC3339, *w.BookedAt)
 			if err != nil {
-				return world.Presented{}, err
+				return bankLine{}, err
 			}
-			p.BookedAt, p.At = bt, bt
+			p.BookedAt = bt
 		}
 	}
 	if w.Counterparty != nil {
-		p.Counterparty = &world.Counterparty{Name: w.Counterparty.Name, AccountNumber: w.Counterparty.AccountNumber, BankCode: w.Counterparty.BankCode, BankName: w.Counterparty.BankName}
+		p.Counterparty = &Counterparty{Name: strp(w.Counterparty.Name), AccountNumber: strp(w.Counterparty.AccountNumber), BankCode: strp(w.Counterparty.BankCode), BankName: strp(w.Counterparty.BankName)}
 	}
 	return p, nil
-}
-
-func (a *App) nubanOf(acct *AccountRec) string {
-	if acct.NUBAN != "" {
-		return acct.NUBAN
-	}
-	wa, _ := a.world.Account(acct.WorldKey)
-	return wa.NUBAN
-}
-
-func fingerprint(lines []world.Presented) {
-	sort.SliceStable(lines, func(i, j int) bool { return lines[i].Seq < lines[j].Seq })
-	seen := map[string]int{}
-	for i := range lines {
-		p := &lines[i]
-		dir := "cr"
-		amt := p.Amount
-		if amt < 0 {
-			dir, amt = "dr", -amt
-		}
-		parts := []string{p.ValueDate.String(), dir, strconv.FormatInt(amt, 10), Normalise(p.Narration)}
-		if !p.Pending {
-			parts = append(parts, strconv.FormatInt(p.BalanceAfter, 10))
-		}
-		base := strings.Join(parts, "|")
-		n := seen[base]
-		seen[base]++
-		p.Key = world.ID("fp", base, strconv.Itoa(n))
-		p.HadPending = false
-	}
 }
 
 func (a *App) pullBank(c *Connection, acct *AccountRec, at time.Time) (pulled, error) {
@@ -99,11 +82,7 @@ func (a *App) pullBank(c *Connection, acct *AccountRec, at time.Time) (pulled, e
 	if b == nil {
 		return pulled{}, &bankDown{fmt.Errorf("%s is not configured", c.Institution)}
 	}
-	meta, err := a.bankMetaFor(b)
-	if err != nil {
-		return pulled{}, err
-	}
-	nuban := a.nubanOf(acct)
+	nuban := acct.NUBAN
 	from := acct.From
 	if !(c.FullDue || !acct.HistoryDone || acct.AsAt.IsZero()) {
 		if w := clock.DateOf(acct.AsAt).AddDays(-syncOverlapDays); w.After(from) {
@@ -136,9 +115,6 @@ func (a *App) pullBank(c *Connection, acct *AccountRec, at time.Time) (pulled, e
 		}
 		cursor = *page.Cursor
 	}
-	if !meta.StableIDs {
-		fingerprint(out.lines)
-	}
 	var bal struct {
 		Ledger    wireMoney `json:"ledger_balance"`
 		Available wireMoney `json:"available_balance"`
@@ -158,7 +134,7 @@ func (a *App) bankBalanceOn(c *Connection, acct *AccountRec, d clock.Date) (int6
 	var out struct {
 		Ledger wireMoney `json:"ledger_balance"`
 	}
-	if err := a.bankGet(b, c.ID, "/accounts/"+a.nubanOf(acct)+"/balances?as_of="+d.String(), &out); err != nil {
+	if err := a.bankGet(b, c.ID, "/accounts/"+acct.NUBAN+"/balances?as_of="+d.String(), &out); err != nil {
 		return 0, err
 	}
 	return out.Ledger.Amount, nil

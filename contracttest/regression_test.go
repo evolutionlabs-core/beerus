@@ -2,7 +2,6 @@ package contracttest
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -48,8 +47,14 @@ func TestRevokedConnectionCannotBeReauthorised(t *testing.T) {
 func TestReconnectWithLaterStartKeepsBalanceInvariant(t *testing.T) {
 	s := newStack(t)
 	c1 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	s.spend(s.persona("adaeze"), 3)
+	s.advance("48h")
+	s.spend(s.persona("adaeze"), 2)
+	s.syncNow()
 	s.ctl("POST", "/connections/"+c1.ConnectionID+"/revoke", nil)
-	start := s.today().AddDays(-10)
+	s.spend(s.persona("adaeze"), 2)
+	s.advance("48h")
+	start := s.today().AddDays(-1)
 	c2 := s.connect("adaeze", "bank-a", start)
 	id := fmt.Sprint(accountAt(t, c2, "current")["id"])
 	hist := s.eventsOf("historical_sync.completed", func(d map[string]any) bool {
@@ -61,7 +66,7 @@ func TestReconnectWithLaterStartKeepsBalanceInvariant(t *testing.T) {
 	eff := fmt.Sprint(hist[len(hist)-1]["effective_start_date"])
 	first, err := clock.ParseDate(eff)
 	if err != nil || !first.Before(start) {
-		t.Fatalf("effective_start_date %q should show the older history", eff)
+		t.Fatalf("effective_start_date %q should be before the requested start %s", eff, start)
 	}
 	feed, _ := s.syncAll(id, "", 500)
 	var sum int64
@@ -108,6 +113,7 @@ func TestReauthSendsSyncAvailable(t *testing.T) {
 	id := fmt.Sprint(conn.Accounts[0]["id"])
 	st, _ := s.syncAll(id, "", 500)
 	s.ctl("POST", "/scenarios/token_refresh_failed", map[string]any{"connection_id": conn.ConnectionID})
+	s.spend(s.persona("tunde"), 2)
 	s.advance("72h")
 	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", nil), 201)
 	res := s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), "", "tunde", nil)
@@ -123,7 +129,7 @@ func TestReauthSendsSyncAvailable(t *testing.T) {
 	before := len(st.lines)
 	after, _ := s.syncMore(id, st, 500)
 	if len(after.lines) <= before {
-		t.Fatal("no new lines after three days")
+		t.Fatal("no new lines after two payments")
 	}
 	if !found {
 		t.Fatal("reauth brought new lines but sent no sync.available")
@@ -138,7 +144,7 @@ func TestFrozenClockSurvivesRestart(t *testing.T) {
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
-	again, err := connect.New(s.cfg, connect.Options{WorldOnly: s.worldOnly})
+	again, err := connect.New(s.cfg, connect.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,41 +158,19 @@ func TestFrozenClockSurvivesRestart(t *testing.T) {
 	}
 }
 
-func TestSignInWithoutAccountsAtThatBank(t *testing.T) {
-	s := newStubStack(t)
-	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
-	b := s.browser()
-	b.get(fmt.Sprint(ls.JSON["widget_url"]))
-	b.post("/link/institution", map[string][]string{"institution": {"bank-a"}})
-	p := s.persona("chidi")
-	b.post("/bank/login", map[string][]string{"username": {p.Username}, "password": {p.Password}})
-	if !strings.Contains(b.last, "has no accounts at Bank A") {
-		t.Fatalf("expected a no-accounts message: %.300s", b.last)
-	}
-}
-
 func TestBankLedgerStaysConsistent(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
 	s := newBankStack(t)
-	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-40))
-	s.ctl("POST", "/scenarios/debit_then_reversal", map[string]any{"account_id": fmt.Sprint(accountAt(t, conn, "current")["id"])})
-	s.ctl("POST", "/scenarios/pending_amount_change", map[string]any{"account_id": fmt.Sprint(accountAt(t, conn, "current")["id"])})
+	s.connect("adaeze", "bank-a", s.today().AddDays(-40))
+	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "20000")
 	s.advance("40d")
 	c, err := s.app.VerifyBank()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.Ledger.OK() || len(c.Mismatches) > 0 {
-		t.Fatalf("bank ledger: %v %v", c.Ledger, c.Mismatches)
-	}
-	if len(c.ChargeMonths) == 0 {
-		t.Fatal("no month-end charges were posted")
-	}
-	for k, n := range c.ChargeMonths {
-		if n != 1 {
-			t.Fatalf("%s charged %d times", k, n)
-		}
+	if !c.OK() {
+		t.Fatalf("bank ledger: %v", c)
 	}
 }

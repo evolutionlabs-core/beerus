@@ -6,9 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 func TestVaultSealsEachTokenWithItsOwnKey(t *testing.T) {
@@ -48,30 +45,5 @@ func TestVaultSealsEachTokenWithItsOwnKey(t *testing.T) {
 	other, _ := loadVault(filepath.Join(t.TempDir(), "other.key"))
 	if _, err := other.open(e.Access, "con_1/access"); err == nil {
 		t.Fatal("a different master key opened the token")
-	}
-}
-
-func TestFingerprintIgnoresBankIDs(t *testing.T) {
-	d, _ := clock.ParseDate("2026-10-01")
-	mk := func(prefix string) []world.Presented {
-		return []world.Presented{
-			{Key: prefix + "1", Amount: -5000, ValueDate: d, Narration: "STAMP DUTY", BalanceAfter: 95000, Seq: 1},
-			{Key: prefix + "2", Amount: -5000, ValueDate: d, Narration: "STAMP DUTY", BalanceAfter: 90000, Seq: 2},
-			{Key: prefix + "3", Pending: true, Amount: -700, ValueDate: d, Narration: "POS", Seq: 3},
-			{Key: prefix + "4", Pending: true, Amount: -700, ValueDate: d, Narration: "POS", Seq: 4},
-		}
-	}
-	a, b := mk("x"), mk("y")
-	fingerprint(a)
-	fingerprint(b)
-	ids := map[string]bool{}
-	for i := range a {
-		if a[i].Key != b[i].Key {
-			t.Fatalf("line %d changed identity", i)
-		}
-		ids[a[i].Key] = true
-	}
-	if len(ids) != 4 {
-		t.Fatalf("identical lines collided: %d distinct", len(ids))
 	}
 }

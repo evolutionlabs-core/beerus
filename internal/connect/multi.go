@@ -3,9 +3,7 @@ package connect
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +11,9 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,8 +21,8 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
@@ -46,23 +46,32 @@ func remotePeers() bool {
 }
 
 type replica struct {
-	WorldID  string            `json:"world_id"`
-	Now      time.Time         `json:"business_now"`
-	Pace     float64           `json:"pace"`
-	World    world.Overrides   `json:"world"`
-	Phases   map[string]string `json:"phases"`
-	Registry []*RegistryClient `json:"registry"`
+	WorldID   string            `json:"world_id"`
+	Now       time.Time         `json:"business_now"`
+	Pace      float64           `json:"pace"`
+	Banks     []*config.Bank    `json:"banks"`
+	Phases    map[string]string `json:"phases"`
+	Directory []nip.Participant `json:"directory"`
+	Faults    []Fault           `json:"faults"`
+	Registry  []*RegistryClient `json:"registry"`
 }
 
 func (a *App) ctlReplica(w http.ResponseWriter, r *http.Request) {
 	rep := replica{Phases: map[string]string{}}
 	a.mu.Lock()
-	rep.WorldID, rep.Now, rep.Pace = a.st.WorldID, a.clock.Now(), a.clock.State().Pace
-	rep.World = a.world.Overrides()
+	ids := []string{}
 	for _, b := range a.cfg.Banks {
-		rep.Phases[b.ID] = a.bankPhase(b.ID)
+		ids = append(ids, b.ID)
+		c := *b
+		rep.Banks = append(rep.Banks, &c)
 	}
+	rep.WorldID, rep.Now, rep.Pace = a.st.WorldID, a.clock.Now(), a.clock.State().Pace
+	rep.Directory = slices.Clone(a.members)
+	rep.Faults = a.faultsLocked(rep.Now)
 	a.mu.Unlock()
+	for _, id := range ids {
+		rep.Phases[id] = a.bankPhase(id)
+	}
 	rep.Registry = a.RegistryClients()
 	writeJSON(w, http.StatusOK, rep)
 }
@@ -83,6 +92,7 @@ const (
 	peerTimeout    = 30 * time.Second
 	replicaTimeout = 5 * time.Second
 	replicaRetry   = time.Second
+	replicaMaxAge  = 2 * time.Millisecond
 )
 
 var (
@@ -156,10 +166,6 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 	if o.CoreURL == "" {
 		return nil, errors.New("a bank needs --core or BEERUS_CORE_URL, the simulator's control URL")
 	}
-	genesis, err := cfg.GenesisDate()
-	if err != nil {
-		return nil, err
-	}
 	token, err := config.ReadSecret(cfg.Path("control-token"))
 	if err != nil {
 		return nil, fmt.Errorf("control token: %w", err)
@@ -185,7 +191,6 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 		now = o.Real()
 	}
 	a.clock = clock.New(clock.State{AnchorBusiness: now, AnchorReal: now}, o.Real)
-	a.world = world.New(a.worldConfig(genesis), world.Overrides{})
 	if a.ctl, err = readStore(cfg.Dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -193,7 +198,7 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 		a.ctl = &ctlStore{dir: cfg.Dir, readOnly: true}
 	}
 	a.setupKey = a.ctl.setupKey()
-	ls, err := openLedgerSource(context.Background(), cfg, a.ctl, b, a.world)
+	ls, err := openLedgerSource(context.Background(), cfg, a.ctl, b)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +215,7 @@ func (a *App) freshen() {
 		return
 	}
 	a.pullMu.Lock()
-	stale := time.Since(a.pulledAt) > 2*time.Millisecond
+	stale := time.Since(a.pulledAt) > replicaMaxAge
 	a.pullMu.Unlock()
 	if stale {
 		_ = a.pullReplica()
@@ -219,7 +224,7 @@ func (a *App) freshen() {
 
 func (a *App) pullReplica() error {
 	a.pullMu.Lock()
-	if time.Since(a.pulledAt) < 2*time.Millisecond && a.synced.Load() {
+	if time.Since(a.pulledAt) < replicaMaxAge && a.synced.Load() {
 		a.pullMu.Unlock()
 		return nil
 	}
@@ -260,13 +265,6 @@ func (a *App) fetchReplica() error {
 	if _, err := a.peerDoWithin(replicaTimeout, a.coreURL, http.MethodGet, "/internal/replica", nil, &rep); err != nil {
 		return err
 	}
-	sum := sha256.New()
-	_ = json.NewEncoder(sum).Encode(rep.World)
-	digest := hex.EncodeToString(sum.Sum(nil))
-	genesis, err := a.cfg.GenesisDate()
-	if err != nil {
-		return err
-	}
 	a.lifeMu.Lock()
 	if st := a.status[a.bankID]; st != nil && rep.Phases[a.bankID] != "" {
 		st.Phase = rep.Phases[a.bankID]
@@ -275,16 +273,11 @@ func (a *App) fetchReplica() error {
 	a.mu.Lock()
 	a.clock.Restore(clock.State{AnchorBusiness: rep.Now})
 	_ = a.clock.SetPace(rep.Pace)
-	if digest != a.worldSum {
-		a.world = world.New(a.worldConfig(genesis), rep.World)
-		a.worldSum = digest
-		a.log.Info("world updated from the simulator", "world", rep.WorldID)
-		for _, l := range a.ledgers {
-			if err := l.Keep(a.world); err != nil {
-				a.mu.Unlock()
-				return err
-			}
-		}
+	a.peerBanks = rep.Banks
+	a.members = rep.Directory
+	a.st.Faults = nil
+	for i := range rep.Faults {
+		a.st.Faults = append(a.st.Faults, &rep.Faults[i])
 	}
 	reopen := a.st.WorldID != rep.WorldID && a.replicated
 	a.st.WorldID = rep.WorldID
@@ -341,15 +334,26 @@ func (a *App) ServeBank(ctx context.Context) error {
 	}
 }
 
-func (a *App) remoteTransfer(req world.TransferRequest) (world.TransferResult, error) {
-	body := transferBody{From: req.From, To: req.To, ToBank: req.ToBank, ToName: req.ToName, Amount: fmt.Sprintf("%d.%02d", req.Amount/100, req.Amount%100), Narration: req.Narration, SessionID: req.SessionID}
-	var out struct {
-		Result world.TransferResult `json:"result"`
+func (a *App) remoteTransfer(req TransferRequest) (TransferResult, error) {
+	body := transferBody{From: req.From, To: req.To, ToBank: req.ToBank, Amount: fmt.Sprintf("%d.%02d", req.Amount/100, req.Amount%100), Narration: req.Narration}
+	var out TransferResult
+	status, err := a.coreDo(http.MethodPost, "/banks/"+url.PathEscape(req.FromBank)+"/transfers", body, &out)
+	if err != nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+		return out, refused(status, nip.SystemError, "transfer_refused", err)
 	}
-	if _, err := a.coreDo(http.MethodPost, "/transfers", body, &out); err != nil {
-		return world.TransferResult{}, err
+	return out, err
+}
+
+func (a *App) remoteEnquiry(code, nuban string) (string, error) {
+	var out nameEnquiry
+	q := url.Values{"bank_code": {code}, "account_number": {nuban}}
+	if _, err := a.coreDo(http.MethodGet, "/nip/name-enquiry?"+q.Encode(), nil, &out); err != nil {
+		return "", err
 	}
-	return out.Result, nil
+	if out.Code != nip.OK {
+		return "", refused(http.StatusUnprocessableEntity, out.Code, "name_enquiry_failed", errors.New(out.Message))
+	}
+	return out.AccountName, nil
 }
 
 func (a *App) revokeRemote(b *config.Bank, consent string) error {

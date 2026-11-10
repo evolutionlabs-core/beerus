@@ -103,6 +103,7 @@ func TestIdempotency(t *testing.T) {
 func TestConnectAndSync(t *testing.T) {
 	s := newBankStack(t)
 	today := s.today()
+	s.spend(s.persona("adaeze"), 4)
 	conn := s.connect("adaeze", "bank-a", today.AddDays(-60))
 	if len(conn.Accounts) != 2 {
 		t.Fatalf("want 2 Bank A accounts, got %d", len(conn.Accounts))
@@ -111,8 +112,8 @@ func TestConnectAndSync(t *testing.T) {
 	id := fmt.Sprint(acct["id"])
 	small, _ := s.syncAll(id, "", 7)
 	big, last := s.syncAll(id, "", 500)
-	if len(big.lines) < 30 {
-		t.Fatalf("only %d lines in 60 days", len(big.lines))
+	if len(big.lines) != 17 {
+		t.Fatalf("%d lines, want a deposit and 4 transfers of 4 lines", len(big.lines))
 	}
 	if small.pages < 2 || len(small.lines) != len(big.lines) {
 		t.Fatalf("paging changed the result: %d pages, %d vs %d lines", small.pages, len(small.lines), len(big.lines))
@@ -180,7 +181,7 @@ func TestConnectAndSync(t *testing.T) {
 	}
 	for _, want := range []string{"Transfer fee", "VAT on transfer fee", "Stamp duty"} {
 		if !kinds[want] {
-			t.Errorf("no %q line in 60 days", want)
+			t.Errorf("no %q line", want)
 		}
 	}
 
@@ -223,8 +224,8 @@ func TestBalanceRangeAndHistoryLimit(t *testing.T) {
 	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
 	eff := fmt.Sprint(c.JSON["effective_start_date"])
 	want := today.AddDays(-s.cfg.Bank("bank-b").HistoryDays)
-	if genesis, err := s.cfg.GenesisDate(); err == nil && genesis.AddDays(1).After(want) {
-		want = genesis.AddDays(1)
+	if start := clock.DateOf(s.cfg.Start); start.After(want) {
+		want = start
 	}
 	if eff != want.String() {
 		t.Fatalf("effective_start_date %s, want %s", eff, want)
@@ -288,73 +289,6 @@ func TestExchangeErrors(t *testing.T) {
 	}
 }
 
-func TestPendingAndModifiedLines(t *testing.T) {
-	s := newStack(t)
-	conn := s.connect("adaeze", "bank-b", s.today().AddDays(-20))
-	id := fmt.Sprint(conn.Accounts[0]["id"])
-	st, _ := s.syncAll(id, "", 100)
-	s.ctl("POST", "/scenarios/pending_amount_change", map[string]any{"account_id": id})
-	s.syncNow()
-	st, _ = s.syncMore(id, st, 100)
-	var pending map[string]any
-	for _, l := range st.lines {
-		if l["status"] == "pending" && num(l["amount_minor"]) == -1450000 {
-			pending = l
-		}
-	}
-	if pending == nil {
-		t.Fatal("the pending line did not arrive")
-	}
-	s.advance("4h")
-	st, _ = s.syncMore(id, st, 100)
-	if !st.removed[fmt.Sprint(pending["id"])] {
-		t.Fatal("the pending line was not removed after it posted")
-	}
-	var postedLine map[string]any
-	for _, l := range st.lines {
-		if l["pending_transaction_id"] == pending["id"] {
-			postedLine = l
-		}
-	}
-	if postedLine == nil || num(postedLine["amount_minor"]) != -1500000 || postedLine["status"] != "posted" {
-		t.Fatalf("posted version: %v", postedLine)
-	}
-	ids := map[string]bool{}
-	for id := range st.lines {
-		ids[id] = true
-	}
-	s.ctl("POST", "/scenarios/renarration", map[string]any{"account_id": id, "count": 2})
-	s.syncNow()
-	before := len(st.modified)
-	st, _ = s.syncMore(id, st, 100)
-	if len(st.modified)-before != 2 {
-		t.Fatalf("want 2 modified lines, got %d", len(st.modified)-before)
-	}
-	for _, m := range st.modified[before:] {
-		if m["modification_reason"] != "description_changed" || m["status"] != "posted" {
-			t.Fatalf("modified line: %v", m)
-		}
-	}
-	s.ctl("POST", "/scenarios/unstable_ids", map[string]any{"institution": "bank-b"})
-	s.advance("26h")
-	before = len(st.modified)
-	st, _ = s.syncMore(id, st, 100)
-	refChanged := 0
-	for _, m := range st.modified[before:] {
-		if m["modification_reason"] == "bank_reference_changed" {
-			refChanged++
-		}
-	}
-	if refChanged == 0 {
-		t.Fatal("unstable_ids produced no bank_reference_changed lines")
-	}
-	for id := range ids {
-		if _, ok := st.lines[id]; !ok && !st.removed[id] {
-			t.Fatalf("line %s vanished under unstable_ids", id)
-		}
-	}
-}
-
 func TestSnapshotRestoreResetsCursor(t *testing.T) {
 	s := newStack(t)
 	conn := s.connect("tunde", "bank-a", s.today().AddDays(-30))
@@ -362,24 +296,18 @@ func TestSnapshotRestoreResetsCursor(t *testing.T) {
 	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "before"})
 	first, _ := s.syncAll(id, "", 100)
 	s.advance("48h")
-	s.ctl("POST", "/scenarios/fee_vat_levy_lines", map[string]any{"account_id": id})
-	s.advance("1m")
+	s.ctl("POST", "/banks/bank-a/deposits", map[string]string{"account": s.persona("tunde").Accounts[0], "amount": "15000"})
+	s.syncNow()
 	first, _ = s.syncMore(id, first, 100)
 	restored := s.ctl("POST", "/snapshots/"+fmt.Sprint(snap["id"])+"/restore", nil)
 	if restored["world_id"] == first.worldID {
 		t.Fatal("restore kept the world ID")
 	}
 	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync?cursor="+first.cursor, nil)
-	want := "cursor_reset"
-	if !s.worldOnly {
-		want = "reauth_required"
-	}
-	if r.Status != 409 || r.Code() != want {
+	if r.Status != 409 || r.Code() != "reauth_required" {
 		t.Fatalf("old cursor after restore: %d %s", r.Status, r.Body)
 	}
-	if !s.worldOnly {
-		s.connect("tunde", "bank-a", s.today().AddDays(-30))
-	}
+	s.connect("tunde", "bank-a", s.today().AddDays(-30))
 	s.syncNow()
 	again, _ := s.syncAll(id, "", 100)
 	if again.worldID == first.worldID {
@@ -512,7 +440,7 @@ func TestRefreshAndRateLimit(t *testing.T) {
 func TestBankOutage(t *testing.T) {
 	s := newStack(t)
 	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
-	s.ctl("POST", "/scenarios/bank_outage", map[string]any{"institution": "bank-b", "duration": "2h"})
+	s.ctl("POST", "/faults", map[string]any{"kind": "down", "bank": "bank-b", "for": "2h"})
 	s.syncNow()
 	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
 	if c.JSON["status"] != "institution_down" {
@@ -522,8 +450,13 @@ func TestBankOutage(t *testing.T) {
 	if r.Status != 503 || r.Code() != "institution_down" {
 		t.Fatalf("delete during outage: %d %s", r.Status, r.Body)
 	}
-	if _, err := s.ctlTry("POST", "/transfers", map[string]any{"from": fmt.Sprint(conn.Accounts[0]["account_number"]), "to": "0123456789", "to_bank": "Bank C", "amount": "1000"}); err == nil || !strings.Contains(err.Error(), "bank_unavailable") {
-		t.Fatalf("transfer from a bank that is down: %v", err)
+	tunde := s.persona("tunde")
+	before := s.balances(tunde)
+	if _, err := s.payTry("bank-a", tunde.Accounts[0], "bank-b", s.persona("chidi").Accounts[0], "1000", nil); err == nil || !strings.Contains(err.Error(), "bank_unavailable") {
+		t.Fatalf("transfer to a bank that is down: %v", err)
+	}
+	if after := s.balances(tunde); fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatalf("a refused transfer moved money: %v then %v", before, after)
 	}
 	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
 	b := s.browser()
@@ -544,8 +477,12 @@ func TestOwnAccountTransferMatchesBySessionID(t *testing.T) {
 	start := s.today().AddDays(-5)
 	a := s.connect("adaeze", "bank-a", start)
 	b := s.connect("adaeze", "bank-b", start)
-	s.ctl("POST", "/scenarios/own_account_transfer_across_banks", map[string]any{"persona": "adaeze"})
-	s.advance("1m")
+	pa, pb := s.personaAt("adaeze", "bank-a"), s.personaAt("adaeze", "bank-b")
+	if pa.BVN != pb.BVN {
+		t.Fatalf("one customer has BVNs %s and %s", pa.BVN, pb.BVN)
+	}
+	s.pay("bank-a", pa.Accounts[0], "bank-b", pb.Accounts[0], "100000")
+	s.syncNow()
 	fa, _ := s.syncAll(fmt.Sprint(accountAt(t, a, "current")["id"]), "", 500)
 	fb, _ := s.syncAll(fmt.Sprint(b.Accounts[0]["id"]), "", 500)
 	sessions := map[string]int64{}
@@ -572,7 +509,7 @@ func TestCustomerPageRevokes(t *testing.T) {
 	p := s.persona("chidi")
 	b := s.browser()
 	b.get(s.cfg.WidgetURL() + "/customer")
-	b.post("/customer/login", map[string][]string{"username": {p.Username}, "password": {p.Password}})
+	b.post("/customer/login", map[string][]string{"bank": {p.Bank}, "username": {p.Username}, "password": {p.Password}})
 	if !strings.Contains(b.last, conn.ConnectionID) {
 		t.Fatalf("customer page does not list the connection: %.300s", b.last)
 	}

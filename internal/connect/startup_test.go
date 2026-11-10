@@ -67,9 +67,6 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 			t.Errorf("%s history %d", b.ID, b.HistoryDays)
 		}
 	}
-	if cfg.Genesis != "2024-10-04" {
-		t.Errorf("genesis %s, want start − 760 days", cfg.Genesis)
-	}
 	if !cfg.Start.Equal(time.Date(2026, 11, 3, 8, 0, 0, 0, clock.Lagos)) {
 		t.Errorf("start %v", cfg.Start)
 	}
@@ -129,13 +126,9 @@ func TestInitRefusesABadSpec(t *testing.T) {
 }
 
 func TestClockStartsAtStart(t *testing.T) {
-	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
-	app, err := New(cfg, Options{WorldOnly: true, Real: func() time.Time { return time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC) }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := app.Clock().Now(); !got.Equal(cfg.Start) {
-		t.Fatalf("business time %v, want %v", got, cfg.Start)
+	app := newTestApp(t, Options{Real: func() time.Time { return time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC) }})
+	if got := app.Clock().Now(); !got.Equal(app.cfg.Start) {
+		t.Fatalf("business time %v, want %v", got, app.cfg.Start)
 	}
 	if app.setupKey == 0 || app.setupKey != app.ctl.setupKey() {
 		t.Fatalf("setup key %d", app.setupKey)

@@ -77,9 +77,7 @@ func (a *App) bankConfig(id string) *config.Bank {
 }
 
 func (a *App) flushEvents() {
-	if !a.flushMu.TryLock() {
-		return
-	}
+	a.flushMu.Lock()
 	defer a.flushMu.Unlock()
 	a.obMu.Lock()
 	servers := make(map[string]*openbanking.Server, len(a.obs))

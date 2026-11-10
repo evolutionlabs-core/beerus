@@ -73,10 +73,19 @@ type Account struct {
 	OverdraftLimit int64
 }
 
+type Counterparty struct {
+	Name          string `json:"name"`
+	AccountNumber string `json:"account_number"`
+	BankCode      string `json:"bank_code"`
+	BankName      string `json:"bank_name"`
+}
+
 type Line struct {
-	Account   string `json:"account"`
-	Amount    int64  `json:"amount"`
-	Narration string `json:"narration"`
+	Account      string        `json:"account"`
+	Amount       int64         `json:"amount"`
+	Narration    string        `json:"narration"`
+	Channel      string        `json:"channel,omitempty"`
+	Counterparty *Counterparty `json:"counterparty,omitempty"`
 }
 
 type Entry struct {
@@ -96,6 +105,8 @@ type Entry struct {
 type Posted struct {
 	EntryID  int64
 	Replayed bool
+	PostedAt time.Time
+	Balances map[string]int64
 }
 
 type Limits map[int]int64
@@ -286,16 +297,35 @@ func (l *Ledger) Post(ctx context.Context, e Entry) (Posted, error) {
 
 func (l *Ledger) existing(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
+	Query(context.Context, string, ...any) (pgx.Rows, error)
 }, key, hash string) (Posted, error) {
 	var id int64
 	var h string
-	if err := q.QueryRow(ctx, `SELECT id, request_hash FROM journal_entries WHERE idempotency_key = $1`, key).Scan(&id, &h); err != nil {
+	var at time.Time
+	if err := q.QueryRow(ctx, `SELECT id, request_hash, posted_at FROM journal_entries WHERE idempotency_key = $1`, key).Scan(&id, &h, &at); err != nil {
 		return Posted{}, err
 	}
 	if h != hash {
 		return Posted{}, ErrIdempotency
 	}
-	return Posted{EntryID: id, Replayed: true}, nil
+	rows, err := q.Query(ctx, `SELECT a.code, ev.balance_after FROM account_events ev JOIN gl_accounts a ON a.id = ev.account_id WHERE ev.entry_id = $1`, id)
+	if err != nil {
+		return Posted{}, fmt.Errorf("read balances of entry %d: %w", id, err)
+	}
+	defer rows.Close()
+	balances := map[string]int64{}
+	for rows.Next() {
+		var code string
+		var bal int64
+		if err := rows.Scan(&code, &bal); err != nil {
+			return Posted{}, fmt.Errorf("read balances of entry %d: %w", id, err)
+		}
+		balances[code] = bal
+	}
+	if err := rows.Err(); err != nil {
+		return Posted{}, fmt.Errorf("read balances of entry %d: %w", id, err)
+	}
+	return Posted{EntryID: id, Replayed: true, PostedAt: at, Balances: balances}, nil
 }
 
 type lockedAccount struct {
@@ -471,8 +501,18 @@ func (l *Ledger) post(ctx context.Context, e Entry, hash string) (Posted, error)
 		if narr == "" {
 			narr = e.Narration
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO journal_lines (entry_id, line_no, account_id, amount, currency, narration) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-			entryID, i+1, a.ID, ln.Amount, a.Currency, narr).Scan(&lineID); err != nil {
+		var channel *string
+		if ln.Channel != "" {
+			channel = &ln.Channel
+		}
+		var cp []byte
+		if ln.Counterparty != nil {
+			if cp, err = json.Marshal(ln.Counterparty); err != nil {
+				return Posted{}, fmt.Errorf("encode counterparty: %w", err)
+			}
+		}
+		if err := tx.QueryRow(ctx, `INSERT INTO journal_lines (entry_id, line_no, account_id, amount, currency, narration, channel, counterparty) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+			entryID, i+1, a.ID, ln.Amount, a.Currency, narr, channel, cp).Scan(&lineID); err != nil {
 			return Posted{}, err
 		}
 		if a.Customer {
@@ -487,10 +527,12 @@ func (l *Ledger) post(ctx context.Context, e Entry, hash string) (Posted, error)
 			}
 		}
 	}
-	for _, a := range accts {
+	balances := map[string]int64{}
+	for code, a := range accts {
 		if !a.Customer {
 			continue
 		}
+		balances[code] = a.ledger
 		if _, err := tx.Exec(ctx, `UPDATE balances SET ledger = $2, events = $3 WHERE account_id = $1`, a.ID, a.ledger, a.events); err != nil {
 			return Posted{}, err
 		}
@@ -501,7 +543,7 @@ func (l *Ledger) post(ctx context.Context, e Entry, hash string) (Posted, error)
 		}
 		return Posted{}, err
 	}
-	return Posted{EntryID: entryID}, nil
+	return Posted{EntryID: entryID, PostedAt: e.PostedAt, Balances: balances}, nil
 }
 
 func (l *Ledger) Reverse(ctx context.Context, entryID int64, key string, at time.Time, narration string) (Posted, error) {
@@ -530,22 +572,34 @@ func (l *Ledger) Reverse(ctx context.Context, entryID int64, key string, at time
 	if kind == "reversal" {
 		return Posted{}, ErrInvalid
 	}
-	rows, err := l.pool.Query(ctx, `SELECT a.code, jl.amount, jl.narration FROM journal_lines jl JOIN gl_accounts a ON a.id = jl.account_id WHERE jl.entry_id = $1 ORDER BY jl.line_no`, entryID)
+	rows, err := l.pool.Query(ctx, `SELECT a.code, jl.amount, jl.narration, jl.counterparty FROM journal_lines jl JOIN gl_accounts a ON a.id = jl.account_id WHERE jl.entry_id = $1 ORDER BY jl.line_no`, entryID)
 	if err != nil {
 		return Posted{}, err
 	}
 	lines := []Line{}
 	for rows.Next() {
 		var ln Line
-		if err := rows.Scan(&ln.Account, &ln.Amount, &ln.Narration); err != nil {
+		var cp []byte
+		if err := rows.Scan(&ln.Account, &ln.Amount, &ln.Narration, &cp); err != nil {
 			rows.Close()
 			return Posted{}, err
 		}
+		if len(cp) > 0 {
+			ln.Counterparty = &Counterparty{}
+			if err := json.Unmarshal(cp, ln.Counterparty); err != nil {
+				rows.Close()
+				return Posted{}, fmt.Errorf("read counterparty of entry %d: %w", entryID, err)
+			}
+		}
 		ln.Amount = -ln.Amount
 		ln.Narration = "REV/" + ln.Narration
+		ln.Channel = "reversal"
 		lines = append(lines, ln)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return Posted{}, err
+	}
 	if narration == "" {
 		narration = "REV/" + narr
 	}

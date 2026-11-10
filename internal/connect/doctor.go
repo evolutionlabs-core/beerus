@@ -90,6 +90,9 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		if f.Meta.CBN {
 			expected[cbn+"_snap_"+snapID(f.Meta.ID)] = true
 		}
+		if f.Meta.NIBSS {
+			expected[nibssSnapshot(c, f.Meta.ID)] = true
+		}
 	}
 	prefix := config.DatabaseName(c.Dir, "")
 	all, err := store.List(ctx, c.DatabaseURL, "beerus_")

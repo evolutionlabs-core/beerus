@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -201,6 +202,25 @@ func (a *App) toToken(r tokenReply) bankToken {
 	return bankToken{Access: r.Access, Refresh: r.Refresh, AccessExpires: now.Add(time.Duration(r.ExpiresIn) * time.Second), RefreshExpires: now.Add(time.Duration(r.RefreshExpiresIn) * time.Second), ConsentID: r.ConsentID}
 }
 
+func (a *App) bankFrom(ls *LinkSession) clock.Date {
+	from := ls.StartDate
+	for _, c := range a.st.Connections {
+		if c.PartnerID != ls.PartnerID || c.WorkspaceID != ls.WorkspaceID || c.Institution != ls.Institution {
+			continue
+		}
+		for _, id := range c.AccountIDs {
+			rec := a.st.Accounts[id]
+			if rec == nil || !rec.HistoryDone || rec.AsAt.IsZero() {
+				continue
+			}
+			if d := clock.DateOf(rec.AsAt); d.Before(from) {
+				from = d
+			}
+		}
+	}
+	return from
+}
+
 func (a *App) bankPAR(b *config.Bank, ls *LinkSession, state, challenge string) (string, error) {
 	p := a.partnerOf(ls.PartnerID)
 	form := url.Values{
@@ -211,7 +231,7 @@ func (a *App) bankPAR(b *config.Bank, ls *LinkSession, state, challenge string) 
 		"code_challenge_method": {"S256"},
 		"scope":                 {strings.Join(openbanking.Scopes, " ")},
 		"partner_id":            {ls.PartnerID},
-		"transaction_from":      {ls.StartDate.String()},
+		"transaction_from":      {a.bankFrom(ls).String()},
 	}
 	if p != nil {
 		form.Set("partner_name", p.Name)
@@ -329,7 +349,7 @@ func (a *App) revokeOrQueue(b *config.Bank, consentID string) {
 }
 
 func (a *App) retryRevokes() {
-	if !a.live() || len(a.st.Revokes) == 0 {
+	if len(a.st.Revokes) == 0 {
 		return
 	}
 	pending := a.st.Revokes
@@ -354,29 +374,7 @@ func (a *App) retryRevokes() {
 	a.dirty()
 }
 
-type bankMeta struct {
-	StableIDs bool `json:"stable_ids"`
-}
-
-func (a *App) bankMetaFor(b *config.Bank) (bankMeta, error) {
-	if m, ok := a.metas[b.ID]; ok {
-		return m, nil
-	}
-	var m bankMeta
-	if err := a.bankDo(b, http.MethodGet, "/discover", nil, "", &m); err != nil {
-		return m, err
-	}
-	if a.metas == nil {
-		a.metas = map[string]bankMeta{}
-	}
-	a.metas[b.ID] = m
-	return m, nil
-}
-
 func (a *App) refreshTokens() {
-	if !a.live() {
-		return
-	}
 	real := a.clock.Real()
 	ids := make([]string, 0, len(a.st.Connections))
 	for id := range a.st.Connections {
@@ -420,8 +418,4 @@ func (a *App) bankFailed(c *Connection, err error) bool {
 		return false
 	}
 	return true
-}
-
-func (a *App) live() bool {
-	return !a.worldOnly
 }

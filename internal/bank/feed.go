@@ -5,31 +5,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
-	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
-const TransferClearing = "TRANSFER_CLEARING"
+type Counterparty = ledger.Counterparty
 
-type Counterparty struct {
-	Name          string `json:"name"`
-	AccountNumber string `json:"account_number"`
-	BankCode      string `json:"bank_code"`
-	BankName      string `json:"bank_name"`
-}
+var ErrUnknownLine = errors.New("bank: unknown statement line")
 
 type FeedLine struct {
 	Key          string
 	NUBAN        string
-	Pending      bool
-	HadPending   bool
 	Amount       int64
-	At           time.Time
 	BookedAt     time.Time
 	ValueDate    clock.Date
 	Narration    string
@@ -37,247 +29,131 @@ type FeedLine struct {
 	SessionID    string
 	BankRef      string
 	Channel      string
-	Category     string
 	BalanceAfter int64
 	Seq          int64
 }
 
-func (b *Bank) EnsureCustomer(ctx context.Context, nuban, name, product, owner string, opening int64, at time.Time) error {
-	if _, err := b.OpenCustomer(ctx, nuban, name, product, owner, 3); err != nil {
-		return err
-	}
-	if opening <= 0 {
-		return nil
-	}
-	_, err := b.L.Post(ctx, entry("opening:"+nuban, "opening", at, "OPENING BALANCE",
-		dr(Vault, opening, "Opening balance"),
-		cr(CustomerAccount(nuban), opening, "OPENING BALANCE")))
-	return err
-}
+const feedSelect = `SELECT e.line_id, e.entry_id, a.nuban, e.amount, e.posted_at, e.value_date, e.narration, coalesce(e.session_id, ''), coalesce(jl.channel, ''), jl.counterparty, e.balance_after, e.seq
+	FROM account_events e JOIN gl_accounts a ON a.id = e.account_id JOIN journal_lines jl ON jl.id = e.line_id
+	WHERE a.customer AND `
 
-func chargeAccount(l FeedLine) (string, error) {
-	switch l.Category {
-	case charges.CategoryFee:
-		return FeeIncome, nil
-	case charges.CategoryVAT:
-		return VATPayable, nil
-	case charges.CategoryStamp, charges.CategoryLevy:
-		return StampPayable, nil
-	}
-	return "", fmt.Errorf("bank: charge line %s has no known category", l.Key)
-}
-
-func counterpart(l FeedLine) (string, error) {
-	switch {
-	case l.Channel == "internal":
-		return TransferClearing, nil
-	case l.Channel == "charge", l.Channel == "reversal" && l.Category != "":
-		return chargeAccount(l)
-	}
-	original := l.Amount
-	if l.Channel == "reversal" {
-		original = -l.Amount
-	}
-	if original < 0 {
-		return NIPOutward, nil
-	}
-	return NIPInward, nil
-}
-
-func NIPAmounts(l FeedLine) (outward, inward int64, err error) {
-	if l.Pending {
-		return 0, 0, nil
-	}
-	account, err := counterpart(l)
+func (b *Bank) lines(ctx context.Context, what, where string, args ...any) ([]FeedLine, error) {
+	rows, err := b.L.Pool().Query(ctx, feedSelect+where, args...)
 	if err != nil {
-		return 0, 0, err
-	}
-	switch account {
-	case NIPOutward:
-		return -l.Amount, 0, nil
-	case NIPInward:
-		return 0, l.Amount, nil
-	}
-	return 0, 0, nil
-}
-
-func kindOf(l FeedLine) string {
-	switch l.Channel {
-	case "nip", "reversal", "charge", "internal":
-		return l.Channel
-	}
-	return "feed"
-}
-
-func (b *Bank) nextSeq(ctx context.Context, tx pgx.Tx, accountID int64) (int64, error) {
-	if _, err := tx.Exec(ctx, `INSERT INTO feed_heads (account_id) VALUES ($1) ON CONFLICT DO NOTHING`, accountID); err != nil {
-		return 0, err
-	}
-	var seq int64
-	err := tx.QueryRow(ctx, `UPDATE feed_heads SET seq = seq + 1 WHERE account_id = $1 RETURNING seq`, accountID).Scan(&seq)
-	return seq, err
-}
-
-func (b *Bank) feedExists(ctx context.Context, accountID int64, key string, pending bool) (bool, error) {
-	var ok bool
-	err := b.L.Pool().QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM account_feed WHERE account_id = $1 AND line_key = $2 AND pending = $3)`, accountID, key, pending).Scan(&ok)
-	return ok, err
-}
-
-func (b *Bank) insertFeed(ctx context.Context, accountID int64, l FeedLine, entryID *int64, balance *int64) error {
-	tx, err := b.L.Pool().Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	var exists bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM account_feed WHERE account_id = $1 AND line_key = $2 AND pending = $3)`, accountID, l.Key, l.Pending).Scan(&exists); err != nil || exists {
-		return err
-	}
-	seq, err := b.nextSeq(ctx, tx, accountID)
-	if err != nil {
-		return err
-	}
-	var cp []byte
-	if l.Counterparty != nil {
-		cp, _ = json.Marshal(l.Counterparty)
-	}
-	var booked *time.Time
-	if !l.Pending {
-		t := l.BookedAt
-		booked = &t
-	}
-	null := func(s string) *string {
-		if s == "" {
-			return nil
-		}
-		return &s
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO account_feed (account_id, seq, line_key, pending, amount, appeared_at, booked_at, value_date, narration, counterparty, session_id, bank_ref, channel, balance_after, entry_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-		accountID, seq, l.Key, l.Pending, l.Amount, l.At, booked, l.ValueDate.Start(), l.Narration, cp, null(l.SessionID), null(l.BankRef), l.Channel, balance, entryID); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
-func (b *Bank) RecordLine(ctx context.Context, l FeedLine) error {
-	acct, err := b.L.Account(ctx, CustomerAccount(l.NUBAN))
-	if err != nil {
-		return err
-	}
-	if done, err := b.feedExists(ctx, acct.ID, l.Key, l.Pending); err != nil || done {
-		return err
-	}
-	if l.Pending {
-		return b.insertFeed(ctx, acct.ID, l, nil, nil)
-	}
-	if l.Amount == 0 {
-		return fmt.Errorf("bank: line %s has no amount", l.Key)
-	}
-	amt := l.Amount
-	if amt < 0 {
-		amt = -amt
-	}
-	other, err := counterpart(l)
-	if err != nil {
-		return err
-	}
-	var lines []ledger.Line
-	if l.Amount > 0 {
-		lines = []ledger.Line{dr(other, amt, l.Narration), cr(CustomerAccount(l.NUBAN), amt, l.Narration)}
-	} else {
-		lines = []ledger.Line{dr(CustomerAccount(l.NUBAN), amt, l.Narration), cr(other, amt, l.Narration)}
-	}
-	e := ledger.Entry{Key: "line:" + l.Key, Kind: kindOf(l), PostingDate: clock.DateOf(l.BookedAt), ValueDate: l.ValueDate, PostedAt: l.BookedAt, Narration: l.Narration, SessionID: l.SessionID, Lines: lines, AllowOverdraft: true}
-	p, err := b.L.Post(ctx, e)
-	if err != nil {
-		return err
-	}
-	var bal int64
-	if err := b.L.Pool().QueryRow(ctx, `SELECT balance_after FROM account_events WHERE account_id = $1 AND entry_id = $2 ORDER BY seq DESC LIMIT 1`, acct.ID, p.EntryID).Scan(&bal); err != nil {
-		return err
-	}
-	return b.insertFeed(ctx, acct.ID, l, &p.EntryID, &bal)
-}
-
-func (b *Bank) Watermark(ctx context.Context, nuban string) (time.Time, error) {
-	var wm *time.Time
-	err := b.L.Pool().QueryRow(ctx, `SELECT h.watermark FROM feed_heads h JOIN gl_accounts a ON a.id = h.account_id WHERE a.code = $1`, CustomerAccount(nuban)).Scan(&wm)
-	if errors.Is(err, pgx.ErrNoRows) || wm == nil {
-		return time.Time{}, nil
-	}
-	return *wm, err
-}
-
-func (b *Bank) SetWatermark(ctx context.Context, nuban string, at time.Time) error {
-	acct, err := b.L.Account(ctx, CustomerAccount(nuban))
-	if err != nil {
-		return err
-	}
-	_, err = b.L.Pool().Exec(ctx, `INSERT INTO feed_heads (account_id, watermark) VALUES ($1, $2) ON CONFLICT (account_id) DO UPDATE SET watermark = GREATEST(feed_heads.watermark, EXCLUDED.watermark)`, acct.ID, at)
-	return err
-}
-
-func (b *Bank) Feed(ctx context.Context, nuban string, at time.Time, from clock.Date) ([]FeedLine, error) {
-	rows, err := b.L.Pool().Query(ctx, `SELECT f.line_key, f.pending, f.amount, f.appeared_at, f.booked_at, f.value_date, f.narration, f.counterparty, coalesce(f.session_id, ''), coalesce(f.bank_ref, ''), f.channel, coalesce(f.balance_after, 0), f.seq,
-			EXISTS (SELECT 1 FROM account_feed p WHERE p.account_id = f.account_id AND p.line_key = f.line_key AND p.pending)
-		FROM account_feed f JOIN gl_accounts a ON a.id = f.account_id
-		WHERE a.code = $1 AND (
-			(NOT f.pending AND f.booked_at <= $2 AND f.booked_at >= $3)
-			OR (f.pending AND f.appeared_at <= $2 AND f.appeared_at >= $3 AND NOT EXISTS (
-				SELECT 1 FROM account_feed q WHERE q.account_id = f.account_id AND q.line_key = f.line_key AND NOT q.pending AND q.booked_at <= $2)))
-		ORDER BY f.seq`, CustomerAccount(nuban), at, from.Start())
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read %s: %w", what, err)
 	}
 	defer rows.Close()
 	out := []FeedLine{}
 	for rows.Next() {
 		var l FeedLine
-		var booked *time.Time
+		var line, entry int64
 		var vd time.Time
 		var cp []byte
-		if err := rows.Scan(&l.Key, &l.Pending, &l.Amount, &l.At, &booked, &vd, &l.Narration, &cp, &l.SessionID, &l.BankRef, &l.Channel, &l.BalanceAfter, &l.Seq, &l.HadPending); err != nil {
-			return nil, err
+		if err := rows.Scan(&line, &entry, &l.NUBAN, &l.Amount, &l.BookedAt, &vd, &l.Narration, &l.SessionID, &l.Channel, &cp, &l.BalanceAfter, &l.Seq); err != nil {
+			return nil, fmt.Errorf("read %s: %w", what, err)
 		}
-		if booked != nil {
-			l.BookedAt = *booked
-		}
+		l.Key = strconv.FormatInt(line, 10)
+		l.BankRef = b.reference(entry)
 		l.ValueDate = clock.DateOf(time.Date(vd.Year(), vd.Month(), vd.Day(), 12, 0, 0, 0, clock.Lagos))
 		if len(cp) > 0 {
 			l.Counterparty = &Counterparty{}
-			_ = json.Unmarshal(cp, l.Counterparty)
+			if err := json.Unmarshal(cp, l.Counterparty); err != nil {
+				return nil, fmt.Errorf("read counterparty of line %d: %w", line, err)
+			}
 		}
-		if l.Pending {
-			l.HadPending = false
-		}
-		l.NUBAN = nuban
 		out = append(out, l)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read %s: %w", what, err)
+	}
+	return out, nil
+}
+
+func (b *Bank) Feed(ctx context.Context, nuban string, at time.Time, from clock.Date) ([]FeedLine, error) {
+	return b.lines(ctx, "feed of "+nuban, `a.code = $1 AND e.posted_at <= $2 AND e.posted_at >= $3 ORDER BY e.seq`, CustomerAccount(nuban), at, from.Start())
+}
+
+func (b *Bank) Recent(ctx context.Context, nuban string, limit int, cursor string) ([]FeedLine, string, error) {
+	if err := checkLimit(limit); err != nil {
+		return nil, "", err
+	}
+	before := int64(-1)
+	if cursor != "" {
+		n, err := strconv.ParseInt(cursor, 10, 64)
+		if err != nil || n < 1 {
+			return nil, "", fmt.Errorf("%w: %q", ErrBadCursor, cursor)
+		}
+		before = n
+	}
+	out, err := b.lines(ctx, "lines of "+nuban, `a.code = $1 AND ($2 < 0 OR e.seq < $2) ORDER BY e.seq DESC LIMIT $3`, CustomerAccount(nuban), before, limit+1)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(out) > limit {
+		return out[:limit], strconv.FormatInt(out[limit-1].Seq, 10), nil
+	}
+	return out, "", nil
+}
+
+func (b *Bank) Line(ctx context.Context, nuban, key string) (FeedLine, error) {
+	id, err := strconv.ParseInt(key, 10, 64)
+	if err != nil || id < 1 {
+		return FeedLine{}, fmt.Errorf("%w: %q", ErrUnknownLine, key)
+	}
+	out, err := b.lines(ctx, "line "+key, `a.code = $1 AND e.line_id = $2`, CustomerAccount(nuban), id)
+	if err != nil {
+		return FeedLine{}, err
+	}
+	if len(out) == 0 {
+		return FeedLine{}, fmt.Errorf("%w: %s on %s", ErrUnknownLine, key, nuban)
+	}
+	return out[0], nil
+}
+
+func (b *Bank) SessionLines(ctx context.Context, sessionID string) ([]FeedLine, error) {
+	if sessionID == "" {
+		return nil, invalid("session id is empty")
+	}
+	out, err := b.lines(ctx, "lines of session "+sessionID, `e.session_id = $1 ORDER BY e.seq LIMIT $2`, sessionID, MaxPage+1)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > MaxPage {
+		return nil, fmt.Errorf("session %s has more than %d lines", sessionID, MaxPage)
+	}
+	return out, nil
+}
+
+type Totals struct {
+	Customers int64
+	Accounts  int64
+	Deposits  int64
+}
+
+func (b *Bank) Totals(ctx context.Context) (Totals, error) {
+	var t Totals
+	err := b.L.Pool().QueryRow(ctx, `SELECT (SELECT count(*) FROM customers WHERE status = $1),
+		(SELECT count(*) FROM gl_accounts WHERE customer AND status <> 'closed'),
+		(SELECT coalesce(sum(b.ledger), 0)::bigint FROM gl_accounts a JOIN balances b ON b.account_id = a.id WHERE a.customer)`, CustomerActive).Scan(&t.Customers, &t.Accounts, &t.Deposits)
+	if err != nil {
+		return Totals{}, fmt.Errorf("read totals of %s: %w", b.P.ID, err)
+	}
+	return t, nil
+}
+
+func (b *Bank) reference(entry int64) string {
+	return fmt.Sprintf("%s%010d", b.P.NUBANCode, entry)
 }
 
 func (b *Bank) BalanceAt(ctx context.Context, nuban string, at time.Time) (int64, error) {
-	var bal *int64
-	err := b.L.Pool().QueryRow(ctx, `SELECT f.balance_after FROM account_feed f JOIN gl_accounts a ON a.id = f.account_id
-		WHERE a.code = $1 AND NOT f.pending AND f.booked_at <= $2 ORDER BY f.seq DESC LIMIT 1`, CustomerAccount(nuban), at).Scan(&bal)
-	if err == nil && bal != nil {
-		return *bal, nil
+	var bal int64
+	err := b.L.Pool().QueryRow(ctx, `SELECT coalesce((SELECT e.balance_after FROM account_events e WHERE e.account_id = a.id AND e.posted_at <= $2 ORDER BY e.seq DESC LIMIT 1), 0)
+		FROM gl_accounts a WHERE a.code = $1 AND a.customer`, CustomerAccount(nuban), at).Scan(&bal)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ledger.ErrUnknownAccount
 	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return 0, err
+	if err != nil {
+		return 0, fmt.Errorf("read balance of %s: %w", nuban, err)
 	}
-	var opening int64
-	err = b.L.Pool().QueryRow(ctx, `SELECT coalesce(sum(-jl.amount), 0) FROM journal_lines jl JOIN journal_entries je ON je.id = jl.entry_id JOIN gl_accounts a ON a.id = jl.account_id
-		WHERE a.code = $1 AND je.kind = 'opening'`, CustomerAccount(nuban)).Scan(&opening)
-	return opening, err
-}
-
-func (b *Bank) PendingAt(ctx context.Context, nuban string, at time.Time) (int64, error) {
-	var sum int64
-	err := b.L.Pool().QueryRow(ctx, `SELECT coalesce(sum(f.amount), 0) FROM account_feed f JOIN gl_accounts a ON a.id = f.account_id
-		WHERE a.code = $1 AND f.pending AND f.appeared_at <= $2 AND NOT EXISTS (
-			SELECT 1 FROM account_feed q WHERE q.account_id = f.account_id AND q.line_key = f.line_key AND NOT q.pending AND q.booked_at <= $2)`, CustomerAccount(nuban), at).Scan(&sum)
-	return sum, err
+	return bal, nil
 }

@@ -2,6 +2,7 @@ package connect
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -35,6 +36,18 @@ func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSess
 	http.Redirect(w, r, b.URL()+"/authorize?"+q.Encode(), http.StatusSeeOther)
 }
 
+func (a *App) accountOwner(bankID, nuban string) (string, error) {
+	l := a.obLedger(bankID)
+	if l == nil {
+		return "", fmt.Errorf("the books of %s are not open", bankID)
+	}
+	acc, err := l.Account(nuban)
+	if err != nil {
+		return "", fmt.Errorf("look up the owner of %s: %w", nuban, err)
+	}
+	return acc.Owner, nil
+}
+
 func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -43,7 +56,7 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	if !a.live() || ls.BankState == "" || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(ls.BankState)) != 1 {
+	if ls.BankState == "" || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(ls.BankState)) != 1 {
 		a.message(w, http.StatusForbidden, "Request refused", "This sign-in does not match your session. Go back to the app and start again.")
 		return
 	}
@@ -72,6 +85,12 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = a.bankGet(b, vid, "/accounts", &g)
 	}
+	owner := ""
+	if err == nil && len(g.Accounts) > 0 {
+		a.mu.Unlock()
+		owner, err = a.accountOwner(b.ID, g.Accounts[0].ID)
+		a.mu.Lock()
+	}
 	if err != nil {
 		a.log.Error("bank sign-in", "bank", b.ID, "err", err)
 		a.vaultDrop(vid)
@@ -93,14 +112,9 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 		a.vaultDrop(vid)
 		a.failSession(w, r, ls, code)
 	}
-	keys, owner := []string{}, ""
+	keys := []string{}
 	for _, ba := range g.Accounts {
-		acc, err := a.world.FindAccount(ba.ID)
-		if err != nil || acc.Institution != b.ID {
-			continue
-		}
-		keys = append(keys, acc.Key)
-		owner = acc.Owner
+		keys = append(keys, acctKey(b.ID, ba.ID))
 	}
 	if len(keys) == 0 {
 		drop("server_error")
@@ -108,14 +122,14 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if ls.ConnectionID != "" {
 		c := a.st.Connections[ls.ConnectionID]
-		if c == nil || c.Status == "revoked" || c.PersonaID != owner {
+		if c == nil || c.Status == "revoked" || c.CustomerID != owner {
 			drop("access_denied")
 			return
 		}
 	}
 	slices.Sort(keys)
 	code := newSecret("oc_", 16)
-	ls.PersonaID, ls.Accounts, ls.BankAccounts = owner, keys, g.Accounts
+	ls.CustomerID, ls.Accounts, ls.BankAccounts = owner, keys, g.Accounts
 	ls.BankConsentID, ls.ConsentEnds, ls.BankFrom = tok.ConsentID, g.Ends, g.From
 	ls.Status = "authorised"
 	ls.CodeHash = hashSecret(code)

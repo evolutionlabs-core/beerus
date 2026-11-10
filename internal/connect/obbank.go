@@ -21,11 +21,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 func (a *App) prepareOpenBanking() error {
@@ -251,82 +252,75 @@ func (d bankData) ledger() (*ledgerSource, error) {
 	return nil, errors.New("the bank ledger is not open")
 }
 
-func (d bankData) find(nuban string) (accountRef, error) {
-	acc, err := d.a.world.FindAccount(nuban)
-	if err != nil || acc.Institution != d.bank.ID || acc.NUBAN != nuban {
-		return accountRef{}, openbanking.ErrNotFound
+func (d bankData) find(nuban string) (ledger.Account, *ledgerSource, error) {
+	l, err := d.ledger()
+	if err != nil {
+		return ledger.Account{}, nil, err
 	}
-	return accountRef{acc.Key, acc.NUBAN, acc.Name, acc.Type, acc.Currency}, nil
+	acc, err := l.Account(nuban)
+	if errors.Is(err, ledger.ErrUnknownAccount) {
+		return ledger.Account{}, nil, openbanking.ErrNotFound
+	}
+	if err != nil {
+		return ledger.Account{}, nil, err
+	}
+	return acc, l, nil
 }
 
-type accountRef struct {
-	Key, NUBAN, Name, Type, Currency string
-}
-
-func (r accountRef) info() openbanking.AccountInfo {
-	return openbanking.AccountInfo{ID: r.NUBAN, Name: r.Name, Type: r.Type, Currency: r.Currency}
+func accountInfo(acc ledger.Account) openbanking.AccountInfo {
+	return openbanking.AccountInfo{ID: acc.NUBAN, Name: acc.Name, Type: acc.Product, Currency: acc.Currency}
 }
 
 func (d bankData) Accounts(customer string) ([]openbanking.AccountInfo, error) {
-	out := []openbanking.AccountInfo{}
-	for _, acc := range d.a.world.AccountsAt(customer, d.bank.ID) {
-		out = append(out, accountRef{acc.Key, acc.NUBAN, acc.Name, acc.Type, acc.Currency}.info())
+	l, err := d.ledger()
+	if err != nil {
+		return nil, err
+	}
+	accs, err := l.Bank().CustomerAccounts(l.ctx, customer)
+	if errors.Is(err, bank.ErrUnknownCustomer) {
+		return []openbanking.AccountInfo{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make([]openbanking.AccountInfo, 0, len(accs))
+	for _, acc := range accs {
+		out = append(out, accountInfo(acc))
 	}
 	return out, nil
 }
 
 func (d bankData) Account(nuban string) (openbanking.AccountInfo, error) {
-	r, err := d.find(nuban)
-	return r.info(), err
+	acc, _, err := d.find(nuban)
+	return accountInfo(acc), err
 }
 
 func (d bankData) Balance(nuban string) (openbanking.Balance, error) {
-	r, err := d.find(nuban)
+	acc, l, err := d.find(nuban)
 	if err != nil {
 		return openbanking.Balance{}, err
 	}
-	l, err := d.ledger()
+	bal, err := l.LedgerAt(nuban, d.a.clock.Now())
 	if err != nil {
 		return openbanking.Balance{}, err
 	}
-	now := d.a.clock.Now()
-	ledger, err := l.LedgerAt(r.Key, now)
-	if err != nil {
-		return openbanking.Balance{}, err
-	}
-	pending, err := l.PendingAt(r.Key, now)
-	if err != nil {
-		return openbanking.Balance{}, err
-	}
-	b := openbanking.Balance{Ledger: ledger, Available: ledger, Currency: r.Currency}
-	if pending < 0 {
-		b.Available += pending
-	}
-	return b, nil
+	return openbanking.Balance{Ledger: bal, Available: bal, Currency: acc.Currency}, nil
 }
 
 func (d bankData) BalanceOn(nuban string, day clock.Date) (int64, error) {
-	r, err := d.find(nuban)
+	_, l, err := d.find(nuban)
 	if err != nil {
 		return 0, err
 	}
-	l, err := d.ledger()
-	if err != nil {
-		return 0, err
-	}
-	return l.EndOfDay(r.Key, day)
+	return l.EndOfDay(nuban, day)
 }
 
 func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking.Txn, error) {
-	r, err := d.find(nuban)
+	_, l, err := d.find(nuban)
 	if err != nil {
 		return nil, err
 	}
-	l, err := d.ledger()
-	if err != nil {
-		return nil, err
-	}
-	rows, err := l.Fetch(r.Key, d.a.clock.Now(), from)
+	rows, err := l.Fetch(nuban, d.a.clock.Now(), from)
 	if err != nil {
 		return nil, err
 	}
@@ -335,11 +329,7 @@ func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking
 		if p.ValueDate.Before(from) || p.ValueDate.After(to) {
 			continue
 		}
-		id := p.Key
-		if !d.bank.Stable() {
-			id = world.ID("t", p.Key, clock.DateOf(d.a.clock.Now()).String())
-		}
-		t := openbanking.Txn{ID: id, HadPending: p.HadPending, Pending: p.Pending, Amount: p.Amount, BookedAt: p.BookedAt, ValueDate: p.ValueDate, Narration: p.Narration, SessionID: p.SessionID, BankRef: p.BankRef, Channel: p.Channel, BalanceAfter: p.BalanceAfter, Seq: p.Seq}
+		t := openbanking.Txn{ID: p.Key, Amount: p.Amount, BookedAt: p.BookedAt, ValueDate: p.ValueDate, Narration: p.Narration, SessionID: p.SessionID, BankRef: p.BankRef, Channel: p.Channel, BalanceAfter: p.BalanceAfter, Seq: p.Seq}
 		if p.Counterparty != nil {
 			t.Counterparty = &openbanking.Counterparty{Name: p.Counterparty.Name, AccountNumber: p.Counterparty.AccountNumber, BankCode: p.Counterparty.BankCode, BankName: p.Counterparty.BankName}
 		}
@@ -387,7 +377,6 @@ func (a *App) openBanking(id string) *openbanking.Server {
 		Data:          bankData{a, b},
 		Ledger:        consentLedger{a},
 		LedgerOutbox:  a.role == RoleBank,
-		StableIDs:     b.Stable(),
 		Now:           a.clock.Real,
 		Biz:           a.clock.Now,
 		ConsentMonths: b.API.ConsentMonths,
@@ -448,7 +437,7 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	h := ob.Handler()
 	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.freshen()
-		if (a.role == RoleBank && (!a.synced.Load() || a.paused.Load())) || a.bankPhase(b.ID) == PhaseSuspended || a.obLedger(b.ID) == nil || a.world.Down(b.ID, a.clock.Now()) {
+		if (a.role == RoleBank && (!a.synced.Load() || a.paused.Load())) || a.bankPhase(b.ID) == PhaseSuspended || a.obLedger(b.ID) == nil || a.bankDown(b.ID, a.clock.Now()) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "30")
 			w.WriteHeader(http.StatusServiceUnavailable)

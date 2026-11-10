@@ -52,6 +52,36 @@ type Phone struct {
 	Source      string `yaml:"source"`
 }
 
+type DepositInsurance struct {
+	Limits      map[string]int64  `yaml:"limits_minor"`
+	BankTypes   map[string]string `yaml:"bank_types"`
+	Placeholder string            `yaml:"placeholder"`
+	Source      string            `yaml:"source"`
+}
+
+func (d DepositInsurance) check() error {
+	if d.Source == "" {
+		return fmt.Errorf("deposit_insurance has no source")
+	}
+	if len(d.BankTypes) == 0 {
+		return fmt.Errorf("deposit_insurance has no bank_types")
+	}
+	for typ, class := range d.BankTypes {
+		if d.Limits[class] <= 0 {
+			return fmt.Errorf("deposit_insurance: bank type %s maps to %q, which has no limit above zero", typ, class)
+		}
+	}
+	return nil
+}
+
+func (d DepositInsurance) Limit(bankType string) (int64, error) {
+	class, ok := d.BankTypes[bankType]
+	if !ok {
+		return 0, fmt.Errorf("deposit insurance has no limit for bank type %q", bankType)
+	}
+	return d.Limits[class], nil
+}
+
 type Pack struct {
 	Country  string     `yaml:"country"`
 	Version  string     `yaml:"version"`
@@ -60,8 +90,9 @@ type Pack struct {
 	Islamic  []Islamic  `yaml:"islamic"`
 	Declared []Declared `yaml:"declared"`
 
-	SimulatorCodes SimulatorCodes `yaml:"simulator_codes"`
-	Phone          Phone          `yaml:"phone"`
+	SimulatorCodes   SimulatorCodes   `yaml:"simulator_codes"`
+	Phone            Phone            `yaml:"phone"`
+	DepositInsurance DepositInsurance `yaml:"deposit_insurance"`
 }
 
 func Nigeria() (*Pack, error) {
@@ -82,6 +113,9 @@ func Nigeria() (*Pack, error) {
 	}
 	if p.Phone.CallingCode == "" || p.Phone.TrunkPrefix == "" || p.Phone.Source == "" {
 		return nil, fmt.Errorf("country pack NG: phone needs calling_code, trunk_prefix and source")
+	}
+	if err := p.DepositInsurance.check(); err != nil {
+		return nil, fmt.Errorf("country pack NG: %w", err)
 	}
 	return &p, nil
 }

@@ -53,26 +53,15 @@ func TestDoneStory(t *testing.T) {
 	limited := start.Before(today.AddDays(-s.cfg.Bank("bank-a").HistoryDays))
 
 	step(1, "Adaeze's Bakery banks with Bank A and Bank B")
-	byBank := map[string][]map[string]any{}
-	var adaeze map[string]any
-	for _, p := range s.ctl("GET", "/personas", nil)["data"].([]any) {
-		if m := p.(map[string]any); m["id"] == "adaeze" {
-			adaeze = m
-		}
-	}
-	check(adaeze != nil && adaeze["name"] == "Adaeze's Bakery Ltd", "persona: %v", adaeze)
-	for _, a := range adaeze["accounts"].([]any) {
-		m := a.(map[string]any)
-		byBank[fmt.Sprint(m["institution"])] = append(byBank[fmt.Sprint(m["institution"])], m)
-	}
-	check(len(byBank["bank-a"]) > 0 && len(byBank["bank-b"]) > 0, "accounts: %v", byBank)
-	var bankACurrent map[string]any
-	for _, a := range byBank["bank-a"] {
-		if a["type"] == "current" {
-			bankACurrent = a
-		}
-	}
-	check(bankACurrent != nil, "no current account at Bank A")
+	pa, pb := s.personaAt("adaeze", "bank-a"), s.personaAt("adaeze", "bank-b")
+	check(pa.Name == "Adaeze's Bakery Ltd" && len(pa.Accounts) == 2 && len(pb.Accounts) == 1, "customer: %+v %+v", pa, pb)
+	check(pa.BVN != "" && pa.BVN == pb.BVN, "one customer holds BVNs %s and %s", pa.BVN, pb.BVN)
+	current := pa.Accounts[0]
+	ngozi := s.persona("ngozi").Accounts[0]
+	s.pay("bank-a", current, "bank-b", ngozi, "40000")
+	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "bank-b", "outcome": "failed", "count": 1})
+	s.payTry("bank-a", current, "bank-b", ngozi, "15000", nil)
+	s.advance("3h")
 
 	step(2, "Connect bank, pick Bank A, redirect to the bank")
 	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": start.String(), "workspace_id": "ws_adaeze_bakery", "redirect_uri": s.redirect, "state": "st-done"}), 201)
@@ -84,8 +73,7 @@ func TestDoneStory(t *testing.T) {
 
 	step(3, "sign in, 2FA code, CBN consent screen, pick accounts, approve")
 	base := b.cur.Scheme + "://" + b.cur.Host
-	p := s.persona("adaeze")
-	b.postTo(base, "/login", url.Values{"username": {p.Username}, "password": {p.Password}})
+	b.postTo(base, "/login", url.Values{"username": {pa.Username}, "password": {pa.Password}})
 	otp := reOTP.FindStringSubmatch(b.last)
 	check(otp != nil, "no 2FA code in the inbox: %.300s", b.last)
 	b.postTo(base, "/verify", url.Values{"otp": {otp[1]}})
@@ -97,8 +85,8 @@ func TestDoneStory(t *testing.T) {
 	for _, m := range reAccount.FindAllStringSubmatch(b.last, -1) {
 		offered = append(offered, m[1])
 	}
-	check(len(offered) == len(byBank["bank-a"]), "the bank offered %d accounts, want %d", len(offered), len(byBank["bank-a"]))
-	b.postTo(base, "/authorize/consent", url.Values{"account": {fmt.Sprint(bankACurrent["nuban"])}, "action": {"approve"}})
+	check(len(offered) == len(pa.Accounts), "the bank offered %d accounts, want %d", len(offered), len(pa.Accounts))
+	b.postTo(base, "/authorize/consent", url.Values{"account": {current}, "action": {"approve"}})
 	check(b.result != nil && b.result.Query().Get("code") != "", "no code on the redirect to Balance: %.300s", b.last)
 	q := b.result.Query()
 	check(q.Get("state") == "st-done" && q.Get("link_session_id") == ls.JSON["id"], "redirect: %v", b.result)
@@ -134,8 +122,8 @@ func TestDoneStory(t *testing.T) {
 		run += num(l["amount_minor"])
 		check(num(l["balance_after_minor"]) == run, "balance chain broken at %v", l["id"])
 	}
-	current := num(s.must(s.call("GET", "/v1/accounts/"+idA, nil), 200).JSON["balances"].(map[string]any)["current"].(map[string]any)["amount_minor"])
-	check(opening+sum == current, "opening %d + history %d != current %d", opening, sum, current)
+	now := num(s.must(s.call("GET", "/v1/accounts/"+idA, nil), 200).JSON["balances"].(map[string]any)["current"].(map[string]any)["amount_minor"])
+	check(opening == 0 && opening+sum == now, "opening %d + history %d != current %d", opening, sum, now)
 	for _, want := range []string{"Transfer fee", "VAT on transfer fee", "Stamp duty"} {
 		check(kinds[want], "no %q line in the history", want)
 	}
@@ -151,17 +139,7 @@ func TestDoneStory(t *testing.T) {
 	check(len(feedB.lines) > 0, "no history from Bank B")
 
 	step(5, "a customer at Bank B pays her through the NIP switch")
-	var chidiB string
-	for _, pp := range s.ctl("GET", "/personas", nil)["data"].([]any) {
-		if m := pp.(map[string]any); m["id"] == "chidi" {
-			for _, a := range m["accounts"].([]any) {
-				if am := a.(map[string]any); am["institution"] == "bank-b" {
-					chidiB = fmt.Sprint(am["key"])
-				}
-			}
-		}
-	}
-	check(chidiB != "", "no Bank B account for the customer")
+	chidiB := s.persona("chidi").Accounts[0]
 	before := s.ctl("GET", "/nip/settlement", nil)
 	delivered := func(typ string, match func(map[string]any) bool) int {
 		if s.sink == nil {
@@ -184,7 +162,7 @@ func TestDoneStory(t *testing.T) {
 	}
 	isA := func(d map[string]any) bool { return d["account_id"] == idA }
 	hooksBefore := delivered("sync.available", isA)
-	pay, err := s.ctlTry("POST", "/transfers", map[string]any{"from": chidiB, "to": fmt.Sprint(bankACurrent["key"]), "amount": "2500", "narration": "Cake order"})
+	pay, _, err := s.ctlWith("POST", "/banks/bank-b/transfers", map[string]string{"from": chidiB, "to_bank": "bank-a", "to": current, "amount": "2500", "narration": "Cake order"}, nil)
 	check(err == nil, "payment: %v", err)
 	sid := fmt.Sprint(pay["session_id"])
 	check(len(sid) == 30 && pay["response_code"] == "00" && strings.HasPrefix(sid, "999002"), "payment reply: %v", pay)
@@ -204,7 +182,7 @@ func TestDoneStory(t *testing.T) {
 	after := s.ctl("GET", "/nip/settlement", nil)
 	check(num(after["sessions"]) > num(before["sessions"]), "no settlement session ran: %v then %v", before["sessions"], after["sessions"])
 	check(len(after["problems"].([]any)) == 0, "settlement problems: %v", after["problems"])
-	check(fmt.Sprint(s.ctl("GET", "/nip/transfers/"+sid, nil)["response_code"]) == "00", "the switch lost the transfer")
+	check(fmt.Sprint(s.ctl("GET", "/nip/sessions/"+sid, nil)["status"]) == "00", "the switch lost the transfer")
 	feedA, _ = s.syncMore(idA, feedA, 500)
 	line := findBySession(feedA)
 	check(line != nil && line["status"] == "posted", "the payment is not posted after settlement: %v", line)
@@ -214,10 +192,10 @@ func TestDoneStory(t *testing.T) {
 	}
 
 	step(6, "own-account transfer from Bank A to Bank B matched by session ID")
-	own := s.ctl("POST", "/scenarios/own_account_transfer_across_banks", map[string]any{"persona": "adaeze"})
-	ownSID := regexp.MustCompile(`session (\d{30})`).FindStringSubmatch(fmt.Sprint(own["result"]))
-	check(ownSID != nil, "the scenario did not report a session ID: %v", own)
-	s.advance("1m")
+	own := s.pay("bank-a", current, "bank-b", pb.Accounts[0], "100000")
+	ownSID := []string{"", fmt.Sprint(own["session_id"])}
+	check(len(ownSID[1]) == 30, "the transfer did not report a session ID: %v", own)
+	s.syncNow()
 	feedA, _ = s.syncMore(idA, feedA, 500)
 	feedB, _ = s.syncMore(idB, feedB, 500)
 	bySession := func(st *feedState) []map[string]any {
@@ -234,35 +212,7 @@ func TestDoneStory(t *testing.T) {
 	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "done-story"})
 	atSnapA, atSnapB := idSet(feedA), idSet(feedB)
 
-	step(7, "unstable_ids on: every transaction exactly once")
-	changedBefore := len(feedA.modified) + len(feedB.modified)
-	for _, inst := range []string{"bank-a", "bank-b"} {
-		s.ctl("POST", "/scenarios/unstable_ids", map[string]any{"institution": inst})
-	}
-	for i := 0; i < 3; i++ {
-		s.advance("26h")
-		feedA, _ = s.syncMore(idA, feedA, 500)
-		feedB, _ = s.syncMore(idB, feedB, 500)
-	}
-	refChanged := 0
-	for _, m := range append(append([]map[string]any{}, feedA.modified...), feedB.modified...)[changedBefore:] {
-		if m["modification_reason"] == "bank_reference_changed" {
-			refChanged++
-		}
-	}
-	check(refChanged > 0, "the scenario changed no bank references, so nothing was tested: %d lines in A, %d in B, %d and %d modified", len(feedA.lines), len(feedB.lines), len(feedA.modified), len(feedB.modified))
-	for name, pair := range map[string]struct {
-		st  *feedState
-		was []string
-	}{"Bank A": {feedA, atSnapA}, "Bank B": {feedB, atSnapB}} {
-		postedKeys(t, pair.st)
-		for _, id := range pair.was {
-			_, ok := pair.st.lines[id]
-			check(ok || pair.st.removed[id], "%s: transaction %s vanished", name, id)
-		}
-	}
-
-	step(8, "she revokes consent in her bank's app")
+	step(7, "she revokes consent in her bank's app")
 	app := s.bankSignIn("adaeze")
 	app.get("/apps")
 	check(strings.Contains(app.last, "Balance") && strings.Contains(app.last, "via Beerus Connect"), "connected apps page: %.300s", app.last)
@@ -278,7 +228,7 @@ func TestDoneStory(t *testing.T) {
 	check(r.Status == 409 && r.Code() == "connection_revoked", "sync after revoke: %d %s", r.Status, r.Body)
 	check(s.must(s.call("GET", "/v1/connections/"+connB, nil), 200).JSON["status"] == "active", "the revoke touched the other bank")
 
-	step(9, "a year passes: consent expires and can be renewed")
+	step(8, "a year passes: consent expires and can be renewed")
 	oldCursor := feedB.cursor
 	s.advance("366d")
 	check(s.must(s.call("GET", "/v1/connections/"+connB, nil), 200).JSON["status"] == "expired", "Bank B consent did not expire")
@@ -296,13 +246,13 @@ func TestDoneStory(t *testing.T) {
 	check(s.must(s.call("GET", "/v1/connections/"+connB, nil), 200).JSON["status"] == "active", "Bank B is not active after renewal")
 	s.must(s.call("GET", "/v1/accounts/"+idB+"/transactions/sync?limit=5", nil), 200)
 
-	step(10, "every response so far matched the OpenAPI contract the stub is held to")
+	step(9, "every response so far matched the OpenAPI contract the stub is held to")
 	s.vmu.Lock()
 	n := len(s.violations)
 	s.vmu.Unlock()
 	check(n == 0, "%d contract violations", n)
 
-	step(11, "restoring the snapshot asks Balance to reconnect, then rebuilds the feed")
+	step(10, "restoring the snapshot asks Balance to reconnect, then rebuilds the feed")
 	restored := s.ctl("POST", "/snapshots/"+fmt.Sprint(snap["id"])+"/restore", nil)
 	check(restored["world_id"] != feedB.worldID, "restore kept the world ID")
 	r = s.call("GET", "/v1/accounts/"+idB+"/transactions/sync?cursor="+oldCursor, nil)
@@ -328,8 +278,8 @@ func TestDoneStory(t *testing.T) {
 	}
 	if s.app != nil {
 		checkSettled(t, s.app)
-		if c, err := s.app.VerifyBank(); err != nil || !c.Ledger.OK() || len(c.Mismatches) > 0 {
-			t.Fatalf("bank ledgers at the end: %v %v %v", err, c.Ledger, c.Mismatches)
+		if c, err := s.app.VerifyBank(); err != nil || !c.OK() {
+			t.Fatalf("bank ledgers at the end: %v %v", err, c)
 		}
 	}
 }

@@ -13,7 +13,7 @@ Beerus is a full simulation of the Nigerian banking system that runs on your own
 - **NIBSS**: the NIP switch with name enquiry, transfers and status queries, deferred net settlement in sessions, the BVN registry, the Open Banking Registry and the consent ledger.
 - **CBN**: the trust anchor for every participant's certificates, and the RTGS that holds banks' settlement accounts.
 - **Beerus Connect**: an open banking aggregator. Applications connect through its partner API to get account data and a transaction feed.
-- **Simulator**: a seeded population of customers whose activity produces repeatable transaction history.
+- **Control API and CLI**: create customers and accounts, take deposits and withdrawals, send transfers and inject faults. Banks start empty, and money moves only when you or your app move it.
 
 Each institution is a separate service with its own database. They communicate only over mTLS with signed, idempotent messages, as they would in production.
 

@@ -64,16 +64,16 @@ func (b *Bank) MonthEnd(ctx context.Context, month time.Month, year int, at time
 			}
 			vat := charges.VAT(sms)
 			lines = append(lines,
-				dr(a.code, sms, "SMS ALERT CHARGES "+label), cr(FeeIncome, sms, "SMS ALERT CHARGES "+label),
-				dr(a.code, vat, "VAT ON SMS ALERT CHARGES "+label), cr(VATPayable, vat, "VAT ON SMS ALERT CHARGES "+label))
+				via(dr(a.code, sms, "SMS ALERT CHARGES "+label), "charge", nil), cr(FeeIncome, sms, "SMS ALERT CHARGES "+label),
+				via(dr(a.code, vat, "VAT ON SMS ALERT CHARGES "+label), "charge", nil), cr(VATPayable, vat, "VAT ON SMS ALERT CHARGES "+label))
 		}
 		if a.product == "current" && a.turnover > 0 {
 			fee := (a.turnover*charges.MaintenancePerMille + 500) / 1000
 			if fee > 0 {
 				vat := charges.VAT(fee)
 				lines = append(lines,
-					dr(a.code, fee, "ACCOUNT MAINT FEE "+label), cr(FeeIncome, fee, "ACCOUNT MAINT FEE "+label),
-					dr(a.code, vat, "VAT ON ACCOUNT MAINT FEE "+label), cr(VATPayable, vat, "VAT ON ACCOUNT MAINT FEE "+label))
+					via(dr(a.code, fee, "ACCOUNT MAINT FEE "+label), "charge", nil), cr(FeeIncome, fee, "ACCOUNT MAINT FEE "+label),
+					via(dr(a.code, vat, "VAT ON ACCOUNT MAINT FEE "+label), "charge", nil), cr(VATPayable, vat, "VAT ON ACCOUNT MAINT FEE "+label))
 			}
 		}
 		if len(lines) == 0 {

@@ -15,18 +15,18 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 func testBankConfig() *config.Config {
-	return &config.Config{Seed: 1, Genesis: "2024-01-01", Connect: config.Connect{ControlPort: 7480}, Banks: []*config.Bank{{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "999001", NUBANCode: "901", HistoryDays: 30, Port: 7445}}}
+	return &config.Config{Connect: config.Connect{ControlPort: 7480}, Banks: []*config.Bank{{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "999001", NUBANCode: "901", HistoryDays: 30, Port: 7445}}}
 }
 
 func TestPausingBanksDoesNotHoldTheAppLock(t *testing.T) {
 	cfg := testBankConfig()
-	a := &App{cfg: cfg, role: RoleSim, st: newState(), log: slog.New(slog.NewTextHandler(io.Discard, nil)), ledgers: []*ledgerSource{{inst: world.Institution{ID: "bank-a"}}}}
+	a := &App{cfg: cfg, role: RoleSim, st: newState(), log: slog.New(slog.NewTextHandler(io.Discard, nil)), ledgers: []*ledgerSource{{inst: bank.Profile{ID: "bank-a"}}}}
 	in, release := make(chan struct{}), make(chan struct{})
 	a.peers = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		in <- struct{}{}
@@ -60,8 +60,6 @@ func TestReplicaPullTakesLocksInOrder(t *testing.T) {
 		clock:  clock.New(clock.State{Pace: 1}, func() time.Time { return now }),
 		status: map[string]*BankStatus{"bank-a": {ID: "bank-a", Phase: PhaseProvisioning}},
 	}
-	genesis, _ := cfg.GenesisDate()
-	a.world = world.New(a.worldConfig(genesis), world.Overrides{})
 	a.lifeMu.Lock()
 	done := make(chan error, 1)
 	go func() { done <- a.fetchReplica() }()
@@ -198,7 +196,7 @@ func pausingSim(t *testing.T, fail map[string]string) (*App, *sync.Mutex, map[st
 	cfg.Banks = append(cfg.Banks, &config.Bank{ID: "bank-b", Name: "Bank B", Type: "digital", NIPCode: "999002", NUBANCode: "902", HistoryDays: 30, Port: 7446})
 	var mu sync.Mutex
 	calls := map[string][]string{}
-	a := &App{cfg: cfg, role: RoleSim, st: newState(), log: slog.New(slog.NewTextHandler(io.Discard, nil)), ledgers: []*ledgerSource{{inst: world.Institution{ID: "bank-a"}}, {inst: world.Institution{ID: "bank-b"}}}}
+	a := &App{cfg: cfg, role: RoleSim, st: newState(), log: slog.New(slog.NewTextHandler(io.Discard, nil)), ledgers: []*ledgerSource{{inst: bank.Profile{ID: "bank-a"}}, {inst: bank.Profile{ID: "bank-b"}}}}
 	a.peers = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		mu.Lock()
 		defer mu.Unlock()

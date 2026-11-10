@@ -11,7 +11,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
@@ -72,10 +71,9 @@ func (a *App) initLifecycle(unready map[string]bool) []*config.Bank {
 	}
 	var resume []*config.Bank
 	for _, b := range a.cfg.Banks {
-		st := newStatus(b, a.worldOnly || a.ledgerFor(b.ID) != nil)
+		st := newStatus(b, a.ledgerFor(b.ID) != nil)
 		a.status[b.ID] = st
-		a.alignSuspensionLocked(b)
-		if a.worldOnly || b.Closed() {
+		if b.Closed() {
 			continue
 		}
 		r := findResource(&stored, setup.KindBank, b.ID)
@@ -160,9 +158,6 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 }
 
 func (a *App) reconcileBanks() {
-	if a.worldOnly {
-		return
-	}
 	a.checkDrift()
 	now := a.clock.Real()
 	a.lifeMu.Lock()
@@ -191,12 +186,6 @@ func (a *App) provision(b *config.Bank) {
 	ok := a.step(st, setup.StepAllocate, func() error {
 		return a.claimBank(b)
 	}) && a.step(st, setup.StepDirectory, func() error {
-		a.mu.Lock()
-		err := a.world.AddInstitution(world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: b.Stable(), Style: b.Style()})
-		a.mu.Unlock()
-		if err != nil {
-			return err
-		}
 		return a.registerMember(b)
 	}) && a.step(st, setup.StepDatabase, func() error {
 		a.mu.Lock()
@@ -204,7 +193,7 @@ func (a *App) provision(b *config.Bank) {
 		a.mu.Unlock()
 		if ls == nil {
 			var err error
-			if ls, err = openLedgerSource(context.Background(), a.cfg, a.ctl, b, a.world); err != nil {
+			if ls, err = openLedgerSource(context.Background(), a.cfg, a.ctl, b); err != nil {
 				return err
 			}
 			a.mu.Lock()
@@ -233,9 +222,6 @@ func (a *App) provision(b *config.Bank) {
 	st.Phase, st.Reason, st.Attempts, st.NextAttemptAt = phase, "", 0, nil
 	a.lifeMu.Unlock()
 	a.recordPhase(b.ID, phase)
-	a.mu.Lock()
-	a.alignSuspensionLocked(b)
-	a.mu.Unlock()
 }
 
 func (a *App) bankCerts(b *config.Bank) error {

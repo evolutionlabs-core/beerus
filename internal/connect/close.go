@@ -1,31 +1,33 @@
 package connect
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
-var insuredLimit = map[string]int64{"commercial": 500_000_000, "digital": 500_000_000, "microfinance": 200_000_000}
-
 type ImpactAccount struct {
-	Key       string `json:"key"`
 	NUBAN     string `json:"nuban"`
 	Name      string `json:"name"`
 	Type      string `json:"type"`
 	Owner     string `json:"owner"`
 	Balance   int64  `json:"balance_minor"`
-	Pending   int64  `json:"pending_minor"`
 	Connected bool   `json:"connected"`
 }
 
 type ImpactCustomer struct {
-	Persona   string `json:"persona"`
+	ID        string `json:"customer"`
 	Name      string `json:"name"`
 	Accounts  int    `json:"accounts"`
 	Deposits  int64  `json:"deposits_minor"`
@@ -34,10 +36,10 @@ type ImpactCustomer struct {
 }
 
 type ImpactConnection struct {
-	ID      string `json:"id"`
-	Partner string `json:"partner"`
-	Persona string `json:"persona"`
-	Status  string `json:"status"`
+	ID       string `json:"id"`
+	Partner  string `json:"partner"`
+	Customer string `json:"customer"`
+	Status   string `json:"status"`
 }
 
 type CloseImpact struct {
@@ -46,7 +48,6 @@ type CloseImpact struct {
 	Deposits     int64              `json:"deposits_minor"`
 	Insured      int64              `json:"insured_minor"`
 	Uninsured    int64              `json:"uninsured_minor"`
-	Pending      int64              `json:"pending_minor"`
 	Customers    []ImpactCustomer   `json:"customers"`
 	Accounts     []ImpactAccount    `json:"accounts"`
 	Connections  []ImpactConnection `json:"connections"`
@@ -54,79 +55,111 @@ type CloseImpact struct {
 	Blockers     []string           `json:"blockers"`
 }
 
+func insuredLimit(bankType string) (int64, error) {
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return 0, err
+	}
+	return pack.DepositInsurance.Limit(bankType)
+}
+
 func (a *App) CloseImpact(id string) (CloseImpact, error) {
 	st, ok := a.bankStatus(id)
-	b := a.cfg.Bank(id)
+	banks := a.bankList()
+	b := findBank(banks, id)
 	if !ok || b == nil {
 		return CloseImpact{}, errNotFound
 	}
-	out := CloseImpact{Bank: st, InsuredLimit: insuredLimit[b.Type], Customers: []ImpactCustomer{}, Accounts: []ImpactAccount{}, Connections: []ImpactConnection{}, Partners: []string{}, Blockers: []string{}}
+	limit, err := insuredLimit(b.Type)
+	if err != nil {
+		return CloseImpact{}, err
+	}
+	out := CloseImpact{Bank: st, InsuredLimit: limit, Customers: []ImpactCustomer{}, Accounts: []ImpactAccount{}, Connections: []ImpactConnection{}, Partners: []string{}, Blockers: []string{}}
 	switch st.Phase {
 	case PhaseProvisioning, PhaseRepairing:
 		out.Blockers = append(out.Blockers, "the bank is "+st.Phase+"; wait until it is active or suspended")
 	case PhaseClosed:
 		out.Blockers = append(out.Blockers, "the bank is already closed")
 	}
-	for _, other := range a.cfg.Banks {
+	for _, other := range banks {
 		if other.SettlesThrough == id && !other.Closed() {
 			out.Blockers = append(out.Blockers, other.Name+" settles through this bank; close it first")
 		}
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	now := a.clock.Now()
+	ls := a.ledgerFor(id)
 	connected := map[string]bool{}
 	partners := map[string]bool{}
 	for _, c := range a.st.Connections {
 		if c.Institution != id || c.Status == "revoked" || c.Status == "expired" {
 			continue
 		}
-		out.Connections = append(out.Connections, ImpactConnection{ID: c.ID, Partner: c.PartnerID, Persona: c.PersonaID, Status: c.Status})
+		out.Connections = append(out.Connections, ImpactConnection{ID: c.ID, Partner: c.PartnerID, Customer: c.CustomerID, Status: c.Status})
 		partners[c.PartnerID] = true
 	}
 	for _, rec := range a.st.Accounts {
 		if c := a.st.Connections[rec.ConnectionID]; c != nil && c.Institution == id && c.Status != "revoked" && c.Status != "expired" {
-			connected[rec.WorldKey] = true
+			connected[rec.Key] = true
 		}
 	}
-	customers := map[string]*ImpactCustomer{}
-	for _, acc := range a.world.Accounts() {
-		if acc.Institution != id || (!acc.OpenedAt.IsZero() && acc.OpenedAt.After(now)) {
-			continue
+	a.mu.Unlock()
+	if ls == nil {
+		return CloseImpact{}, fmt.Errorf("the books of %s are not open", b.Name)
+	}
+	holders, err := allCustomers(ls)
+	if err != nil {
+		return CloseImpact{}, err
+	}
+	now := a.clock.Now()
+	bk := ls.Bank()
+	for _, cust := range holders {
+		accs, err := bk.CustomerAccounts(ls.ctx, cust.ID)
+		if err != nil {
+			return CloseImpact{}, err
 		}
-		bal, _ := a.world.LedgerAt(acc.Key, now)
-		pend, _ := a.world.PendingAt(acc.Key, now)
-		out.Accounts = append(out.Accounts, ImpactAccount{Key: acc.Key, NUBAN: acc.NUBAN, Name: acc.Name, Type: acc.Type, Owner: acc.Owner, Balance: bal, Pending: pend, Connected: connected[acc.Key]})
-		out.Pending += pend
-		cu := customers[acc.Owner]
-		if cu == nil {
-			cu = &ImpactCustomer{Persona: acc.Owner}
-			if p, ok := a.world.Persona(acc.Owner); ok {
-				cu.Name = p.Name
+		cu := ImpactCustomer{ID: cust.ID, Name: cust.Name}
+		for _, acc := range accs {
+			bal, err := bk.BalanceAt(ls.ctx, acc.NUBAN, now)
+			if err != nil {
+				return CloseImpact{}, err
 			}
-			customers[acc.Owner] = cu
+			out.Accounts = append(out.Accounts, ImpactAccount{NUBAN: acc.NUBAN, Name: acc.Name, Type: acc.Product, Owner: cust.ID, Balance: bal, Connected: connected[acctKey(id, acc.NUBAN)]})
+			cu.Accounts++
+			if bal > 0 {
+				cu.Deposits += bal
+			}
 		}
-		cu.Accounts++
-		if bal > 0 {
-			cu.Deposits += bal
-		}
-	}
-	for _, cu := range customers {
 		cu.Insured = min(cu.Deposits, out.InsuredLimit)
 		cu.Uninsured = cu.Deposits - cu.Insured
 		out.Deposits += cu.Deposits
 		out.Insured += cu.Insured
 		out.Uninsured += cu.Uninsured
-		out.Customers = append(out.Customers, *cu)
+		out.Customers = append(out.Customers, cu)
 	}
 	for p := range partners {
 		out.Partners = append(out.Partners, p)
 	}
-	sort.Slice(out.Customers, func(i, j int) bool { return out.Customers[i].Deposits > out.Customers[j].Deposits })
-	sort.Slice(out.Accounts, func(i, j int) bool { return out.Accounts[i].Key < out.Accounts[j].Key })
+	sort.SliceStable(out.Customers, func(i, j int) bool { return out.Customers[i].Deposits > out.Customers[j].Deposits })
+	sort.Slice(out.Accounts, func(i, j int) bool { return out.Accounts[i].NUBAN < out.Accounts[j].NUBAN })
 	sort.Slice(out.Connections, func(i, j int) bool { return out.Connections[i].ID < out.Connections[j].ID })
 	sort.Strings(out.Partners)
 	return out, nil
+}
+
+func allCustomers(ls *ledgerSource) ([]bank.Customer, error) {
+	out := []bank.Customer{}
+	cursor := ""
+	for {
+		page, next, err := ls.Bank().Customers(ls.ctx, bank.MaxPage, cursor)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page...)
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
 }
 
 func (a *App) ctlCloseImpact(w http.ResponseWriter, r *http.Request) {
@@ -138,12 +171,46 @@ func (a *App) ctlCloseImpact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, imp)
 }
 
-func (a *App) openInstitutions() []world.Institution {
-	now := a.clock.Now()
-	out := []world.Institution{}
-	for _, inst := range a.world.Institutions() {
-		if !a.world.Closed(inst.ID, now) {
-			out = append(out, inst)
+func (a *App) bankList() []*config.Bank {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.cfg.Banks)
+}
+
+func findBank(banks []*config.Bank, id string) *config.Bank {
+	for _, b := range banks {
+		if b.ID == id {
+			return b
+		}
+	}
+	return nil
+}
+
+func (a *App) bankByID(id string) *config.Bank {
+	return findBank(a.bankList(), id)
+}
+
+func (a *App) banksLocked() []*config.Bank {
+	if a.role == RoleBank && a.peerBanks != nil {
+		return a.peerBanks
+	}
+	return a.cfg.Banks
+}
+
+func (a *App) bankLocked(id string) *config.Bank {
+	for _, b := range a.banksLocked() {
+		if b.ID == id {
+			return b
+		}
+	}
+	return nil
+}
+
+func (a *App) openInstitutions() []*config.Bank {
+	out := []*config.Bank{}
+	for _, b := range a.banksLocked() {
+		if !b.Closed() {
+			out = append(out, b)
 		}
 	}
 	return out
@@ -157,17 +224,27 @@ type CloseRequest struct {
 	Customers map[string]string `json:"customers"`
 }
 
+type Move struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	ToBank string `json:"to_bank"`
+	Amount int64  `json:"amount_minor"`
+	Payout bool   `json:"payout"`
+}
+
 type CloseResult struct {
-	Bank    BankStatus   `json:"bank"`
-	Moved   int64        `json:"moved_minor"`
-	PaidOut int64        `json:"paid_out_minor"`
-	Claims  int64        `json:"claims_minor"`
-	Left    int64        `json:"left_minor"`
-	Moves   []world.Move `json:"moves"`
-	Revoked []string     `json:"revoked_connections"`
+	Bank    BankStatus `json:"bank"`
+	Moved   int64      `json:"moved_minor"`
+	PaidOut int64      `json:"paid_out_minor"`
+	Claims  int64      `json:"claims_minor"`
+	Left    int64      `json:"left_minor"`
+	Moves   []Move     `json:"moves"`
+	Revoked []string   `json:"revoked_connections"`
 }
 
 func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
+	a.gate.RLock()
+	defer a.gate.RUnlock()
 	a.recMu.Lock()
 	defer a.recMu.Unlock()
 	imp, err := a.CloseImpact(id)
@@ -185,7 +262,7 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 	}
 	choice := map[string]string{}
 	for _, cu := range imp.Customers {
-		choice[cu.Persona] = req.Money
+		choice[cu.ID] = req.Money
 	}
 	for p, c := range req.Customers {
 		if _, ok := choice[p]; !ok {
@@ -201,7 +278,8 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 		needTarget = needTarget || c != "leave"
 	}
 	if needTarget {
-		to := a.cfg.Bank(req.To)
+		to := a.bankByID(req.To)
+		now := a.clock.Now()
 		switch {
 		case req.To == "":
 			return CloseResult{}, invalid("choose the bank that receives the money with to")
@@ -209,12 +287,16 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 			return CloseResult{}, invalid("unknown bank %q", req.To)
 		case req.To == id:
 			return CloseResult{}, invalid("the money cannot go to the bank that is closing")
-		case a.bankPhase(req.To) != PhaseActive || a.world.Down(req.To, a.clock.Now()):
+		case a.bankPhase(req.To) != PhaseActive || a.bankDown(req.To, now):
 			return CloseResult{}, invalid("%s is not active, so it cannot receive the money", to.Name)
+		case a.bankFaulty(req.To, now):
+			return CloseResult{}, invalid("%s has a fault, so the money cannot be moved safely; clear it with beerus fault clear --bank %s", to.Name, req.To)
+		case a.bankFaulty(id, now):
+			return CloseResult{}, invalid("%s has a fault, so the money cannot be moved safely; clear it with beerus fault clear --bank %s", imp.Bank.Name, id)
 		}
 	}
 	a.lifeMu.Lock()
-	b := a.cfg.Bank(id)
+	b := a.bankByID(id)
 	st := a.status[id]
 	prev, prevPhase := b.State, st.Phase
 	b.State, st.Phase, st.Reason = "closed", PhaseClosed, ""
@@ -223,11 +305,14 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 	if err := a.saveBanks(undo); err != nil {
 		return CloseResult{}, err
 	}
-	res, err := a.closeWorld(id, imp, choice, req.To)
+	res, err := a.closeBooks(id, imp, choice, req.To)
 	if err != nil {
 		a.lifeMu.Lock()
 		undo()
 		a.lifeMu.Unlock()
+		if len(res.Moves) > 0 {
+			err = fmt.Errorf("closing %s stopped after %d of its moves and the bank was reopened; run the close again to finish, and what was already paid out still counts against the insured limit: %w", imp.Bank.Name, len(res.Moves), err)
+		}
 		return CloseResult{}, errors.Join(err, a.saveBanks(func() {}))
 	}
 	a.detach(b, setup.StepSite)
@@ -240,17 +325,24 @@ func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
 	return res, nil
 }
 
-func (a *App) closeWorld(id string, imp CloseImpact, choice map[string]string, to string) (CloseResult, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+func (a *App) closeBooks(id string, imp CloseImpact, choice map[string]string, to string) (CloseResult, error) {
 	now := a.clock.Now()
-	res := CloseResult{Moves: []world.Move{}, Revoked: []string{}}
-	paid := map[string]int64{}
+	res := CloseResult{Moves: []Move{}, Revoked: []string{}}
+	a.mu.Lock()
+	from, dest := a.ledgerFor(id), a.ledgerFor(to)
+	a.mu.Unlock()
+	if from == nil {
+		return CloseResult{}, fmt.Errorf("the books of %s are not open", id)
+	}
+	paid, err := a.alreadyMoved(id, imp.Accounts)
+	if err != nil {
+		return CloseResult{}, err
+	}
 	for _, acc := range imp.Accounts {
 		c := choice[acc.Owner]
-		bal, err := a.world.LedgerAt(acc.Key, now)
+		bal, err := from.Bank().BalanceAt(from.ctx, acc.NUBAN, now)
 		if err != nil {
-			return CloseResult{}, err
+			return res, err
 		}
 		if c == "leave" || bal <= 0 {
 			if bal > 0 {
@@ -267,20 +359,33 @@ func (a *App) closeWorld(id string, imp CloseImpact, choice map[string]string, t
 				continue
 			}
 		}
-		dest, err := a.destination(acc.Owner, acc.Type, to, now)
-		if err != nil {
-			return CloseResult{}, err
+		if dest == nil {
+			return res, fmt.Errorf("the books of %s are not open", to)
 		}
-		res.Moves = append(res.Moves, world.Move{From: acc.Key, To: dest, Amount: amount, Payout: c == "payout"})
+		nuban, err := a.closureAccount(from, dest, acc, now)
+		if err != nil {
+			return res, err
+		}
+		narr := "Closure of " + imp.Bank.Name
+		if c == "payout" {
+			narr = "NDIC payout, closure of " + imp.Bank.Name
+		}
+		tr, err := a.transfer(TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: amount, Narration: narr, Key: "closure:" + id + ":" + acc.NUBAN, Closure: true})
+		if err != nil {
+			return res, fmt.Errorf("move %s from %s: %w", naira(amount), acc.NUBAN, err)
+		}
+		if tr.Status != nip.Success {
+			return res, fmt.Errorf("move %s from %s: session %s is %s", naira(amount), acc.NUBAN, tr.SessionID, tr.Status)
+		}
+		res.Moves = append(res.Moves, Move{From: acc.NUBAN, To: nuban, ToBank: to, Amount: amount, Payout: c == "payout"})
 		if c == "payout" {
 			res.PaidOut += amount
 		} else {
 			res.Moved += amount
 		}
 	}
-	if err := a.world.Close(id, now, res.Moves); err != nil {
-		return CloseResult{}, err
-	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	ids := make([]string, 0, len(a.st.Connections))
 	for cid := range a.st.Connections {
 		ids = append(ids, cid)
@@ -301,21 +406,56 @@ func (a *App) closeWorld(id string, imp CloseImpact, choice map[string]string, t
 	return res, nil
 }
 
-func (a *App) destination(persona, typ, bank string, now time.Time) (string, error) {
-	have := a.world.AccountsAt(persona, bank)
-	for _, acc := range have {
-		if acc.Type == typ {
-			return acc.Key, nil
+func (a *App) alreadyMoved(id string, accounts []ImpactAccount) (map[string]int64, error) {
+	b := a.bankByID(id)
+	sw := a.nibssStore()
+	if b == nil || sw == nil {
+		return nil, errors.New("NIBSS is not available right now, so earlier closure moves cannot be checked; try again soon")
+	}
+	sent, err := sw.ClosureSent(context.Background(), b.NIPCode)
+	if err != nil {
+		return nil, fmt.Errorf("check earlier closure moves: %w", err)
+	}
+	owner := map[string]string{}
+	for _, acc := range accounts {
+		owner[acc.NUBAN] = acc.Owner
+	}
+	paid := map[string]int64{}
+	for _, x := range sent {
+		if o, ok := owner[x.FromNUBAN]; ok {
+			paid[o] += x.Amount
 		}
 	}
-	if len(have) > 0 {
-		return have[0].Key, nil
-	}
-	acc, err := a.world.OpenAccount(persona, bank, "current", now)
+	return paid, nil
+}
+
+func (a *App) closureAccount(from, dest *ledgerSource, acc ImpactAccount, at time.Time) (string, error) {
+	cust, err := from.Bank().Customer(from.ctx, acc.Owner)
 	if err != nil {
-		return "", invalid("could not open an account for %s at %s: %s", persona, bank, transferMessage(err))
+		return "", err
 	}
-	return acc.Key, nil
+	db := dest.Bank()
+	holder, err := db.CustomerByBVN(dest.ctx, cust.BVN)
+	if errors.Is(err, bank.ErrUnknownCustomer) {
+		holder, err = db.CreateCustomer(dest.ctx, "closure:"+from.inst.ID+":"+cust.ID, cust.Name, cust.Phone, cust.DOB, cust.BVN, "", "", at)
+	}
+	if err != nil {
+		return "", fmt.Errorf("find %s at %s: %w", cust.Name, dest.inst.Name, err)
+	}
+	have, err := db.CustomerAccounts(dest.ctx, holder.ID)
+	if err != nil {
+		return "", err
+	}
+	for _, x := range have {
+		if x.Product == acc.Type && x.Status != "closed" {
+			return x.NUBAN, nil
+		}
+	}
+	opened, err := db.OpenAccount(dest.ctx, "closure:"+from.inst.ID+":"+acc.NUBAN, holder.ID, acc.Type, at)
+	if err != nil {
+		return "", fmt.Errorf("open an account for %s at %s: %w", cust.Name, dest.inst.Name, err)
+	}
+	return opened.NUBAN, nil
 }
 
 func (a *App) ctlCloseBank(w http.ResponseWriter, r *http.Request) {

@@ -41,3 +41,8 @@ phone:
   calling_code: "234"
   trunk_prefix: "0"
   source: "Nigeria's numbering plan filed with the ITU by the NCC, 2023: country code 234, national prefix 0. https://www.itu.int/dms_pub/itu-t/oth/02/02/T020200009C0002PDFE.pdf"
+deposit_insurance:
+  limits_minor: {deposit_money_bank: 500000000, microfinance_bank: 200000000}
+  bank_types: {commercial: deposit_money_bank, digital: deposit_money_bank, microfinance: microfinance_bank}
+  placeholder: Beerus maps the digital bank type to the deposit money bank limit. Many real digital banks hold microfinance licences, so this mapping is a placeholder until bank type means licence category.
+  source: The NDIC raised maximum cover to 5,000,000 naira for deposit money banks and 2,000,000 naira for microfinance banks on 24-25 April 2024. https://guardian.ng/business-services/ndic-raises-maximum-bank-deposit-insurance-coverage-to-n5m/

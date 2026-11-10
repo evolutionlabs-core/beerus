@@ -14,8 +14,6 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
-
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const maxScenarioFile = 1 << 20
@@ -26,18 +24,18 @@ type scenarioFile struct {
 	Steps       []scenarioStep `yaml:"steps"`
 }
 
+type scenarioTransfer struct {
+	FromBank     string `yaml:"from_bank"`
+	transferBody `yaml:",inline"`
+}
+
 type scenarioStep struct {
-	Run         string        `yaml:"run"`
-	Account     string        `yaml:"account"`
-	Institution string        `yaml:"institution"`
-	Persona     string        `yaml:"persona"`
-	Connection  string        `yaml:"connection"`
-	Duration    string        `yaml:"duration"`
-	Count       int           `yaml:"count"`
-	Transfer    *transferBody `yaml:"transfer"`
-	Advance     string        `yaml:"advance"`
-	Suspend     string        `yaml:"suspend"`
-	Resume      string        `yaml:"resume"`
+	Run        string            `yaml:"run"`
+	Connection string            `yaml:"connection"`
+	Transfer   *scenarioTransfer `yaml:"transfer"`
+	Advance    string            `yaml:"advance"`
+	Suspend    string            `yaml:"suspend"`
+	Resume     string            `yaml:"resume"`
 }
 
 var unknownFieldRe = regexp.MustCompile(`line (\d+): field (\S+) not found`)
@@ -89,8 +87,8 @@ func (a *App) validateScenarioFile(f *scenarioFile) error {
 	if len(f.Steps) == 0 {
 		return fmt.Errorf("steps is empty; add at least one step")
 	}
-	known := []string{"token_refresh_failed"}
-	for _, sc := range world.Scenarios {
+	known := []string{}
+	for _, sc := range scenarios {
 		known = append(known, sc.Name)
 	}
 	for i, s := range f.Steps {
@@ -104,33 +102,21 @@ func (a *App) validateScenarioFile(f *scenarioFile) error {
 		case n > 1:
 			return bad("use only one of run, transfer, advance, suspend or resume")
 		}
-		if action != "run" && (s.Account != "" || s.Institution != "" || s.Persona != "" || s.Connection != "" || s.Duration != "" || s.Count != 0) {
-			return bad("account, institution, persona, connection, duration and count only go with run")
+		if action != "run" && s.Connection != "" {
+			return bad("connection only goes with run")
 		}
 		switch action {
 		case "run":
 			if !slices.Contains(known, s.Run) {
 				return bad("unknown scenario %q; run beerus scenarios to list them", s.Run)
 			}
-			if s.Duration != "" {
-				if _, err := parseDuration(s.Duration); err != nil {
-					return bad("duration must look like 2h or 3d")
-				}
-			}
-			if s.Persona != "" {
-				if _, ok := a.world.Persona(s.Persona); !ok {
-					return bad("unknown persona %q", s.Persona)
-				}
-			}
-			if s.Institution != "" {
-				if _, ok := a.world.Institution(s.Institution); !ok {
-					return bad("unknown bank %q", s.Institution)
-				}
-			}
 		case "transfer":
 			t := s.Transfer
-			if t.From == "" || t.To == "" || t.Amount == "" {
-				return bad("transfer needs from, to and amount")
+			if t.FromBank == "" || t.From == "" || t.To == "" || t.Amount == "" {
+				return bad("transfer needs from_bank, from, to and amount")
+			}
+			if a.cfg.Bank(t.FromBank) == nil {
+				return bad("unknown bank %q", t.FromBank)
 			}
 			if _, err := parseNaira(t.Amount); err != nil {
 				return bad("%s", err.Error())
@@ -141,29 +127,12 @@ func (a *App) validateScenarioFile(f *scenarioFile) error {
 			}
 		case "suspend", "resume":
 			id := s.Suspend + s.Resume
-			if _, ok := a.world.Institution(id); !ok {
+			if a.cfg.Bank(id) == nil {
 				return bad("unknown bank %q", id)
 			}
 		}
 	}
 	return nil
-}
-
-func (a *App) resolveRef(ref string) (string, error) {
-	who, where, ok := strings.Cut(ref, "@")
-	if !ok {
-		return ref, nil
-	}
-	bank, typ, _ := strings.Cut(where, ":")
-	if _, ok := a.world.Persona(who); !ok {
-		return "", fmt.Errorf("unknown persona %q", who)
-	}
-	for _, acc := range a.world.AccountsAt(who, bank) {
-		if typ == "" || acc.Type == typ {
-			return acc.Key, nil
-		}
-	}
-	return "", fmt.Errorf("%s has no matching account at %s", who, bank)
 }
 
 func bankMessage(err error) string {
@@ -177,28 +146,14 @@ func (a *App) runScenarioStep(s scenarioStep) (string, string, error) {
 	action, _ := s.action()
 	switch action {
 	case "run":
-		account := s.Account
-		if account != "" {
-			var err error
-			if account, err = a.resolveRef(account); err != nil {
-				return s.Run, "", err
-			}
-		}
-		result, err := a.runScenario(s.Run, scenarioParams{AccountID: account, Institution: s.Institution, Persona: s.Persona, ConnectionID: s.Connection, Duration: s.Duration, Count: s.Count})
+		result, err := a.runScenario(s.Run, scenarioParams{ConnectionID: s.Connection})
 		if err != nil {
 			return s.Run, "", err
 		}
 		return s.Run, result, nil
 	case "transfer":
 		t := *s.Transfer
-		var err error
-		if t.From, err = a.resolveRef(t.From); err != nil {
-			return "transfer", "", err
-		}
-		if t.To, err = a.resolveRef(t.To); err != nil {
-			return "transfer", "", err
-		}
-		rep := a.runTransfer(nil, t, "")
+		rep := a.bankTransfer(nil, t.FromBank, t.transferBody, "")
 		if rep.status != http.StatusOK {
 			var failed struct {
 				Error apiError `json:"error"`
@@ -208,14 +163,12 @@ func (a *App) runScenarioStep(s scenarioStep) (string, string, error) {
 			}
 			return "transfer", "", errors.New(failed.Error.Message)
 		}
-		var done struct {
-			Result world.TransferResult `json:"result"`
+		var res TransferResult
+		if err := json.Unmarshal(rep.body, &res); err != nil {
+			return "transfer", "", fmt.Errorf("read the transfer result: %w", err)
 		}
-		if err := json.Unmarshal(rep.body, &done); err != nil {
-			return "transfer", "", err
-		}
-		res := done.Result
-		return "transfer", fmt.Sprintf("%s moved, %s in charges", naira(res.Amount), naira(res.Fee+res.VAT+res.StampDuty)), nil
+		a.SyncAll()
+		return "transfer", fmt.Sprintf("%s %s, %s in charges", naira(res.Amount), res.Status, naira(res.Fee+res.VAT+res.StampDuty)), nil
 	case "advance":
 		if err := a.advanceClock(s.Advance, ""); err != nil {
 			return "advance " + s.Advance, "", err
@@ -288,7 +241,11 @@ func (a *App) ctlScenarioRun(w http.ResponseWriter, r *http.Request) {
 		label, result, err := a.runScenarioStep(s)
 		if err != nil {
 			msg := fmt.Sprintf("step %d (%s) failed: %s", i+1, label, err)
-			if i > 0 {
+			switch i {
+			case 0:
+			case 1:
+				msg += " Step 1 already ran."
+			default:
 				msg += fmt.Sprintf(" Steps 1 to %d already ran.", i)
 			}
 			writeError(w, r, http.StatusBadRequest, "invalid_request", msg)

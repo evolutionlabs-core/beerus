@@ -11,7 +11,6 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 type LinkSession struct {
@@ -27,7 +26,7 @@ type LinkSession struct {
 	TokenExpires  time.Time     `json:"token_expires"`
 	TokenUsed     bool          `json:"token_used"`
 	Institution   string        `json:"institution"`
-	PersonaID     string        `json:"persona_id"`
+	CustomerID    string        `json:"customer_id"`
 	Accounts      []string      `json:"accounts"`
 	Analytics     bool          `json:"analytics"`
 	CodeHash      string        `json:"code_hash"`
@@ -60,7 +59,7 @@ type Connection struct {
 	PartnerID        string      `json:"partner_id"`
 	WorkspaceID      string      `json:"workspace_id"`
 	Institution      string      `json:"institution"`
-	PersonaID        string      `json:"persona_id"`
+	CustomerID       string      `json:"customer_id"`
 	Status           string      `json:"status"`
 	StatusBeforeDown string      `json:"status_before_down"`
 	StartDate        clock.Date  `json:"start_date"`
@@ -80,7 +79,7 @@ type Connection struct {
 type AccountRec struct {
 	ID           string     `json:"id"`
 	PartnerID    string     `json:"partner_id"`
-	WorldKey     string     `json:"world_key"`
+	Key          string     `json:"key"`
 	ConnectionID string     `json:"connection_id"`
 	From         clock.Date `json:"from"`
 	Cut          bool       `json:"cut"`
@@ -178,7 +177,7 @@ type AccessEvent struct {
 	ConnectionID string    `json:"connection_id"`
 	PartnerID    string    `json:"partner_id"`
 	AccountID    string    `json:"account_id"`
-	WorldKey     string    `json:"world_key"`
+	Key          string    `json:"key"`
 	At           time.Time `json:"at"`
 }
 
@@ -220,9 +219,8 @@ type State struct {
 	ConsentLedger  []ConsentRecord            `json:"consent_ledger"`
 	Access         []AccessEvent              `json:"access"`
 	WorldID        string                     `json:"world_id"`
-	Calendar       string                     `json:"calendar,omitempty"`
 	Clock          clock.State                `json:"clock"`
-	World          world.Overrides            `json:"world"`
+	Faults         []*Fault                   `json:"faults"`
 	LinkSessions   map[string]*LinkSession    `json:"link_sessions"`
 	WidgetSessions map[string]*WidgetSession  `json:"widget_sessions"`
 	Connections    map[string]*Connection     `json:"connections"`
@@ -248,7 +246,7 @@ func newState() *State {
 		Idem:           map[string]*IdemRec{},
 		Registry:       map[string]*RegistryClient{},
 		Vault:          map[string]*VaultEntry{},
-		NIP:            &NIPState{Failures: map[string]*NIPFailure{}},
+		NIP:            &NIPState{},
 	}
 }
 
@@ -283,7 +281,6 @@ func (s *State) fill() {
 	if s.NIP == nil {
 		s.NIP = &NIPState{}
 	}
-	s.NIP.fill()
 	for _, a := range s.Accounts {
 		if len(a.Grants) == 0 && a.ConnectionID != "" && !a.Removed {
 			a.Grants = []string{a.ConnectionID}

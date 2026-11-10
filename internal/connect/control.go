@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -18,8 +19,6 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/nip"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 func (a *App) ControlHandler() http.Handler {
@@ -31,20 +30,22 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("POST /clock/advance", a.ctlAdvance)
 	mux.HandleFunc("POST /clock/pace", a.ctlPace)
 	mux.HandleFunc("GET /scenarios", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"data": append(world.Scenarios, world.Scenario{Name: "token_refresh_failed", Description: "Connect can no longer refresh the bank token, so the connection needs reauthorisation"})})
+		writeJSON(w, http.StatusOK, map[string]any{"data": scenarios})
 	})
 	mux.HandleFunc("POST /scenarios/run", a.ctlScenarioRun)
 	mux.HandleFunc("POST /scenarios/{name}", a.ctlScenario)
-	mux.HandleFunc("GET /personas", a.ctlPersonas)
-	mux.HandleFunc("POST /transfers", a.ctlTransfer)
 	mux.HandleFunc("GET /nip/name-enquiry", a.ctlNameEnquiry)
 	mux.HandleFunc("GET /nip/participants", a.ctlNIPParticipants)
 	mux.HandleFunc("GET /nip/positions", a.ctlNIPPositions)
 	mux.HandleFunc("GET /nip/settlement", a.ctlNIPSettlement)
+	mux.HandleFunc("POST /nip/settle-now", a.ctlSettleNow)
+	mux.HandleFunc("GET /nip/sessions/{id}", a.ctlNIPSession)
+	mux.HandleFunc("GET /faults", a.ctlFaults)
+	mux.HandleFunc("POST /faults", a.ctlAddFault)
+	mux.HandleFunc("DELETE /faults", a.ctlClearFaults)
 	mux.HandleFunc("GET /internal/replica", a.ctlReplica)
 	mux.HandleFunc("POST /internal/consents", a.ctlConsentRecord)
 	mux.HandleFunc("POST /banks/{id}/net-debit-cap", a.ctlNetDebitCap)
-	mux.HandleFunc("GET /nip/transfers/{session_id}", a.ctlNIPStatus)
 	mux.HandleFunc("GET /connections", a.ctlConnections)
 	mux.HandleFunc("POST /connections/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.RevokeAtBank(r.PathValue("id")); err != nil {
@@ -78,7 +79,16 @@ func (a *App) ControlHandler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"data": data, "warnings": a.BankWarnings()})
 	})
 	mux.HandleFunc("POST /banks", a.ctlCreateBank)
+	mux.HandleFunc("GET /banks/{id}/customers", a.ctlCustomers)
+	mux.HandleFunc("POST /banks/{id}/customers", a.ctlCreateCustomer)
+	mux.HandleFunc("POST /banks/{id}/customers/{customer}/close", a.ctlCloseCustomer)
+	mux.HandleFunc("GET /banks/{id}/accounts", a.ctlAccounts)
 	mux.HandleFunc("POST /banks/{id}/accounts", a.ctlOpenAccount)
+	mux.HandleFunc("POST /banks/{id}/accounts/{nuban}/close", a.ctlCloseAccount)
+	mux.HandleFunc("GET /banks/{id}/accounts/{nuban}/statement", a.ctlStatement)
+	mux.HandleFunc("POST /banks/{id}/deposits", a.ctlCash("deposit"))
+	mux.HandleFunc("POST /banks/{id}/withdrawals", a.ctlCash("withdrawal"))
+	mux.HandleFunc("POST /banks/{id}/transfers", a.ctlBankTransfer)
 	mux.HandleFunc("GET /banks/{id}/close", a.ctlCloseImpact)
 	mux.HandleFunc("POST /banks/{id}/close", a.ctlCloseBank)
 	mux.HandleFunc("GET /banks/{id}/purge", a.ctlPurgeImpact)
@@ -215,71 +225,41 @@ func (a *App) ctlPace(w http.ResponseWriter, r *http.Request) {
 	a.ctlClock(w, r)
 }
 
-func (a *App) resolveAccount(id string) (string, bool) {
-	if rec := a.st.Accounts[id]; rec != nil {
-		return rec.WorldKey, true
-	}
-	if _, ok := a.world.Account(id); ok {
-		return id, true
-	}
-	return "", false
+type scenario struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+var scenarios = []scenario{
+	{"consent_revoked_mid_sync", "The customer revokes consent at the bank"},
+	{"token_refresh_failed", "Connect can no longer refresh the bank token, so the connection needs reauthorisation"},
 }
 
 type scenarioParams struct {
-	AccountID    string `json:"account_id"`
-	Institution  string `json:"institution"`
-	Persona      string `json:"persona"`
 	ConnectionID string `json:"connection_id"`
-	Duration     string `json:"duration"`
-	Count        int    `json:"count"`
 }
 
 func (a *App) runScenario(name string, in scenarioParams) (string, error) {
+	var err error
 	switch name {
-	case "consent_revoked_mid_sync", "token_refresh_failed":
-		var err error
-		if name == "consent_revoked_mid_sync" {
-			err = a.ForceStatus(in.ConnectionID, "syncing", "")
-			if err == nil {
-				err = a.RevokeAtBank(in.ConnectionID)
-			}
-		} else {
-			err = a.ForceStatus(in.ConnectionID, "reauth_required", "reauth_required")
+	case "consent_revoked_mid_sync":
+		err = a.ForceStatus(in.ConnectionID, "syncing", "")
+		if err == nil {
+			err = a.RevokeAtBank(in.ConnectionID)
 		}
-		if err != nil {
-			return "", errors.New("connection_id must name an existing connection.")
-		}
-		a.poke()
-		return "connection " + in.ConnectionID + " updated", nil
+	case "token_refresh_failed":
+		err = a.ForceStatus(in.ConnectionID, "reauth_required", "reauth_required")
+	default:
+		return "", fmt.Errorf("unknown scenario %q; run beerus scenarios to list them", name)
 	}
-	a.mu.Lock()
-	p := world.ScenarioParams{Institution: in.Institution, Persona: in.Persona, Count: in.Count}
-	if in.AccountID != "" {
-		key, ok := a.resolveAccount(in.AccountID)
-		if !ok {
-			a.mu.Unlock()
-			return "", errors.New("account_id is not known.")
-		}
-		p.Account = key
+	if errors.Is(err, errNotFound) {
+		return "", errors.New("connection_id must name an existing connection")
 	}
-	if in.Duration != "" {
-		d, err := parseDuration(in.Duration)
-		if err != nil {
-			a.mu.Unlock()
-			return "", errors.New("duration must look like 2h or 3d.")
-		}
-		p.Duration = d
-	}
-	result, err := a.world.RunScenario(name, a.clock.Now(), p)
-	if err == nil {
-		a.dirty()
-	}
-	a.mu.Unlock()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("run scenario %s: %w", name, err)
 	}
 	a.poke()
-	return result, nil
+	return "connection " + in.ConnectionID + " updated", nil
 }
 
 func (a *App) ctlScenario(w http.ResponseWriter, r *http.Request) {
@@ -330,51 +310,6 @@ func naira(minor int64) string {
 	return fmt.Sprintf("%s₦%s.%02d", sign, out, minor%100)
 }
 
-func (a *App) runTransfer(r *http.Request, body transferBody, key string) reply {
-	amount, err := parseNaira(body.Amount)
-	if err != nil {
-		return errReply(r, http.StatusBadRequest, "invalid_request", err.Error())
-	}
-	if body.SessionID != "" && !nip.ValidSessionID(body.SessionID) {
-		return errReply(r, http.StatusBadRequest, "invalid_request", "session_id must be 30 digits.")
-	}
-	if len(key) > 255 {
-		return errReply(r, http.StatusBadRequest, "invalid_request", "An Idempotency-Key must be 1 to 255 characters.")
-	}
-	a.mu.Lock()
-	rep := a.transferLocked(r, body, amount, key)
-	a.mu.Unlock()
-	if rep.synced {
-		a.SyncAll()
-	}
-	return rep
-}
-
-func (a *App) ctlTransfer(w http.ResponseWriter, r *http.Request) {
-	var body transferBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"...","to":"...","amount":"25000"}.`)
-		return
-	}
-	a.runTransfer(r, body, r.Header.Get("Idempotency-Key")).write(w)
-}
-
-func (a *App) ctlPersonas(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := []map[string]any{}
-	for _, p := range a.world.Personas() {
-		accts := []map[string]any{}
-		for _, k := range p.Accounts {
-			acc, _ := a.world.Account(k)
-			inst, _ := a.world.Institution(acc.Institution)
-			accts = append(accts, map[string]any{"key": acc.Key, "institution": inst.ID, "bank": inst.Name, "nuban": acc.NUBAN, "name": acc.Name, "type": acc.Type})
-		}
-		out = append(out, map[string]any{"id": p.ID, "name": p.Name, "username": p.Username, "password": p.Password, "bvn": nip.BVN(a.cfg.Seed, p.ID), "accounts": accts})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": out})
-}
-
 func (a *App) ctlConnections(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -382,7 +317,7 @@ func (a *App) ctlConnections(w http.ResponseWriter, r *http.Request) {
 	for _, c := range a.st.Connections {
 		m := a.connectionJSON(c)
 		m["partner_id"] = c.PartnerID
-		m["persona"] = c.PersonaID
+		m["customer_id"] = c.CustomerID
 		m["account_ids"] = c.AccountIDs
 		out = append(out, m)
 	}
@@ -428,10 +363,12 @@ type snapshotMeta struct {
 	Schema       int       `json:"schema"`
 	TakenReal    time.Time `json:"taken_real"`
 	Banks        []string  `json:"banks,omitempty"`
+	Closed       []string  `json:"closed,omitempty"`
 	CBN          bool      `json:"cbn,omitempty"`
+	NIBSS        bool      `json:"nibss,omitempty"`
 }
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 type snapshotFile struct {
 	Meta  snapshotMeta `json:"meta"`
@@ -453,18 +390,20 @@ func (a *App) TakeSnapshot(name string) (meta snapshotMeta, err error) {
 			err = errors.Join(err, rerr)
 		}
 	}()
+	a.gate.Lock()
+	defer a.gate.Unlock()
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.st.Clock = a.clock.State()
-	a.st.World = a.world.Overrides()
 	a.regMu.Lock()
 	b, err := json.Marshal(a.st)
 	a.regMu.Unlock()
 	if err != nil {
+		a.mu.Unlock()
 		return snapshotMeta{}, err
 	}
 	cp := &State{}
 	if err := json.Unmarshal(b, cp); err != nil {
+		a.mu.Unlock()
 		return snapshotMeta{}, err
 	}
 	cp.Deliveries = nil
@@ -478,25 +417,51 @@ func (a *App) TakeSnapshot(name string) (meta snapshotMeta, err error) {
 		ls.OTP, ls.Verifier, ls.BankState = "", "", ""
 	}
 	meta = snapshotMeta{ID: newID("snap"), Name: name, BusinessTime: ts(a.clock.Now()), SetupKey: a.setupKey, Schema: schemaVersion, TakenReal: a.clock.Real()}
-	for _, l := range a.ledgers {
-		if err := l.Sync(a.clock.Now()); err != nil {
-			return snapshotMeta{}, err
+	for _, b := range a.cfg.Banks {
+		if b.Closed() {
+			meta.Closed = append(meta.Closed, b.ID)
 		}
+	}
+	ledgers, r, sw := slices.Clone(a.ledgers), a.rtgs, a.nibss
+	a.mu.Unlock()
+	snapID := meta.ID
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, a.discardSnapshot(snapID, ledgers, r))
+		}
+	}()
+	for _, l := range ledgers {
 		if err := l.Snapshot(meta.ID); err != nil {
 			return snapshotMeta{}, err
 		}
 		meta.Banks = append(meta.Banks, l.inst.ID)
 	}
-	if a.rtgs != nil {
-		if err := a.rtgs.Snapshot(meta.ID); err != nil {
+	if r != nil {
+		if err := r.Snapshot(meta.ID); err != nil {
 			return snapshotMeta{}, err
 		}
 		meta.CBN = true
 	}
+	if err := a.snapshotNIBSS(sw, meta.ID); err != nil {
+		return snapshotMeta{}, err
+	}
+	meta.NIBSS = true
 	if err := saveJSON(filepath.Join(a.snapshotDir(), meta.ID+".json"), snapshotFile{Meta: meta, State: cp}); err != nil {
 		return snapshotMeta{}, err
 	}
 	return meta, nil
+}
+
+func (a *App) discardSnapshot(id string, ledgers []*ledgerSource, r *rtgs) error {
+	errs := []error{}
+	for _, l := range ledgers {
+		errs = append(errs, l.DropSnapshot(id))
+	}
+	if r != nil {
+		errs = append(errs, r.DropSnapshot(id))
+	}
+	errs = append(errs, a.dropNIBSSSnapshot(id))
+	return errors.Join(errs...)
 }
 
 func (a *App) RestoreSnapshot(id string) (result string, err error) {
@@ -517,27 +482,23 @@ func (a *App) RestoreSnapshot(id string) (result string, err error) {
 	if f.Meta.Schema != schemaVersion {
 		return "", fmt.Errorf("snapshot %s was taken with schema %d; this setup uses schema %d", id, f.Meta.Schema, schemaVersion)
 	}
-	for _, p := range a.world.PurgedInstitutions() {
-		kept := false
-		for _, q := range f.State.World.Purged {
-			kept = kept || q.ID == p.ID
-		}
-		if !kept && (slices.Contains(f.Meta.Banks, p.ID) || slices.ContainsFunc(f.State.World.Closed, func(c world.Closure) bool { return c.Institution == p.ID })) {
-			return "", fmt.Errorf("snapshot %s was taken before %s was purged, and purging a bank cannot be undone", id, p.Name)
+	if !f.Meta.NIBSS {
+		return "", fmt.Errorf("snapshot %s has no copy of NIBSS", id)
+	}
+	a.mu.Lock()
+	for _, bid := range f.Meta.Banks {
+		if a.cfg.Bank(bid) == nil {
+			a.mu.Unlock()
+			return "", fmt.Errorf("snapshot %s was taken before %s was purged, and purging a bank cannot be undone", id, bid)
 		}
 	}
 	for _, b := range a.cfg.Banks {
-		if !b.Closed() {
-			continue
-		}
-		kept := false
-		for _, c := range f.State.World.Closed {
-			kept = kept || c.Institution == b.ID
-		}
-		if !kept {
+		if b.Closed() && !slices.Contains(f.Meta.Closed, b.ID) {
+			a.mu.Unlock()
 			return "", fmt.Errorf("snapshot %s was taken before %s closed, and closing a bank cannot be undone", id, b.Name)
 		}
 	}
+	a.mu.Unlock()
 	resume, err := a.pauseBanks()
 	if err != nil {
 		return "", err
@@ -547,17 +508,28 @@ func (a *App) RestoreSnapshot(id string) (result string, err error) {
 			err = errors.Join(err, rerr)
 		}
 	}()
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for a.settling {
-		a.settleDone.Wait()
+	wid, err := a.restoreAll(id, f)
+	if err != nil {
+		return "", err
 	}
+	if _, err := a.settle(a.clock.Now(), false); err != nil {
+		return "", fmt.Errorf("restored, but settlement failed: %w", err)
+	}
+	return wid, nil
+}
+
+func (a *App) restoreAll(id string, f snapshotFile) (string, error) {
+	a.gate.Lock()
+	defer a.gate.Unlock()
+	a.mu.Lock()
+	ledgers, r, sw := slices.Clone(a.ledgers), a.rtgs, a.nibss
+	a.mu.Unlock()
 	taken := map[string]bool{}
 	for _, id := range f.Meta.Banks {
 		taken[id] = true
 	}
 	restore := map[string]bool{}
-	for _, l := range a.ledgers {
+	for _, l := range ledgers {
 		ok, err := l.HasSnapshot(id)
 		if err != nil {
 			return "", err
@@ -569,6 +541,22 @@ func (a *App) RestoreSnapshot(id string) (result string, err error) {
 			return "", fmt.Errorf("snapshot %s has no copy of %s", id, l.inst.Name)
 		}
 	}
+	for _, l := range ledgers {
+		if restore[l.inst.ID] {
+			if err := l.Restore(id); err != nil {
+				return "", err
+			}
+		}
+	}
+	if r != nil {
+		if err := r.Restore(id); err != nil {
+			return "", err
+		}
+	}
+	if err := a.restoreNIBSS(sw, id); err != nil {
+		return "", err
+	}
+	a.mu.Lock()
 	st := f.State
 	st.fill()
 	st.WorldID = newID("wld")
@@ -576,41 +564,24 @@ func (a *App) RestoreSnapshot(id string) (result string, err error) {
 	st.Registry = a.st.Registry
 	st.Revokes = a.st.Revokes
 	st.ConsentLedger = a.st.ConsentLedger
+	prior := a.st
 	a.st = st
 	if err := a.ensureRegistryLocked(); err != nil {
+		a.st = prior
+		a.mu.Unlock()
 		return "", err
 	}
-	if a.live() {
-		for _, c := range st.Connections {
-			switch c.Status {
-			case "revoked", "expired", "reauth_required":
-			default:
-				a.setStatus(c, "reauth_required", "reauth_required")
-			}
+	for _, c := range st.Connections {
+		switch c.Status {
+		case "revoked", "expired", "reauth_required":
+		default:
+			a.setStatus(c, "reauth_required", "reauth_required")
 		}
 	}
 	a.clock.Restore(st.Clock)
-	genesis, _ := a.cfg.GenesisDate()
-	a.world = world.New(a.worldConfig(genesis), st.World)
-	for _, b := range a.cfg.Banks {
-		a.alignSuspensionLocked(b)
-	}
-	for _, l := range a.ledgers {
-		if !restore[l.inst.ID] {
-			if err := l.Keep(a.world); err != nil {
-				return "", err
-			}
-			continue
-		}
-		if err := l.Restore(id, a.world); err != nil {
-			return "", err
-		}
-	}
-	if a.rtgs != nil {
-		if err := a.rtgs.Restore(id); err != nil {
-			return "", err
-		}
-	}
+	a.mu.Unlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	for _, rec := range a.st.Accounts {
 		if c := a.st.Connections[rec.ConnectionID]; c != nil && !rec.Removed && c.Status != "reauth_required" {
 			a.emit(c.PartnerID, "sync.available", map[string]any{"connection_id": c.ID, "account_id": rec.ID, "world_id": st.WorldID})
@@ -618,31 +589,45 @@ func (a *App) RestoreSnapshot(id string) (result string, err error) {
 	}
 	a.dirty()
 	a.poke()
-	if err := a.settleLocked(a.clock.Now()); err != nil {
-		a.log.Error("NIP settlement", "err", err)
-	}
 	return st.WorldID, nil
 }
 
-func (a *App) ctlSnapshots(w http.ResponseWriter, r *http.Request) {
-	entries, _ := os.ReadDir(a.snapshotDir())
+func (a *App) snapshotMetas() ([]snapshotMeta, error) {
+	entries, err := os.ReadDir(a.snapshotDir())
+	if errors.Is(err, fs.ErrNotExist) {
+		return []snapshotMeta{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list snapshots: %w", err)
+	}
 	out := []snapshotMeta{}
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(a.snapshotDir(), e.Name()))
+		path := filepath.Join(a.snapshotDir(), e.Name())
+		b, err := os.ReadFile(path)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("read snapshot %s: %w", e.Name(), err)
 		}
 		var f struct {
 			Meta snapshotMeta `json:"meta"`
 		}
-		if json.Unmarshal(b, &f) == nil {
-			out = append(out, f.Meta)
+		if err := json.Unmarshal(b, &f); err != nil {
+			return nil, fmt.Errorf("decode snapshot %s: %w", e.Name(), err)
 		}
+		out = append(out, f.Meta)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].TakenReal.Before(out[j].TakenReal) })
+	return out, nil
+}
+
+func (a *App) ctlSnapshots(w http.ResponseWriter, r *http.Request) {
+	out, err := a.snapshotMetas()
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
@@ -672,15 +657,4 @@ func (a *App) ctlRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"world_id": wid, "business_time": ts(a.clock.Now()), "business_date": clock.DateOf(a.clock.Now()).String()})
-}
-
-func transferMessage(err error) string {
-	msg := err.Error()
-	for _, e := range []error{world.ErrBankSuspended, world.ErrBankClosed, world.ErrBankUnavailable} {
-		msg = strings.TrimPrefix(msg, e.Error()+": ")
-	}
-	if msg != "" {
-		msg = strings.ToUpper(msg[:1]) + strings.TrimSuffix(msg[1:], ".") + "."
-	}
-	return msg
 }

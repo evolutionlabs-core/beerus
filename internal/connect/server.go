@@ -102,7 +102,7 @@ func (a *App) Serve(ctx context.Context) error {
 	a.serving = true
 	a.lifeMu.Unlock()
 	for _, b := range a.cfg.Banks {
-		if a.worldOnly || b.Closed() || !a.bankReady(b.ID) {
+		if b.Closed() || !a.bankReady(b.ID) {
 			continue
 		}
 		if err := a.startBankSite(b); err != nil {

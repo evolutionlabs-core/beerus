@@ -68,7 +68,6 @@ func (s *sink) all() []hook {
 }
 
 type Stack struct {
-	worldOnly  bool
 	t          *testing.T
 	cfg        *config.Config
 	app        *connect.App
@@ -83,6 +82,7 @@ type Stack struct {
 	vmu        sync.Mutex
 	violations []string
 	skew       atomic.Int64
+	people     map[string]persona
 }
 
 func (s *Stack) realNow() time.Time {
@@ -145,15 +145,7 @@ func portOpen(p int) bool {
 
 func newStack(t *testing.T) *Stack {
 	t.Helper()
-	return startStack(t, os.Getenv("BEERUS_CONTRACT_FULL") == "")
-}
-
-func newStackAllPersonas(t *testing.T) *Stack {
-	t.Helper()
-	if os.Getenv("BEERUS_CONTRACT_FULL") == "" {
-		return startStack(t, true)
-	}
-	return startStackWith(t, false, connect.Options{Personas: []string{}})
+	return startStack(t)
 }
 
 func newStubStack(t *testing.T) *Stack {
@@ -161,15 +153,13 @@ func newStubStack(t *testing.T) *Stack {
 	if testingExternal() {
 		t.Skip("needs the in-process stub")
 	}
-	return startStack(t, true)
+	return startStack(t)
 }
 
 func newBankStackWith(t *testing.T, edit func(*config.Config)) *Stack {
 	t.Helper()
-	return startStack(t, false, edit)
+	return startStack(t, edit)
 }
-
-const bankHistoryDays = 90
 
 const stackStart = "2026-01-15T08:00:00+01:00"
 
@@ -206,33 +196,22 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	return connect.LoadConfig(dir)
 }
 
-func bankStackPersonas(worldOnly bool) []string {
-	if worldOnly {
-		return nil
-	}
-	return []string{"adaeze", "tunde", "ngozi", "chidi"}
-}
-
 func newBankStack(t *testing.T) *Stack {
 	t.Helper()
-	return startStack(t, false)
+	return startStack(t)
 }
 
-func startStack(t *testing.T, worldOnly bool, edits ...func(*config.Config)) *Stack {
+func startStack(t *testing.T, edits ...func(*config.Config)) *Stack {
 	t.Helper()
-	return startStackWith(t, worldOnly, connect.Options{}, edits...)
+	return startStackWith(t, connect.Options{}, edits...)
 }
 
-func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ...func(*config.Config)) *Stack {
+func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Config)) *Stack {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}
-	opts.WorldOnly = worldOnly
-	if opts.Personas == nil {
-		opts.Personas = bankStackPersonas(worldOnly)
-	}
-	s := &Stack{t: t, worldOnly: worldOnly}
+	s := &Stack{t: t, people: map[string]persona{}}
 	if opts.Real == nil {
 		opts.Real = s.realNow
 	}
@@ -254,9 +233,6 @@ func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ..
 			}
 			for _, edit := range edits {
 				edit(cfg)
-			}
-			if !worldOnly {
-				shortHistory(cfg)
 			}
 			app, err := connect.New(cfg, opts)
 			if err != nil {
@@ -335,21 +311,11 @@ func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ..
 	return s
 }
 
-func shortHistory(cfg *config.Config) {
-	cfg.Genesis = clock.DateOf(cfg.Start).AddDays(-bankHistoryDays).String()
-	for _, b := range cfg.Banks {
-		b.HistoryDays = min(b.HistoryDays, bankHistoryDays)
-	}
-}
-
 func (s *Stack) loadConfig() *config.Config {
 	s.t.Helper()
 	cfg, err := connect.LoadConfig(s.cfg.Dir)
 	if err != nil {
 		s.t.Fatal(err)
-	}
-	if !s.worldOnly {
-		shortHistory(cfg)
 	}
 	return cfg
 }
@@ -381,7 +347,7 @@ func (s *Stack) rootPool() *x509.CertPool {
 func (s *Stack) waitHealthy() {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := s.ctlTry("GET", "/health", nil); err == nil && s.banksAnswer() {
+		if _, err := s.ctlTry("GET", "/health", nil); err == nil && s.banksActive() && s.banksAnswer() {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -389,8 +355,21 @@ func (s *Stack) waitHealthy() {
 	s.t.Fatal("stack did not become healthy")
 }
 
+func (s *Stack) banksActive() bool {
+	out, err := s.ctlTry("GET", "/banks", nil)
+	if err != nil {
+		return false
+	}
+	for _, b := range out["data"].([]any) {
+		if b.(map[string]any)["phase"] != "active" {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Stack) banksAnswer() bool {
-	if !s.external || s.worldOnly {
+	if !s.external {
 		return true
 	}
 	for _, b := range s.cfg.Banks {
@@ -607,19 +586,99 @@ func (s *Stack) today() clock.Date {
 }
 
 type persona struct {
-	ID, Username, Password string
+	ID, Bank, Customer, Name, Username, Password, BVN string
+	Accounts                                          []string
+}
+
+type opening struct {
+	typ, naira string
+}
+
+var people = map[string]struct {
+	name, phone, dob string
+	banks            map[string][]opening
+}{
+	"adaeze": {"Adaeze's Bakery Ltd", "08031234567", "1988-03-14", map[string][]opening{"bank-a": {{"current", "1250000"}, {"savings", "3000000"}}, "bank-b": {{"current", "450000"}}}},
+	"tunde":  {"Tunde Motors Ltd", "08032345678", "1979-07-02", map[string][]opening{"bank-a": {{"current", "4800000"}}}},
+	"ngozi":  {"Ngozi Fabrics Ventures", "08033456789", "1991-11-23", map[string][]opening{"bank-b": {{"current", "320000"}}}},
+	"chidi":  {"Chidi Okafor", "08034567890", "1995-05-30", map[string][]opening{"bank-b": {{"savings", "85000"}}}},
+}
+
+func (s *Stack) home(id string) string {
+	s.t.Helper()
+	p, ok := people[id]
+	if !ok {
+		s.t.Fatalf("no test customer %s", id)
+	}
+	if _, ok := p.banks["bank-a"]; ok {
+		return "bank-a"
+	}
+	return "bank-b"
 }
 
 func (s *Stack) persona(id string) persona {
-	out := s.ctl("GET", "/personas", nil)
-	for _, p := range out["data"].([]any) {
-		m := p.(map[string]any)
-		if m["id"] == id {
-			return persona{ID: id, Username: fmt.Sprint(m["username"]), Password: fmt.Sprint(m["password"])}
+	s.t.Helper()
+	return s.personaAt(id, s.home(id))
+}
+
+func (s *Stack) personaAt(id, bank string) persona {
+	s.t.Helper()
+	if p, ok := s.people[id+"@"+bank]; ok {
+		return p
+	}
+	spec, ok := people[id]
+	if !ok || spec.banks[bank] == nil {
+		s.t.Fatalf("no test customer %s at %s", id, bank)
+	}
+	p := s.join(id, bank)
+	for _, o := range spec.banks[bank] {
+		nuban := s.openAccount(p, o.typ)
+		s.ctl("POST", "/banks/"+bank+"/deposits", map[string]string{"account": nuban, "amount": o.naira})
+	}
+	return s.people[id+"@"+bank]
+}
+
+func (s *Stack) join(id, bank string) persona {
+	s.t.Helper()
+	spec, ok := people[id]
+	if !ok {
+		s.t.Fatalf("no test customer %s", id)
+	}
+	p := persona{ID: id, Bank: bank, Name: spec.name, Username: id, Password: "beerus-test-" + id}
+	c := s.ctl("POST", "/banks/"+bank+"/customers", map[string]string{"name": spec.name, "phone": spec.phone, "dob": spec.dob, "username": p.Username, "password": p.Password})
+	p.Customer, p.BVN = fmt.Sprint(c["id"]), fmt.Sprint(c["bvn"])
+	s.people[id+"@"+bank] = p
+	return p
+}
+
+func (s *Stack) openAccount(p persona, typ string) string {
+	s.t.Helper()
+	acc := s.ctl("POST", "/banks/"+p.Bank+"/accounts", map[string]string{"customer": p.Customer, "type": typ})
+	nuban := fmt.Sprint(acc["nuban"])
+	p = s.people[p.ID+"@"+p.Bank]
+	p.Accounts = append(p.Accounts, nuban)
+	s.people[p.ID+"@"+p.Bank] = p
+	return nuban
+}
+
+func (s *Stack) balances(p persona) map[string]int64 {
+	s.t.Helper()
+	out := map[string]int64{}
+	for _, a := range s.ctl("GET", "/banks/"+p.Bank+"/accounts?customer="+p.Customer, nil)["data"].([]any) {
+		m := a.(map[string]any)
+		out[fmt.Sprint(m["nuban"])] = int64(m["balance_minor"].(float64))
+	}
+	return out
+}
+
+func (s *Stack) bankOf(host string) string {
+	for _, b := range s.cfg.Banks {
+		if mustHost(b.URL()) == host {
+			return b.ID
 		}
 	}
-	s.t.Fatalf("no persona %s", id)
-	return persona{}
+	s.t.Fatalf("no bank serves %s", host)
+	return ""
 }
 
 var (
@@ -705,7 +764,7 @@ func mustHost(raw string) string {
 func (b *browser) bankSignIn(personaID string, accounts func([]string) []string) {
 	b.s.t.Helper()
 	base := b.cur.Scheme + "://" + b.cur.Host
-	p := b.s.persona(personaID)
+	p := b.s.personaAt(personaID, b.s.bankOf(b.cur.Host))
 	b.postTo(base, "/login", url.Values{"username": {p.Username}, "password": {p.Password}})
 	if b.result != nil {
 		return
@@ -742,30 +801,6 @@ func (s *Stack) completeLink(widgetURL, institution, personaID string, accounts 
 	}
 	if b.result == nil && b.atBank() {
 		b.bankSignIn(personaID, accounts)
-	} else if b.result == nil {
-		p := s.persona(personaID)
-		b.post("/bank/login", url.Values{"username": {p.Username}, "password": {p.Password}})
-		if b.result != nil {
-			q := b.result.Query()
-			return linkResult{SessionID: q.Get("link_session_id"), State: q.Get("state"), Error: q.Get("error")}
-		}
-		m := reOTP.FindStringSubmatch(b.last)
-		if m == nil {
-			s.t.Fatalf("no OTP on page: %.400s", b.last)
-		}
-		b.post("/bank/otp", url.Values{"otp": {m[1]}})
-		all := []string{}
-		for _, m := range reAccount.FindAllStringSubmatch(b.last, -1) {
-			all = append(all, m[1])
-		}
-		if len(all) == 0 {
-			s.t.Fatalf("no accounts on consent page: %.400s", b.last)
-		}
-		pick := all
-		if accounts != nil {
-			pick = accounts(all)
-		}
-		b.post("/bank/consent", url.Values{"account": pick, "action": {"approve"}})
 	}
 	if b.result == nil {
 		s.t.Fatalf("widget did not redirect to the partner: %.400s", b.last)
@@ -964,5 +999,31 @@ func (s *Stack) checkDates(m map[string]any) {
 		if bt, err := time.Parse(time.RFC3339, b); err != nil || bt.Year() < 2000 {
 			s.t.Fatalf("line %v has booked_at %v", m["id"], b)
 		}
+	}
+}
+
+func (s *Stack) payTry(fromBank, from, toBank, to, naira string, header map[string]string) (map[string]any, error) {
+	s.t.Helper()
+	out, _, err := s.ctlWith("POST", "/banks/"+fromBank+"/transfers", map[string]string{"from": from, "to_bank": toBank, "to": to, "amount": naira}, header)
+	return out, err
+}
+
+func (s *Stack) pay(fromBank, from, toBank, to, naira string) map[string]any {
+	s.t.Helper()
+	out, err := s.payTry(fromBank, from, toBank, to, naira, nil)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return out
+}
+
+func (s *Stack) spend(p persona, n int) {
+	s.t.Helper()
+	to := s.persona("ngozi")
+	if p.Bank == to.Bank {
+		to = s.persona("tunde")
+	}
+	for range n {
+		s.pay(p.Bank, p.Accounts[0], to.Bank, to.Accounts[0], "10000")
 	}
 }

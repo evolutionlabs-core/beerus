@@ -1,12 +1,16 @@
 package connect
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -173,7 +177,11 @@ func TestNewSetupKeyIsRandom(t *testing.T) {
 func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
-	if err := Init(dir, setup.DefaultSpec("beerus", today), DefaultLocal(), today); err != nil {
+	local := DefaultLocal()
+	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
+		local.DatabaseURL = u
+	}
+	if err := Init(dir, setup.DefaultSpec("beerus", today), local, today); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadConfig(dir)
@@ -181,4 +189,30 @@ func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+func newTestApp(t *testing.T, o Options) *App {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("opens bank databases; run without -short")
+	}
+	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
+	if o.Logger == nil {
+		o.Logger = slog.New(slog.DiscardHandler)
+	}
+	conn, err := pgx.Connect(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		t.Skipf("no Postgres for app tests (%v); set BEERUS_TEST_DATABASE_URL", err)
+	}
+	conn.Close(context.Background())
+	a, err := New(cfg, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := a.DropBankDatabases(); err != nil {
+			t.Errorf("drop databases: %v", err)
+		}
+	})
+	return a
 }

@@ -1,9 +1,0 @@
-name: failed-transfer-and-reversal
-description: A failed transfer reverses two hours later, then a disputed one reverses a day later.
-steps:
-  - run: debit_then_reversal
-    account: adaeze@bank-a
-  - advance: 3h
-  - run: late_reversal
-    account: tunde@bank-a
-  - advance: 2d

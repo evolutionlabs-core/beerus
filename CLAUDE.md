@@ -60,7 +60,7 @@ Use the toolchain's gofmt; the Homebrew one is older and CI disagrees with it.
 - **Wording.** Get singular and plural right. Never write vague text like "Steps 1 to 1 already ran."
 
 ## Locking
-- **Lock order:** `applyMu` → `stepMu` → `recMu` → `lifeMu` → `mu` → `regMu` → `ctlMu`. Never take an earlier lock while holding a later one.
+- **Lock order:** `applyMu` → `stepMu` → `gate` → `recMu` → `lifeMu` → `sendLock` → `mu` → `regMu` → `ctlMu`. Never take an earlier lock while holding a later one. `sendLock` is per sending bank and is the one lock allowed across the bank and NIBSS DB calls for the cap check and debit. `gate` is the write gate: every outermost write to bank, CBN or NIBSS data holds `gate.RLock`, a snapshot or restore holds `gate.Lock`. Never take `gate.RLock` twice on one goroutine; call the ungated inner function instead.
 - **No lock across slow work.** Never hold a shared lock across a network call, a DB query, a file write, `time.Sleep` or `writeJSON`. Copy what you need under the lock, unlock, do the I/O, then relock to apply the result.
 - **Flags read across locks** are atomics.
 - **Goroutines and transports.** Every goroutine has a stop condition. Every `http.Transport` is shared and has idle timeouts.

@@ -2,8 +2,8 @@ package connect
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -32,21 +33,62 @@ type PurgeResult struct {
 
 func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
 	st, ok := a.bankStatus(id)
-	b := a.cfg.Bank(id)
+	banks := a.bankList()
+	b := findBank(banks, id)
 	if !ok || b == nil {
 		return PurgeImpact{}, errNotFound
 	}
-	out := PurgeImpact{Bank: st, Database: b.Database, Snapshots: a.snapshotsWith(id), Blockers: []string{}}
+	snaps, err := a.snapshotsWith(id)
+	if err != nil {
+		return PurgeImpact{}, err
+	}
+	out := PurgeImpact{Bank: st, Database: b.Database, Snapshots: snaps, Blockers: []string{}}
 	if st.Phase != PhaseClosed {
 		out.Blockers = append(out.Blockers, "the bank is "+st.Phase+"; close it before purging it")
 	}
-	if len(a.cfg.Banks) == 1 {
+	if len(banks) == 1 {
 		out.Blockers = append(out.Blockers, "it is the only bank left; add another bank first")
 	}
-	for _, other := range a.cfg.Banks {
+	for _, other := range banks {
 		if other.SettlesThrough == id {
 			out.Blockers = append(out.Blockers, other.Name+" settles through this bank; purge it first")
 		}
+	}
+	sw := a.nibssStore()
+	if sw == nil {
+		return PurgeImpact{}, errors.New("NIBSS is not available right now")
+	}
+	sessions, err := sw.Open(context.Background())
+	if err != nil {
+		return PurgeImpact{}, fmt.Errorf("check open NIP sessions: %w", err)
+	}
+	waiting := 0
+	for _, x := range sessions {
+		if x.FromCode == b.NIPCode || x.ToCode == b.NIPCode {
+			waiting++
+		}
+	}
+	switch {
+	case waiting == 1:
+		out.Blockers = append(out.Blockers, "1 NIP session with this bank has not settled; wait for the next settlement or run beerus nip settle-now")
+	case waiting > 1:
+		out.Blockers = append(out.Blockers, fmt.Sprintf("%d NIP sessions with this bank have not settled; wait for the next settlement or run beerus nip settle-now", waiting))
+	}
+	unposted, err := sw.Unposted(context.Background())
+	if err != nil {
+		return PurgeImpact{}, fmt.Errorf("check unposted settlements: %w", err)
+	}
+	awaiting := 0
+	for _, settlement := range unposted {
+		if slices.ContainsFunc(settlement.Sessions, func(x nibss.Session) bool { return x.FromCode == b.NIPCode || x.ToCode == b.NIPCode }) {
+			awaiting++
+		}
+	}
+	switch {
+	case awaiting == 1:
+		out.Blockers = append(out.Blockers, "1 settlement with this bank has not been posted to the books; wait for the next step and try again")
+	case awaiting > 1:
+		out.Blockers = append(out.Blockers, fmt.Sprintf("%d settlements with this bank have not been posted to the books; wait for the next step and try again", awaiting))
 	}
 	a.mu.Lock()
 	for _, c := range a.st.Connections {
@@ -58,50 +100,33 @@ func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
 	return out, nil
 }
 
-func (a *App) snapshotsWith(id string) []string {
+func (a *App) snapshotsWith(id string) ([]string, error) {
+	metas, err := a.snapshotMetas()
+	if err != nil {
+		return nil, err
+	}
 	out := []string{}
-	entries, _ := os.ReadDir(a.snapshotDir())
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(a.snapshotDir(), e.Name()))
-		if err != nil {
-			continue
-		}
-		var f struct {
-			Meta snapshotMeta `json:"meta"`
-		}
-		if json.Unmarshal(raw, &f) == nil && slices.Contains(f.Meta.Banks, id) {
-			out = append(out, f.Meta.ID)
+	for _, m := range metas {
+		if slices.Contains(m.Banks, id) {
+			out = append(out, m.ID)
 		}
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
 
-func (a *App) PurgeBank(id string) (PurgeResult, error) {
+func (a *App) markPurged(id string) (PurgeImpact, *config.Bank, error) {
 	a.recMu.Lock()
 	defer a.recMu.Unlock()
 	imp, err := a.PurgeImpact(id)
 	if err != nil {
-		return PurgeResult{}, err
+		return PurgeImpact{}, nil, err
 	}
 	if len(imp.Blockers) > 0 {
-		return PurgeResult{}, invalid("%s cannot be purged: %s", imp.Bank.Name, strings.Join(imp.Blockers, "; "))
-	}
-	a.mu.Lock()
-	if err := a.world.Purge(id); err != nil {
-		a.mu.Unlock()
-		return PurgeResult{}, invalid("%s", err.Error())
-	}
-	err = a.saveLocked()
-	a.mu.Unlock()
-	if err != nil {
-		return PurgeResult{}, err
+		return PurgeImpact{}, nil, invalid("%s cannot be purged: %s", imp.Bank.Name, strings.Join(imp.Blockers, "; "))
 	}
 	a.lifeMu.Lock()
-	b := a.cfg.Bank(id)
+	b := a.bankByID(id)
 	st := a.status[id]
 	a.mu.Lock()
 	banks := a.cfg.Banks
@@ -115,8 +140,19 @@ func (a *App) PurgeBank(id string) (PurgeResult, error) {
 		a.mu.Unlock()
 		a.status[id] = st
 	}); err != nil {
+		return PurgeImpact{}, nil, err
+	}
+	return imp, b, nil
+}
+
+func (a *App) PurgeBank(id string) (PurgeResult, error) {
+	a.gate.RLock()
+	defer a.gate.RUnlock()
+	imp, b, err := a.markPurged(id)
+	if err != nil {
 		return PurgeResult{}, err
 	}
+	a.sendLocks.Delete(id)
 	memberErr := a.removeMember(id)
 	a.detach(b, setup.StepSite)
 	ls := a.ledgerFor(id)
@@ -139,6 +175,7 @@ func (a *App) PurgeBank(id string) (PurgeResult, error) {
 		if a.rtgs != nil {
 			errs = append(errs, a.rtgs.DropSnapshot(snap))
 		}
+		errs = append(errs, a.dropNIBSSSnapshot(snap))
 		if err := os.Remove(filepath.Join(a.snapshotDir(), snap+".json")); err != nil && !os.IsNotExist(err) {
 			errs = append(errs, err)
 		}

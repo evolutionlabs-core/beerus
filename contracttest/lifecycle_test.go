@@ -3,6 +3,7 @@ package contracttest
 import (
 	"context"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/world"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,7 +17,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 func (s *Stack) waitBank(id string) map[string]any {
@@ -44,6 +44,7 @@ func TestCreateBank(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newBankStack(t)
+	p := s.persona("adaeze")
 	snap := s.ctl("POST", "/snapshots", map[string]any{"name": "before"})
 	out := s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
 	if out["id"] != "abuja-digital" || out["phase"] != connect.PhaseProvisioning {
@@ -87,10 +88,9 @@ func TestCreateBank(t *testing.T) {
 	}
 	ob := s.bankBrowser()
 	ob.base = b.URL()
-	p := s.persona("adaeze")
 	ob.get("/login")
 	ob.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
-	if !strings.Contains(ob.last, "has no accounts at Abuja Digital") {
+	if !strings.Contains(ob.last, "The username or password is wrong.") {
 		t.Fatalf("sign-in at a bank with no customers: %.300s", ob.last)
 	}
 	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
@@ -132,21 +132,15 @@ func TestSuspendBank(t *testing.T) {
 	}
 	s := newBankStack(t)
 	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
-	keys := map[string]string{}
-	for _, p := range s.ctl("GET", "/personas", nil)["data"].([]any) {
-		for _, a := range p.(map[string]any)["accounts"].([]any) {
-			m := a.(map[string]any)
-			keys[fmt.Sprint(p.(map[string]any)["id"], "@", m["institution"])] = fmt.Sprint(m["key"])
-		}
-	}
+	chidi, tunde := s.persona("chidi").Accounts[0], s.persona("tunde").Accounts[0]
 	st := s.ctl("POST", "/banks/bank-b/suspend", nil)
 	if st["phase"] != connect.PhaseSuspended {
 		t.Fatalf("suspend: %v", st)
 	}
-	if _, err := s.ctlTry("POST", "/transfers", map[string]any{"from": keys["chidi@bank-b"], "to": keys["tunde@bank-a"], "amount": "1000"}); err == nil || !strings.Contains(err.Error(), "bank_suspended") {
+	if _, err := s.payTry("bank-b", chidi, "bank-a", tunde, "1000", nil); err == nil || !strings.Contains(err.Error(), "bank_not_active") {
 		t.Fatalf("transfer out of a suspended bank: %v", err)
 	}
-	if _, err := s.ctlTry("POST", "/transfers", map[string]any{"from": keys["tunde@bank-a"], "to": keys["chidi@bank-b"], "amount": "1000"}); err == nil || !strings.Contains(err.Error(), "nothing was debited") {
+	if _, err := s.payTry("bank-a", tunde, "bank-b", chidi, "1000", nil); err == nil || !strings.Contains(err.Error(), "nothing was debited") {
 		t.Fatalf("transfer into a suspended bank: %v", err)
 	}
 	s.syncNow()
@@ -170,7 +164,7 @@ func TestSuspendBank(t *testing.T) {
 		t.Fatal("suspension not saved")
 	}
 	s.ctl("POST", "/banks/bank-b/resume", nil)
-	s.ctl("POST", "/transfers", map[string]any{"from": keys["tunde@bank-a"], "to": keys["chidi@bank-b"], "amount": "1000"})
+	s.pay("bank-a", tunde, "bank-b", chidi, "1000")
 	s.syncNow()
 	c = s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
 	if c.JSON["status"] != "active" {
@@ -208,8 +202,7 @@ func TestBankRepairsDrift(t *testing.T) {
 	s := newBankStack(t)
 	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
-	asOf := s.today().AddDays(-1).String()
-	before := s.must(s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+asOf, nil), 200).JSON["ledger_balance"]
+	p := s.persona("chidi")
 	pc, err := pgx.ParseConfig(s.cfg.DatabaseURL)
 	if err != nil {
 		t.Fatal(err)
@@ -239,21 +232,15 @@ func TestBankRepairsDrift(t *testing.T) {
 	}
 	checkProvisioned(t, storedBank(t, s.cfg.Dir, "bank-b"))
 	s.syncNow()
-	if r := s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+asOf, nil); r.Status != 409 || r.Code() != "reauth_required" {
+	if r := s.call("GET", "/v1/accounts/"+acct+"/balance", nil); r.Status != 409 || r.Code() != "reauth_required" {
 		t.Fatalf("consents live in the bank database, so a rebuilt bank should ask for consent again: %d %s", r.Status, r.Body)
-	}
-	s.connect("chidi", "bank-b", s.today().AddDays(-10))
-	after := s.must(s.call("GET", "/v1/accounts/"+acct+"/balance?as_of="+asOf, nil), 200).JSON["ledger_balance"]
-	if fmt.Sprint(before) != fmt.Sprint(after) {
-		t.Fatalf("balance changed across the repair: %v then %v", before, after)
 	}
 	b := s.bankBrowser()
 	b.base = s.cfg.Bank("bank-b").URL()
-	p := s.persona("chidi")
 	b.get("/login")
 	b.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
-	if !strings.Contains(b.last, "verification code") {
-		t.Fatalf("sign-in after repair: %.300s", b.last)
+	if !strings.Contains(b.last, "The username or password is wrong.") {
+		t.Fatalf("a rebuilt bank starts empty, so old sign-ins fail: %.300s", b.last)
 	}
 	checkSettled(t, s.app)
 }
@@ -265,27 +252,17 @@ func TestOpenAccountAtNewBank(t *testing.T) {
 	s := newBankStack(t)
 	s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
 	s.waitPhase("abuja-digital", connect.PhaseActive, 60*time.Second)
-	acc := s.ctl("POST", "/banks/abuja-digital/accounts", map[string]any{"persona": "adaeze", "type": "current"})
-	nuban := fmt.Sprint(acc["nuban"])
-	if acc["owner"] != "adaeze" || len(nuban) != 10 {
-		t.Fatalf("open account: %v", acc)
+	p := s.join("adaeze", "abuja-digital")
+	if p.BVN != s.persona("adaeze").BVN {
+		t.Fatalf("a second bank gave adaeze BVN %s, want %s", p.BVN, s.persona("adaeze").BVN)
 	}
-	if _, err := s.ctlTry("POST", "/banks/abuja-digital/accounts", map[string]any{"persona": "adaeze", "type": "current"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
-		t.Fatalf("second current account: %v", err)
+	nuban := s.openAccount(p, "current")
+	if nuban != world.NUBAN(s.cfg.Bank("abuja-digital").NUBANCode, 1) {
+		t.Fatalf("new account number %q", nuban)
 	}
-	from := ""
-	for _, p := range s.ctl("GET", "/personas", nil)["data"].([]any) {
-		for _, a := range p.(map[string]any)["accounts"].([]any) {
-			m := a.(map[string]any)
-			if p.(map[string]any)["id"] == "adaeze" && m["institution"] == "bank-a" && m["type"] == "current" {
-				from = fmt.Sprint(m["key"])
-			}
-		}
-	}
-	s.ctl("POST", "/transfers", map[string]any{"from": from, "to": fmt.Sprint(acc["key"]), "amount": "25000"})
+	s.pay("bank-a", s.persona("adaeze").Accounts[0], "abuja-digital", nuban, "25000")
 	b := s.bankBrowser()
 	b.base = s.cfg.Bank("abuja-digital").URL()
-	p := s.persona("adaeze")
 	b.get("/login")
 	b.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
 	m := regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`).FindStringSubmatch(b.last)
@@ -313,24 +290,15 @@ func TestCloseImpact(t *testing.T) {
 	if len(empty["customers"].([]any)) != 0 || empty["deposits_minor"] != float64(0) {
 		t.Fatalf("new bank impact: %v", empty)
 	}
-	acc := s.ctl("POST", "/banks/abuja-digital/accounts", map[string]any{"persona": "adaeze", "type": "current"})
-	from := ""
-	for _, p := range s.ctl("GET", "/personas", nil)["data"].([]any) {
-		for _, a := range p.(map[string]any)["accounts"].([]any) {
-			m := a.(map[string]any)
-			if p.(map[string]any)["id"] == "adaeze" && m["institution"] == "bank-a" && m["type"] == "current" {
-				from = fmt.Sprint(m["key"])
-			}
-		}
-	}
-	s.ctl("POST", "/transfers", map[string]any{"from": from, "to": fmt.Sprint(acc["key"]), "amount": "25000"})
+	p := s.join("adaeze", "abuja-digital")
+	s.pay("bank-a", s.persona("adaeze").Accounts[0], "abuja-digital", s.openAccount(p, "current"), "25000")
 	s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
 	imp := s.ctl("GET", "/banks/abuja-digital/close", nil)
 	if imp["insured_limit_minor"] != float64(500_000_000) || len(imp["blockers"].([]any)) != 0 {
 		t.Fatalf("impact: %v", imp)
 	}
 	customers := imp["customers"].([]any)
-	if len(customers) != 1 || customers[0].(map[string]any)["persona"] != "adaeze" || customers[0].(map[string]any)["deposits_minor"] != float64(2_500_000) {
+	if len(customers) != 1 || customers[0].(map[string]any)["customer"] != p.Customer || customers[0].(map[string]any)["deposits_minor"] != float64(2_500_000) {
 		t.Fatalf("customers: %v", customers)
 	}
 	accounts := imp["accounts"].([]any)
@@ -360,44 +328,48 @@ func TestCloseBank(t *testing.T) {
 	s := newBankStack(t)
 	s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
 	s.waitPhase("abuja-digital", connect.PhaseActive, 60*time.Second)
-	w := s.app.World()
-	bankA := func(persona string) world.Account {
-		for _, a := range w.AccountsAt(persona, "bank-a") {
-			if a.Type == "current" {
-				return a
-			}
-		}
-		t.Fatalf("%s has no current account at bank-a", persona)
-		return world.Account{}
-	}
 	fund := map[string]string{"adaeze": "25000", "tunde": "10000"}
-	opened := map[string]string{}
-	for p, amount := range fund {
-		acc := s.ctl("POST", "/banks/abuja-digital/accounts", map[string]any{"persona": p, "type": "current"})
-		opened[p] = fmt.Sprint(acc["key"])
-		s.ctl("POST", "/transfers", map[string]any{"from": bankA(p).Key, "to": opened[p], "amount": amount})
+	home, opened := map[string]persona{}, map[string]persona{}
+	for _, id := range []string{"adaeze", "tunde"} {
+		home[id] = s.persona(id)
+		opened[id] = s.join(id, "abuja-digital")
+		s.pay("bank-a", home[id].Accounts[0], "abuja-digital", s.openAccount(opened[id], "current"), fund[id])
+		opened[id] = s.personaAt(id, "abuja-digital")
 	}
 	conn := s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
-	balance := func(key string) int64 {
-		v, err := w.LedgerAt(key, s.app.Clock().Now())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return v
+	balance := func(p persona) int64 {
+		return s.balances(p)[p.Accounts[0]]
 	}
-	before := balance(bankA("adaeze").Key)
-	for _, bad := range []map[string]any{{"money": "transfer"}, {"money": "transfer", "to": "abuja-digital"}, {"money": "keep", "to": "bank-a"}, {"money": "transfer", "to": "bank-a", "customers": map[string]string{"chidi": "leave"}}} {
+	before := balance(home["adaeze"])
+	for _, bad := range []map[string]any{{"money": "transfer"}, {"money": "transfer", "to": "abuja-digital"}, {"money": "keep", "to": "bank-a"}, {"money": "transfer", "to": "bank-a", "customers": map[string]string{"cus_nobody": "leave"}}} {
 		if _, err := s.ctlTry("POST", "/banks/abuja-digital/close", bad); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
 			t.Fatalf("close with %v: %v", bad, err)
 		}
 	}
-	res := s.ctl("POST", "/banks/abuja-digital/close", map[string]any{"money": "transfer", "to": "bank-a", "customers": map[string]string{"tunde": "leave"}})
+	for _, bad := range []map[string]any{{"kind": "timeout", "bank": "bank-a", "outcome": "failed", "count": 0}, {"kind": "timeout", "bank": "bank-a", "outcome": "failed", "count": -2}, {"kind": "down", "bank": "bank-a", "count": 1}} {
+		if _, err := s.ctlTry("POST", "/faults", bad); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
+			t.Fatalf("fault %v: %v", bad, err)
+		}
+	}
+	if _, err := s.ctlTry("POST", "/faults", map[string]any{"kind": "timeout", "bank": "bank-a", "outcome": "failed", "count": 0}); err == nil || !strings.Contains(err.Error(), "count 0 must be 1 or more") {
+		t.Fatalf("fault count 0 message: %v", err)
+	}
+	if got := s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "bank-a", "outcome": "failed"}); got["left"] != float64(1) {
+		t.Fatalf("fault without a count: %v", got)
+	}
+	if _, err := s.ctlTry("POST", "/banks/abuja-digital/close", map[string]any{"money": "transfer", "to": "bank-a"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "Bank A has a fault") {
+		t.Fatalf("close while the destination has a fault: %v", err)
+	}
+	if got := s.ctl("DELETE", "/faults?bank=bank-a", nil); got["cleared"] != float64(1) {
+		t.Fatalf("clear faults: %v", got)
+	}
+	res := s.ctl("POST", "/banks/abuja-digital/close", map[string]any{"money": "transfer", "to": "bank-a", "customers": map[string]string{opened["tunde"].Customer: "leave"}})
 	if res["moved_minor"] != float64(2_500_000) || res["left_minor"] != float64(1_000_000) || len(res["revoked_connections"].([]any)) != 1 {
 		t.Fatalf("close: %v", res)
 	}
 	s.waitPhase("abuja-digital", connect.PhaseClosed, time.Second)
-	if got := balance(bankA("adaeze").Key); got != before+2_500_000 {
+	if got := balance(home["adaeze"]); got != before+2_500_000 {
 		t.Fatalf("adaeze at bank-a has %d, want %d", got, before+2_500_000)
 	}
 	s.advance("72h")
@@ -407,8 +379,8 @@ func TestCloseBank(t *testing.T) {
 	if got := balance(opened["tunde"]); got != 1_000_000 {
 		t.Fatalf("left account has %d", got)
 	}
-	if c, err := s.app.VerifyBank(); err != nil || !c.Ledger.OK() || len(c.Mismatches) > 0 {
-		t.Fatalf("bank ledgers after the close: %v %v %v", err, c.Ledger, c.Mismatches)
+	if c, err := s.app.VerifyBank(); err != nil || !c.OK() {
+		t.Fatalf("bank ledgers after the close: %v %v", err, c)
 	}
 	if got := s.eventsOf("connection.status_changed", func(d map[string]any) bool {
 		return d["connection_id"] == conn.ConnectionID && d["status"] == "revoked"
@@ -427,10 +399,10 @@ func TestCloseBank(t *testing.T) {
 			t.Fatalf("%s on a closed bank: %v", path, err)
 		}
 	}
-	if _, err := s.ctlTry("POST", "/transfers", map[string]any{"from": bankA("tunde").Key, "to": opened["tunde"], "amount": "100"}); err == nil || !strings.Contains(err.Error(), "bank_closed") {
+	if _, err := s.payTry("bank-a", home["tunde"].Accounts[0], "abuja-digital", opened["tunde"].Accounts[0], "100", nil); err == nil || !strings.Contains(err.Error(), "bank_closed") {
 		t.Fatalf("transfer into a closed bank: %v", err)
 	}
-	if _, err := s.ctlTry("POST", "/banks/abuja-digital/accounts", map[string]any{"persona": "chidi"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
+	if _, err := s.ctlTry("POST", "/banks/abuja-digital/accounts", map[string]any{"customer": opened["tunde"].Customer, "type": "current"}); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
 		t.Fatalf("open account at a closed bank: %v", err)
 	}
 	s.waitPhase("abuja-digital", connect.PhaseClosed, time.Second)
@@ -441,7 +413,7 @@ func TestCloseBank(t *testing.T) {
 	if !saved.Bank("abuja-digital").Closed() {
 		t.Fatal("the closed state was not saved")
 	}
-	again, err := connect.New(saved, connect.Options{WorldOnly: true})
+	again, err := connect.New(saved, connect.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,8 +422,8 @@ func TestCloseBank(t *testing.T) {
 			t.Fatalf("after restart: %s", st.Phase)
 		}
 	}
-	if v, _ := again.World().LedgerAt(bankA("adaeze").Key, s.app.Clock().Now()); v != balance(bankA("adaeze").Key) {
-		t.Fatalf("money moved again after restart: %d vs %d", v, balance(bankA("adaeze").Key))
+	if got := balance(home["adaeze"]); got != before+2_500_000 {
+		t.Fatalf("money moved again after restart: %d, want %d", got, before+2_500_000)
 	}
 	checkSettled(t, s.app)
 }
@@ -466,43 +438,28 @@ func TestClosePaysInsuredDeposits(t *testing.T) {
 	if imp := s.ctl("GET", "/banks/bank-a/close", nil); !strings.Contains(fmt.Sprint(imp["blockers"]), "Kano Microfinance settles through this bank") {
 		t.Fatalf("bank-a blockers: %v", imp["blockers"])
 	}
-	w := s.app.World()
-	now := func() time.Time { return s.app.Clock().Now() }
-	var who world.Persona
-	var from world.Account
-	for _, p := range w.Personas() {
-		for _, a := range w.AccountsAt(p.ID, "bank-a") {
-			if bal, _ := w.LedgerAt(a.Key, now()); a.Type == "current" && bal > 260_000_000 && from.Key == "" {
-				who, from = p, a
-			}
-		}
+	from := s.persona("tunde")
+	who := s.join("tunde", "kano-microfinance")
+	for _, h := range []opening{{"current", "1500000"}, {"savings", "1000000"}} {
+		s.pay("bank-a", from.Accounts[0], "kano-microfinance", s.openAccount(who, h.typ), h.naira)
 	}
-	if from.Key == "" {
-		t.Fatal("no persona has ₦2.6m in a bank-a current account")
-	}
-	held := map[string]string{"current": "1500000", "savings": "1000000"}
-	for typ, amount := range held {
-		acc := s.ctl("POST", "/banks/kano-microfinance/accounts", map[string]any{"persona": who.ID, "type": typ})
-		s.ctl("POST", "/transfers", map[string]any{"from": from.Key, "to": fmt.Sprint(acc["key"]), "amount": amount})
-	}
-	total := func(bank string) int64 {
+	total := func(p persona) int64 {
 		var sum int64
-		for _, a := range w.AccountsAt(who.ID, bank) {
-			v, _ := w.LedgerAt(a.Key, now())
+		for _, v := range s.balances(p) {
 			sum += v
 		}
 		return sum
 	}
-	before := total("bank-a")
+	before := total(from)
 	res := s.ctl("POST", "/banks/kano-microfinance/close", map[string]any{"money": "payout", "to": "bank-a"})
 	if res["paid_out_minor"] != float64(200_000_000) || res["claims_minor"] != float64(50_000_000) {
 		t.Fatalf("close: %v", res)
 	}
-	if got := total("bank-a"); got != before+200_000_000 {
-		t.Fatalf("%s at bank-a has %d, want %d", who.ID, got, before+200_000_000)
+	if got := total(from); got != before+200_000_000 {
+		t.Fatalf("tunde at bank-a has %d, want %d", got, before+200_000_000)
 	}
 	s.advance("72h")
-	if got := total("kano-microfinance"); got != 50_000_000 {
+	if got := total(who); got != 50_000_000 {
 		t.Fatalf("claims left at the closed bank: %d", got)
 	}
 	if imp := s.ctl("GET", "/banks/bank-a/close", nil); len(imp["blockers"].([]any)) != 0 {
@@ -523,9 +480,6 @@ func TestRestoreCannotReopenAClosedBank(t *testing.T) {
 		t.Fatalf("restore before the close: %v", err)
 	}
 	s.waitPhase("bank-b", connect.PhaseClosed, time.Second)
-	if !s.app.World().Closed("bank-b", s.app.Clock().Now()) {
-		t.Fatal("bank-b reopened in the world")
-	}
 	ids := func(state string) []string {
 		out := []string{}
 		for _, d := range s.ctl("GET", "/banks?state="+state, nil)["data"].([]any) {

@@ -14,7 +14,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 func TestPurgeLeavesNothingBehind(t *testing.T) {
@@ -25,18 +24,8 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
 	s.waitPhase("abuja-digital", connect.PhaseActive, 60*time.Second)
 	bank := *s.cfg.Bank("abuja-digital")
-	w := s.app.World()
-	bankA := func(w *world.World) world.Account {
-		for _, a := range w.AccountsAt("adaeze", "bank-a") {
-			if a.Type == "current" {
-				return a
-			}
-		}
-		t.Fatal("adaeze has no current account at bank-a")
-		return world.Account{}
-	}
-	opened := s.ctl("POST", "/banks/abuja-digital/accounts", map[string]any{"persona": "adaeze", "type": "current"})
-	s.ctl("POST", "/transfers", map[string]any{"from": bankA(w).Key, "to": fmt.Sprint(opened["key"]), "amount": "25000"})
+	home := s.persona("adaeze")
+	s.pay("bank-a", home.Accounts[0], "abuja-digital", s.openAccount(s.join("adaeze", "abuja-digital"), "current"), "25000")
 	conn := s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
 	snap := fmt.Sprint(s.ctl("POST", "/snapshots", map[string]string{"name": "with abuja"})["id"])
@@ -54,21 +43,13 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("purge an open bank: %v", err)
 	}
 	s.ctl("POST", "/banks/abuja-digital/close", map[string]any{"money": "transfer", "to": "bank-a"})
+	if _, err := s.ctlTry("POST", "/banks/abuja-digital/purge", nil); err == nil || !strings.Contains(err.Error(), "2 NIP sessions with this bank have not settled") {
+		t.Fatalf("purge before the closure transfer settled: %v", err)
+	}
+	s.ctl("POST", "/nip/settle-now", nil)
 	imp := s.ctl("GET", "/banks/abuja-digital/purge", nil)
 	if len(imp["blockers"].([]any)) != 0 || fmt.Sprint(imp["snapshots"]) != "["+snap+"]" || imp["database"] != bank.Database || imp["connections"] != float64(1) {
 		t.Fatalf("purge preview: %v", imp)
-	}
-	now := s.app.Clock().Now()
-	before := map[string][]world.Presented{}
-	for _, a := range w.Accounts() {
-		if a.Institution == "abuja-digital" {
-			continue
-		}
-		ls, err := w.Statement(a.Key, now)
-		if err != nil {
-			t.Fatal(err)
-		}
-		before[a.Key] = ls
 	}
 	res := s.ctl("POST", "/banks/abuja-digital/purge", nil)
 	if fmt.Sprint(res["snapshots_deleted"]) != "["+snap+"]" {
@@ -95,11 +76,6 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	for _, d := range s.ctl("GET", "/banks", nil)["data"].([]any) {
 		if d.(map[string]any)["id"] == "abuja-digital" {
 			t.Fatal("GET /banks still lists the bank")
-		}
-	}
-	for _, inst := range s.app.World().Institutions() {
-		if inst.ID == "abuja-digital" {
-			t.Fatal("the world still lists the bank")
 		}
 	}
 	if _, err := s.ctlTry("GET", "/banks/abuja-digital/purge", nil); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
@@ -140,15 +116,16 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if rep, err := connect.Doctor(context.Background(), c, false); err != nil || !rep.Clean() {
 		t.Fatalf("doctor after --fix: %+v %v", rep, err)
 	}
-	if ck, err := s.app.VerifyBank(); err != nil || !ck.Ledger.OK() || len(ck.Mismatches) > 0 {
-		t.Fatalf("bank ledgers after the purge: %v %v %v", err, ck.Ledger, ck.Mismatches)
+	if ck, err := s.app.VerifyBank(); err != nil || !ck.OK() {
+		t.Fatalf("bank ledgers after the purge: %v %v", err, ck)
 	}
 	s.advance("72h")
 	checkSettled(t, s.app)
+	before := s.balances(home)
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
-	again, err := connect.New(c, connect.Options{WorldOnly: true})
+	again, err := connect.New(c, connect.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,19 +137,8 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 			t.Fatalf("%s is %s after a restart", st.ID, st.Phase)
 		}
 	}
-	for key, want := range before {
-		got, err := again.World().Statement(key, now)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(got) != len(want) {
-			t.Fatalf("%s has %d lines after a restart, %d before", key, len(got), len(want))
-		}
-		for i := range got {
-			if got[i].Key != want[i].Key || got[i].Amount != want[i].Amount || got[i].Narration != want[i].Narration {
-				t.Fatalf("%s line %d changed after a restart", key, i)
-			}
-		}
+	if after := s.balances(home); fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatalf("balances moved after a restart: %v, before %v", after, before)
 	}
 }
 
@@ -186,16 +152,11 @@ func TestPurgeRules(t *testing.T) {
 	}
 	s.ctl("POST", "/banks/bank-b/close", map[string]any{"money": "leave"})
 	snap := fmt.Sprint(s.ctl("POST", "/snapshots", map[string]string{"name": "closed"})["id"])
-	s.ctl("POST", "/banks/bank-b/purge", nil)
-	if _, err := s.ctlTry("POST", "/snapshots/"+snap+"/restore", nil); err == nil || !strings.Contains(err.Error(), "HTTP 409") || !strings.Contains(err.Error(), "was purged") {
-		t.Fatalf("restore before the purge: %v", err)
+	if res := s.ctl("POST", "/banks/bank-b/purge", nil); fmt.Sprint(res["snapshots_deleted"]) != "["+snap+"]" {
+		t.Fatalf("the purge kept a snapshot that holds the bank: %v", res)
 	}
-	for _, p := range s.app.World().Personas() {
-		for _, k := range p.Accounts {
-			if strings.HasPrefix(k, "bank-b:") {
-				t.Fatalf("%s still lists %s", p.ID, k)
-			}
-		}
+	if _, err := s.ctlTry("POST", "/snapshots/"+snap+"/restore", nil); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("restore of a snapshot the purge deleted: %v", err)
 	}
 	if imp := s.ctl("GET", "/banks/bank-a/purge", nil); !strings.Contains(fmt.Sprint(imp["blockers"]), "only bank left") {
 		t.Fatalf("purge preview of the last bank: %v", imp)
@@ -210,7 +171,7 @@ func TestPurgeRules(t *testing.T) {
 	if c.Bank("bank-b") != nil {
 		t.Fatal("the setup still lists the purged bank")
 	}
-	again, err := connect.New(c, connect.Options{WorldOnly: true})
+	again, err := connect.New(c, connect.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

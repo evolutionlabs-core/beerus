@@ -22,9 +22,6 @@ const (
 	oldSpecFile = "beerus.yaml"
 	statusFile  = "control.json"
 
-	generatorSeed        int64 = 20261028
-	generatorGenesisDays       = 760
-
 	defaultDatabaseURL  = "postgres:///postgres"
 	defaultConnectHost  = "connect.localhost"
 	defaultPartnerPort  = 7443
@@ -291,15 +288,24 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 	if err != nil {
 		return nil, fmt.Errorf("start %q: %w", spec.Start, err)
 	}
+	def := setup.DefaultSpec(st.Applied.Metadata.Name, clock.DateOf(start)).Spec
+	tsqAfter, err := time.ParseDuration(orDefault(spec.NIP.TSQAfter, def.NIP.TSQAfter))
+	if err != nil {
+		return nil, fmt.Errorf("nip.tsq_after %q: %w", spec.NIP.TSQAfter, err)
+	}
+	tsqAttempts := spec.NIP.TSQAttempts
+	if tsqAttempts == 0 {
+		tsqAttempts = def.NIP.TSQAttempts
+	}
 	ln := local.Connect
 	c := &config.Config{
 		Dir:         dir,
 		DatabaseURL: local.DatabaseURL,
 		Pace:        local.Pace,
 		Start:       start,
-		Seed:        generatorSeed,
-		Genesis:     clock.DateOf(start).AddDays(-generatorGenesisDays).String(),
 		NIPSessions: spec.NIP.Sessions,
+		TSQAfter:    tsqAfter,
+		TSQAttempts: tsqAttempts,
 		Ports:       config.Ports{APIOffset: local.Ports.APIOffset, Window: local.Ports.Window},
 		Connect: config.Connect{
 			Host:         orDefault(ln.Host, defaultConnectHost),

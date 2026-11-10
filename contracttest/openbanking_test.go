@@ -160,6 +160,10 @@ func TestOpenBanking(t *testing.T) {
 		t.Fatalf("consent screen lists %d accounts", len(accounts))
 	}
 	shared, hidden := accounts[0][1], accounts[1][1]
+	chidi := s.persona("chidi")
+	for range 2 {
+		s.pay(p.Bank, shared, chidi.Bank, chidi.Accounts[0], "10000")
+	}
 	b.post("/authorize/consent", url.Values{"action": {"approve"}, "account": {shared}})
 	cb, err := url.Parse(b.next)
 	if err != nil || !strings.HasPrefix(b.next, redirect+"?") || cb.Query().Get("state") != "st-1" || cb.Query().Get("iss") != o.issuer || cb.Query().Get("code") == "" {

@@ -50,3 +50,26 @@ func TestPhone(t *testing.T) {
 		t.Errorf("phone: %+v", p.Phone)
 	}
 }
+
+func TestDepositInsurance(t *testing.T) {
+	p, err := Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for typ, want := range map[string]int64{"commercial": 500000000, "digital": 500000000, "microfinance": 200000000} {
+		got, err := p.DepositInsurance.Limit(typ)
+		if err != nil || got != want {
+			t.Fatalf("%s: %d %v, want %d", typ, got, err, want)
+		}
+	}
+	if _, err := p.DepositInsurance.Limit("savings"); err == nil || err.Error() != `deposit insurance has no limit for bank type "savings"` {
+		t.Fatalf("unknown type: %v", err)
+	}
+	bad := DepositInsurance{Limits: map[string]int64{"dmb": 0}, BankTypes: map[string]string{"commercial": "dmb"}, Source: "x"}
+	if err := bad.check(); err == nil || err.Error() != `deposit_insurance: bank type commercial maps to "dmb", which has no limit above zero` {
+		t.Fatalf("zero limit: %v", err)
+	}
+	if err := (DepositInsurance{BankTypes: map[string]string{"commercial": "dmb"}}).check(); err == nil || err.Error() != "deposit_insurance has no source" {
+		t.Fatalf("no source: %v", err)
+	}
+}

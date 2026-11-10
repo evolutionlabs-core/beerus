@@ -44,10 +44,19 @@ Usage:
   beerus clock [advance <24h|7d|365d> | pace <n>]
   beerus scenarios
   beerus scenario run <file.yaml>
-  beerus scenario <name> [--account ID] [--institution bank-a] [--persona adaeze] [--connection ID] [--duration 2h] [--count N]
-  beerus personas
-  beerus nip name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions
-  beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA [--to-bank "Bank C"] [--to-name NAME] [--narration TEXT]
+  beerus scenario <name> --connection ID
+  beerus customer create --bank ID --name N --phone P --dob YYYY-MM-DD [--username U --password-stdin]
+  beerus customer close <id> --bank ID
+  beerus customers --bank ID [--limit N] [--cursor C]
+  beerus account open --bank ID --customer ID [--type current|savings]
+  beerus account close <nuban> --bank ID
+  beerus accounts --bank ID [--customer ID] [--limit N] [--cursor C]
+  beerus deposit|withdraw <nuban> --bank ID --amount NAIRA
+  beerus statement <nuban> --bank ID [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit N] [--cursor C]
+  beerus transfer --from-bank ID --from NUBAN --to NUBAN [--to-bank ID] --amount NAIRA [--narration TEXT]
+  beerus nip name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions | settlement | settle-now
+  beerus faults
+  beerus fault add down --bank ID [--for 1h] | add timeout --bank ID --outcome credited|failed|unknown [--count N] | clear [--bank ID]
   beerus connections
   beerus revoke <connection-id>
   beerus sync
@@ -56,7 +65,6 @@ Usage:
   beerus bank [list]
   beerus bank create --name NAME [--type commercial|digital|microfinance] [--id ID] [--nip-code N] [--nuban-code N] [--settles-through ID]
   beerus bank suspend|resume <id>
-  beerus bank open-account <id> --persona ID [--type current|savings]
   beerus bank close <id> --to BANK [--money transfer|payout|leave] [--customers a=payout,b=leave] [--dry-run] [--yes]
   beerus bank purge <id> [--yes]
   beerus registry [list | add-client <id> --cert-cn CN --public-key FILE --redirect-uri URL [--name N] [--legal-name N] [--cac N] | consents [--bank ID]]
@@ -256,10 +264,6 @@ func cmdUp(args []string) error {
 		return err
 	}
 	fmt.Printf("\nControl room        %s\n", app.RoomURL())
-	fmt.Println("\nPersonas (username / password):")
-	for _, p := range app.World().Personas() {
-		fmt.Printf("  %-8s %s  %s\n", p.Username, p.Password, p.Name)
-	}
 	fmt.Println("\nPress Ctrl+C to stop.")
 	return app.Serve(ctx)
 }
@@ -361,40 +365,35 @@ func cmdControl(cmd string, args []string) error {
 			break
 		}
 		fs := flag.NewFlagSet("scenario", flag.ExitOnError)
-		acc := fs.String("account", "", "account ID")
-		inst := fs.String("institution", "", "institution ID")
-		persona := fs.String("persona", "", "persona ID")
 		conn := fs.String("connection", "", "connection ID")
-		dur := fs.String("duration", "", "duration")
-		count := fs.Int("count", 0, "count")
 		fs.Parse(args[1:])
-		out, err = c.do("POST", "/scenarios/"+args[0], map[string]any{"account_id": *acc, "institution": *inst, "persona": *persona, "connection_id": *conn, "duration": *dur, "count": *count})
-	case "personas":
-		out, err = c.do("GET", "/personas", nil)
+		out, err = c.do("POST", "/scenarios/"+args[0], map[string]any{"connection_id": *conn})
+	case "customer":
+		out, err = cmdCustomer(c, args)
+	case "account":
+		out, err = cmdAccount(c, args)
+	case "customers", "accounts", "statement":
+		out, err = cmdList(c, cmd, args)
+	case "deposit", "withdraw":
+		out, err = cmdCash(c, cmd, args)
+	case "faults":
+		out, err = c.do("GET", "/faults", nil)
+	case "fault":
+		out, err = cmdFault(c, args)
 	case "transfer":
-		fs := flag.NewFlagSet("transfer", flag.ExitOnError)
-		from := fs.String("from", "", "account number, bank:number or acc_ ID to pay from")
-		to := fs.String("to", "", "account number, bank:number or acc_ ID to pay to")
-		amount := fs.String("amount", "", "amount in naira, such as 25000 or 2500.50")
-		toBank := fs.String("to-bank", "", "bank of an outside account (Bank A, Bank B, Bank C, Bank D Microfinance)")
-		toName := fs.String("to-name", "", "name of an outside beneficiary")
-		narration := fs.String("narration", "", "narration for the debit")
-		sessionID := fs.String("session-id", "", "30-digit NIP session ID; sending the same one again returns the first answer")
-		fs.Parse(args)
-		if *from == "" || *to == "" || *amount == "" {
-			return errors.New("usage: beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA")
-		}
-		out, err = c.do("POST", "/transfers", map[string]string{"from": *from, "to": *to, "amount": *amount, "to_bank": *toBank, "to_name": *toName, "narration": *narration, "session_id": *sessionID})
+		out, err = cmdTransfer(c, args)
 	case "nip":
 		switch {
 		case len(args) == 3 && args[0] == "name-enquiry":
 			out, err = c.do("GET", "/nip/name-enquiry?bank_code="+url.QueryEscape(args[1])+"&account_number="+url.QueryEscape(args[2]), nil)
 		case len(args) == 2 && args[0] == "status":
-			out, err = c.do("GET", "/nip/transfers/"+url.PathEscape(args[1]), nil)
-		case len(args) == 1 && (args[0] == "participants" || args[0] == "positions"):
+			out, err = c.do("GET", "/nip/sessions/"+url.PathEscape(args[1]), nil)
+		case len(args) == 1 && (args[0] == "participants" || args[0] == "positions" || args[0] == "settlement"):
 			out, err = c.do("GET", "/nip/"+args[0], nil)
+		case len(args) == 1 && args[0] == "settle-now":
+			out, err = c.do("POST", "/nip/settle-now", nil)
 		default:
-			return errors.New("usage: beerus nip [name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions]")
+			return errors.New("usage: beerus nip [name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions | settlement | settle-now]")
 		}
 	case "connections":
 		out, err = c.do("GET", "/connections", nil)
@@ -509,7 +508,7 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		dry := fs.Bool("dry-run", false, "show what closing the bank would affect, without closing it")
 		money := fs.String("money", "transfer", "what happens to customers' money: transfer, payout or leave")
 		to := fs.String("to", "", "bank that receives transferred or paid-out money")
-		each := fs.String("customers", "", "choices for single customers, such as adaeze=payout,tunde=leave")
+		each := fs.String("customers", "", "choices for single customers, such as cus_1=payout,cus_2=leave")
 		yes := fs.Bool("yes", false, "close the bank; this cannot be undone")
 		fs.Parse(args[2:])
 		if *dry || !*yes {
@@ -526,7 +525,7 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 			}
 			k, v, ok := strings.Cut(kv, "=")
 			if !ok {
-				return nil, errors.New("--customers takes persona=choice pairs, such as adaeze=payout")
+				return nil, errors.New("--customers takes customer=choice pairs, such as cus_1=payout")
 			}
 			customers[strings.TrimSpace(k)] = strings.TrimSpace(v)
 		}
@@ -543,17 +542,8 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 			return out, err
 		}
 		return c.do("POST", "/banks/"+args[1]+"/purge", nil)
-	case args[0] == "open-account" && len(args) >= 2:
-		fs := flag.NewFlagSet("bank open-account", flag.ExitOnError)
-		persona := fs.String("persona", "", "persona who opens the account")
-		typ := fs.String("type", "current", "current or savings")
-		fs.Parse(args[2:])
-		if *persona == "" {
-			return nil, errors.New("usage: beerus bank open-account <id> --persona ID [--type current|savings]")
-		}
-		return c.do("POST", "/banks/"+args[1]+"/accounts", map[string]string{"persona": *persona, "type": *typ})
 	}
-	return nil, errors.New("usage: beerus bank [list [--state STATE] | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID | close <id> --to BANK [--money transfer|payout|leave] --yes | purge <id> --yes]")
+	return nil, errors.New("usage: beerus bank [list [--state STATE] | create --name NAME | suspend <id> | resume <id> | close <id> --to BANK [--money transfer|payout|leave] --yes | purge <id> --yes]")
 }
 
 func waitBank(c *ctl, id string) (map[string]any, error) {

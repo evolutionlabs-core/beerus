@@ -61,7 +61,6 @@ type Bank struct {
 	HistoryDays    int     `yaml:"history_days"`
 	Port           int     `yaml:"port"`
 	APIPort        int     `yaml:"api_port,omitempty"`
-	StableIDs      *bool   `yaml:"stable_ids,omitempty"`
 	Database       string  `yaml:"database"`
 	SettlesThrough string  `yaml:"settles_through,omitempty"`
 	State          string  `yaml:"state,omitempty"`
@@ -83,10 +82,6 @@ func (b *Bank) CapIsDefault() bool {
 
 func (b *Bank) Suspended() bool {
 	return b.State == "suspended"
-}
-
-func (b *Bank) Stable() bool {
-	return b.StableIDs == nil || *b.StableIDs
 }
 
 func (b *Bank) Closed() bool {
@@ -122,18 +117,18 @@ type Holidays struct {
 }
 
 type Config struct {
-	DatabaseURL string     `yaml:"database_url"`
-	Banks       []*Bank    `yaml:"banks,omitempty"`
-	NIPSessions int        `yaml:"nip_sessions,omitempty"`
-	Ports       Ports      `yaml:"ports,omitempty"`
-	Seed        int64      `yaml:"seed"`
-	Genesis     string     `yaml:"genesis"`
-	Pace        float64    `yaml:"pace"`
-	Connect     Connect    `yaml:"connect"`
-	Partners    []*Partner `yaml:"partners"`
-	Holidays    *Holidays  `yaml:"holidays,omitempty"`
-	Dir         string     `yaml:"-"`
-	Start       time.Time  `yaml:"-"`
+	DatabaseURL string        `yaml:"database_url"`
+	Banks       []*Bank       `yaml:"banks,omitempty"`
+	NIPSessions int           `yaml:"nip_sessions,omitempty"`
+	TSQAfter    time.Duration `yaml:"-"`
+	TSQAttempts int           `yaml:"-"`
+	Ports       Ports         `yaml:"ports,omitempty"`
+	Pace        float64       `yaml:"pace"`
+	Connect     Connect       `yaml:"connect"`
+	Partners    []*Partner    `yaml:"partners"`
+	Holidays    *Holidays     `yaml:"holidays,omitempty"`
+	Dir         string        `yaml:"-"`
+	Start       time.Time     `yaml:"-"`
 	calendar    *clock.Calendar
 }
 
@@ -190,10 +185,6 @@ func (c *Config) validateSessions() error {
 
 func (c *Config) Path(parts ...string) string {
 	return filepath.Join(append([]string{c.Dir}, parts...)...)
-}
-
-func (c *Config) GenesisDate() (clock.Date, error) {
-	return clock.ParseDate(c.Genesis)
 }
 
 func (c *Config) SyncInterval() time.Duration {
@@ -265,8 +256,8 @@ func HashKey(key string) string {
 }
 
 func (c *Config) Finish() error {
-	if _, err := c.GenesisDate(); err != nil {
-		return fmt.Errorf("genesis: %w", err)
+	if c.TSQAfter <= 0 || c.TSQAttempts <= 0 {
+		return fmt.Errorf("nip status queries need a wait and a number of tries, not %s and %d", c.TSQAfter, c.TSQAttempts)
 	}
 	if err := c.validateSessions(); err != nil {
 		return err

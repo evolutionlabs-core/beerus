@@ -2,6 +2,7 @@ package bank
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -57,7 +58,6 @@ func (b *Bank) Setup(ctx context.Context) error {
 		{Code: VATPayable, Name: "VAT payable", Kind: ledger.Liability},
 		{Code: StampPayable, Name: "Stamp duty payable", Kind: ledger.Liability},
 		{Code: Suspense, Name: "Settlement suspense", Kind: ledger.Asset},
-		{Code: TransferClearing, Name: "Internal transfer clearing", Kind: ledger.Liability},
 	} {
 		if _, err := b.L.OpenAccount(ctx, a); err != nil {
 			return err
@@ -79,6 +79,11 @@ func cr(account string, amount int64, narration string) ledger.Line {
 	return ledger.Line{Account: account, Amount: -amount, Narration: narration}
 }
 
+func via(l ledger.Line, channel string, cp *Counterparty) ledger.Line {
+	l.Channel, l.Counterparty = channel, cp
+	return l
+}
+
 const (
 	GenesisSettlement int64 = 1_000_000_000_000
 	GenesisVault      int64 = 200_000_000_000
@@ -90,10 +95,6 @@ func (b *Bank) Genesis(ctx context.Context, settlement, vault int64, at time.Tim
 		dr(Vault, vault, "Genesis vault cash"),
 		cr(Capital, settlement+vault, "Share capital")))
 	return err
-}
-
-func (b *Bank) OpenCustomer(ctx context.Context, nuban, name, product, owner string, tier int) (ledger.Account, error) {
-	return b.L.OpenAccount(ctx, ledger.Account{Code: CustomerAccount(nuban), Name: name, Kind: ledger.Liability, Customer: true, NUBAN: nuban, Product: product, Owner: owner, KYCTier: tier})
 }
 
 func clientKey(op, key string) string {
@@ -113,7 +114,7 @@ func (b *Bank) CashDeposit(ctx context.Context, key, nuban string, amount int64,
 	}
 	return b.L.Post(ctx, entry(clientKey("cash_deposit", key), "cash_deposit", at, "CASH DEPOSIT",
 		dr(Vault, amount, "Cash deposit"),
-		cr(CustomerAccount(nuban), amount, "CASH DEPOSIT")))
+		via(cr(CustomerAccount(nuban), amount, "CASH DEPOSIT"), "branch", nil)))
 }
 
 func (b *Bank) CashWithdrawal(ctx context.Context, key, nuban string, amount int64, at time.Time) (ledger.Posted, error) {
@@ -121,13 +122,13 @@ func (b *Bank) CashWithdrawal(ctx context.Context, key, nuban string, amount int
 		return ledger.Posted{}, err
 	}
 	e := entry(clientKey("cash_withdrawal", key), "cash_withdrawal", at, "CASH WITHDRAWAL",
-		dr(CustomerAccount(nuban), amount, "CASH WITHDRAWAL"),
+		via(dr(CustomerAccount(nuban), amount, "CASH WITHDRAWAL"), "branch", nil),
 		cr(Vault, amount, "Cash withdrawal"))
 	e.LimitedAmount = amount
 	return b.L.Post(ctx, e)
 }
 
-func (b *Bank) OwnTransfer(ctx context.Context, key, from, to string, amount int64, at time.Time) (ledger.Posted, error) {
+func (b *Bank) OwnTransfer(ctx context.Context, key, from, to string, amount int64, narration string, at time.Time) (ledger.Posted, error) {
 	if err := positive(amount); err != nil {
 		return ledger.Posted{}, err
 	}
@@ -142,25 +143,33 @@ func (b *Bank) OwnTransfer(ctx context.Context, key, from, to string, amount int
 	if err != nil {
 		return ledger.Posted{}, err
 	}
-	if fa.Owner == "" || fa.Owner != ta.Owner {
-		return ledger.Posted{}, fmt.Errorf("%w: own-account transfers need the same owner", ledger.ErrInvalid)
-	}
-	e := entry(clientKey("own_transfer", key), "transfer", at, "OWN ACCOUNT TRANSFER",
-		dr(CustomerAccount(from), amount, "TRF TO "+to),
-		cr(CustomerAccount(to), amount, "TRF FRM "+from))
+	e := entry(clientKey("own_transfer", key), "transfer", at, "TRANSFER",
+		via(dr(CustomerAccount(from), amount, withNarration("TRF TO "+ta.Name+"/"+to, narration)), "internal", b.party(ta)),
+		via(cr(CustomerAccount(to), amount, withNarration("TRF FRM "+fa.Name+"/"+from, narration)), "internal", b.party(fa)))
 	e.LimitedAmount = amount
 	return b.L.Post(ctx, e)
 }
 
+func (b *Bank) party(a ledger.Account) *Counterparty {
+	return &Counterparty{Name: a.Name, AccountNumber: a.NUBAN, BankCode: b.P.NIPCode, BankName: b.P.Name}
+}
+
+func withNarration(base, narration string) string {
+	if narration == "" {
+		return base
+	}
+	return base + "/" + narration
+}
+
 type NIPSend struct {
-	Key         string
-	From        string
-	Amount      int64
-	SessionID   string
-	Beneficiary string
-	BankName    string
-	At          time.Time
-	NoCharges   bool
+	Key       string
+	From      string
+	Amount    int64
+	SessionID string
+	To        Counterparty
+	At        time.Time
+	NoCharges bool
+	Narration string
 }
 
 func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.Transfer, error) {
@@ -175,26 +184,62 @@ func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.T
 		c = charges.ForTransfer(s.Amount, clock.DateOf(s.At), false)
 	}
 	short := s.SessionID[18:]
-	narr := fmt.Sprintf("NIP TRF TO %s/%s/%s", s.Beneficiary, s.BankName, short)
+	to := s.To
+	narr := withNarration(fmt.Sprintf("NIP TRF TO %s/%s/%s", to.Name, to.BankName, short), s.Narration)
 	cust := CustomerAccount(s.From)
 	lines := []ledger.Line{
-		dr(cust, s.Amount, narr),
+		via(dr(cust, s.Amount, narr), "nip", &to),
 		cr(NIPOutward, s.Amount, narr),
 	}
 	if c.Fee > 0 {
-		lines = append(lines, dr(cust, c.Fee, "NIP CHARGE "+short), cr(FeeIncome, c.Fee, "NIP CHARGE "+short))
+		lines = append(lines, via(dr(cust, c.Fee, "NIP CHARGE "+short), "charge", nil), cr(FeeIncome, c.Fee, "NIP CHARGE "+short))
 	}
 	if c.VAT > 0 {
-		lines = append(lines, dr(cust, c.VAT, "VAT ON NIP CHARGE "+short), cr(VATPayable, c.VAT, "VAT ON NIP CHARGE "+short))
+		lines = append(lines, via(dr(cust, c.VAT, "VAT ON NIP CHARGE "+short), "charge", nil), cr(VATPayable, c.VAT, "VAT ON NIP CHARGE "+short))
 	}
 	if c.StampDuty > 0 {
-		lines = append(lines, dr(cust, c.StampDuty, "STAMP DUTY "+short), cr(StampPayable, c.StampDuty, "STAMP DUTY "+short))
+		lines = append(lines, via(dr(cust, c.StampDuty, "STAMP DUTY "+short), "charge", nil), cr(StampPayable, c.StampDuty, "STAMP DUTY "+short))
 	}
 	e := entry(clientKey("send_nip", s.Key), "transfer", s.At, narr, lines...)
 	e.SessionID = s.SessionID
 	e.LimitedAmount = s.Amount
 	p, err := b.L.Post(ctx, e)
 	return p, c, err
+}
+
+type PriorSend struct {
+	SessionID string
+	At        time.Time
+	To        Counterparty
+}
+
+func (b *Bank) PriorNIPSend(ctx context.Context, key string) (PriorSend, bool, error) {
+	var p PriorSend
+	var cp []byte
+	err := b.L.Pool().QueryRow(ctx, `SELECT je.session_id, je.posted_at, jl.counterparty FROM journal_entries je JOIN journal_lines jl ON jl.entry_id = je.id AND jl.line_no = 1
+		WHERE je.idempotency_key = $1 AND je.session_id IS NOT NULL`, clientKey("send_nip", key)).Scan(&p.SessionID, &p.At, &cp)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PriorSend{}, false, nil
+	}
+	if err != nil {
+		return PriorSend{}, false, fmt.Errorf("find NIP send for key %s: %w", key, err)
+	}
+	if err := json.Unmarshal(cp, &p.To); err != nil {
+		return PriorSend{}, false, fmt.Errorf("read counterparty of NIP send for key %s: %w", key, err)
+	}
+	return p, true, nil
+}
+
+func (b *Bank) SentNIP(ctx context.Context, sessionID string) (int64, error) {
+	var id int64
+	err := b.L.Pool().QueryRow(ctx, `SELECT id FROM journal_entries WHERE session_id = $1 AND idempotency_key LIKE $2 || '%' ORDER BY id LIMIT 1`, sessionID, clientKey("send_nip", "")).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("%w: no NIP send for session %s", ledger.ErrInvalid, sessionID)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("find NIP send %s: %w", sessionID, err)
+	}
+	return id, nil
 }
 
 func (b *Bank) ReverseNIP(ctx context.Context, entryID int64, sessionID string, at time.Time) (ledger.Posted, error) {
@@ -217,17 +262,17 @@ func (b *Bank) ReverseNIP(ctx context.Context, entryID int64, sessionID string, 
 	return p, nil
 }
 
-func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int64, sender, senderBank string, closure bool, at time.Time) (ledger.Posted, error) {
+func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int64, from Counterparty, narration string, closure bool, at time.Time) (ledger.Posted, error) {
 	if err := positive(amount); err != nil {
 		return ledger.Posted{}, err
 	}
 	if len(sessionID) != 30 {
 		return ledger.Posted{}, fmt.Errorf("%w: session ID must be 30 digits", ledger.ErrInvalid)
 	}
-	narr := fmt.Sprintf("NIP TRF FRM %s/%s/%s", sender, senderBank, sessionID[18:])
-	lines := []ledger.Line{dr(NIPInward, amount, narr), cr(CustomerAccount(to), amount, narr)}
+	narr := withNarration(fmt.Sprintf("NIP TRF FRM %s/%s/%s", from.Name, from.BankName, sessionID[18:]), narration)
+	lines := []ledger.Line{dr(NIPInward, amount, narr), via(cr(CustomerAccount(to), amount, narr), "nip", &from)}
 	if levy := charges.EMTL(amount, clock.DateOf(at)); levy > 0 && !closure {
-		lines = append(lines, dr(CustomerAccount(to), levy, "EMTL "+sessionID[18:]), cr(StampPayable, levy, "EMTL "+sessionID[18:]))
+		lines = append(lines, via(dr(CustomerAccount(to), levy, "EMTL "+sessionID[18:]), "charge", nil), cr(StampPayable, levy, "EMTL "+sessionID[18:]))
 	}
 	e := entry("nip-in:"+sessionID, "nip_inward", at, narr, lines...)
 	e.SessionID = sessionID
@@ -247,6 +292,29 @@ func (b *Bank) Settle(ctx context.Context, sessionKey string, outward, inward in
 		return ledger.Posted{}, nil
 	}
 	return b.L.Post(ctx, entry("settle:"+sessionKey, "settlement", at, "NIP settlement "+sessionKey, lines...))
+}
+
+func (b *Bank) Settlements(ctx context.Context) (map[string]int64, error) {
+	rows, err := b.L.Pool().Query(ctx, `SELECT substr(e.idempotency_key, length('settle:') + 1), coalesce(sum(jl.amount) FILTER (WHERE a.code = $1), 0)::bigint
+		FROM journal_entries e JOIN journal_lines jl ON jl.entry_id = e.id JOIN gl_accounts a ON a.id = jl.account_id
+		WHERE e.kind = 'settlement' GROUP BY 1`, Settlement)
+	if err != nil {
+		return nil, fmt.Errorf("read settlements: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var key string
+		var net int64
+		if err := rows.Scan(&key, &net); err != nil {
+			return nil, fmt.Errorf("read settlements: %w", err)
+		}
+		out[key] = net
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read settlements: %w", err)
+	}
+	return out, nil
 }
 
 func (b *Bank) RemitTaxes(ctx context.Context, key string, at time.Time) (ledger.Posted, error) {

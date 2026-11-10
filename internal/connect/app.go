@@ -22,14 +22,13 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 type App struct {
+	gate         sync.RWMutex
 	mu           sync.Mutex
 	cfg          *config.Config
 	clock        *clock.Clock
-	world        *world.World
 	st           *State
 	ctl          *ctlStore
 	setupKey     uint64
@@ -39,6 +38,7 @@ type App struct {
 	isDirty      atomic.Bool
 	limiters     map[string]*rate.Limiter
 	idemLock     sync.Map
+	sendLocks    sync.Map
 	client       *http.Client
 	wake         chan struct{}
 	statePath    string
@@ -54,10 +54,9 @@ type App struct {
 	nibssTried   time.Time
 	nibssOpening bool
 	members      []nip.Participant
+	peerBanks    []*config.Bank
 	settling     bool
 	settleDone   *sync.Cond
-	worldOnly    bool
-	personas     []string
 	lifeMu       sync.Mutex
 	recMu        sync.Mutex
 	stepMu       sync.Mutex
@@ -79,7 +78,6 @@ type App struct {
 	role         string
 	bankID       string
 	coreURL      string
-	worldSum     string
 	replicated   bool
 	synced       atomic.Bool
 	paused       atomic.Bool
@@ -95,29 +93,22 @@ type App struct {
 	eventHTTP    map[string]*http.Client
 	bankWrap     func(http.RoundTripper) http.RoundTripper
 	obKey        *ecdsa.PrivateKey
-	metas        map[string]bankMeta
 	eventJTI     jtiSet
 }
 
 type Options struct {
-	Real      func() time.Time
-	Logger    *slog.Logger
-	Client    *http.Client
-	WorldOnly bool
-	Role      string
-	BankID    string
-	CoreURL   string
-	BankWrap  func(http.RoundTripper) http.RoundTripper
-	Personas  []string
+	Real     func() time.Time
+	Logger   *slog.Logger
+	Client   *http.Client
+	Role     string
+	BankID   string
+	CoreURL  string
+	BankWrap func(http.RoundTripper) http.RoundTripper
 }
 
 func New(cfg *config.Config, o Options) (*App, error) {
 	if o.Role == RoleBank {
 		return newBankRole(cfg, o)
-	}
-	genesis, err := cfg.GenesisDate()
-	if err != nil {
-		return nil, err
 	}
 	key, err := config.WebhookKey(cfg)
 	if err != nil {
@@ -157,19 +148,12 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stub state: %w", err)
 	}
-	fresh := st == nil
-	if fresh {
+	if st == nil {
 		st = newState()
 		st.Clock = clock.State{Pace: cfg.Pace, AnchorBusiness: cfg.Start}
 	} else if _, err := os.Stat(a.runningPath()); err == nil {
-		a.log.Warn("the last run did not shut down cleanly; starting a new world so partners resync", "old_world", st.WorldID)
+		a.log.Warn("the last run did not shut down cleanly; starting a new run so partners resync", "old_run", st.WorldID)
 		st.WorldID = newID("wld")
-	}
-	if st.Calendar != clock.CalendarVersion() {
-		if !fresh {
-			a.log.Warn("the holiday calendar changed since this setup last ran; past transaction history is regenerated with the new holiday dates", "from", st.Calendar, "to", clock.CalendarVersion())
-		}
-		st.Calendar = clock.CalendarVersion()
 	}
 	for _, d := range st.Deliveries {
 		if d.Status == "sending" {
@@ -178,9 +162,6 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New(st.Clock, o.Real)
-	a.personas = o.Personas
-	a.world = world.New(a.worldConfig(genesis), st.World)
-	a.worldOnly = o.WorldOnly
 	if err := a.prepareOpenBanking(); err != nil {
 		return nil, err
 	}
@@ -188,13 +169,10 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		return nil, err
 	}
 	for _, b := range cfg.Banks {
-		if a.worldOnly {
-			break
-		}
 		if err := a.claimBank(b); err != nil {
 			return nil, err
 		}
-		ls, err := openLedgerSource(context.Background(), cfg, a.ctl, b, a.world)
+		ls, err := openLedgerSource(context.Background(), cfg, a.ctl, b)
 		if err != nil {
 			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
 			continue
@@ -204,9 +182,6 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	a.nibssStore()
 	unregistered := map[string]bool{}
 	for _, b := range cfg.Banks {
-		if a.worldOnly {
-			break
-		}
 		if err := a.registerMember(b); err != nil {
 			a.log.Error("bank not in the NIBSS directory; retrying in the background", "bank", b.ID, "err", err)
 			unregistered[b.ID] = true
@@ -215,31 +190,14 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	for _, l := range a.ledgers {
 		a.attachMember(l)
 	}
-	for _, l := range a.ledgers {
-		if err := l.Sync(a.clock.Now()); err != nil {
-			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
-		}
-	}
 	if err := a.ensureRTGS(); err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
-	if err := a.settleLocked(a.clock.Now()); err != nil {
-		a.log.Error("NIP settlement", "err", err)
-	}
-	a.mu.Unlock()
+	a.settleDue()
 	for _, b := range a.initLifecycle(unregistered) {
 		a.provision(b)
 	}
 	return a, nil
-}
-
-func (a *App) worldConfig(genesis clock.Date) world.Config {
-	wc := world.Config{Seed: a.cfg.Seed, Genesis: genesis, Calendar: a.cfg.Calendar(), Personas: a.personas}
-	for _, b := range a.cfg.Banks {
-		wc.Institutions = append(wc.Institutions, world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: b.Stable(), Style: b.Style()})
-	}
-	return wc
 }
 
 func (a *App) addLedger(ls *ledgerSource) {
@@ -283,10 +241,6 @@ func (a *App) Clock() *clock.Clock {
 	return a.clock
 }
 
-func (a *App) World() *world.World {
-	return a.world
-}
-
 func (a *App) Config() *config.Config {
 	return a.cfg
 }
@@ -310,7 +264,6 @@ func (a *App) Save() error {
 
 func (a *App) saveLocked() error {
 	a.st.Clock = a.clock.State()
-	a.st.World = a.world.Overrides()
 	a.isDirty.Store(false)
 	a.regMu.Lock()
 	defer a.regMu.Unlock()
@@ -364,16 +317,8 @@ func (a *App) Step() {
 	if err := a.ensureRTGS(); err != nil {
 		a.log.Error("CBN ledger", "err", err)
 	}
+	a.settleDue()
 	a.mu.Lock()
-	for _, l := range a.ledgers {
-		if err := l.Sync(a.clock.Now()); err != nil {
-			a.log.Error("bank ledger sync", "bank", l.inst.ID, "err", err)
-			a.driftDue.Store(true)
-		}
-	}
-	if err := a.settleLocked(a.clock.Now()); err != nil {
-		a.log.Error("NIP settlement", "err", err)
-	}
 	a.refreshTokens()
 	a.retryRevokes()
 	a.runConnections()
@@ -391,6 +336,16 @@ func (a *App) Step() {
 	}
 }
 
+func (a *App) settleDue() {
+	now := a.clock.Now()
+	if err := a.checkSessions(now); err != nil {
+		a.log.Error("NIP status query", "err", err)
+	}
+	if _, err := a.settle(now, false); err != nil {
+		a.log.Error("NIP settlement", "err", err)
+	}
+}
+
 func (a *App) sweep() {
 	real := a.clock.Real()
 	if real.Sub(a.swept) < time.Minute {
@@ -403,7 +358,7 @@ func (a *App) sweep() {
 			a.idemLock.Delete(k)
 		}
 	}
-	a.pruneNIPLocked(real)
+	a.pruneFaultsLocked(a.clock.Now())
 	for k, ls := range a.st.LinkSessions {
 		if real.Sub(ls.ExpiresReal) > 7*24*time.Hour {
 			delete(a.st.LinkSessions, k)
@@ -523,14 +478,6 @@ func (a *App) runConnections() {
 }
 
 func (a *App) syncConnection(c *Connection, at time.Time) bool {
-	if !a.live() && a.world.Down(c.Institution, at) {
-		if c.Status != "institution_down" {
-			c.StatusBeforeDown = c.Status
-			a.setStatus(c, "institution_down", "institution_down")
-		}
-		c.LastSyncedReal = a.clock.Real()
-		return false
-	}
 	changed := map[string]bool{}
 	for _, accID := range slices.Clone(c.AccountIDs) {
 		acct := a.st.Accounts[accID]
@@ -542,7 +489,7 @@ func (a *App) syncConnection(c *Connection, at time.Time) bool {
 			if errors.Is(err, errStale) {
 				return false
 			}
-			if a.live() && a.bankFailed(c, err) {
+			if a.bankFailed(c, err) {
 				c.LastSyncedReal = a.clock.Real()
 				return false
 			}
@@ -596,7 +543,7 @@ func (a *App) recordAccess(c *Connection, acct *AccountRec, at time.Time) {
 			break
 		}
 	}
-	a.st.Access = append(a.st.Access, AccessEvent{ConnectionID: c.ID, PartnerID: c.PartnerID, AccountID: acct.ID, WorldKey: acct.WorldKey, At: at})
+	a.st.Access = append(a.st.Access, AccessEvent{ConnectionID: c.ID, PartnerID: c.PartnerID, AccountID: acct.ID, Key: acct.Key, At: at})
 	if len(a.st.Access) > 1000 {
 		a.st.Access = a.st.Access[len(a.st.Access)-1000:]
 	}
@@ -632,9 +579,6 @@ func (a *App) runRefreshes() {
 			outcome, code = "failed", "connection_revoked"
 		case conn.Status == "expired" || conn.Status == "reauth_required":
 			outcome, code = "failed", "reauth_required"
-		case !a.live() && a.world.Down(conn.Institution, a.clock.Now()):
-			a.syncConnection(conn, a.clock.Now())
-			outcome, code = "failed", "institution_down"
 		default:
 			conn.FullDue = true
 			if !a.syncConnection(conn, a.clock.Now()) {
@@ -675,11 +619,6 @@ func (a *App) RevokeAtBank(connID string) error {
 	if !ok {
 		a.mu.Unlock()
 		return errNotFound
-	}
-	if !a.live() {
-		a.setStatus(c, "revoked", "connection_revoked")
-		a.mu.Unlock()
-		return nil
 	}
 	bank, consent := c.Institution, c.ConsentID
 	a.mu.Unlock()

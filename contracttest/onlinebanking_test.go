@@ -89,33 +89,27 @@ func TestOnlineBanking(t *testing.T) {
 		t.Fatal("accounts page does not list the current account")
 	}
 	b.get("/accounts/" + current)
-	if !strings.Contains(b.last, "NIP CHARGE") {
-		t.Fatal("statement has no fee lines")
+	if !strings.Contains(b.last, "1,250,000.00") {
+		t.Fatalf("statement does not show the opening deposit: %.600s", b.last)
 	}
-	chidi := ""
-	for _, p := range s.ctl("GET", "/personas", nil)["data"].([]any) {
-		m := p.(map[string]any)
-		if m["id"] == "chidi" {
-			chidi = fmt.Sprint(m["accounts"].([]any)[0].(map[string]any)["nuban"])
-		}
-	}
+	chidi := s.persona("chidi").Accounts[0]
 	b.get("/transfer")
-	form := url.Values{"from": {current}, "mode": {"other"}, "number": {chidi}, "bank": {"Bank B"}, "amount": {"12000"}, "narration": {"Online test"}}
+	form := url.Values{"from": {current}, "mode": {"other"}, "number": {chidi}, "bank": {"bank-b"}, "amount": {"12000"}, "narration": {"Online test"}}
 	b.post("/transfer/review", form)
 	if !strings.Contains(b.last, "Chidi Okafor") || !strings.Contains(b.last, "₦12,076.88") {
 		t.Fatalf("review page: %.600s", b.last)
 	}
 	form.Set("csrf", "")
 	b.post("/transfer/confirm", form)
-	if !strings.Contains(b.last, "Transfer successful") {
-		t.Fatalf("confirm page: %.400s", b.last)
+	if b.loc != "/accounts/"+current || !strings.Contains(b.last, "Transfer sent. Both banks have posted it.") || !strings.Contains(b.last, "NIP CHARGE") {
+		t.Fatalf("after confirm at %s: %.600s", b.loc, b.last)
 	}
 	s.syncNow()
 	id := fmt.Sprint(accountAt(t, conn, "current")["id"])
 	st, _ := s.syncAll(id, "", 500)
 	found := false
 	for _, l := range st.lines {
-		if l["description_raw"] == "Online test" && num(l["amount_minor"]) == -1200000 {
+		if strings.Contains(fmt.Sprint(l["description_raw"]), "Online test") && num(l["amount_minor"]) == -1200000 {
 			found = true
 		}
 	}
@@ -123,14 +117,18 @@ func TestOnlineBanking(t *testing.T) {
 		t.Fatal("the online banking transfer did not reach the partner feed")
 	}
 	c, err := s.app.VerifyBank()
-	if err != nil || !c.Ledger.OK() || len(c.Mismatches) > 0 {
-		t.Fatalf("bank ledger after online transfer: %v %v %v", err, c.Ledger, c.Mismatches)
+	if err != nil || !c.OK() {
+		t.Fatalf("bank ledger after online transfer: %v %v", err, c)
 	}
 	b.get("/apps")
 	if !strings.Contains(b.last, "Balance") || !strings.Contains(b.last, "via Beerus Connect") {
 		t.Fatalf("connected apps page: %.400s", b.last)
 	}
-	b.post("/apps/"+conn.ConnectionID+"/revoke", url.Values{})
+	consent := regexp.MustCompile(`/apps/([^/"]+)/revoke`).FindStringSubmatch(b.last)
+	if consent == nil {
+		t.Fatalf("no withdraw button on the connected apps page: %.400s", b.last)
+	}
+	b.post("/apps/"+consent[1]+"/revoke", url.Values{})
 	if !strings.Contains(b.last, "Access withdrawn") {
 		t.Fatalf("revoke page: %.300s", b.last)
 	}

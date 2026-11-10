@@ -16,6 +16,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
+	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
@@ -63,22 +64,6 @@ type BankStatus struct {
 type siteServer struct {
 	srv *http.Server
 	api *http.Server
-}
-
-func (a *App) alignSuspensionLocked(b *config.Bank) {
-	if b.Closed() {
-		return
-	}
-	now := a.clock.Now()
-	changed := false
-	if b.Suspended() {
-		changed = a.world.Suspend(b.ID, now)
-	} else {
-		changed = a.world.Resume(b.ID, now)
-	}
-	if changed {
-		a.dirty()
-	}
 }
 
 func (a *App) BankStatuses() []BankStatus {
@@ -172,13 +157,35 @@ func (a *App) postgresRoom(ctx context.Context) error {
 	return nil
 }
 
+func (a *App) removedBanks() ([]nibss.Institution, error) {
+	s := a.nibssStore()
+	if s == nil {
+		return nil, errors.New("the NIBSS directory is not open yet, so the codes of removed banks cannot be checked; try again soon")
+	}
+	all, err := s.Directory(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	out := []nibss.Institution{}
+	for _, in := range all {
+		if in.Status == nibss.StatusRemoved {
+			out = append(out, in)
+		}
+	}
+	return out, nil
+}
+
 func (a *App) CreateBank(req BankRequest) (*config.Bank, error) {
+	removed, err := a.removedBanks()
+	if err != nil {
+		return nil, err
+	}
 	a.lifeMu.Lock()
 	if len(a.cfg.Banks) == 0 {
 		a.lifeMu.Unlock()
 		return nil, invalid("this setup runs the built-in banks without ledgers; create a new setup with beerus init to manage banks")
 	}
-	b, err := a.admit(req, 0, "")
+	b, err := a.admit(req, 0, "", removed)
 	if err != nil {
 		a.lifeMu.Unlock()
 		return nil, err
@@ -200,7 +207,7 @@ func (a *App) CreateBank(req BankRequest) (*config.Bank, error) {
 	return b, nil
 }
 
-func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, error) {
+func (a *App) admit(req BankRequest, port int, database string, removed []nibss.Institution) (*config.Bank, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > 40 {
 		return nil, invalid("name must be 1 to 40 characters")
@@ -238,7 +245,7 @@ func (a *App) admit(req BankRequest, port int, database string) (*config.Bank, e
 			usedNUBAN[n] = true
 		}
 	}
-	for _, p := range a.world.PurgedInstitutions() {
+	for _, p := range removed {
 		if strings.EqualFold(p.Name, name) {
 			return nil, invalid("%q was the name of a purged bank, and it stays reserved", name)
 		}
@@ -370,9 +377,6 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 	if err := a.saveBanks(func() { b.State, st.Phase = prev, prevPhase }); err != nil {
 		return err
 	}
-	a.mu.Lock()
-	a.alignSuspensionLocked(b)
-	a.mu.Unlock()
 	a.poke()
 	a.lifeMu.Lock()
 	phase := st.Phase
@@ -480,47 +484,6 @@ func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool)
 	}
 	st, _ := a.bankStatus(id)
 	writeJSON(w, http.StatusOK, st)
-}
-
-func (a *App) OpenAccount(bankID, persona, typ string) (world.Account, error) {
-	if _, ok := a.world.Institution(bankID); !ok || a.world.Purged(bankID) {
-		return world.Account{}, errNotFound
-	}
-	if phase := a.bankPhase(bankID); phase == PhaseProvisioning || phase == PhaseRepairing {
-		return world.Account{}, invalid("the bank is %s; try again when it is active", phase)
-	}
-	if typ == "" {
-		typ = "current"
-	}
-	a.mu.Lock()
-	acc, err := a.world.OpenAccount(persona, bankID, typ, a.clock.Now())
-	if err == nil {
-		a.dirty()
-	}
-	a.mu.Unlock()
-	if err != nil {
-		return world.Account{}, invalid("%s", transferMessage(err))
-	}
-	a.poke()
-	return acc, nil
-}
-
-func (a *App) ctlOpenAccount(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Persona string `json:"persona"`
-		Type    string `json:"type"`
-	}
-	if err := decodeBody(r, &body); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"persona":"adaeze","type":"current"}.`)
-		return
-	}
-	acc, err := a.OpenAccount(r.PathValue("id"), body.Persona, body.Type)
-	if err != nil {
-		a.bankError(w, r, err)
-		return
-	}
-	inst, _ := a.world.Institution(acc.Institution)
-	writeJSON(w, http.StatusCreated, map[string]any{"key": acc.Key, "bank": inst.Name, "nuban": acc.NUBAN, "name": acc.Name, "type": acc.Type, "owner": acc.Owner, "opened_at": ts(acc.OpenedAt)})
 }
 
 func CheckPorts(c *config.Config) error {

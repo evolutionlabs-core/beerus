@@ -34,7 +34,7 @@ func TestHungBankDoesNotStallPartnerAPI(t *testing.T) {
 			return base.RoundTrip(r)
 		})
 	}}
-	s := startStackWith(t, false, opts)
+	s := startStackWith(t, opts)
 	t.Cleanup(func() {
 		select {
 		case <-release:

@@ -26,12 +26,12 @@ func (s *Store) EnrolBVN(ctx context.Context, name, phone string, dob clock.Date
 	if err != nil {
 		return "", err
 	}
-	p, err := normalisePhone(phone, s.phone.CallingCode, s.phone.TrunkPrefix)
+	p, err := s.NormalisePhone(phone)
 	if err != nil {
 		return "", err
 	}
 	if dob.IsZero() || clock.DateOf(dob.Start()) != dob {
-		return "", fmt.Errorf("date of birth %04d-%02d-%02d is not a real date", dob.Y, int(dob.M), dob.D)
+		return "", fmt.Errorf("%w: date of birth %04d-%02d-%02d is not a real date", ErrBadDetails, dob.Y, int(dob.M), dob.D)
 	}
 	bvn, err := s.findBVN(ctx, n, p, dob)
 	if err == nil || !errors.Is(err, pgx.ErrNoRows) {
@@ -100,10 +100,14 @@ func normaliseName(name string) (string, error) {
 	}
 	words := strings.Fields(b.String())
 	if len(words) == 0 {
-		return "", fmt.Errorf("name %q has no letters", name)
+		return "", fmt.Errorf("%w: name %q has no letters", ErrBadDetails, name)
 	}
 	sort.Strings(words)
 	return strings.Join(words, " "), nil
+}
+
+func (s *Store) NormalisePhone(phone string) (string, error) {
+	return normalisePhone(phone, s.phone.CallingCode, s.phone.TrunkPrefix)
 }
 
 func normalisePhone(phone, callingCode, trunkPrefix string) (string, error) {
@@ -115,7 +119,7 @@ func normalisePhone(phone, callingCode, trunkPrefix string) (string, error) {
 		case r == '+' && i == 0:
 		case r == ' ' || r == '-' || r == '(' || r == ')':
 		default:
-			return "", fmt.Errorf("phone %q may hold only digits, spaces, dashes, brackets and a leading +", phone)
+			return "", fmt.Errorf("%w: phone %q may hold only digits, spaces, dashes, brackets and a leading +", ErrBadDetails, phone)
 		}
 	}
 	d := b.String()
@@ -128,5 +132,5 @@ func normalisePhone(phone, callingCode, trunkPrefix string) (string, error) {
 	case !intl && strings.HasPrefix(d, callingCode) && len(d) > len(callingCode):
 		return d, nil
 	}
-	return "", fmt.Errorf("phone %q must start with +%s or %s", phone, callingCode, trunkPrefix)
+	return "", fmt.Errorf("%w: phone %q must start with +%s or %s", ErrBadDetails, phone, callingCode, trunkPrefix)
 }

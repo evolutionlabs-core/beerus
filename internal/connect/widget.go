@@ -3,6 +3,7 @@ package connect
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -10,32 +11,27 @@ import (
 	"slices"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
-	widgetCookie   = "beerus_link"
-	customerCookie = "beerus_customer"
-	otpLife        = 5 * time.Minute
-	maxAttempts    = 5
+	widgetCookie     = "beerus_link"
+	customerCookie   = "beerus_customer"
+	otpLife          = 5 * time.Minute
+	maxAttempts      = 5
+	bankLockout      = 15 * time.Minute
+	maxTrackedLogins = 10000
 )
 
 type page map[string]any
 
-func (a *App) render(w http.ResponseWriter, name string, status int, inst *world.Institution, data page) {
+func (a *App) render(w http.ResponseWriter, name string, status int, data page) {
 	data["ConnectBrand"] = a.cfg.Connect.BrandName
 	data["ConnectName"] = a.cfg.Connect.BrandName
-	if inst != nil {
-		data["Brand"] = inst.Name
-		data["BankClass"] = inst.ID
-		data["Mark"] = inst.Name[len(inst.Name)-1:]
-		data["Ctx"] = "Online banking"
-	} else {
-		data["Brand"] = a.cfg.Connect.BrandName
-		data["BankClass"] = ""
-		data["Ctx"] = "Open banking"
-	}
+	data["Brand"] = a.cfg.Connect.BrandName
+	data["BankClass"] = ""
+	data["Ctx"] = "Open banking"
 	if _, ok := data["Title"]; !ok {
 		data["Title"] = data["Brand"]
 	}
@@ -47,7 +43,7 @@ func (a *App) render(w http.ResponseWriter, name string, status int, inst *world
 }
 
 func (a *App) message(w http.ResponseWriter, status int, heading, msg string) {
-	a.render(w, "message", status, nil, page{"Heading": heading, "Message": msg})
+	a.render(w, "message", status, page{"Heading": heading, "Message": msg})
 }
 
 func (a *App) WidgetHandler() http.Handler {
@@ -59,12 +55,6 @@ func (a *App) WidgetHandler() http.Handler {
 	mux.HandleFunc("POST /link/cancel", a.widgetCancel)
 	mux.HandleFunc("GET /bank/callback", a.bankCallback)
 	mux.HandleFunc("POST /consent-events", a.consentEvents)
-	mux.HandleFunc("GET /bank/login", a.bankLoginPage)
-	mux.HandleFunc("POST /bank/login", a.bankLogin)
-	mux.HandleFunc("GET /bank/otp", a.bankOTPPage)
-	mux.HandleFunc("POST /bank/otp", a.bankOTP)
-	mux.HandleFunc("GET /bank/consent", a.bankConsentPage)
-	mux.HandleFunc("POST /bank/consent", a.bankConsent)
 	mux.HandleFunc("GET /customer", a.customerPage)
 	mux.HandleFunc("POST /customer/login", a.customerLogin)
 	mux.HandleFunc("POST /customer/revoke", a.customerRevoke)
@@ -203,17 +193,13 @@ func (a *App) widgetStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ls.Institution != "" {
-		if a.live() {
-			a.beginBankAuth(w, r, ls)
-			return
-		}
-		http.Redirect(w, r, "/bank/login", http.StatusSeeOther)
+		a.beginBankAuth(w, r, ls)
 		return
 	}
 	d := a.base(ls, ws)
 	d["Institutions"] = a.openInstitutions()
 	d["Title"] = "Connect your bank"
-	a.render(w, "choose", http.StatusOK, nil, d)
+	a.render(w, "choose", http.StatusOK, d)
 }
 
 func (a *App) widgetInstitution(w http.ResponseWriter, r *http.Request) {
@@ -225,7 +211,7 @@ func (a *App) widgetInstitution(w http.ResponseWriter, r *http.Request) {
 	}
 	if ls.Institution == "" {
 		id := r.PostForm.Get("institution")
-		if _, ok := a.world.Institution(id); !ok || a.world.Closed(id, a.clock.Now()) {
+		if b := a.cfg.Bank(id); b == nil || b.Closed() {
 			a.message(w, http.StatusBadRequest, "Unknown bank", "Go back and choose a bank from the list.")
 			return
 		}
@@ -233,11 +219,7 @@ func (a *App) widgetInstitution(w http.ResponseWriter, r *http.Request) {
 		ls.Status = "bank_chosen"
 		a.dirty()
 	}
-	if a.live() {
-		a.beginBankAuth(w, r, ls)
-		return
-	}
-	http.Redirect(w, r, "/bank/login", http.StatusSeeOther)
+	a.beginBankAuth(w, r, ls)
 }
 
 func (a *App) widgetCancel(w http.ResponseWriter, r *http.Request) {
@@ -250,231 +232,12 @@ func (a *App) widgetCancel(w http.ResponseWriter, r *http.Request) {
 	a.failSession(w, r, ls, "access_denied")
 }
 
-func (a *App) atBank(w http.ResponseWriter, r *http.Request) (*WidgetSession, *LinkSession, *world.Institution) {
-	ws, ls := a.session(w, r)
-	if ls == nil {
-		return nil, nil, nil
-	}
-	if a.live() {
-		a.message(w, http.StatusNotFound, "Not found", "Sign in at your bank instead. Go back and choose the bank again.")
-		return nil, nil, nil
-	}
-	inst, ok := a.world.Institution(ls.Institution)
-	if !ok {
-		http.Redirect(w, r, "/link/start", http.StatusSeeOther)
-		return nil, nil, nil
-	}
-	if a.world.Down(inst.ID, a.clock.Now()) {
-		a.failSession(w, r, ls, "institution_down")
-		return nil, nil, nil
-	}
-	if ls.Status == "created" || ls.Status == "bank_chosen" {
-		ls.Status = "at_bank"
-		a.dirty()
-	}
-	return ws, ls, &inst
-}
-
-func (a *App) bankLoginPage(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	ws, ls, inst := a.atBank(w, r)
-	if ls == nil {
-		return
-	}
-	d := a.base(ls, ws)
-	a.render(w, "login", http.StatusOK, inst, d)
-}
-
 func otp() string {
 	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	if err != nil {
 		panic(err)
 	}
 	return fmt.Sprintf("%06d", n.Int64())
-}
-
-func (a *App) bankLogin(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	ws, ls, inst := a.atBank(w, r)
-	if ls == nil {
-		return
-	}
-	d := a.base(ls, ws)
-	p, ok := a.world.PersonaByUsername(r.PostForm.Get("username"))
-	good := ok && subtle.ConstantTimeCompare([]byte(p.Password), []byte(r.PostForm.Get("password"))) == 1
-	if good && len(a.world.AccountsAt(p.ID, inst.ID)) == 0 {
-		d["Error"] = p.Name + " has no accounts at " + inst.Name + ". Go back and choose the bank that holds the account."
-		a.render(w, "login", http.StatusUnprocessableEntity, inst, d)
-		return
-	}
-	if good && ls.ConnectionID != "" {
-		if c := a.st.Connections[ls.ConnectionID]; c == nil || c.Status == "revoked" {
-			a.failSession(w, r, ls, "access_denied")
-			return
-		} else if c.PersonaID != p.ID {
-			good = false
-		}
-	}
-	if !good {
-		ls.LoginAttempts++
-		a.dirty()
-		if ls.LoginAttempts >= maxAttempts {
-			a.failSession(w, r, ls, "access_denied")
-			return
-		}
-		d["Error"] = "The username or password is wrong."
-		a.render(w, "login", http.StatusUnauthorized, inst, d)
-		return
-	}
-	ls.PersonaID = p.ID
-	ls.OTP = otp()
-	ls.OTPExpires = a.clock.Real().Add(otpLife)
-	ls.OTPAttempts = 0
-	a.dirty()
-	http.Redirect(w, r, "/bank/otp", http.StatusSeeOther)
-}
-
-func (a *App) bankOTPPage(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	ws, ls, inst := a.atBank(w, r)
-	if ls == nil {
-		return
-	}
-	if ls.PersonaID == "" {
-		http.Redirect(w, r, "/bank/login", http.StatusSeeOther)
-		return
-	}
-	d := a.base(ls, ws)
-	d["OTP"] = ls.OTP
-	a.render(w, "otp", http.StatusOK, inst, d)
-}
-
-func (a *App) bankOTP(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	ws, ls, inst := a.atBank(w, r)
-	if ls == nil {
-		return
-	}
-	if ls.PersonaID == "" {
-		http.Redirect(w, r, "/bank/login", http.StatusSeeOther)
-		return
-	}
-	d := a.base(ls, ws)
-	d["OTP"] = ls.OTP
-	if a.clock.Real().After(ls.OTPExpires) {
-		ls.PersonaID = ""
-		a.dirty()
-		http.Redirect(w, r, "/bank/login", http.StatusSeeOther)
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(ls.OTP), []byte(r.PostForm.Get("otp"))) != 1 {
-		ls.OTPAttempts++
-		a.dirty()
-		if ls.OTPAttempts >= maxAttempts {
-			a.failSession(w, r, ls, "access_denied")
-			return
-		}
-		d["Error"] = "That code is wrong."
-		a.render(w, "otp", http.StatusUnauthorized, inst, d)
-		return
-	}
-	ls.Verified = true
-	ls.OTP = ""
-	a.dirty()
-	http.Redirect(w, r, "/bank/consent", http.StatusSeeOther)
-}
-
-type consentAccount struct {
-	Key, Name, Type, NUBAN string
-	Checked                bool
-}
-
-func (a *App) consentData(ls *LinkSession, ws *WidgetSession) page {
-	d := a.base(ls, ws)
-	d["ConnectLegal"] = a.cfg.Connect.LegalName
-	d["RegistryID"] = a.cfg.Connect.RegistryID
-	d["CAC"] = a.cfg.Connect.CACNumber
-	d["Start"] = ls.StartDate.String()
-	if eff, cut := a.effectiveStart(ls.StartDate, ls.Institution); cut {
-		d["Effective"] = eff.String()
-	}
-	d["Until"] = a.clock.Now().AddDate(1, 0, 0).Format("2 January 2006")
-	existing := map[string]bool{}
-	if c := a.st.Connections[ls.ConnectionID]; c != nil {
-		for _, id := range c.AccountIDs {
-			if rec := a.st.Accounts[id]; rec != nil {
-				existing[rec.WorldKey] = true
-			}
-		}
-	}
-	accts := []consentAccount{}
-	for _, acc := range a.world.AccountsAt(ls.PersonaID, ls.Institution) {
-		accts = append(accts, consentAccount{Key: acc.Key, Name: acc.Name, Type: acc.Type, NUBAN: acc.NUBAN, Checked: existing[acc.Key] || len(existing) == 0})
-	}
-	d["Accounts"] = accts
-	return d
-}
-
-func (a *App) bankConsentPage(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	ws, ls, inst := a.atBank(w, r)
-	if ls == nil {
-		return
-	}
-	if !ls.Verified {
-		http.Redirect(w, r, "/bank/login", http.StatusSeeOther)
-		return
-	}
-	a.render(w, "consent", http.StatusOK, inst, a.consentData(ls, ws))
-}
-
-func (a *App) bankConsent(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	ws, ls, inst := a.atBank(w, r)
-	if ls == nil {
-		return
-	}
-	if !ls.Verified {
-		http.Redirect(w, r, "/bank/login", http.StatusSeeOther)
-		return
-	}
-	if r.PostForm.Get("action") != "approve" {
-		a.failSession(w, r, ls, "access_denied")
-		return
-	}
-	allowed := []string{}
-	for _, acc := range a.world.AccountsAt(ls.PersonaID, ls.Institution) {
-		allowed = append(allowed, acc.Key)
-	}
-	chosen := []string{}
-	for _, k := range r.PostForm["account"] {
-		if slices.Contains(allowed, k) && !slices.Contains(chosen, k) {
-			chosen = append(chosen, k)
-		}
-	}
-	if len(chosen) == 0 {
-		d := a.consentData(ls, ws)
-		d["Error"] = "Choose at least one account."
-		a.render(w, "consent", http.StatusBadRequest, inst, d)
-		return
-	}
-	slices.Sort(chosen)
-	code := newSecret("oc_", 16)
-	ls.Accounts = chosen
-	ls.Analytics = r.PostForm.Get("analytics") == "yes"
-	ls.Status = "authorised"
-	ls.CodeHash = hashSecret(code)
-	ls.CodeExpires = a.clock.Real().Add(codeLife)
-	if err := a.saveLocked(); err != nil {
-		a.log.Error("save state", "err", err)
-	}
-	a.redirectPartner(w, r, ls, url.Values{"code": {code}})
 }
 
 func (a *App) customerPage(w http.ResponseWriter, r *http.Request) {
@@ -486,26 +249,29 @@ func (a *App) customerPage(w http.ResponseWriter, r *http.Request) {
 		ws = a.st.WidgetSessions[hashSecret(ck.Value)]
 	}
 	if ws == nil || a.clock.Real().After(ws.ExpiresReal) {
-		a.render(w, "customer_login", http.StatusOK, nil, page{"Title": "Your connections"})
+		a.render(w, "customer_login", http.StatusOK, page{"Title": "Your connections", "Banks": a.openInstitutions()})
 		return
 	}
-	persona := ws.LinkSessionID
+	owner := ws.LinkSessionID
 	type row struct {
 		ID, Partner, Bank, Status, Since string
 		Active                           bool
 	}
 	rows := []row{}
 	for _, c := range a.st.Connections {
-		if c.PersonaID != persona {
+		if customerKey(c.Institution, c.CustomerID) != owner {
 			continue
 		}
-		inst, _ := a.world.Institution(c.Institution)
+		bankName := c.Institution
+		if b := a.cfg.Bank(c.Institution); b != nil {
+			bankName = b.Name
+		}
 		p := a.partnerOf(c.PartnerID)
 		name := c.PartnerID
 		if p != nil {
 			name = p.Name
 		}
-		rows = append(rows, row{ID: c.ID, Partner: name, Bank: inst.Name, Status: c.Status, Since: clock.DateOf(c.CreatedAt).String(), Active: c.Status != "revoked"})
+		rows = append(rows, row{ID: c.ID, Partner: name, Bank: bankName, Status: c.Status, Since: clock.DateOf(c.CreatedAt).String(), Active: c.Status != "revoked"})
 	}
 	slices.SortFunc(rows, func(x, y row) int {
 		if x.Since == y.Since {
@@ -516,23 +282,38 @@ func (a *App) customerPage(w http.ResponseWriter, r *http.Request) {
 		}
 		return -1
 	})
-	a.render(w, "customer", http.StatusOK, nil, page{"Title": "Your connections", "Connections": rows, "CSRF": ws.CSRF})
+	a.render(w, "customer", http.StatusOK, page{"Title": "Your connections", "Connections": rows, "CSRF": ws.CSRF})
+}
+
+func customerKey(bank, customer string) string {
+	return bank + ":" + customer
 }
 
 func (a *App) customerLogin(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	if err := r.ParseForm(); err != nil {
 		a.message(w, http.StatusBadRequest, "Request refused", "Try again.")
 		return
 	}
-	p, ok := a.world.PersonaByUsername(r.PostForm.Get("username"))
-	if !ok || subtle.ConstantTimeCompare([]byte(p.Password), []byte(r.PostForm.Get("password"))) != 1 {
-		a.render(w, "customer_login", http.StatusUnauthorized, nil, page{"Title": "Your connections", "Error": "The username or password is wrong."})
+	bankID := r.PostForm.Get("bank")
+	login := func() (bank.Customer, error) {
+		l := a.obLedger(bankID)
+		if l == nil {
+			return bank.Customer{}, bank.ErrBadLogin
+		}
+		return l.Bank().Authenticate(l.ctx, r.PostForm.Get("username"), r.PostForm.Get("password"))
+	}
+	cust, err := login()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err != nil {
+		if !errors.Is(err, bank.ErrBadLogin) {
+			a.log.Error("customer sign-in", "bank", bankID, "err", err)
+		}
+		a.render(w, "customer_login", http.StatusUnauthorized, page{"Title": "Your connections", "Banks": a.openInstitutions(), "Error": "The bank, username or password is wrong."})
 		return
 	}
 	raw := newSecret("cs_", 20)
-	ws := &WidgetSession{ID: hashSecret(raw), LinkSessionID: p.ID, CSRF: newSecret("", 16), ExpiresReal: a.clock.Real().Add(30 * time.Minute)}
+	ws := &WidgetSession{ID: hashSecret(raw), LinkSessionID: customerKey(bankID, cust.ID), CSRF: newSecret("", 16), ExpiresReal: a.clock.Real().Add(30 * time.Minute)}
 	a.st.WidgetSessions[ws.ID] = ws
 	a.dirty()
 	a.setCookie(w, customerCookie, raw, 1800)
@@ -553,11 +334,11 @@ func (a *App) customerRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := a.st.Connections[r.PostForm.Get("connection")]
-	if c == nil || c.PersonaID != ws.LinkSessionID {
+	if c == nil || customerKey(c.Institution, c.CustomerID) != ws.LinkSessionID {
 		a.message(w, http.StatusNotFound, "Not found", "That connection does not exist.")
 		return
 	}
-	if a.live() && c.Status != "revoked" {
+	if c.Status != "revoked" {
 		if err := a.revokeAtBank(c); err != nil {
 			a.message(w, http.StatusServiceUnavailable, "Bank not reachable", "The bank could not be reached to withdraw access. Try again soon.")
 			return

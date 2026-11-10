@@ -1,15 +1,6 @@
 name: bank-b-suspension
-description: Bank B is suspended for two days, then comes back. Transfers before and after show the freeze.
+description: Bank B is suspended for two days, then comes back. Transfers into Bank B fail while it is suspended.
 steps:
-  - transfer:
-      from: chidi@bank-b
-      to: tunde@bank-a
-      amount: "5000"
-      narration: Rent top-up
   - suspend: bank-b
   - advance: 2d
   - resume: bank-b
-  - transfer:
-      from: ngozi@bank-b
-      to: adaeze@bank-a
-      amount: "12500.50"

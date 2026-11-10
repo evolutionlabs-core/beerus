@@ -170,12 +170,11 @@ func (a *App) listWebhookKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) effectiveStart(start clock.Date, institution string) (clock.Date, bool) {
-	inst, _ := a.world.Institution(institution)
-	today := a.clock.Today()
-	min := today.AddDays(-inst.HistoryDays)
-	genesis := a.world.Config().Genesis.AddDays(1)
-	if genesis.After(min) {
-		min = genesis
+	min := clock.DateOf(a.cfg.Start)
+	if b := a.cfg.Bank(institution); b != nil {
+		if d := a.clock.Today().AddDays(-b.HistoryDays); d.After(min) {
+			min = d
+		}
 	}
 	if start.Before(min) {
 		return min, true
@@ -245,20 +244,18 @@ func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
 		}
 		status = http.StatusOK
 	} else {
-		c = &Connection{ID: newID("con"), PartnerID: p.ID, WorkspaceID: ls.WorkspaceID, Institution: ls.Institution, PersonaID: ls.PersonaID, StartDate: ls.StartDate, CreatedAt: a.clock.Now()}
+		c = &Connection{ID: newID("con"), PartnerID: p.ID, WorkspaceID: ls.WorkspaceID, Institution: ls.Institution, CustomerID: ls.CustomerID, StartDate: ls.StartDate, CreatedAt: a.clock.Now()}
 		a.st.Connections[c.ID] = c
 		ls.ConnectionID = c.ID
 	}
 	oldConsent := c.ConsentID
-	if a.live() {
-		if err := a.vaultMove(linkVaultPrefix+ls.ID, c.ID); err != nil {
-			a.dirty()
-			writeError(w, r, http.StatusInternalServerError, "internal_error", "The bank tokens could not be stored.")
-			return
-		}
+	if err := a.vaultMove(linkVaultPrefix+ls.ID, c.ID); err != nil {
+		a.dirty()
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "The bank tokens could not be stored.")
+		return
 	}
 	a.authorise(c, ls)
-	if b := a.cfg.Bank(c.Institution); a.live() && b != nil && oldConsent != "" && oldConsent != c.ConsentID {
+	if b := a.cfg.Bank(c.Institution); b != nil && oldConsent != "" && oldConsent != c.ConsentID {
 		a.revokeOrQueue(b, oldConsent)
 	}
 	writeJSON(w, status, a.connectionJSON(c))
@@ -270,40 +267,34 @@ func (a *App) authorise(c *Connection, ls *LinkSession) {
 	c.ConsentID = newID("cns")
 	c.AuthorisedAt = now
 	c.ExpiresAt = now.AddDate(1, 0, 0)
-	if a.live() && ls.BankConsentID != "" {
+	if ls.BankConsentID != "" {
 		c.ConsentID, c.ExpiresAt = ls.BankConsentID, ls.ConsentEnds
 		if !ls.BankFrom.IsZero() && ls.BankFrom.After(eff) {
 			eff = ls.BankFrom
 		}
 	}
-	c.PersonaID = ls.PersonaID
+	c.CustomerID = ls.CustomerID
 	old := map[string]bool{}
 	for _, id := range c.AccountIDs {
 		old[id] = true
 	}
-	inst, _ := a.world.Institution(c.Institution)
 	next := []string{}
 	var earliest *clock.Date
 	for _, key := range ls.Accounts {
-		wa, ok := a.world.Account(key)
-		if !ok {
-			continue
-		}
-		id := AccountID(c.PartnerID, inst.ID, wa.NUBAN)
+		bankID, nuban := splitKey(key)
+		id := AccountID(c.PartnerID, bankID, nuban)
 		next = append(next, id)
 		rec := a.st.Accounts[id]
 		if rec == nil {
-			rec = &AccountRec{ID: id, PartnerID: c.PartnerID, WorldKey: key, From: eff}
+			rec = &AccountRec{ID: id, PartnerID: c.PartnerID, Key: key, From: eff}
 			a.st.Accounts[id] = rec
 		} else if eff.Before(rec.From) {
 			rec.From = eff
 		}
-		if a.live() {
-			rec.NUBAN = wa.NUBAN
-			for _, ba := range ls.BankAccounts {
-				if ba.ID == wa.NUBAN {
-					rec.Name, rec.Type, rec.Currency = ba.Name, ba.Type, ba.Currency
-				}
+		rec.NUBAN = nuban
+		for _, ba := range ls.BankAccounts {
+			if ba.ID == nuban {
+				rec.Name, rec.Type, rec.Currency = ba.Name, ba.Type, ba.Currency
 			}
 		}
 		rec.Cut = rec.From != c.StartDate
@@ -353,7 +344,6 @@ func (a *App) authorise(c *Connection, ls *LinkSession) {
 }
 
 func (a *App) connectionJSON(c *Connection) map[string]any {
-	inst, _ := a.world.Institution(c.Institution)
 	var eff any
 	if c.EffectiveStart != nil {
 		eff = c.EffectiveStart.String()
@@ -365,7 +355,7 @@ func (a *App) connectionJSON(c *Connection) map[string]any {
 	return map[string]any{
 		"id":                   c.ID,
 		"status":               c.Status,
-		"institution":          map[string]string{"id": inst.ID, "name": inst.Name},
+		"institution":          a.institutionJSON(c.Institution),
 		"workspace_id":         c.WorkspaceID,
 		"start_date":           c.StartDate.String(),
 		"effective_start_date": eff,
@@ -401,19 +391,13 @@ func (a *App) deleteConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.Status != "revoked" {
-		if a.live() {
-			if err := a.revokeAtBank(c); err != nil {
-				w.Header().Set("Retry-After", "60")
-				if isDown(err) {
-					writeError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached to revoke the consent.")
-				} else {
-					writeError(w, r, http.StatusBadGateway, "bank_error", "The bank did not accept the revocation.")
-				}
-				return
-			}
-		} else if a.world.Down(c.Institution, a.clock.Now()) {
+		if err := a.revokeAtBank(c); err != nil {
 			w.Header().Set("Retry-After", "60")
-			writeError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached to revoke the consent.")
+			if isDown(err) {
+				writeError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached to revoke the consent.")
+			} else {
+				writeError(w, r, http.StatusBadGateway, "bank_error", "The bank did not accept the revocation.")
+			}
 			return
 		}
 		a.setStatus(c, "revoked", "connection_revoked")
@@ -432,12 +416,16 @@ func (a *App) revokeAtBank(c *Connection) error {
 	return nil
 }
 
-func (a *App) accountJSON(rec *AccountRec, connID string) map[string]any {
-	wa, _ := a.world.Account(rec.WorldKey)
-	if rec.NUBAN != "" && rec.Name != "" {
-		wa.NUBAN, wa.Name, wa.Type, wa.Currency = rec.NUBAN, rec.Name, rec.Type, rec.Currency
+func (a *App) institutionJSON(id string) map[string]string {
+	name := ""
+	if b := a.cfg.Bank(id); b != nil {
+		name = b.Name
 	}
-	inst, _ := a.world.Institution(wa.Institution)
+	return map[string]string{"id": id, "name": name}
+}
+
+func (a *App) accountJSON(rec *AccountRec, connID string) map[string]any {
+	bankID, _ := splitKey(rec.Key)
 	asAt := rec.AsAt
 	if asAt.IsZero() {
 		asAt = a.clock.Now()
@@ -445,14 +433,14 @@ func (a *App) accountJSON(rec *AccountRec, connID string) map[string]any {
 	return map[string]any{
 		"id":             rec.ID,
 		"connection_id":  connID,
-		"institution":    map[string]string{"id": inst.ID, "name": inst.Name},
-		"name":           wa.Name,
-		"account_number": wa.NUBAN,
-		"type":           wa.Type,
-		"currency":       wa.Currency,
+		"institution":    a.institutionJSON(bankID),
+		"name":           rec.Name,
+		"account_number": rec.NUBAN,
+		"type":           rec.Type,
+		"currency":       rec.Currency,
 		"balances": map[string]any{
-			"current":   map[string]any{"amount_minor": rec.Ledger, "currency": wa.Currency},
-			"available": map[string]any{"amount_minor": rec.Available, "currency": wa.Currency},
+			"current":   map[string]any{"amount_minor": rec.Ledger, "currency": rec.Currency},
+			"available": map[string]any{"amount_minor": rec.Available, "currency": rec.Currency},
 			"as_at":     ts(asAt),
 		},
 	}
@@ -578,21 +566,15 @@ func (a *App) getBalance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "as_of_out_of_range", "as_of must be between "+min.String()+" and "+max.String()+", the day before the first date Connect holds and the last completed business day.")
 		return
 	}
-	var bal int64
-	if a.live() {
-		bal, err = a.bankBalanceOn(conn, rec, d)
-		if err != nil && a.bankFailed(conn, err) {
-			a.connUnavailable(w, r, conn)
-			return
-		}
-	} else {
-		bal, err = a.src(rec.WorldKey).EndOfDay(rec.WorldKey, d)
+	bal, err := a.bankBalanceOn(conn, rec, d)
+	if err != nil && a.bankFailed(conn, err) {
+		a.connUnavailable(w, r, conn)
+		return
 	}
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Something went wrong.")
 		return
 	}
-	wa, _ := a.world.Account(rec.WorldKey)
 	var eff any
 	if rec.Cut {
 		eff = rec.From.String()
@@ -600,7 +582,7 @@ func (a *App) getBalance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account_id":           rec.ID,
 		"as_of":                d.String(),
-		"ledger_balance":       map[string]any{"amount_minor": bal, "currency": wa.Currency},
+		"ledger_balance":       map[string]any{"amount_minor": bal, "currency": rec.Currency},
 		"effective_start_date": eff,
 	})
 }

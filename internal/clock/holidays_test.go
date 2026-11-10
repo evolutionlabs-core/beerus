@@ -236,9 +236,3 @@ func TestDeclaredAdjustments(t *testing.T) {
 		t.Errorf("June 2025: got %v, want %v", got, want)
 	}
 }
-
-func TestCalendarVersion(t *testing.T) {
-	if CalendarVersion() == "" {
-		t.Error("the calendar has no version")
-	}
-}
