@@ -169,8 +169,10 @@ func (a *App) registerMember(b *config.Bank) error {
 	if err := s.Register(ctx, memberOf(b)); err != nil {
 		return fmt.Errorf("register %s with NIBSS: %w", b.ID, err)
 	}
-	if err := s.SetStatus(ctx, b.ID, memberStatus(b)); err != nil {
-		return fmt.Errorf("set NIBSS status of %s: %w", b.ID, err)
+	if in, err := s.Institution(ctx, b.NIPCode); err != nil || in.Status != nibss.StatusTerminating {
+		if err := s.SetStatus(ctx, b.ID, memberStatus(b)); err != nil {
+			return fmt.Errorf("set NIBSS status of %s: %w", b.ID, err)
+		}
 	}
 	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
 		r := findResource(st, setup.KindBank, b.ID)
@@ -219,10 +221,27 @@ func (a *App) removeMember(id string) error {
 	}
 	s.Attach(id, nil)
 	ctx := context.Background()
+	list, err := s.Directory(ctx)
+	if err != nil {
+		return fmt.Errorf("read the NIBSS directory: %w", err)
+	}
+	cur := ""
+	for _, in := range list {
+		if in.ID == id {
+			cur = in.Status
+		}
+	}
 	for _, status := range []string{nibss.StatusTerminating, nibss.StatusRemoved} {
+		if cur == nibss.StatusRemoved || cur == "" {
+			break
+		}
+		if cur == status {
+			continue
+		}
 		if err := s.SetStatus(ctx, id, status); err != nil {
 			return fmt.Errorf("set NIBSS status of %s to %s: %w", id, status, err)
 		}
+		cur = status
 	}
 	return a.refreshDirectory()
 }

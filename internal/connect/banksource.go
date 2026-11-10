@@ -187,10 +187,11 @@ func (s *ledgerSource) Close() {
 }
 
 func (s *ledgerSource) Drop() error {
+	name := s.st.Name()
 	if err := s.st.Drop(context.Background()); err != nil {
 		return err
 	}
-	return s.ctl.forget(setup.KindBank, s.inst.ID)
+	return s.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
 }
 
 func (a *App) VerifyBank() (ledger.Check, error) {

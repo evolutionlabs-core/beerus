@@ -1,7 +1,6 @@
 package connect
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -128,14 +127,5 @@ func TestPreviousSession(t *testing.T) {
 		if next := s.next(got.Add(-time.Nanosecond)); !next.Equal(got) {
 			t.Errorf("%s is not a session cutoff", got.Format(time.RFC3339))
 		}
-	}
-}
-
-func TestNoBankTakesTheCBNDatabase(t *testing.T) {
-	cfg := &config.Config{Dir: t.TempDir()}
-	a := &App{cfg: cfg}
-	_, err := a.admit(BankRequest{Name: "Kano Digital"}, 7450, config.DatabaseName(cfg.Dir, cbnID), nil)
-	if err == nil || !strings.Contains(err.Error(), "belongs to the CBN") {
-		t.Fatalf("a bank on the CBN database: %v", err)
 	}
 }

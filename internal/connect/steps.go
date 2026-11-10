@@ -73,10 +73,14 @@ func (a *App) initLifecycle(unready map[string]bool) []*config.Bank {
 	for _, b := range a.cfg.Banks {
 		st := newStatus(b, a.ledgerFor(b.ID) != nil)
 		a.status[b.ID] = st
+		r := findResource(&stored, setup.KindBank, b.ID)
+		if r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
+			st.Phase = r.Phase
+			continue
+		}
 		if b.Closed() {
 			continue
 		}
-		r := findResource(&stored, setup.KindBank, b.ID)
 		if !unready[b.ID] && (r == nil || (r.Phase != PhaseProvisioning && r.Phase != PhaseRepairing)) {
 			continue
 		}
@@ -112,6 +116,7 @@ func (a *App) recordPhase(id, phase string) {
 		if phase == PhaseActive || phase == PhaseSuspended {
 			changed = changed || r.ObservedGeneration != r.Generation || r.Attempts != 0 || r.NextAttemptAt != nil
 			r.ObservedGeneration, r.Attempts, r.NextAttemptAt = r.Generation, 0, nil
+			changed = clearCondition(r, setup.ConditionDegraded) || changed
 		}
 		return changed
 	})
@@ -176,6 +181,7 @@ func (a *App) reconcileBanks() {
 	for _, b := range pending {
 		a.provision(b)
 	}
+	a.reconcileChanges()
 	a.advanceFinalizers(finalizerLists)
 }
 

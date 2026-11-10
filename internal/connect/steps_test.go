@@ -66,7 +66,7 @@ func finalizerApp(t *testing.T, r setup.Resource) *App {
 }
 
 func TestOneFinalizerPerStep(t *testing.T) {
-	a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: setup.PhaseTerminating, Finalizers: []string{"one", "two", "three"}})
+	a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: setup.PhaseClosing, Finalizers: []string{"one", "two", "three"}})
 	ran := []string{}
 	run := func(name string) func(*App, setup.Resource) (*setup.Condition, error) {
 		return func(*App, setup.Resource) (*setup.Condition, error) {
@@ -85,8 +85,8 @@ func TestOneFinalizerPerStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := findResource(&st, setup.KindBank, "bank-b"); !slices.Equal(r.Done, []string{"one", "two"}) {
-		t.Fatalf("a finalizer without a run was marked done: %v", r.Done)
+	if r := findResource(&st, setup.KindBank, "bank-b"); !slices.Equal(r.Done, []string{"one", "two", "three"}) || r.Phase != setup.PhaseClosed || r.ObservedGeneration != r.Generation {
+		t.Fatalf("a finalizer without a run did not finish at once, or the close did not complete: %+v", r)
 	}
 }
 

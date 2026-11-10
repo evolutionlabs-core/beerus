@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -353,6 +354,9 @@ func runtimeBank(b setup.Bank, r setup.Resource) *config.Bank {
 		state = setup.StateClosed
 	case setup.PhaseClosing, setup.PhaseTerminating:
 		state = setup.StateSuspended
+		if slices.Contains(r.Done, setup.FinalizerDecideMoney) {
+			state = setup.StateClosed
+		}
 	}
 	if state == setup.StateActive {
 		state = ""

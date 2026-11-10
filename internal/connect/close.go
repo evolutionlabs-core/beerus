@@ -2,17 +2,18 @@ package connect
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
+	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -216,8 +217,6 @@ func (a *App) openInstitutions() []*config.Bank {
 	return out
 }
 
-var moneyChoices = map[string]bool{"transfer": true, "payout": true, "leave": true}
-
 type CloseRequest struct {
 	Money     string            `json:"money"`
 	To        string            `json:"to"`
@@ -242,87 +241,126 @@ type CloseResult struct {
 	Revoked []string   `json:"revoked_connections"`
 }
 
-func (a *App) CloseBank(id string, req CloseRequest) (CloseResult, error) {
-	a.gate.RLock()
-	defer a.gate.RUnlock()
-	a.recMu.Lock()
-	defer a.recMu.Unlock()
+func (a *App) CloseBank(id string, req CloseRequest) (setup.Resource, error) {
+	err := a.applyEdit(func(sp *setup.Spec) error {
+		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
+		if i < 0 {
+			return errNotFound
+		}
+		b := &sp.Spec.Banks[i]
+		if b.State == setup.StateClosed {
+			return invalid("%s is already closed", b.Name)
+		}
+		b.State = setup.StateClosed
+		if req.Money != "" || req.To != "" || len(req.Customers) > 0 {
+			b.OnRemove = &setup.Removal{Money: req.Money, To: req.To, Customers: req.Customers}
+		}
+		return nil
+	}, ApplyOptions{})
+	if err != nil {
+		return setup.Resource{}, err
+	}
+	return a.Resource(setup.KindBank, id)
+}
+
+func (a *App) stopRouting(r setup.Resource) (*setup.Condition, error) {
+	return nil, a.setMemberStatus(r.ID, nibss.StatusTerminating)
+}
+
+func (a *App) decideMoney(r setup.Resource) (*setup.Condition, error) {
+	id := r.ID
+	b := a.bankByID(id)
+	if b == nil {
+		return nil, errNotFound
+	}
+	if b.Closed() {
+		return nil, nil
+	}
 	imp, err := a.CloseImpact(id)
 	if err != nil {
-		return CloseResult{}, err
+		return nil, err
 	}
-	if len(imp.Blockers) > 0 {
-		return CloseResult{}, invalid("%s cannot be closed: %s", imp.Bank.Name, strings.Join(imp.Blockers, "; "))
+	choice, to, cond := a.closeChoices(r, imp)
+	if cond != nil {
+		return cond, nil
 	}
-	if req.Money == "" {
-		req.Money = "transfer"
-	}
-	if !moneyChoices[req.Money] {
-		return CloseResult{}, invalid("money must be transfer, payout or leave")
-	}
-	choice := map[string]string{}
-	for _, cu := range imp.Customers {
-		choice[cu.ID] = req.Money
-	}
-	for p, c := range req.Customers {
-		if _, ok := choice[p]; !ok {
-			return CloseResult{}, invalid("%s is not a customer of %s", p, imp.Bank.Name)
-		}
-		if !moneyChoices[c] {
-			return CloseResult{}, invalid("the choice for %s must be transfer, payout or leave", p)
-		}
-		choice[p] = c
-	}
-	needTarget := false
-	for _, c := range choice {
-		needTarget = needTarget || c != "leave"
-	}
-	if needTarget {
-		to := a.bankByID(req.To)
-		now := a.clock.Now()
-		switch {
-		case req.To == "":
-			return CloseResult{}, invalid("choose the bank that receives the money with to")
-		case to == nil:
-			return CloseResult{}, invalid("unknown bank %q", req.To)
-		case req.To == id:
-			return CloseResult{}, invalid("the money cannot go to the bank that is closing")
-		case a.bankPhase(req.To) != PhaseActive || a.bankDown(req.To, now):
-			return CloseResult{}, invalid("%s is not active, so it cannot receive the money", to.Name)
-		case a.bankFaulty(req.To, now):
-			return CloseResult{}, invalid("%s has a fault, so the money cannot be moved safely; clear it with beerus fault clear --bank %s", to.Name, req.To)
-		case a.bankFaulty(id, now):
-			return CloseResult{}, invalid("%s has a fault, so the money cannot be moved safely; clear it with beerus fault clear --bank %s", imp.Bank.Name, id)
-		}
+	res, err := a.closeBooks(id, imp, choice, to)
+	if err != nil {
+		return nil, err
 	}
 	a.lifeMu.Lock()
-	b := a.bankByID(id)
-	st := a.status[id]
-	prev, prevPhase := b.State, st.Phase
-	b.State, st.Phase, st.Reason = "closed", PhaseClosed, ""
+	a.mu.Lock()
+	b.State = setup.StateClosed
+	a.mu.Unlock()
 	a.lifeMu.Unlock()
-	undo := func() { b.State, st.Phase = prev, prevPhase }
-	if err := a.saveBanks(undo); err != nil {
-		return CloseResult{}, err
-	}
-	res, err := a.closeBooks(id, imp, choice, req.To)
-	if err != nil {
-		a.lifeMu.Lock()
-		undo()
-		a.lifeMu.Unlock()
-		if len(res.Moves) > 0 {
-			err = fmt.Errorf("closing %s stopped after %d of its moves and the bank was reopened; run the close again to finish, and what was already paid out still counts against the insured limit: %w", imp.Bank.Name, len(res.Moves), err)
-		}
-		return CloseResult{}, errors.Join(err, a.saveBanks(func() {}))
-	}
 	a.detach(b, setup.StepSite)
-	a.recordPhase(id, PhaseClosed)
 	res.Bank, _ = a.bankStatus(id)
-	a.poke()
-	if err := a.setMemberStatus(id, memberStatus(b)); err != nil {
-		return res, err
+	raw, err := json.Marshal(res)
+	if err != nil {
+		return nil, fmt.Errorf("encode the close result: %w", err)
 	}
-	return res, nil
+	a.recordBank(id, func(r *setup.Resource) bool {
+		r.Result = raw
+		return true
+	})
+	return nil, nil
+}
+
+func (a *App) blocked(reason, format string, args ...any) *setup.Condition {
+	return &setup.Condition{Type: setup.ConditionBlocked, Status: "True", Reason: reason, Message: fmt.Sprintf(format, args...), ChangedAt: a.clock.Real()}
+}
+
+func (a *App) closeChoices(r setup.Resource, imp CloseImpact) (map[string]string, string, *setup.Condition) {
+	choice := map[string]string{}
+	rm := r.Money
+	held := 0
+	var total int64
+	for _, cu := range imp.Customers {
+		if cu.Deposits > 0 {
+			held++
+			total += cu.Deposits
+		}
+	}
+	if rm == nil {
+		if total == 0 {
+			return choice, "", nil
+		}
+		return nil, "", a.blocked(setup.ReasonMoneyDecisionNeeded, "%s holds %s for %s. Run beerus apply --prune --money transfer --to <bank>.", imp.Bank.Name, naira(total), plural(held, "customer", "customers"))
+	}
+	for _, cu := range imp.Customers {
+		choice[cu.ID] = rm.Money
+	}
+	needTarget := rm.Money != setup.MoneyLeave
+	for cid, c := range rm.Customers {
+		if _, ok := choice[cid]; !ok {
+			return nil, "", a.blocked(setup.ReasonMoneyDecisionNeeded, "%s is not a customer of %s. Remove it from on_remove.customers.", cid, imp.Bank.Name)
+		}
+		choice[cid] = c
+		needTarget = needTarget || c != setup.MoneyLeave
+	}
+	if !needTarget {
+		return choice, "", nil
+	}
+	to := a.bankByID(rm.To)
+	now := a.clock.Now()
+	switch {
+	case to == nil:
+		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s is not a bank in this setup, so money cannot move there. Choose another bank.", rm.To)
+	case a.bankPhase(rm.To) != PhaseActive || a.bankDown(rm.To, now):
+		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s is suspended or down, so money cannot move there. Resume it or choose another bank.", to.Name)
+	case a.bankFaulty(rm.To, now):
+		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s has a fault, so the money cannot be moved safely; clear it with beerus fault clear --bank %s.", to.Name, rm.To)
+	case a.bankFaulty(r.ID, now):
+		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s has a fault, so the money cannot be moved safely; clear it with beerus fault clear --bank %s.", imp.Bank.Name, r.ID)
+	}
+	return choice, rm.To, nil
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 func (a *App) closeBooks(id string, imp CloseImpact, choice map[string]string, to string) (CloseResult, error) {
@@ -469,5 +507,5 @@ func (a *App) ctlCloseBank(w http.ResponseWriter, r *http.Request) {
 		a.bankError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusAccepted, res)
 }

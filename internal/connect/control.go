@@ -55,6 +55,10 @@ func (a *App) ControlHandler() http.Handler {
 		a.poke()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 	})
+	mux.HandleFunc("POST /plan", a.ctlPlan)
+	mux.HandleFunc("POST /apply", a.ctlApply)
+	mux.HandleFunc("GET /resources", a.ctlResources)
+	mux.HandleFunc("GET /resources/{kind}/{id}", a.ctlResource)
 	mux.HandleFunc("POST /partners", a.ctlAddPartner)
 	mux.HandleFunc("POST /partners/{id}/rotate-key", a.ctlRotatePartner)
 	mux.HandleFunc("DELETE /partners/{id}", a.ctlRemovePartner)
@@ -484,6 +488,11 @@ func (a *App) RestoreSnapshot(id string) (result string, err error) {
 	}
 	if !f.Meta.NIBSS {
 		return "", fmt.Errorf("snapshot %s has no copy of NIBSS", id)
+	}
+	for _, b := range a.bankList() {
+		if phase := a.bankPhase(b.ID); phase == PhaseClosing || phase == PhaseTerminating {
+			return "", fmt.Errorf("%s is %s, so a snapshot cannot be restored until that finishes", b.Name, phase)
+		}
 	}
 	a.mu.Lock()
 	for _, bid := range f.Meta.Banks {

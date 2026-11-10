@@ -15,6 +15,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 const somethingWentWrong = "Something went wrong. Try again."
@@ -208,22 +209,19 @@ func (a *App) ctlNIPSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) SetNetDebitCap(id string, cap, collateral int64) error {
-	a.lifeMu.Lock()
-	b := a.cfg.Bank(id)
-	if b == nil {
-		a.lifeMu.Unlock()
-		return errNotFound
+	err := a.applyEdit(func(sp *setup.Spec) error {
+		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
+		if i < 0 {
+			return errNotFound
+		}
+		sp.Spec.Banks[i].NetDebitCap, sp.Spec.Banks[i].Collateral = cap, collateral
+		return nil
+	}, ApplyOptions{})
+	if err != nil {
+		return err
 	}
-	a.mu.Lock()
-	prevCap, prevCollateral := b.NetDebitCap, b.Collateral
-	b.NetDebitCap, b.Collateral = cap, collateral
-	a.mu.Unlock()
-	a.lifeMu.Unlock()
-	return a.saveBanks(func() {
-		a.mu.Lock()
-		b.NetDebitCap, b.Collateral = prevCap, prevCollateral
-		a.mu.Unlock()
-	})
+	a.reconcileNow()
+	return nil
 }
 
 func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {

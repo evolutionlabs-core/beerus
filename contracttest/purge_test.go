@@ -39,22 +39,21 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if len(databases()) != 2 {
 		t.Fatalf("before the purge: %v", databases())
 	}
-	if _, err := s.ctlTry("POST", "/banks/abuja-digital/purge", nil); err == nil || !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "close it before purging") {
-		t.Fatalf("purge an open bank: %v", err)
-	}
 	s.ctl("POST", "/banks/abuja-digital/close", map[string]any{"money": "transfer", "to": "bank-a"})
-	if _, err := s.ctlTry("POST", "/banks/abuja-digital/purge", nil); err == nil || !strings.Contains(err.Error(), "2 NIP sessions with this bank have not settled") {
-		t.Fatalf("purge before the closure transfer settled: %v", err)
-	}
-	s.ctl("POST", "/nip/settle-now", nil)
+	s.closeResult("abuja-digital")
 	imp := s.ctl("GET", "/banks/abuja-digital/purge", nil)
-	if len(imp["blockers"].([]any)) != 0 || fmt.Sprint(imp["snapshots"]) != "["+snap+"]" || imp["database"] != bank.Database || imp["connections"] != float64(1) {
+	if !strings.Contains(fmt.Sprint(imp["blockers"]), "2 NIP sessions with this bank have not settled") || fmt.Sprint(imp["snapshots"]) != "["+snap+"]" || imp["database"] != bank.Database || imp["connections"] != float64(1) {
 		t.Fatalf("purge preview: %v", imp)
 	}
-	res := s.ctl("POST", "/banks/abuja-digital/purge", nil)
-	if fmt.Sprint(res["snapshots_deleted"]) != "["+snap+"]" {
-		t.Fatalf("purge: %v", res)
+	if res := s.ctl("POST", "/banks/abuja-digital/purge", nil); res["phase"] != setup.PhaseTerminating {
+		t.Fatalf("purge was not admitted as terminating: %v", res)
 	}
+	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "2 NIP sessions with this bank have not settled")
+	if got := databases(); len(got) != 2 {
+		t.Fatalf("the purge dropped databases while transfers were unsettled: %v", got)
+	}
+	s.ctl("POST", "/nip/settle-now", nil)
+	s.waitGone("bank", "abuja-digital")
 	if got := databases(); len(got) != 0 {
 		t.Fatalf("databases left behind: %v", got)
 	}
@@ -147,13 +146,13 @@ func TestPurgeRules(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newStubStack(t)
-	if imp := s.ctl("GET", "/banks/bank-a/purge", nil); !strings.Contains(fmt.Sprint(imp["blockers"]), "close it before purging") {
-		t.Fatalf("purge preview of an open bank: %v", imp)
-	}
 	s.ctl("POST", "/banks/bank-b/close", map[string]any{"money": "leave"})
+	s.waitPhase("bank-b", connect.PhaseClosed, 60*time.Second)
 	snap := fmt.Sprint(s.ctl("POST", "/snapshots", map[string]string{"name": "closed"})["id"])
-	if res := s.ctl("POST", "/banks/bank-b/purge", nil); fmt.Sprint(res["snapshots_deleted"]) != "["+snap+"]" {
-		t.Fatalf("the purge kept a snapshot that holds the bank: %v", res)
+	s.ctl("POST", "/banks/bank-b/purge", nil)
+	s.waitGone("bank", "bank-b")
+	if _, err := os.Stat(s.cfg.Path("snapshots", snap+".json")); !os.IsNotExist(err) {
+		t.Fatalf("the purge kept a snapshot that holds the bank: %v", err)
 	}
 	if _, err := s.ctlTry("POST", "/snapshots/"+snap+"/restore", nil); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("restore of a snapshot the purge deleted: %v", err)
@@ -161,7 +160,7 @@ func TestPurgeRules(t *testing.T) {
 	if imp := s.ctl("GET", "/banks/bank-a/purge", nil); !strings.Contains(fmt.Sprint(imp["blockers"]), "only bank left") {
 		t.Fatalf("purge preview of the last bank: %v", imp)
 	}
-	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Other", "id": "bank-b"}); err == nil || !strings.Contains(err.Error(), "purged bank") {
+	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Other", "id": "bank-b"}); err == nil || !strings.Contains(err.Error(), "removed bank") {
 		t.Fatalf("create with a purged id: %v", err)
 	}
 	if err := s.app.Save(); err != nil {

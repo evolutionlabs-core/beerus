@@ -39,6 +39,66 @@ func (s *Stack) waitBank(id string) map[string]any {
 	return nil
 }
 
+func (s *Stack) waitResource(kind, id string, within time.Duration, done func(map[string]any) bool) map[string]any {
+	s.t.Helper()
+	deadline := time.Now().Add(within)
+	var last map[string]any
+	for time.Now().Before(deadline) {
+		r, err := s.ctlTry("GET", "/resources/"+kind+"/"+id, nil)
+		if err == nil {
+			last = r
+			if done(r) {
+				return r
+			}
+		} else if !strings.Contains(err.Error(), "HTTP 404") {
+			s.t.Fatal(err)
+		} else if done(nil) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	s.t.Fatalf("%s/%s never got there: %v", kind, id, last)
+	return nil
+}
+
+func (s *Stack) waitBlocked(id, reason, text string) {
+	s.t.Helper()
+	s.waitResource("bank", id, 60*time.Second, func(r map[string]any) bool {
+		for _, c := range asList(r["conditions"]) {
+			if c["type"] == setup.ConditionBlocked && c["status"] == "True" && c["reason"] == reason && strings.Contains(fmt.Sprint(c["message"]), text) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func (s *Stack) waitGone(kind, id string) {
+	s.t.Helper()
+	s.waitResource(kind, id, 60*time.Second, func(r map[string]any) bool { return r == nil })
+}
+
+func (s *Stack) closeResult(id string) map[string]any {
+	s.t.Helper()
+	s.waitPhase(id, connect.PhaseClosed, 60*time.Second)
+	res, ok := s.ctl("GET", "/resources/bank/"+id, nil)["result"].(map[string]any)
+	if !ok {
+		s.t.Fatalf("bank %s has no close result", id)
+	}
+	return res
+}
+
+func asList(v any) []map[string]any {
+	out := []map[string]any{}
+	items, _ := v.([]any)
+	for _, x := range items {
+		if m, ok := x.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 func TestCreateBank(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
@@ -342,7 +402,7 @@ func TestCloseBank(t *testing.T) {
 		return s.balances(p)[p.Accounts[0]]
 	}
 	before := balance(home["adaeze"])
-	for _, bad := range []map[string]any{{"money": "transfer"}, {"money": "transfer", "to": "abuja-digital"}, {"money": "keep", "to": "bank-a"}, {"money": "transfer", "to": "bank-a", "customers": map[string]string{"cus_nobody": "leave"}}} {
+	for _, bad := range []map[string]any{{"money": "transfer"}, {"money": "transfer", "to": "abuja-digital"}, {"money": "keep", "to": "bank-a"}} {
 		if _, err := s.ctlTry("POST", "/banks/abuja-digital/close", bad); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
 			t.Fatalf("close with %v: %v", bad, err)
 		}
@@ -358,17 +418,25 @@ func TestCloseBank(t *testing.T) {
 	if got := s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "bank-a", "outcome": "failed"}); got["left"] != float64(1) {
 		t.Fatalf("fault without a count: %v", got)
 	}
-	if _, err := s.ctlTry("POST", "/banks/abuja-digital/close", map[string]any{"money": "transfer", "to": "bank-a"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "Bank A has a fault") {
-		t.Fatalf("close while the destination has a fault: %v", err)
+	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "before the close"})
+	accepted := s.ctl("POST", "/banks/abuja-digital/close", map[string]any{"money": "transfer", "to": "bank-a", "customers": map[string]string{opened["tunde"].Customer: "leave"}})
+	if accepted["phase"] != setup.PhaseClosing || accepted["deletion_requested_at"] == nil {
+		t.Fatalf("close was not admitted as closing: %v", accepted)
+	}
+	s.waitBlocked("abuja-digital", setup.ReasonTargetUnavailable, "Bank A has a fault")
+	if got := balance(home["adaeze"]); got != before {
+		t.Fatalf("money moved while the destination had a fault: %d, want %d", got, before)
+	}
+	if _, err := s.ctlTry("POST", "/snapshots/"+fmt.Sprint(snap["id"])+"/restore", nil); err == nil || !strings.Contains(err.Error(), "HTTP 409") || !strings.Contains(err.Error(), "Abuja Digital is closing, so a snapshot cannot be restored until that finishes") {
+		t.Fatalf("restore while a bank is closing: %v", err)
 	}
 	if got := s.ctl("DELETE", "/faults?bank=bank-a", nil); got["cleared"] != float64(1) {
 		t.Fatalf("clear faults: %v", got)
 	}
-	res := s.ctl("POST", "/banks/abuja-digital/close", map[string]any{"money": "transfer", "to": "bank-a", "customers": map[string]string{opened["tunde"].Customer: "leave"}})
+	res := s.closeResult("abuja-digital")
 	if res["moved_minor"] != float64(2_500_000) || res["left_minor"] != float64(1_000_000) || len(res["revoked_connections"].([]any)) != 1 {
 		t.Fatalf("close: %v", res)
 	}
-	s.waitPhase("abuja-digital", connect.PhaseClosed, time.Second)
 	if got := balance(home["adaeze"]); got != before+2_500_000 {
 		t.Fatalf("adaeze at bank-a has %d, want %d", got, before+2_500_000)
 	}
@@ -451,7 +519,8 @@ func TestClosePaysInsuredDeposits(t *testing.T) {
 		return sum
 	}
 	before := total(from)
-	res := s.ctl("POST", "/banks/kano-microfinance/close", map[string]any{"money": "payout", "to": "bank-a"})
+	s.ctl("POST", "/banks/kano-microfinance/close", map[string]any{"money": "payout", "to": "bank-a"})
+	res := s.closeResult("kano-microfinance")
 	if res["paid_out_minor"] != float64(200_000_000) || res["claims_minor"] != float64(50_000_000) {
 		t.Fatalf("close: %v", res)
 	}
@@ -475,11 +544,11 @@ func TestRestoreCannotReopenAClosedBank(t *testing.T) {
 	}
 	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "before"})
 	s.ctl("POST", "/banks/bank-b/close", map[string]any{"money": "leave"})
+	s.waitPhase("bank-b", connect.PhaseClosed, 60*time.Second)
 	_, err := s.ctlTry("POST", "/snapshots/"+fmt.Sprint(snap["id"])+"/restore", nil)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 409") || !strings.Contains(err.Error(), "cannot be undone") {
 		t.Fatalf("restore before the close: %v", err)
 	}
-	s.waitPhase("bank-b", connect.PhaseClosed, time.Second)
 	ids := func(state string) []string {
 		out := []string{}
 		for _, d := range s.ctl("GET", "/banks?state="+state, nil)["data"].([]any) {
