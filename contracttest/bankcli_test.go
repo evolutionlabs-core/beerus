@@ -238,7 +238,7 @@ func TestBankCLI(t *testing.T) {
 		{[]string{"withdraw", a2, "--bank", "bank-a", "--amount", "999999"}, "beerus: The account does not have enough money."},
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", a1, "--amount", "5"}, "beerus: The from and to accounts are the same."},
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", "9999999999", "--to-bank", "bank-b", "--amount", "5"}, "beerus: That is not a valid account at Bank B, so nothing was debited."},
-		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-z", "--amount", "5"}, `beerus: Bank "bank-z" is not in the NIBSS directory: not in the NIBSS directory.`},
+		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-z", "--amount", "5"}, `beerus: Find bank "bank-z": not in the NIBSS directory.`},
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1}, "beerus: --from, --to and --amount are required; usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT]"},
 		{[]string{"transfer", "--bogus"}, "beerus: flag provided but not defined: -bogus; usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT]"},
 		{[]string{"customer", "create", "--bank", "bank-a", "--name", "X"}, "beerus: --name, --phone and --dob are required; usage: beerus customer create --name N --phone P --dob YYYY-MM-DD [--username U --password-stdin] | close <id>"},

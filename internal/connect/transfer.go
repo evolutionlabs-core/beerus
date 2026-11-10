@@ -113,7 +113,7 @@ func (a *App) route(req TransferRequest, session bool) (transferRoute, error) {
 		return transferRoute{}, refused(http.StatusNotFound, nip.SystemError, "not_found", fmt.Errorf("no bank %q", req.FromBank))
 	}
 	if to == nil {
-		return transferRoute{}, refused(http.StatusUnprocessableEntity, nip.SystemError, "unknown_bank", fmt.Errorf("bank %q is not in the NIBSS directory: %w", req.ToBank, nibss.ErrUnknownInstitution))
+		return transferRoute{}, refused(http.StatusUnprocessableEntity, nip.SystemError, "unknown_bank", fmt.Errorf("find bank %q: %w", req.ToBank, nibss.ErrUnknownInstitution))
 	}
 	if phase := a.bankPhase(from.ID); phase != PhaseActive && !req.Closure {
 		return transferRoute{}, refused(http.StatusConflict, nip.Unavailable, "bank_not_active", notActiveError{from.Name, phase})

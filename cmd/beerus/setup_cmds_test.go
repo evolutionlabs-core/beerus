@@ -343,11 +343,11 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	acct, err := cmdAccount(cl, []string{"open", "--bank", "bank-b", "--customer", fmt.Sprint(cust["id"])})
+	acct, err := cl.do("POST", "/banks/bank-b/accounts", map[string]string{"customer": fmt.Sprint(cust["id"]), "type": "current"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cmdCash(cl, "deposit", []string{fmt.Sprint(acct["nuban"]), "--bank", "bank-b", "--amount", "5000"}); err != nil {
+	if _, err := cl.do("POST", "/banks/bank-b/deposits", map[string]string{"account": fmt.Sprint(acct["nuban"]), "amount": "5000"}); err != nil {
 		t.Fatal(err)
 	}
 	r = d(cmdBankEnd, "", false, "purge", "bank-b", "--yes", "--wait", "5s")

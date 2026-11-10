@@ -74,7 +74,7 @@ func (f *cmdFlags) show(out map[string]any, human func() error) error {
 	return human()
 }
 
-func decode[T any](m map[string]any) (T, error) {
+func decodeMap[T any](m map[string]any) (T, error) {
 	var v T
 	raw, err := json.Marshal(m)
 	if err != nil {
@@ -103,7 +103,7 @@ func businessNow(c *ctl) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	v, err := decode[struct {
+	v, err := decodeMap[struct {
 		At time.Time `json:"business_time"`
 	}](out)
 	return v.At, err
@@ -141,6 +141,19 @@ func printNext(out map[string]any) {
 
 func newTable() *tabwriter.Writer {
 	return tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+}
+
+func flagsAfter(fs *flag.FlagSet, args []string, positional int) ([]string, error) {
+	if len(args) < positional {
+		return nil, errors.New("missing argument")
+	}
+	if err := fs.Parse(args[positional:]); err != nil {
+		return nil, err
+	}
+	if fs.NArg() > 0 {
+		return nil, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	return args[:positional], nil
 }
 
 func bankPath(bank string, parts ...string) string {
@@ -238,7 +251,7 @@ func cmdCustomer(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			cu, err := decode[bank.Customer](out)
+			cu, err := decodeMap[bank.Customer](out)
 			if err != nil {
 				return err
 			}
@@ -295,7 +308,7 @@ func cmdAccount(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			a, err := decode[connect.AccountJSON](out)
+			a, err := decodeMap[connect.AccountJSON](out)
 			if err != nil {
 				return err
 			}
@@ -466,7 +479,7 @@ func cmdCash(kind string, args []string) error {
 		return err
 	}
 	return f.show(out, func() error {
-		r, err := decode[connect.CashResult](out)
+		r, err := decodeMap[connect.CashResult](out)
 		if err != nil {
 			return err
 		}
@@ -504,7 +517,7 @@ func cmdTransfer(args []string) error {
 		return err
 	}
 	return f.show(out, func() error {
-		r, err := decode[connect.TransferResult](out)
+		r, err := decodeMap[connect.TransferResult](out)
 		if err != nil {
 			return err
 		}
@@ -586,7 +599,7 @@ func cmdFault(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			fl, err := decode[connect.Fault](out)
+			fl, err := decodeMap[connect.Fault](out)
 			if err != nil {
 				return err
 			}
@@ -644,7 +657,7 @@ func cmdFault(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			r, err := decode[struct {
+			r, err := decodeMap[struct {
 				Cleared int `json:"cleared"`
 			}](out)
 			if err != nil {
@@ -682,7 +695,7 @@ func cmdNip(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			s, err := decode[nibss.Session](out)
+			s, err := decodeMap[nibss.Session](out)
 			if err != nil {
 				return err
 			}
@@ -702,7 +715,7 @@ func cmdNip(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			r, err := decode[struct {
+			r, err := decodeMap[struct {
 				Settled int       `json:"settled_sessions"`
 				At      time.Time `json:"business_time"`
 			}](out)
