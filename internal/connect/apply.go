@@ -373,12 +373,7 @@ func (a *App) bankImpact(act *setup.Action, st setup.Status) error {
 	if err != nil {
 		return err
 	}
-	for _, s := range snaps {
-		if !slices.Contains(im.Snapshots, s) {
-			im.Snapshots = append(im.Snapshots, s)
-		}
-	}
-	sort.Strings(im.Snapshots)
+	im.Snapshots = snaps
 	return nil
 }
 

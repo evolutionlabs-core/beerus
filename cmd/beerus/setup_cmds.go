@@ -397,8 +397,7 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration) error {
 	tick := time.NewTicker(pollEvery)
 	defer tick.Stop()
 	var shown []string
-	for {
-		var pending, blocked []string
+	check := func(res []setup.Resource) (pending, blocked []string) {
 		for _, t := range targets {
 			r := findResource(res, t.kind, t.id)
 			if finished(t, r) {
@@ -409,6 +408,10 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration) error {
 				blocked = append(blocked, blockers(*r)...)
 			}
 		}
+		return pending, blocked
+	}
+	for {
+		pending, blocked := check(res)
 		if len(pending) == 0 {
 			return nil
 		}
@@ -420,6 +423,12 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration) error {
 		}
 		select {
 		case <-deadline.C:
+			if res, err = e.resources(c); err != nil {
+				return err
+			}
+			if pending, blocked = check(res); len(pending) == 0 {
+				return nil
+			}
 			if len(blocked) > 0 {
 				return &statusError{exitBlocked, errors.New(strings.Join(blocked, "\n"))}
 			}
@@ -1000,7 +1009,11 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 		fmt.Fprintln(e.out)
 	case fresh:
 		spec, _ := setup.Parse(req.File, []byte(req.Spec))
-		if err := connect.Init(*dir, spec, connect.DefaultLocal(), clock.DateOf(time.Now())); err != nil {
+		local, err := connect.FreshLocal(*dir)
+		if err != nil {
+			return err
+		}
+		if err := connect.Init(*dir, spec, local, clock.DateOf(time.Now())); err != nil {
 			return err
 		}
 		fmt.Fprintf(e.out, "Created %s from %s.\n\n", *dir, req.File)

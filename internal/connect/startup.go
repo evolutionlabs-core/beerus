@@ -84,6 +84,18 @@ func DefaultLocal() setup.Local {
 	}
 }
 
+func FreshLocal(dir string) (setup.Local, error) {
+	var local setup.Local
+	found, err := readYAML(filepath.Join(dir, LocalFile), &local)
+	if err != nil {
+		return setup.Local{}, err
+	}
+	if !found {
+		return DefaultLocal(), nil
+	}
+	return local, nil
+}
+
 func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) error {
 	ok, err := Initialized(dir)
 	if err != nil {

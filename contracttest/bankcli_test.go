@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 type cli struct {
@@ -26,20 +28,56 @@ type cli struct {
 	in   string
 }
 
+var (
+	binOnce sync.Once
+	binDir  string
+	binErr  error
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if binDir != "" {
+		_ = os.RemoveAll(binDir)
+	}
+	os.Exit(code)
+}
+
+func builtBinary(t *testing.T) string {
+	t.Helper()
+	binOnce.Do(func() {
+		if binDir, binErr = os.MkdirTemp("", "beerus-bin-"); binErr != nil {
+			return
+		}
+		_, file, _, _ := runtime.Caller(0)
+		build := exec.Command("go", "build", "-o", filepath.Join(binDir, "beerus"), "github.com/evolutionlabs-core/beerus/cmd/beerus")
+		build.Dir = filepath.Dir(file)
+		if out, err := build.CombinedOutput(); err != nil {
+			binErr = fmt.Errorf("build beerus: %w\n%s", err, out)
+		}
+	})
+	if binErr != nil {
+		t.Fatal(binErr)
+	}
+	return filepath.Join(binDir, "beerus")
+}
+
 func newCLI(t *testing.T, s *Stack) *cli {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	bin := filepath.Join(t.TempDir(), "beerus")
-	build := exec.Command("go", "build", "-o", bin, "github.com/evolutionlabs-core/beerus/cmd/beerus")
-	build.Dir = filepath.Dir(file)
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build beerus: %v\n%s", err, out)
-	}
-	return &cli{t: t, bin: bin, dir: s.cfg.Dir, home: t.TempDir()}
+	return newCLIAt(t, s.cfg.Dir)
+}
+
+func newCLIAt(t *testing.T, dir string) *cli {
+	t.Helper()
+	return &cli{t: t, bin: builtBinary(t), dir: dir, home: t.TempDir()}
 }
 
 func (c *cli) env(extra ...string) []string {
 	env := []string{"PATH=" + filepath.Dir(c.bin) + ":" + os.Getenv("PATH"), "HOME=" + c.home, "TMPDIR=" + os.TempDir(), "BEERUS_DIR=" + c.dir, "TERM=xterm", "LANG=en_US.UTF-8", "BASH_SILENCE_DEPRECATION_WARNING=1"}
+	for _, key := range []string{config.DatabaseURLEnv, "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD"} {
+		if v := os.Getenv(key); v != "" {
+			env = append(env, key+"="+v)
+		}
+	}
 	return append(env, extra...)
 }
 

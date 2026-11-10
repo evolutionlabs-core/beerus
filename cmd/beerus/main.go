@@ -153,12 +153,28 @@ func defaultDir() string {
 func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	local := connect.DefaultLocal()
-	fs.IntVar(&local.Connect.PartnerPort, "partner-port", local.Connect.PartnerPort, "partner API port; banks take the next free ports")
-	fs.IntVar(&local.Connect.WidgetPort, "widget-port", local.Connect.WidgetPort, "widget port")
-	fs.IntVar(&local.Connect.ControlPort, "control-port", local.Connect.ControlPort, "control API port")
-	fs.IntVar(&local.Connect.HealthPort, "health-port", local.Connect.HealthPort, "health port of the cbn container")
+	flagged := connect.DefaultLocal().Connect
+	fs.IntVar(&flagged.PartnerPort, "partner-port", flagged.PartnerPort, "partner API port; banks take the next free ports")
+	fs.IntVar(&flagged.WidgetPort, "widget-port", flagged.WidgetPort, "widget port")
+	fs.IntVar(&flagged.ControlPort, "control-port", flagged.ControlPort, "control API port")
+	fs.IntVar(&flagged.HealthPort, "health-port", flagged.HealthPort, "health port of the cbn container")
 	fs.Parse(args)
+	local, err := connect.FreshLocal(*dir)
+	if err != nil {
+		return err
+	}
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "partner-port":
+			local.Connect.PartnerPort = flagged.PartnerPort
+		case "widget-port":
+			local.Connect.WidgetPort = flagged.WidgetPort
+		case "control-port":
+			local.Connect.ControlPort = flagged.ControlPort
+		case "health-port":
+			local.Connect.HealthPort = flagged.HealthPort
+		}
+	})
 	today := clock.DateOf(time.Now())
 	if err := connect.Init(*dir, setup.DefaultSpec(defaultSetupName, today), local, today); err != nil {
 		return err
