@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/world"
@@ -25,6 +26,7 @@ var (
 )
 
 const (
+	specMaxBankName  = 40
 	specIDRule       = "Use 2 to 31 lowercase letters, digits or hyphens, starting with a letter"
 	specMinutesInDay = int(24 * time.Hour / time.Minute)
 )
@@ -201,6 +203,10 @@ func (c *specChecker) banks() {
 func (c *specChecker) bankName(p string, b Bank, names map[string]string) {
 	if b.Name == "" {
 		c.add(p+".name", "%s.name is required. Add the bank's name", p)
+		return
+	}
+	if n := utf8.RuneCountInString(b.Name); n > specMaxBankName {
+		c.add(p+".name", "%s.name has %d characters. Use 1 to %d", p, n, specMaxBankName)
 		return
 	}
 	key := strings.ToLower(b.Name)

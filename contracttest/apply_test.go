@@ -47,7 +47,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 	if _, err := post("/apply", applied(), map[string]any{"prune": true, "settle_now": true}); err == nil || !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "settle_now is not supported yet") {
 		t.Fatalf("settle_now: %v", err)
 	}
-	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": strings.Repeat("x", 41)}); err == nil || !strings.Contains(err.Error(), "name must be 1 to 40 characters") {
+	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": strings.Repeat("x", 41)}); err == nil || !strings.Contains(err.Error(), "has 41 characters. Use 1 to 40") {
 		t.Fatalf("a long bank name: %v", err)
 	}
 

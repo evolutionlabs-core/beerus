@@ -224,10 +224,10 @@ func (a *App) provision(b *config.Bank) {
 		return
 	}
 	phase := runningPhase(b)
+	a.recordPhase(b.ID, phase)
 	a.lifeMu.Lock()
 	st.Phase, st.Reason, st.Attempts, st.NextAttemptAt = phase, "", 0, nil
 	a.lifeMu.Unlock()
-	a.recordPhase(b.ID, phase)
 }
 
 func (a *App) bankCerts(b *config.Bank) error {

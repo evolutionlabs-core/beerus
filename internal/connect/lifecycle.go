@@ -29,7 +29,6 @@ const (
 	PhaseTerminating   = setup.PhaseTerminating
 	driftEvery         = 5 * time.Second
 	connectionsPerBank = 8
-	maxBankName        = 40
 )
 
 var (
@@ -182,9 +181,6 @@ func (a *App) CreateBank(req BankRequest) (BankStatus, error) {
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
 		id = strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
-	}
-	if name == "" || len(name) > maxBankName {
-		return BankStatus{}, invalid("name must be 1 to %d characters", maxBankName)
 	}
 	err := a.applyEdit(func(sp *setup.Spec) error {
 		nb := setup.Bank{ID: id, Name: name, Type: orDefault(req.Type, "commercial"), NIPCode: req.NIPCode, NUBANCode: req.NUBANCode, SettlesThrough: req.SettlesThrough}

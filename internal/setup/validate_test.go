@@ -2,6 +2,7 @@ package setup
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,8 @@ func TestValidateRules(t *testing.T) {
 		{"cbn as a bank id", func(s *Spec) { s.Spec.Banks[1].ID = "cbn" }, []string{"banks[cbn].id cbn is reserved for the CBN. Choose another id."}},
 		{"nibss as a bank id", func(s *Spec) { s.Spec.Banks[1].ID = "nibss" }, []string{"banks[nibss].id nibss is reserved for the NIBSS. Choose another id."}},
 		{"no bank name", func(s *Spec) { s.Spec.Banks[0].Name = "" }, []string{"banks[bank-a].name is required. Add the bank's name."}},
+		{"41 character bank name", func(s *Spec) { s.Spec.Banks[0].Name = strings.Repeat("x", 41) }, []string{"banks[bank-a].name has 41 characters. Use 1 to 40."}},
+		{"40 character bank name", func(s *Spec) { s.Spec.Banks[0].Name = strings.Repeat("é", 40) }, nil},
 		{"same name in another case", func(s *Spec) { s.Spec.Banks[1].Name = "BANK A" }, []string{`banks[bank-b].name "BANK A" is already used by bank-a. Give each bank its own name.`}},
 		{"no type", func(s *Spec) { s.Spec.Banks[0].Type = "" }, []string{"banks[bank-a].type is required. Use commercial, digital or microfinance."}},
 		{"short nip code", func(s *Spec) { s.Spec.Banks[0].NIPCode = "99901" }, []string{`banks[bank-a].nip_code "99901" is not valid. Use 6 digits, or leave it out to have one allocated.`}},
