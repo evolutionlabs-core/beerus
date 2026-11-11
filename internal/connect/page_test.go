@@ -34,7 +34,7 @@ func TestPageNumbersAreBoundedBeforeTheyAreUsed(t *testing.T) {
 		{"0", 1, 0, http.StatusOK},
 		{"-1", 1, 0, http.StatusOK},
 		{"1", 1, 0, http.StatusOK},
-		{"2", 2, 0, http.StatusNotFound},
+		{"2", 0, http.StatusUnprocessableEntity, http.StatusUnprocessableEntity},
 		{"3", 0, http.StatusUnprocessableEntity, http.StatusUnprocessableEntity},
 		{"300000000000000000", 0, http.StatusUnprocessableEntity, http.StatusUnprocessableEntity},
 		{"9223372036854775807", 0, http.StatusUnprocessableEntity, http.StatusUnprocessableEntity},
@@ -45,7 +45,7 @@ func TestPageNumbersAreBoundedBeforeTheyAreUsed(t *testing.T) {
 		t.Run(c.page, func(t *testing.T) {
 			target := "/ui/webhooks?page=" + c.page
 			rec := httptest.NewRecorder()
-			page, ok := pageParam(rec, httptest.NewRequest(http.MethodGet, target, nil), "webhook list", pagesOf(len(st.Deliveries), pageSize)+1)
+			page, ok := pageParam(rec, httptest.NewRequest(http.MethodGet, target, nil), "webhook list", pagesOf(len(st.Deliveries), pageSize))
 			if c.wantPageErr == 0 {
 				if !ok || page != c.wantPage {
 					t.Fatalf("page %q gave %d, %v", c.page, page, ok)

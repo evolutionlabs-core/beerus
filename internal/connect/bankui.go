@@ -335,7 +335,7 @@ func (a *bankSite) obStatement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	const size = 30
-	page, ok := pageParam(w, r, "statement", pagesOf(len(ls), size)+1)
+	page, ok := pageParam(w, r, "statement", pagesOf(len(ls), size))
 	if !ok {
 		return
 	}

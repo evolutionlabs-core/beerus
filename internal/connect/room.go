@@ -332,7 +332,7 @@ func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 		a.pageFailed(w, "account", fmt.Errorf("read statement of %s: %w", acc.Key, err))
 		return
 	}
-	page, ok := pageParam(w, r, "statement", pagesOf(len(ls), pageSize)+1)
+	page, ok := pageParam(w, r, "statement", pagesOf(len(ls), pageSize))
 	if !ok {
 		return
 	}
@@ -611,16 +611,11 @@ func (a *App) roomRevoke(w http.ResponseWriter, r *http.Request) {
 func (a *App) roomWebhooks(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	page, ok := pageParam(w, r, "webhook list", pagesOf(len(a.st.Deliveries), pageSize)+1)
+	page, ok := pageParam(w, r, "webhook list", pagesOf(len(a.st.Deliveries), pageSize))
 	if !ok {
 		return
 	}
-	end := len(a.st.Deliveries) - (page-1)*pageSize
-	if end <= 0 && page > 1 {
-		a.roomNotFound(w, r)
-		return
-	}
-	end = max(end, 0)
+	end := max(len(a.st.Deliveries)-(page-1)*pageSize, 0)
 	start := max(end-pageSize, 0)
 	rows := []*Delivery{}
 	for i := end - 1; i >= start; i-- {
