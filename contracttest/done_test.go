@@ -60,8 +60,10 @@ func TestDoneStory(t *testing.T) {
 	ngozi := s.persona("ngozi").Accounts[0]
 	s.pay("bank-a", current, "bank-b", ngozi, "40000")
 	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "bank-b", "outcome": "failed", "count": 1})
-	s.payTry("bank-a", current, "bank-b", ngozi, "15000", nil)
-	s.advance("3h")
+	pending, _ := s.payTry("bank-a", current, "bank-b", ngozi, "15000", nil)
+	check(pending["status"] != "success", "the timeout fault did not leave the transfer pending: %v", pending)
+	resolved := s.ctl("POST", "/nip/sessions/"+fmt.Sprint(pending["session_id"])+"/status", nil)
+	check(resolved["outcome"] == "reversed" && resolved["resolved_at"] != nil, "the status check did not reverse the transfer: %v", resolved)
 
 	step(2, "Connect bank, pick Bank A, redirect to the bank")
 	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": start.String(), "workspace_id": "ws_adaeze_bakery", "redirect_uri": s.redirect, "state": "st-done"}), 201)
@@ -178,7 +180,7 @@ func TestDoneStory(t *testing.T) {
 	}
 	check(findBySession(feedA) != nil, "the payment did not reach Balance by sync")
 	check(delivered("sync.available", isA) > hooksBefore, "no sync.available webhook for the payment")
-	s.advance("24h")
+	s.ctl("POST", "/nip/settle-now", nil)
 	after := s.ctl("GET", "/nip/settlement", nil)
 	check(num(after["sessions"]) > num(before["sessions"]), "no settlement session ran: %v then %v", before["sessions"], after["sessions"])
 	check(len(after["problems"].([]any)) == 0, "settlement problems: %v", after["problems"])
@@ -229,6 +231,10 @@ func TestDoneStory(t *testing.T) {
 	check(s.must(s.call("GET", "/v1/connections/"+connB, nil), 200).JSON["status"] == "active", "the revoke touched the other bank")
 
 	step(8, "a year passes: consent expires and can be renewed")
+	if s.external {
+		t.Log("A running beerus cannot move its clock, so the story stops before the consent expires.")
+		return
+	}
 	oldCursor := feedB.cursor
 	s.advance("366d")
 	check(s.must(s.call("GET", "/v1/connections/"+connB, nil), 200).JSON["status"] == "expired", "Bank B consent did not expire")
