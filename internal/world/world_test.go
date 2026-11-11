@@ -6,16 +6,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 )
 
-func testWorld() (*World, time.Time) {
+func testFees(t testing.TB) *charges.Schedule {
+	t.Helper()
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fees, err := charges.New(pack.Fees)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fees
+}
+
+func testWorld(t testing.TB) (*World, time.Time) {
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, clock.Lagos)
-	return New(Config{Seed: 42, Genesis: clock.DateOf(now).AddDays(-760)}, Overrides{}), now
+	return New(Config{Seed: 42, Genesis: clock.DateOf(now).AddDays(-760), Fees: testFees(t)}, Overrides{}), now
 }
 
 func TestNUBANValid(t *testing.T) {
-	w, _ := testWorld()
+	w, _ := testWorld(t)
 	for _, p := range w.Personas() {
 		for _, k := range p.Accounts {
 			a, _ := w.Account(k)
@@ -28,24 +43,25 @@ func TestNUBANValid(t *testing.T) {
 }
 
 func TestChargesMatchRules(t *testing.T) {
-	if VAT(1000) != 75 || VAT(2500) != 188 || VAT(5000) != 375 {
-		t.Fatalf("vat %d %d %d", VAT(1000), VAT(2500), VAT(5000))
+	fees := testFees(t)
+	if fees.VAT(1000) != 75 || fees.VAT(2500) != 188 || fees.VAT(5000) != 375 {
+		t.Fatalf("vat %d %d %d", fees.VAT(1000), fees.VAT(2500), fees.VAT(5000))
 	}
 	d25 := clock.Date{Y: 2025, M: 12, D: 31}
 	d26 := clock.Date{Y: 2026, M: 1, D: 1}
-	if NIPFee(500000, d26) != 1000 || NIPFee(500100, d26) != 2500 || NIPFee(5000100, d26) != 5000 {
+	if fees.NIPFeeOn(500000, d26) != 1000 || fees.NIPFeeOn(500100, d26) != 2500 || fees.NIPFeeOn(5000100, d26) != 5000 {
 		t.Fatal("fee bands")
 	}
-	if StampDuty(1000000, d25, false) != 0 || StampDuty(1000000, d26, false) != 5000 || StampDuty(999900, d26, false) != 0 || StampDuty(1000000, d26, true) != 0 {
+	if fees.StampDuty(1000000, d25, false) != 0 || fees.StampDuty(1000000, d26, false) != 5000 || fees.StampDuty(999900, d26, false) != 0 || fees.StampDuty(1000000, d26, true) != 0 {
 		t.Fatal("stamp duty")
 	}
-	if EMTL(1000000, d25) != 5000 || EMTL(1000000, d26) != 0 {
+	if fees.EMTL(1000000, d25) != 5000 || fees.EMTL(1000000, d26) != 0 {
 		t.Fatal("emtl")
 	}
 }
 
 func TestBalancesChainAndNeverNegative(t *testing.T) {
-	w, now := testWorld()
+	w, now := testWorld(t)
 	for _, p := range w.Personas() {
 		for _, k := range p.Accounts {
 			a, _ := w.Account(k)
@@ -72,8 +88,8 @@ func TestBalancesChainAndNeverNegative(t *testing.T) {
 }
 
 func TestDeterministic(t *testing.T) {
-	a, now := testWorld()
-	b, _ := testWorld()
+	a, now := testWorld(t)
+	b, _ := testWorld(t)
 	for _, p := range a.Personas() {
 		for _, k := range p.Accounts {
 			la, lb := a.LinesFor(k, now), b.LinesFor(k, now)
@@ -90,7 +106,7 @@ func TestDeterministic(t *testing.T) {
 }
 
 func TestFetchStableAsClockMoves(t *testing.T) {
-	w, now := testWorld()
+	w, now := testWorld(t)
 	k := w.Personas()[0].Accounts[0]
 	from := clock.DateOf(now).AddDays(-90)
 	before, _ := w.Fetch(k, now, from)
@@ -118,7 +134,7 @@ func TestFetchStableAsClockMoves(t *testing.T) {
 }
 
 func TestPendingPostsLater(t *testing.T) {
-	w, now := testWorld()
+	w, now := testWorld(t)
 	found := false
 	for _, p := range w.Personas() {
 		for _, k := range p.Accounts {
@@ -138,7 +154,7 @@ func TestPendingPostsLater(t *testing.T) {
 }
 
 func TestScenariosInject(t *testing.T) {
-	w, now := testWorld()
+	w, now := testWorld(t)
 	k := w.Personas()[0].Accounts[0]
 	for _, s := range []string{"debit_then_reversal", "fee_vat_levy_lines", "identical_same_day_fees", "pending_amount_change", "own_account_transfer_across_banks", "renarration", "unstable_ids", "bank_outage"} {
 		if _, err := w.RunScenario(s, now.Add(time.Minute), ScenarioParams{Account: k}); err != nil {
@@ -161,7 +177,7 @@ func TestScenariosInject(t *testing.T) {
 }
 
 func TestScenarioLinesHaveValueDates(t *testing.T) {
-	w, now := testWorld()
+	w, now := testWorld(t)
 	k := w.Personas()[0].Accounts[0]
 	for _, s := range []string{"debit_then_reversal", "late_reversal", "fee_vat_levy_lines", "identical_same_day_fees", "pending_amount_change", "own_account_transfer_across_banks"} {
 		if _, err := w.RunScenario(s, now.Add(time.Minute), ScenarioParams{Account: k}); err != nil {
@@ -181,7 +197,7 @@ func TestScenarioLinesHaveValueDates(t *testing.T) {
 }
 
 func TestTransfers(t *testing.T) {
-	w, now := testWorld()
+	w, now := testWorld(t)
 	ad := w.Personas()[0]
 	var aCur, bCur, aSav Account
 	for _, k := range ad.Accounts {
@@ -245,7 +261,7 @@ func TestNUBANSixDigitSeed(t *testing.T) {
 }
 
 func TestNoPaydayOnHoliday(t *testing.T) {
-	w, now := testWorld()
+	w, now := testWorld(t)
 	salaries, onEve := 0, 0
 	for _, p := range w.Personas() {
 		for _, k := range p.Accounts {

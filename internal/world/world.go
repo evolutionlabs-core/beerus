@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
@@ -124,11 +125,12 @@ type Overrides struct {
 }
 
 type Config struct {
-	Seed         int64           `json:"seed"`
-	Genesis      clock.Date      `json:"genesis"`
-	Institutions []Institution   `json:"-"`
-	Calendar     *clock.Calendar `json:"-"`
-	Personas     []string        `json:"-"`
+	Seed         int64             `json:"seed"`
+	Genesis      clock.Date        `json:"genesis"`
+	Institutions []Institution     `json:"-"`
+	Calendar     *clock.Calendar   `json:"-"`
+	Personas     []string          `json:"-"`
+	Fees         *charges.Schedule `json:"-"`
 }
 
 func DefaultInstitutions() []Institution {

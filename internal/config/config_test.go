@@ -15,6 +15,9 @@ func TestNIPSessionsAreValidated(t *testing.T) {
 	if err != nil || c.Sessions() != DefaultNIPSessions {
 		t.Fatalf("default: %v %v", c, err)
 	}
+	if c.Fees() == nil || c.Fees().VATRateBasisPoints() != 750 {
+		t.Fatalf("finish did not build the fee schedule: %v", c.Fees())
+	}
 	for _, ok := range []int{1, 2, 12, 24, 1440} {
 		if _, err := finish(Config{NIPSessions: ok}); err != nil {
 			t.Errorf("nip sessions %d: %v", ok, err)

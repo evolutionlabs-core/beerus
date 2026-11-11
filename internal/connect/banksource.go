@@ -49,7 +49,7 @@ func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, b 
 }
 
 func (s *ledgerSource) setup() error {
-	s.b = bank.New(ledger.New(s.st.Pool, nil), bank.Profile{ID: s.inst.ID, Name: s.inst.Name, NIPCode: s.inst.NIPCode, NUBANCode: s.inst.NUBANCode})
+	s.b = bank.New(ledger.New(s.st.Pool, nil), bank.Profile{ID: s.inst.ID, Name: s.inst.Name, NIPCode: s.inst.NIPCode, NUBANCode: s.inst.NUBANCode}, s.cfg.Fees())
 	if err := s.b.Setup(s.ctx); err != nil {
 		return err
 	}
@@ -265,7 +265,7 @@ func (s *ledgerSource) Reconnect() error {
 }
 
 func (s *ledgerSource) reopen() error {
-	s.b = bank.New(ledger.New(s.st.Pool, nil), bank.Profile{ID: s.inst.ID, Name: s.inst.Name, NIPCode: s.inst.NIPCode, NUBANCode: s.inst.NUBANCode})
+	s.b = bank.New(ledger.New(s.st.Pool, nil), bank.Profile{ID: s.inst.ID, Name: s.inst.Name, NIPCode: s.inst.NIPCode, NUBANCode: s.inst.NUBANCode}, s.cfg.Fees())
 	s.marks = map[string]time.Time{}
 	s.settled = time.Time{}
 	return nil

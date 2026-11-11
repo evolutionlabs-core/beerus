@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
@@ -20,7 +19,7 @@ var goldenNow = time.Date(2026, time.January, 15, 12, 0, 0, 0, clock.Lagos)
 
 func generate(t *testing.T, banks []Institution, days int, now time.Time) Template {
 	t.Helper()
-	tmpl, err := Generate(TemplateRetail, 42, banks, days, now, clock.NewCalendar(nil, nil))
+	tmpl, err := Generate(TemplateRetail, 42, banks, days, now, clock.NewCalendar(nil, nil), testFees(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +161,7 @@ func TestRetailAddingABankOnlyMovesTransfersToIt(t *testing.T) {
 }
 
 func TestRetailIntraBankTransfersFollowTheChargeRules(t *testing.T) {
+	fees := testFees(t)
 	tmpl := generate(t, DefaultInstitutions(), 90, goldenNow)
 	keys := byKey(tmpl.Postings)
 	intra, nip := 0, 0
@@ -174,7 +174,7 @@ func TestRetailIntraBankTransfersFollowTheChargeRules(t *testing.T) {
 			_, fee := keys[p.Key+":fee"]
 			_, vat := keys[p.Key+":vat"]
 			_, stamp := keys[p.Key+":stamp"]
-			wantStamp := charges.StampDuty(-p.Amount, p.ValueDate, false) > 0
+			wantStamp := fees.StampDuty(-p.Amount, p.ValueDate, false) > 0
 			if p.Channel == "internal" {
 				intra++
 				if fee || vat || stamp != wantStamp {
@@ -188,7 +188,7 @@ func TestRetailIntraBankTransfersFollowTheChargeRules(t *testing.T) {
 			}
 		case "in":
 			_, emtl := keys[p.Key+":emtl"]
-			want := p.Channel == "nip" && charges.EMTL(p.Amount, p.ValueDate) > 0
+			want := p.Channel == "nip" && fees.EMTL(p.Amount, p.ValueDate) > 0
 			if emtl != want {
 				t.Fatalf("inflow %s on channel %s has EMTL %v", p.Key, p.Channel, emtl)
 			}
@@ -219,7 +219,7 @@ func TestRetailOneBankTransfersAreInternal(t *testing.T) {
 
 func TestRetailPersonaIsTheSameAtEveryBank(t *testing.T) {
 	tmpl := generate(t, []Institution{DefaultInstitutions()[0], DefaultInstitutions()[1], bankC()}, 0, goldenNow)
-	w := New(Config{Seed: 42, Institutions: DefaultInstitutions()}, Overrides{})
+	w := New(Config{Seed: 42, Institutions: DefaultInstitutions(), Fees: testFees(t)}, Overrides{})
 	byUser := map[string]SeedCustomer{}
 	phones := map[string]string{}
 	shared := 0
@@ -438,10 +438,13 @@ func TestGenerateRejectsBadInput(t *testing.T) {
 		{TemplateRetail, []Institution{{ID: "bank-x", Style: "online"}}, cal, `bank bank-x has style "online"; it must be traditional or digital`},
 		{TemplateRetail, []Institution{a, a}, cal, "bank bank-a is listed twice"},
 	} {
-		_, err := Generate(c.template, 42, c.banks, 90, goldenNow, c.cal)
+		_, err := Generate(c.template, 42, c.banks, 90, goldenNow, c.cal, testFees(t))
 		if err == nil || err.Error() != c.want {
 			t.Fatalf("got %v, want %q", err, c.want)
 		}
+	}
+	if _, err := Generate(TemplateRetail, 42, nil, 90, goldenNow, cal, nil); err == nil || err.Error() != "generate seed: no fee schedule" {
+		t.Fatalf("no fee schedule: got %v", err)
 	}
 }
 
@@ -453,6 +456,7 @@ func TestGenerateWithNoBanksIsEmpty(t *testing.T) {
 }
 
 func TestRetailMaintenanceFeeLeavesOutReversedDebits(t *testing.T) {
+	fees := testFees(t)
 	tmpl := generate(t, DefaultInstitutions(), 365, goldenNow)
 	keys := byKey(tmpl.Postings)
 	type month struct {
@@ -482,7 +486,7 @@ func TestRetailMaintenanceFeeLeavesOutReversedDebits(t *testing.T) {
 			continue
 		}
 		m := month{p.Account, monthOf(p.PostedAt)}
-		want := (turnover[m]*charges.MaintenancePerMille() + 500) / 1000
+		want := (turnover[m]*fees.MaintenancePerMille() + 500) / 1000
 		if -p.Amount != want {
 			t.Fatalf("maintenance fee %s is %d, want %d on turnover %d", p.Key, -p.Amount, want, turnover[m])
 		}

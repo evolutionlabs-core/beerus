@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
@@ -55,7 +56,7 @@ type Template struct {
 	Postings  []SeedPosting  `json:"postings"`
 }
 
-func Generate(template string, value int64, banks []Institution, historyDays int, now time.Time, cal *clock.Calendar) (Template, error) {
+func Generate(template string, value int64, banks []Institution, historyDays int, now time.Time, cal *clock.Calendar, fees *charges.Schedule) (Template, error) {
 	if historyDays < 0 || historyDays > MaxHistoryDays {
 		return Template{}, fmt.Errorf("history is %d days; it must be 0 to %d", historyDays, MaxHistoryDays)
 	}
@@ -64,6 +65,9 @@ func Generate(template string, value int64, banks []Institution, historyDays int
 	}
 	if cal == nil {
 		return Template{}, errors.New("generate seed: no holiday calendar")
+	}
+	if fees == nil {
+		return Template{}, errors.New("generate seed: no fee schedule")
 	}
 	seen := map[string]bool{}
 	for i, b := range banks {
@@ -81,7 +85,7 @@ func Generate(template string, value int64, banks []Institution, historyDays int
 	roster := retailRoster(value)
 	out := Template{Customers: []SeedCustomer{}, Accounts: []SeedAccount{}, Postings: []SeedPosting{}}
 	for _, b := range banks {
-		t := generateRetail(roster, value, b, banks, historyDays, now, cal)
+		t := generateRetail(roster, value, b, banks, historyDays, now, cal, fees)
 		out.Customers = append(out.Customers, t.Customers...)
 		out.Accounts = append(out.Accounts, t.Accounts...)
 		out.Postings = append(out.Postings, t.Postings...)

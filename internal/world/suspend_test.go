@@ -28,8 +28,8 @@ func linesBetween(w *World, account string, from, to time.Time) []Line {
 }
 
 func TestSuspensionFreezesTheBank(t *testing.T) {
-	plain, now := testWorld()
-	w, _ := testWorld()
+	plain, now := testWorld(t)
+	w, _ := testWorld(t)
 	if !w.Suspend("bank-b", now) || w.Suspend("bank-b", now) {
 		t.Fatal("suspend should succeed once")
 	}
@@ -93,8 +93,8 @@ func TestSuspensionFreezesTheBank(t *testing.T) {
 }
 
 func TestOutageDelaysActivity(t *testing.T) {
-	plain, now := testWorld()
-	w, _ := testWorld()
+	plain, now := testWorld(t)
+	w, _ := testWorld(t)
 	start := now.Add(24 * time.Hour).Truncate(24 * time.Hour).Add(6 * time.Hour)
 	end := start.Add(14 * time.Hour)
 	w.AddOutage(Outage{Institution: "bank-a", From: start, To: end})
@@ -137,8 +137,8 @@ func TestOutageDelaysActivity(t *testing.T) {
 }
 
 func TestOpenAccountKeepsHistory(t *testing.T) {
-	plain, now := testWorld()
-	w, _ := testWorld()
+	plain, now := testWorld(t)
+	w, _ := testWorld(t)
 	acc, err := w.OpenAccount("tunde", "bank-b", "current", now)
 	if err != nil {
 		t.Fatal(err)
@@ -184,8 +184,8 @@ func TestOpenAccountKeepsHistory(t *testing.T) {
 }
 
 func TestCloseMovesMoneyAndFreezesTheBank(t *testing.T) {
-	plain, now := testWorld()
-	w, _ := testWorld()
+	plain, now := testWorld(t)
+	w, _ := testWorld(t)
 	accts := accountsAt(w, "bank-b")
 	if len(accts) < 3 {
 		t.Fatalf("bank-b has %d accounts", len(accts))
@@ -286,14 +286,14 @@ func TestCloseMovesMoneyAndFreezesTheBank(t *testing.T) {
 }
 
 func TestCloseReleasesPendingLines(t *testing.T) {
-	plain, now := testWorld()
+	plain, now := testWorld(t)
 	for _, a := range accountsAt(plain, "bank-b") {
 		for _, l := range plain.LinesFor(a.Key, now) {
 			if !l.HasPending() || l.BookedAt.Sub(l.PendingAt) < time.Hour {
 				continue
 			}
 			at := l.PendingAt.Add(time.Minute)
-			w, _ := testWorld()
+			w, _ := testWorld(t)
 			if err := w.Close("bank-b", at, nil); err != nil {
 				t.Fatal(err)
 			}
@@ -313,7 +313,7 @@ func TestCloseReleasesPendingLines(t *testing.T) {
 }
 
 func TestPurgeHidesTheBankAndKeepsOtherHistories(t *testing.T) {
-	w, now := testWorld()
+	w, now := testWorld(t)
 	if err := w.Purge("bank-b"); err == nil {
 		t.Fatal("purged an open bank")
 	}
@@ -341,7 +341,7 @@ func TestPurgeHidesTheBankAndKeepsOtherHistories(t *testing.T) {
 			keep = append(keep, inst)
 		}
 	}
-	again := New(Config{Seed: 42, Genesis: w.Config().Genesis, Institutions: keep}, w.Overrides())
+	again := New(Config{Seed: 42, Genesis: w.Config().Genesis, Institutions: keep, Fees: testFees(t)}, w.Overrides())
 	for _, v := range []*World{w, again} {
 		for _, inst := range v.Institutions() {
 			if inst.ID == "bank-b" {
@@ -372,7 +372,7 @@ func TestPurgeHidesTheBankAndKeepsOtherHistories(t *testing.T) {
 			}
 		}
 	}
-	only := New(Config{Seed: 42, Genesis: w.Config().Genesis}, Overrides{Purged: w.Overrides().Purged, Closed: w.Overrides().Closed})
+	only := New(Config{Seed: 42, Genesis: w.Config().Genesis, Fees: testFees(t)}, Overrides{Purged: w.Overrides().Purged, Closed: w.Overrides().Closed})
 	if n := len(only.Institutions()); n != 0 {
 		t.Fatalf("a world with only a purged bank lists %d banks", n)
 	}
