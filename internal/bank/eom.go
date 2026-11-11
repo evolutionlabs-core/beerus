@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
-	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
@@ -58,19 +57,19 @@ func (b *Bank) MonthEnd(ctx context.Context, month time.Month, year int, at time
 	for _, a := range list {
 		lines := []ledger.Line{}
 		if a.events > 0 {
-			sms := a.events * charges.SMSAlertFee
-			if sms > charges.SMSMonthlyCap {
-				sms = charges.SMSMonthlyCap
+			sms := a.events * b.fees.SMSAlertFee()
+			if sms > b.fees.SMSMonthlyCap() {
+				sms = b.fees.SMSMonthlyCap()
 			}
-			vat := charges.VAT(sms)
+			vat := b.fees.VAT(sms)
 			lines = append(lines,
 				via(dr(a.code, sms, "SMS ALERT CHARGES "+label), "charge", nil), cr(FeeIncome, sms, "SMS ALERT CHARGES "+label),
 				via(dr(a.code, vat, "VAT ON SMS ALERT CHARGES "+label), "charge", nil), cr(VATPayable, vat, "VAT ON SMS ALERT CHARGES "+label))
 		}
 		if a.product == "current" && a.turnover > 0 {
-			fee := (a.turnover*charges.MaintenancePerMille + 500) / 1000
+			fee := (a.turnover*b.fees.MaintenancePerMille() + 500) / 1000
 			if fee > 0 {
-				vat := charges.VAT(fee)
+				vat := b.fees.VAT(fee)
 				lines = append(lines,
 					via(dr(a.code, fee, "ACCOUNT MAINT FEE "+label), "charge", nil), cr(FeeIncome, fee, "ACCOUNT MAINT FEE "+label),
 					via(dr(a.code, vat, "VAT ON ACCOUNT MAINT FEE "+label), "charge", nil), cr(VATPayable, vat, "VAT ON ACCOUNT MAINT FEE "+label))

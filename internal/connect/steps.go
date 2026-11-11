@@ -256,7 +256,7 @@ func (a *App) provision(b *config.Bank) {
 
 func (a *App) bankCerts(b *config.Bank) error {
 	c := config.Config{Dir: a.cfg.Dir, Banks: []*config.Bank{b}}
-	if err := c.EnsureBankCertificates(nil, time.Time{}); err != nil {
+	if err := c.EnsureBankCertificates(nil, a.clock.Real()); err != nil {
 		return fmt.Errorf("issue certificates for %s: %w", b.ID, err)
 	}
 	return a.ctl.Claim(setup.KindBank, b.ID, setup.Owned{Kind: ownedDir, Name: "banks/" + b.ID})

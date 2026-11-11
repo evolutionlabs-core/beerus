@@ -35,12 +35,13 @@ type Profile struct {
 }
 
 type Bank struct {
-	L *ledger.Ledger
-	P Profile
+	L    *ledger.Ledger
+	P    Profile
+	fees *charges.Schedule
 }
 
-func New(l *ledger.Ledger, p Profile) *Bank {
-	return &Bank{L: l, P: p}
+func New(l *ledger.Ledger, p Profile, fees *charges.Schedule) *Bank {
+	return &Bank{L: l, P: p, fees: fees}
 }
 
 func CustomerAccount(nuban string) string {
@@ -227,7 +228,7 @@ func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.T
 	}
 	c := charges.Transfer{}
 	if !s.NoCharges {
-		c = charges.ForTransfer(s.Amount, clock.DateOf(s.At), false)
+		c = b.fees.ForTransfer(s.Amount, clock.DateOf(s.At), false)
 	}
 	short := s.SessionID[18:]
 	to := s.To
@@ -319,7 +320,7 @@ func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int6
 	}
 	narr := withNarration(fmt.Sprintf("NIP TRF FRM %s/%s/%s", from.Name, from.BankName, sessionID[18:]), narration)
 	lines := []ledger.Line{dr(NIPInward, amount, narr), via(cr(CustomerAccount(to), amount, narr), "nip", &from)}
-	if levy := charges.EMTL(amount, clock.DateOf(at)); levy > 0 && !closure {
+	if levy := b.fees.EMTL(amount, clock.DateOf(at)); levy > 0 && !closure {
 		lines = append(lines, via(dr(CustomerAccount(to), levy, "EMTL "+sessionID[18:]), "charge", nil), cr(StampPayable, levy, "EMTL "+sessionID[18:]))
 	}
 	e := entry("nip-in:"+sessionID, "nip_inward", at, narr, lines...)

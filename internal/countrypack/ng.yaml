@@ -18,6 +18,44 @@ simulator_codes:
   nip: {first: 999001, last: 999999}
   nuban: {first: 901, last: 999}
   source: Beerus placeholder ranges for allocating codes to banks created in Beerus. They are not real CBN or NIBSS allocations.
+fees:
+  nip:
+    - from: 2020-01-01
+      bands:
+        - {up_to_minor: 500000, fee_minor: 1000}
+        - {up_to_minor: 5000000, fee_minor: 2500}
+        - {fee_minor: 5000}
+      source: CBN Guide to Charges by Banks, Other Financial and Non-Financial Institutions, effective 1 January 2020, which sets N10 below N5,000, N25 from N5,000 to N50,000 and N50 above N50,000. The bands were confirmed from press reports of the guide, not from the scanned CBN PDF.
+  stamp_duty:
+    - from: 2020-01-01
+      threshold_minor: 0
+      amount_minor: 0
+      source: Beerus placeholder. Stamp duty on electronic transfers is modelled as starting on 2026-01-01, with the earlier levy carried by emtl.
+    - from: 2026-01-01
+      threshold_minor: 1000000
+      amount_minor: 5000
+      source: Nigeria Tax Act 2025 replaces the electronic money transfer levy with a N50 stamp duty on transfers of N10,000 and above, charged to the sender from 1 January 2026. https://techeconomy.ng/stamp-duty-replaces-emtl-sender-to-bear-50-charge-on-bank-transfers
+  emtl:
+    - from: 2020-01-01
+      threshold_minor: 1000000
+      amount_minor: 5000
+      source: Electronic money transfer levy of N50 on transfers of N10,000 and above, under the Finance Act 2020 and CBN circulars. The amount and threshold were not re-confirmed against the Act text. https://techeconomy.ng/stamp-duty-replaces-emtl-sender-to-bear-50-charge-on-bank-transfers
+    - from: 2026-01-01
+      threshold_minor: 0
+      amount_minor: 0
+      source: The Nigeria Tax Act 2025 replaces the levy with stamp duty from 1 January 2026. https://techeconomy.ng/stamp-duty-replaces-emtl-sender-to-bear-50-charge-on-bank-transfers
+  vat_rate_basis_points:
+    value: 750
+    source: Finance Act 2019 sets VAT at 7.5 percent. No page was opened to confirm it.
+  sms_alert_fee_minor:
+    value: 400
+    source: CBN guide to charges allows banks to charge not more than N4 per SMS alert on request. The cap is quoted in https://nairametrics.com/breakdown-of-new-cbn-guide-to-charges-by-banks/ which covers the 2017 guide. The 2020 text was not read.
+  sms_monthly_cap_minor:
+    value: 50000
+    source: Beerus placeholder. The CBN guide gives no monthly cap on SMS alert charges that we could confirm.
+  maintenance_per_mille:
+    value: 1
+    source: CBN guide to charges caps the account maintenance fee at N1 per mille of customer-induced debit turnover. The cap is quoted in https://nairametrics.com/breakdown-of-new-cbn-guide-to-charges-by-banks/ which covers the 2017 guide. The 2020 text was not read.
 declared:
   - year: 2022
     remove: [2022-05-04]

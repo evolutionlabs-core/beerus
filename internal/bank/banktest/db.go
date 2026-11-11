@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/charges"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 )
 
 const database = "beerus_test"
@@ -90,4 +92,17 @@ func Schema(t testing.TB) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	return pool
+}
+
+func Fees(t testing.TB) *charges.Schedule {
+	t.Helper()
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := charges.New(pack.Fees)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

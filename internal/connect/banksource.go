@@ -48,7 +48,7 @@ func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, b 
 }
 
 func (s *ledgerSource) setup() error {
-	s.b = bank.New(ledger.New(s.st.Pool, nil), s.inst)
+	s.b = bank.New(ledger.New(s.st.Pool, nil), s.inst, s.cfg.Fees())
 	if err := s.b.Setup(s.ctx); err != nil {
 		return err
 	}
@@ -157,7 +157,7 @@ func (s *ledgerSource) Reconnect() error {
 }
 
 func (s *ledgerSource) reopen() error {
-	s.b = bank.New(ledger.New(s.st.Pool, nil), s.inst)
+	s.b = bank.New(ledger.New(s.st.Pool, nil), s.inst, s.cfg.Fees())
 	s.settled = time.Time{}
 	return nil
 }

@@ -1154,7 +1154,7 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 	if err := connect.CheckPorts(c); err != nil {
 		return err
 	}
-	if err := c.EnsureCertificates(); err != nil {
+	if err := c.EnsureCertificates(time.Now()); err != nil {
 		return err
 	}
 	log := slog.New(slog.NewTextHandler(e.errOut, &slog.HandlerOptions{Level: slog.LevelInfo}))

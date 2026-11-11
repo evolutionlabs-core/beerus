@@ -155,7 +155,7 @@ func (a *App) replacePartner(id string, p *config.Partner) {
 
 func (a *App) issuePartnerCert(p *config.Partner) error {
 	c := config.Config{Dir: a.cfg.Dir, Connect: a.cfg.Connect, Partners: []*config.Partner{p}}
-	if err := c.EnsureCertificates(); err != nil {
+	if err := c.EnsureCertificates(a.clock.Real()); err != nil {
 		return fmt.Errorf("issue certificate for %s: %w", p.ID, err)
 	}
 	return nil
