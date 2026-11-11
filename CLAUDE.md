@@ -1,26 +1,132 @@
-# Beerus: how to write code here
+# Beerus: Go style
 
-Beerus is a faithful copy of Nigeria's banking infrastructure: banks, NIBSS, CBN settlement and open banking, all running from one binary. People use it to learn how the system works, and to build real apps while their licence is pending. Treat it as a real system, not a demo.
+Beerus is a copy of Nigeria's banking infrastructure in one Go binary: banks, NIBSS, CBN settlement and open banking. Write it like the standard library: small packages, plain names, explicit errors, no magic. This file is the single source of the code rules, and the review bot checks every PR against it.
 
-This file is the single source of the code rules. Every agent reads it before writing code, and the review bot checks every PR against it, so code that follows it passes review the first time. The full guide, with examples for every rule, is the Notion page "Beerus coding guide". The design is the Notion page "Beerus control plane and banking core PRD".
+## Principles
+- **Clear beats clever.** A reader should follow a function top to bottom without jumping around.
+- **Copy the code around you.** Match its naming, file layout, error style and test style before adding a new pattern.
+- **Small surface.** Export only what another package uses. Unexport everything else.
+- **Explicit beats implicit.** No `init()`, no mutable package-level state, no reflection tricks. Pass dependencies in.
+- **Delete, don't keep.** No dead code, no unused parameters, no code kept "for later".
+- **No code comments.** Names carry the meaning. Test code has none either. If a name needs a comment, rename it.
+- **No new `.md` files.** Docs live in Notion.
 
-## How to work
-1. Read the PRD section for your task and the code around the change. Copy the patterns you find there: naming, file layout, error style, test style.
-2. Write the change and its tests together. Every new rule gets edge-case tests and a test of its failure message.
-3. Before you commit, run the checks below and go through "Mistakes we have made" at the end of this file.
-4. Write the PR body as described under "Commits and PRs". State every behaviour change, limit and placeholder.
+## Packages
+- **One purpose per package,** named with one short lower-case noun: `clock`, `charges`, `nibss`. Never `util`, `common` or `helpers`.
+- **Rules live in the lowest package that can own them:**
+  - fees in `charges`
+  - dates in `clock`
+  - real-world data in `countrypack`, with a `source:` link
+  - a bank's ledger in `bank`
+  - the switch, BVNs and NIP sessions in `nibss`
+  - spec and plan in `setup`
 
-## House rules (a reviewer blocks on these)
-- No code comments. Names carry the meaning. Test code has none either.
-- No new `.md` files. This file and the README are the only exceptions. Docs live in Notion.
-- UI text, errors, flags and PR text are short, plain English.
-- Never hard-code data that a rule can compute or config should hold: date lists, per-year tables, magic amounts, fixed ports, bank lists. Put real-world data in `internal/countrypack` with a `source:` link, or in config.
-- No silent limits and no silent fallbacks. Paginate with `limit` and `cursor`. If a bound is hit, fail and give the size. Reject bad input; never replace it with a default.
-- Never swallow an error. Wrap it with `fmt.Errorf("verb noun: %w", err)`. Discard an error only on cleanup paths.
-- State every public behaviour change, limit and placeholder in the PR body. Never hide a golden-value change.
-- Nothing moves on its own. Money and data change only when a user, their app, or the clock makes them change.
-- If a figure is invented (caps, collateral, BVN format), label it as a placeholder. Never present it as a NIBSS or CBN fact.
-- `web/node_modules` is never committed. If you touch Tailwind classes, run `cd web && npm run css` and commit `internal/connect/assets/beerus.css`.
+  `connect` wires them together.
+- **Dependencies point down.** A domain package never imports `connect` or `cmd`. No import cycles, and no interface added just to break one.
+- **`cmd/beerus` is CLI only.** It parses flags, calls the control API and prints. No business logic.
+- **One feature, one file,** named after the noun: `close.go`, `purge.go`, `reset.go`. Split a file when it holds two nouns.
+- **Each participant owns its data** and reads only its own database.
+
+## Naming
+- **Short and idiomatic.** `b` for a bank in a ten-line function, a full word for a field. The wider the scope, the longer the name.
+- **No stutter.** `nibss.Store`, not `nibss.NibssStore`.
+- **Initialisms keep their case:** `ID`, `URL`, `BVN`, `NIP`, `HTTP`.
+- **No `Get` prefix.** `b.Balance()`, not `b.GetBalance()`.
+- **One-method interfaces end in `-er`.**
+- **Errors.** Exported sentinels are `ErrXxx`, private ones `errXxx`, error types `XxxError`.
+- **The `Locked` suffix** means the caller holds `a.mu`. A function that takes the lock itself never has it. A function that releases the caller's lock part-way must not exist; split it.
+- **JSON and YAML keys** are snake_case. Money fields end in `_minor`. Times end in `_at`.
+
+## Functions and types
+- **Return early.** Handle the error or the odd case first and keep the main path unindented. No `else` after a `return`.
+- **Keep functions short.** If one needs section breaks to be readable, split it.
+- **`context.Context` is the first parameter** of anything that does I/O. Never store it in a struct. Never start a fresh `context.Background()` below the top of a request or the run loop.
+- **Accept interfaces, return structs.** Define an interface where it is used, and only when it has two real implementations.
+- **Useful zero values.** Use a constructor only when one is needed.
+- **Pointer receivers** for types that have a mutex or are mutated. Do not mix receiver kinds on one type.
+- **No speculative abstraction.** No option struct, generic or helper with one caller.
+- **No test hooks in production.** No package `var` that a test overwrites, and no `httptest`. Pass the value in.
+- **Constants over literals.** A number with a meaning gets a name. A number from the real world goes in `countrypack` or config.
+- **Slices and maps.** Return an empty slice, not nil, in JSON responses. Never rely on map order; sort before you output or hash.
+
+## Errors
+- **Never swallow an error.** `x, _ := f()` is allowed only when the second value is not an error. Discard an error only on cleanup paths.
+- **Wrap with context:** `fmt.Errorf("open ledger: %w", err)`. Lower case, no full stop, verb then noun, no "failed to".
+- **Handle an error once.** Return it or log it, never both.
+- **Match with `errors.Is` and `errors.As`,** never by comparing strings.
+- **No `panic`** outside `main` startup. User input never causes one.
+- **Never return a zero value for a failed read.** A balance that could not be read is an error, not 0.
+- **A change that cannot be saved is undone** in memory before the error is returned.
+
+## Concurrency
+- **Lock order:** `applyMu` → `stepMu` → `gate` → `recMu` → `lifeMu` → `sendLock` → `mu` → `regMu` → `ctlMu`. Never take an earlier lock while holding a later one.
+- **`sendLock`** is per sending bank. It is the one lock allowed across the bank and NIBSS DB calls for the cap check and debit.
+- **`gate`** is the write gate. Every outermost write to bank, CBN or NIBSS data holds `gate.RLock`; a snapshot or restore holds `gate.Lock`. Never take `gate.RLock` twice on one goroutine; call the ungated inner function instead.
+- **Leaf locks** (`idemMu`, `pullMu`) are taken last and never held while taking another lock.
+- **No lock across slow work,** `sendLock` aside: no network call, DB query, file write, sleep or `writeJSON` under a shared lock. Copy what you need, unlock, do the I/O, relock and apply.
+- **`defer mu.Unlock()`** right after `Lock()` unless the function has to release early.
+- **Flags read across locks are atomics.**
+- **Every goroutine has an owner and a stop condition,** usually a context. The code that starts it waits for it on shutdown.
+- **Channels have one closer,** the sender.
+- **No `time.Sleep` to wait.** Use a timer in a `select` with `ctx.Done()`.
+- **`go test -race` must stay clean.**
+
+## HTTP
+- **Handlers stay thin.** Decode, call an exported `*App` method, map the error.
+- **Clients are shared and bounded.** Every `http.Client` has a timeout. Every `http.Transport` is built once and sets `IdleConnTimeout`.
+- **Always close and bound a body.** Read through `io.LimitReader`, and fail with the size when the limit is hit.
+- **Lists paginate** with `limit` and `cursor`. Never cut a list silently.
+- **The error body** is always `{"error":{"code","message","request_id"}}`, with snake_case codes.
+- **User-fixable errors are 422** and say what to do, with the numbers: `this setup already has 6 banks`.
+- **Check certificate identity** on every mTLS call. Never weaken the CSP.
+
+## State and I/O
+- **Atomic writes.** Temp file, then rename, mode 0600. Never `os.WriteFile` a state or key file directly, and never delete the old copy first.
+- **Create only when missing.** Check `errors.Is(err, os.ErrNotExist)`. Any other read error is returned, never papered over with a new file.
+- **Reject bad input at the edge.** Never replace it with a default.
+- **Secrets** never go into YAML, JSON state, snapshots or logs. They come from `crypto/rand`.
+- **Anything that grows is swept with a TTL:** maps, tables, lock sets.
+- **Steps are idempotent ensures.** A provisioning or finalizer step can run twice and give the same result. Retries back off using real time from `clock`.
+- **Nothing moves on its own.** Money and data change only when a user, their app or the clock makes them. No generated history and no background activity.
+- **Only setup banks exist.** A transfer to any other code fails.
+- **Logging** uses `slog` with constant messages and key-value fields.
+
+## Money
+- **`int64` minor units (kobo) everywhere.** No floats. Parse naira once, at the edge.
+- **Check every sum and product for overflow.**
+- **Rates are integers,** such as basis points. A dated rule gets a new entry; an old one is never edited.
+- **Every posting has both sides,** and every settlement check balances.
+- **Classify from structured fields** (channel, category), never from narration text.
+- **Every retryable write carries a deterministic idempotency key.** There is one idempotency mechanism, and it covers every branch.
+- **Invented figures are labelled placeholders,** never presented as a NIBSS or CBN fact.
+
+## Time
+- **Beerus runs on real Lagos time.** There is no simulated clock and nothing is backdated.
+- **`internal/clock` is the only source of now.** `Now()` for anything a customer or bank would date, `Real()` for operational TTLs and timeouts. No `time.Now()` elsewhere; a function that needs the time takes it as a parameter.
+- **Dates use `clock.Date`.** Month arithmetic clamps to month end.
+- **IDs are derived from what they name** (`world.ID`), never from map order, the time or a count of other things. Random values are for secrets and request IDs only.
+
+## Postgres
+- **Queries take a `ctx`** and use `$1` placeholders. Never build SQL from input.
+- **Style:** snake_case, `bigint` money, `timestamptz`, `CHECK` enums.
+- **Migrations** are numbered goose files, never edited once shipped, safe to re-run.
+- **Database names come only from `config.DatabaseName`.**
+- **Claim what you create** (database, port, snapshot) in the status store, and release it when you drop it.
+
+## Tests
+- **Few, broad tests.** One table-driven test covers a whole rule: the normal path, the edges and the failure message.
+- **Test behaviour through the exported API.** Assert exact numbers and exact error text.
+- **Every package that holds a rule has tests beside it.**
+- **Edges to cover:** weekends, holidays, month ends, leap years, far-future years, zero, the largest amount.
+- **Helpers call `t.Helper()`** and clean up with `t.Cleanup`.
+- **No sleeps.** Poll with a deadline.
+- **Keep them fast.** Use `banktest.Schema(t)` for DB tests. In `contracttest`, use `newStack` unless the test needs real banks.
+- **Never skip or weaken a test to make it pass.**
+
+## Text
+- **UI text, errors and flags are short, plain English.**
+- **Get singular and plural right.**
+- **CLI errors** print `beerus: <message>` and exit 1. **Spec errors** give `file:line:col` and what to do.
 
 ## Before every commit
 ```bash
@@ -28,102 +134,4 @@ go vet ./...
 $(go env GOROOT)/bin/gofmt -l .
 go test -short -count=1 ./...
 ```
-`-short` skips the contract tests that start a full stack, so the run takes under 10 seconds. CI runs everything with `-race`.
-Use the toolchain's gofmt; the Homebrew one is older and CI disagrees with it.
-
-## Layout
-- **Domain rules** go in the lowest package that can own them:
-  - fees in `charges`
-  - dates in `clock` and `countrypack`
-  - a bank's ledger in `bank`
-  - the switch, BVNs and NIP sessions in `nibss`
-  - spec and plan in `setup`
-
-  `connect` calls them.
-- **Handlers stay thin.** Decode, call an exported `*App` method, map the error. One feature lives in one file named after the noun (`close.go`, `purge.go`).
-- **No speculative abstraction.** No interface, option struct or helper package with only one caller. No `httptest` or test hooks in production code.
-- **Participants own their data.** Each one reads only its own database. When code still shares state in-process, say so in the PR. Never claim a separation the code doesn't have.
-- **`cmd/beerus` is CLI only.** It parses flags, calls the control API and prints. No business logic.
-
-## Naming
-- **Go idiom.** Short names, no stutter.
-- **The `Locked` suffix** means the caller holds `a.mu`.
-- **Errors.** Exported sentinels are `ErrXxx`; private ones are `errXxx`.
-- **JSON and YAML keys** are snake_case. Money fields end in `_minor`. Times end in `_at`.
-- **Database names** come only from `config.DatabaseName`. Never build one by hand.
-
-## Errors and text
-- **User-fixable errors** become 422 and tell the user what to do, with the numbers: `this setup already has 6 banks`.
-- **The API error body** is always `{"error":{"code","message","request_id"}}`, with snake_case codes.
-- **CLI errors** print `beerus: <message>` and exit 1.
-- **Spec errors** give `file:line:col` and what to do.
-- **Wording.** Get singular and plural right. Never write vague text like "Steps 1 to 1 already ran."
-
-## Locking
-- **Lock order:** `applyMu` → `stepMu` → `gate` → `recMu` → `lifeMu` → `sendLock` → `mu` → `regMu` → `ctlMu`. Never take an earlier lock while holding a later one. `sendLock` is per sending bank and is the one lock allowed across the bank and NIBSS DB calls for the cap check and debit. `gate` is the write gate: every outermost write to bank, CBN or NIBSS data holds `gate.RLock`, a snapshot or restore holds `gate.Lock`. Never take `gate.RLock` twice on one goroutine; call the ungated inner function instead.
-- **No lock across slow work.** Never hold a shared lock across a network call, a DB query, a file write, `time.Sleep` or `writeJSON`. Copy what you need under the lock, unlock, do the I/O, then relock to apply the result.
-- **Flags read across locks** are atomics.
-- **Goroutines and transports.** Every goroutine has a stop condition. Every `http.Transport` is shared and has idle timeouts.
-
-## State
-- **Writes** are temp file then rename, mode 0600. Never `os.WriteFile` a state file directly.
-- **Secrets.** Keys, tokens and passwords never go into YAML, JSON state, snapshots or logs.
-- **Input.** Validate every input at the edge. User input never causes a panic.
-- **Security.** Check certificate identity on every mTLS call. Tokens are single-use where the PRD says so. Never weaken the CSP.
-- **Pruning.** Anything that accumulates is swept with a TTL.
-- **Counterparties.** Records copy counterparty details when they are written. They never look up a live directory later.
-
-## Money
-- **Units.** `int64` minor units (kobo) everywhere. No floats. Parse naira once, at the edge.
-- **Balanced postings.** Every posting has both sides. Every settlement check must balance.
-- **Rates and dated rules.** Rates are integers, such as basis points. A dated rule gets a new entry; never edit an old one.
-- **Classification.** Classify money from structured fields (channel, category), never from narration text.
-- **Overflow.** Check sums and products of amounts for overflow.
-- **Idempotency.** Every write that can be retried carries a deterministic idempotency key and is safe to repeat. There is one idempotency mechanism; cover every branch.
-
-## Time
-- **Source of now.** `internal/clock` is the only source of the current time. Use business time for anything a customer or bank would date, and real time for operational TTLs. Never call `time.Now()` in domain code.
-- **Dates.** Use `clock.Date` and the calendar. Month arithmetic clamps to month end.
-- **Edge cases to test:** weekends, holidays, month ends, leap years, far-future years.
-
-## Determinism
-- **Seeded generation.** The same seed template and value always produce the same data. Randomness is seeded from what it generates, never from map order, `time.Now`, or the count of other banks.
-- **Randomness for secrets.** Use `crypto/rand`, and only for secrets and request IDs.
-
-## Postgres
-- **Databases.** Each participant has its own database. Migrations are numbered goose files that are never edited once shipped and can be re-run safely.
-- **SQL style:** snake_case, `bigint` money, `timestamptz`, `CHECK` enums, `$1` placeholders.
-- **Claims.** Anything that creates a database, port or snapshot claims it in the status store. Anything that drops one releases it.
-
-## Tests
-- **Speed.** Write fast unit tests beside the code first. Use `banktest.Schema(t)` for DB tests. In `contracttest`, `newStack` is the default; use `newBankStack` only for bank, settlement and lifecycle tests. CI time matters.
-- **Behaviour, exactly.** Assert behaviour, not implementation, and assert exact numbers. Never skip or weaken a test to make it pass. If a golden value changes, say why in the PR.
-- **No sleeps.** Poll with a deadline instead of `time.Sleep`.
-- **Coverage.** Every new rule gets edge-case tests and a test of its failure message.
-
-## Commits and PRs
-- **Commit message.** Use one imperative sentence of about 60 characters, without a full stop. Add an optional short body. End with the attribution trailer the session gives.
-- **PR body.** Short bold headings, one bullet per behaviour, behaviour changes and placeholders stated. End with the Claude Code line.
-- **Branches.** Commit only on your own branch. Never push or merge without the lead's and the user's OK.
-- **Before merging,** every PR is reviewed against `.github/review-standard.txt`, and the review must be clean.
-
-## Mistakes we have made (check before you push)
-1. A lock held across network, DB or sleep.
-2. Hard-coded data or magic numbers.
-3. Silent limits or fallbacks.
-4. Swallowed errors.
-5. Unstated behaviour changes.
-6. Unbounded maps or tables.
-7. Races on shared fields.
-8. Goroutine or connection leaks.
-9. Secrets in snapshots, YAML or logs.
-10. Overclaimed boundaries.
-11. Slow tests, or tests that assert implementation.
-12. Idempotency on only one branch.
-13. Text deciding money.
-14. Date edge cases.
-15. Needless abstraction or dead code.
-16. Validation inside a loop that may not run.
-17. Unclear text or wrong plurals.
-18. Fixed topology (ports, bank names in code).
-19. Unsourced Nigerian banking facts.
+`-short` skips the contract tests that start a full stack, so the run takes under 10 seconds. CI runs everything with `-race`. Use the toolchain's gofmt; the Homebrew one is older and CI disagrees with it. Commit messages are one imperative sentence of about 60 characters. The PR body states every behaviour change, limit and placeholder.
