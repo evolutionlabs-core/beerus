@@ -82,11 +82,15 @@ type Stack struct {
 	vmu        sync.Mutex
 	violations []string
 	skew       atomic.Int64
+	origin     time.Time
 	people     map[string]persona
 }
 
 func (s *Stack) realNow() time.Time {
-	return time.Now().Add(time.Duration(s.skew.Load()))
+	if s.external {
+		return time.Now()
+	}
+	return stackBase().Add(time.Since(s.origin)).Add(time.Duration(s.skew.Load()))
 }
 
 func (s *Stack) skewReal(by time.Duration) {
@@ -161,6 +165,38 @@ func newBankStackWith(t *testing.T, edit func(*config.Config)) *Stack {
 	return startStack(t, edit)
 }
 
+const (
+	stackHour      = 9
+	stackFirstDay  = 3
+	stackLastDay   = 14
+	stackQuietDays = 14
+	stackWeekday   = time.Thursday
+)
+
+var (
+	baseOnce sync.Once
+	baseTime time.Time
+)
+
+func stackBase() time.Time {
+	baseOnce.Do(func() {
+		for d := clock.DateOf(time.Now()).AddDays(1); ; d = d.AddDays(1) {
+			if d.Weekday() != stackWeekday || d.D < stackFirstDay || d.D > stackLastDay {
+				continue
+			}
+			quiet := true
+			for i := 0; i <= stackQuietDays; i++ {
+				quiet = quiet && !clock.IsHoliday(d.AddDays(i))
+			}
+			if quiet {
+				baseTime = d.Start().Add(stackHour * time.Hour)
+				return
+			}
+		}
+	})
+	return baseTime
+}
+
 func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	t.Helper()
 	if testing.Short() {
@@ -172,7 +208,7 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 		local.DatabaseURL = u
 	}
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort = ports[0], ports[1], ports[2], ports[3]
-	today := clock.DateOf(time.Now())
+	today := clock.DateOf(stackBase())
 	spec := setup.DefaultSpec("contract", today)
 	spec.Spec.Partners = []setup.Partner{{
 		ID:           "balance",
@@ -204,7 +240,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}
-	s := &Stack{t: t, people: map[string]persona{}}
+	s := &Stack{t: t, people: map[string]persona{}, origin: time.Now()}
 	if opts.Real == nil {
 		opts.Real = s.realNow
 	}

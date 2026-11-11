@@ -40,7 +40,7 @@ func (o *obClient) assertion() string {
 	if err != nil {
 		o.t.Fatal(err)
 	}
-	jwt, err := openbanking.Sign(key, "connect-1", map[string]any{"iss": o.s.cfg.Connect.RegistryID, "sub": o.s.cfg.Connect.RegistryID, "aud": o.issuer, "jti": fmt.Sprint(time.Now().UnixNano()), "exp": time.Now().Add(time.Minute).Unix()})
+	jwt, err := openbanking.Sign(key, "connect-1", map[string]any{"iss": o.s.cfg.Connect.RegistryID, "sub": o.s.cfg.Connect.RegistryID, "aud": o.issuer, "jti": fmt.Sprint(time.Now().UnixNano()), "exp": o.s.realNow().Add(time.Minute).Unix()})
 	if err != nil {
 		o.t.Fatal(err)
 	}
