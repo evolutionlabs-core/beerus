@@ -19,7 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
@@ -137,12 +139,28 @@ type Config struct {
 	Dir         string     `yaml:"-"`
 	Start       time.Time  `yaml:"-"`
 	calendar    *clock.Calendar
+	fees        *charges.Schedule
 }
 
 const DatabaseURLEnv = "BEERUS_DATABASE_URL"
 
 func (c *Config) Calendar() *clock.Calendar {
 	return c.calendar
+}
+
+func (c *Config) Fees() *charges.Schedule {
+	return c.fees
+}
+
+func (c *Config) buildFees() error {
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return fmt.Errorf("load country pack: %w", err)
+	}
+	if c.fees, err = charges.New(pack.Fees); err != nil {
+		return fmt.Errorf("build fee schedule: %w", err)
+	}
+	return nil
 }
 
 func (c *Config) buildCalendar() error {
@@ -278,6 +296,9 @@ func (c *Config) Finish() error {
 	}
 	if c.Pace <= 0 {
 		c.Pace = 1
+	}
+	if err := c.buildFees(); err != nil {
+		return err
 	}
 	return c.buildCalendar()
 }

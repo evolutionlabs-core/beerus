@@ -162,10 +162,10 @@ func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferRe
 	res := TransferResult{From: from.Key, To: cp.AccountNumber, Amount: r.Amount}
 	if intra {
 		res.Kind = "intra_bank"
-		res.StampDuty = charges.StampDuty(r.Amount, d, sameOwner)
+		res.StampDuty = w.cfg.Fees.StampDuty(r.Amount, d, sameOwner)
 	} else {
 		res.Kind = "nip"
-		c := charges.ForTransfer(r.Amount, d, false)
+		c := w.cfg.Fees.ForTransfer(r.Amount, d, false)
 		res.Fee, res.VAT, res.StampDuty = c.Fee, c.VAT, c.StampDuty
 	}
 	res.TotalDebit = r.Amount + res.Fee + res.VAT + res.StampDuty
@@ -240,7 +240,7 @@ func (w *World) transfer(at time.Time, r TransferRequest, send bool) (TransferRe
 		if to != nil {
 			back := &Counterparty{Name: strings.ToUpper(w.personas[from.Owner].Name), AccountNumber: from.NUBAN, BankCode: fromInst.NIPCode, BankName: fromInst.Name}
 			lines = append(lines, Line{Key: s.key(to.Key), Account: to.Key, Amount: r.Amount, BookedAt: at, Narration: g.narr(&toInst, "in", back.Name, back.BankName, short), Counterparty: back, SessionID: sid, BankRef: g.bankRef(&toInst, at), Channel: "nip"})
-			if levy := charges.EMTL(r.Amount, d); levy > 0 {
+			if levy := w.cfg.Fees.EMTL(r.Amount, d); levy > 0 {
 				lines = append(lines, Line{Key: s.key(to.Key), Account: to.Key, Amount: -levy, BookedAt: at, Narration: g.narr(&toInst, "emtl", short), SessionID: sid, BankRef: g.bankRef(&toInst, at), Channel: "charge", Category: charges.CategoryLevy})
 			}
 			res.Credited = true

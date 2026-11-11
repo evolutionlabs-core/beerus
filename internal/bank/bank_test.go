@@ -26,7 +26,7 @@ type testBank struct {
 
 func newBank(t testing.TB, id, nip, nubanCode string, customers int) *testBank {
 	ctx := context.Background()
-	b := bank.New(ledger.New(banktest.Schema(t), nil), bank.Profile{ID: id, Name: id, NIPCode: nip, NUBANCode: nubanCode})
+	b := bank.New(ledger.New(banktest.Schema(t), nil), bank.Profile{ID: id, Name: id, NIPCode: nip, NUBANCode: nubanCode}, banktest.Fees(t))
 	if err := b.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}

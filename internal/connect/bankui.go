@@ -334,11 +334,11 @@ func (a *bankSite) obStatement(w http.ResponseWriter, r *http.Request) {
 		a.pageFailed(w, "statement", fmt.Errorf("read statement of %s: %w", acc.Key, err))
 		return
 	}
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
 	const size = 30
+	page, ok := pageParam(w, r, "statement", pagesOf(len(ls), size)+1)
+	if !ok {
+		return
+	}
 	end := len(ls) - (page-1)*size
 	if end < 0 {
 		end = 0
@@ -546,12 +546,8 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		return
 	}
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-	if page > maxHistoryPages {
-		http.Error(w, fmt.Sprintf("The access history has at most %d pages.", maxHistoryPages), http.StatusUnprocessableEntity)
+	page, ok := pageParam(w, r, "access history", maxHistoryPages)
+	if !ok {
 		return
 	}
 	need := page*historyPageSize + 1

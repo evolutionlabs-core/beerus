@@ -36,22 +36,6 @@ func CounterpartyBanks() []Institution {
 	return out
 }
 
-func NIPFee(amount int64, d clock.Date) int64 {
-	return charges.NIPFeeOn(amount, d)
-}
-
-func VAT(base int64) int64 {
-	return charges.VAT(base)
-}
-
-func StampDuty(amount int64, d clock.Date, exempt bool) int64 {
-	return charges.StampDuty(amount, d, exempt)
-}
-
-func EMTL(amount int64, d clock.Date) int64 {
-	return charges.EMTL(amount, d)
-}
-
 type dayGen struct {
 	w       *World
 	d       clock.Date
@@ -360,13 +344,13 @@ func (g *dayGen) inflow(a *Account, amt int64, kind string) {
 		narr = g.narr(inst, "salary", cp.Name)
 	}
 	g.add(&Line{Key: g.key("in"), Account: a.Key, Amount: amt, BookedAt: t, Narration: narr, Counterparty: cp, SessionID: sid, BankRef: ref, Channel: "nip"})
-	if levy := EMTL(amt, g.d); levy > 0 && kind != "salary" {
+	if levy := g.w.cfg.Fees.EMTL(amt, g.d); levy > 0 && kind != "salary" {
 		g.add(&Line{Key: g.key("emtl"), Account: a.Key, Amount: -levy, BookedAt: t.Add(time.Second), Narration: g.narr(inst, "emtl", sid[len(sid)-12:]), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryLevy})
 	}
 }
 
 func (g *dayGen) charges(amount int64, exempt bool) (fee, vat, stamp int64) {
-	t := charges.ForTransfer(amount, g.d, exempt)
+	t := g.w.cfg.Fees.ForTransfer(amount, g.d, exempt)
 	return t.Fee, t.VAT, t.StampDuty
 }
 
@@ -378,7 +362,7 @@ func (g *dayGen) fit(a *Account, amt int64, at time.Time, exempt bool) int64 {
 		if avail-amt-fee-vat-stamp >= buffer {
 			return amt
 		}
-		amt = (avail - buffer - 5000 - VAT(5000) - 5000) / 5000 * 5000
+		amt = (avail - buffer - 5000 - g.w.cfg.Fees.VAT(5000) - 5000) / 5000 * 5000
 	}
 	return 0
 }
@@ -511,7 +495,7 @@ func (g *dayGen) monthEnd() {
 				sms = 50000
 			}
 			g.add(&Line{Key: g.key("sms"), Account: k, Amount: -sms, BookedAt: t, Narration: g.narr(inst, "sms", month), BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryFee})
-			g.add(&Line{Key: g.key("smsvat"), Account: k, Amount: -VAT(sms), BookedAt: t.Add(time.Second), Narration: g.narr(inst, "smsvat", month), BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryVAT})
+			g.add(&Line{Key: g.key("smsvat"), Account: k, Amount: -g.w.cfg.Fees.VAT(sms), BookedAt: t.Add(time.Second), Narration: g.narr(inst, "smsvat", month), BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryVAT})
 		}
 		if a.Type == "current" && st.debitTurn > 0 {
 			fee := (st.debitTurn + 500) / 1000
@@ -521,7 +505,7 @@ func (g *dayGen) monthEnd() {
 			}
 			if fee > 0 {
 				g.add(&Line{Key: g.key("maint"), Account: k, Amount: -fee, BookedAt: t.Add(2 * time.Second), Narration: g.narr(inst, "maint", month), BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryFee})
-				g.add(&Line{Key: g.key("maintvat"), Account: k, Amount: -VAT(fee), BookedAt: t.Add(3 * time.Second), Narration: g.narr(inst, "maintvat", month), BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryVAT})
+				g.add(&Line{Key: g.key("maintvat"), Account: k, Amount: -g.w.cfg.Fees.VAT(fee), BookedAt: t.Add(3 * time.Second), Narration: g.narr(inst, "maintvat", month), BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryVAT})
 			}
 		}
 		st.alerts = 0

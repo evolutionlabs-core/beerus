@@ -287,6 +287,28 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 
 const pageSize = 50
 
+func pagesOf(rows, size int) int {
+	return max((rows+size-1)/size, 1)
+}
+
+func pageParam(w http.ResponseWriter, r *http.Request, what string, last int) (int, bool) {
+	raw := r.URL.Query().Get("page")
+	if raw == "" {
+		return 1, true
+	}
+	page, err := strconv.Atoi(raw)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		http.Error(w, fmt.Sprintf("The page %q must be a whole number.", raw), http.StatusUnprocessableEntity)
+		return 0, false
+	}
+	page = max(page, 1)
+	if page > last {
+		http.Error(w, fmt.Sprintf("The page %s is too high. The %s allows pages 1 to %d.", raw, what, last), http.StatusUnprocessableEntity)
+		return 0, false
+	}
+	return page, true
+}
+
 const recentLimit = 14
 
 func recentNote(n int) string {
@@ -310,9 +332,9 @@ func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 		a.pageFailed(w, "account", fmt.Errorf("read statement of %s: %w", acc.Key, err))
 		return
 	}
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
+	page, ok := pageParam(w, r, "statement", pagesOf(len(ls), pageSize)+1)
+	if !ok {
+		return
 	}
 	end := len(ls) - (page-1)*pageSize
 	if end < 0 {
@@ -589,9 +611,9 @@ func (a *App) roomRevoke(w http.ResponseWriter, r *http.Request) {
 func (a *App) roomWebhooks(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
+	page, ok := pageParam(w, r, "webhook list", pagesOf(len(a.st.Deliveries), pageSize)+1)
+	if !ok {
+		return
 	}
 	end := len(a.st.Deliveries) - (page-1)*pageSize
 	if end <= 0 && page > 1 {

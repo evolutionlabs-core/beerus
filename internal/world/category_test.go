@@ -3,7 +3,7 @@ package world
 import "testing"
 
 func TestChargesCarryACategory(t *testing.T) {
-	w, now := testWorld()
+	w, now := testWorld(t)
 	charges, reversed := 0, 0
 	for _, a := range w.Accounts() {
 		for _, l := range w.LinesFor(a.Key, now) {

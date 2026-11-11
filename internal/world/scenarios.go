@@ -63,8 +63,9 @@ func (s *scn) transfer(a Account, amt int64, t time.Time, cp *Counterparty, kind
 	sid := s.sid(inst.NIPCode, t)
 	short := sid[len(sid)-12:]
 	day := clock.DateOf(t)
-	fee := NIPFee(amt, day)
-	vat, stamp := VAT(fee), StampDuty(amt, day, false)
+	fees := s.w.cfg.Fees
+	fee := fees.NIPFeeOn(amt, day)
+	vat, stamp := fees.VAT(fee), fees.StampDuty(amt, day, false)
 	out := []Line{{Key: s.key(a.Key), Account: a.Key, Amount: -amt, BookedAt: t, Narration: g.narr(inst, "out", cp.Name, cp.BankName, short), Counterparty: cp, SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "nip"}}
 	out = append(out, Line{Key: s.key(a.Key), Account: a.Key, Amount: -fee, BookedAt: t.Add(time.Second), Narration: g.narr(inst, "fee", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryFee})
 	out = append(out, Line{Key: s.key(a.Key), Account: a.Key, Amount: -vat, BookedAt: t.Add(2 * time.Second), Narration: g.narr(inst, "vat", short), SessionID: sid, BankRef: g.bankRef(inst, t), Channel: "charge", Category: charges.CategoryVAT})

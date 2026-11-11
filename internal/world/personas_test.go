@@ -18,9 +18,9 @@ var originalDigests = map[int64]string{
 	20261028: "43bfc77cdaf1342617a7eb891f16222197a9adbdf531248b35bfa6a54b77b1f2",
 }
 
-func originalsDigest(seed int64) (string, int) {
+func originalsDigest(t testing.TB, seed int64) (string, int) {
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, clock.Lagos)
-	w := New(Config{Seed: seed, Genesis: clock.DateOf(now).AddDays(-760)}, Overrides{})
+	w := New(Config{Seed: seed, Genesis: clock.DateOf(now).AddDays(-760), Fees: testFees(t)}, Overrides{})
 	h := sha256.New()
 	lines := 0
 	enc := json.NewEncoder(h)
@@ -43,7 +43,7 @@ func originalsDigest(seed int64) (string, int) {
 
 func TestOriginalPersonasUnchanged(t *testing.T) {
 	for seed, want := range originalDigests {
-		got, lines := originalsDigest(seed)
+		got, lines := originalsDigest(t, seed)
 		if lines < 1000 {
 			t.Fatalf("seed %d: only %d lines", seed, lines)
 		}
@@ -54,7 +54,7 @@ func TestOriginalPersonasUnchanged(t *testing.T) {
 }
 
 func TestPersonaCount(t *testing.T) {
-	w, _ := testWorld()
+	w, _ := testWorld(t)
 	ps := w.Personas()
 	if len(ps) != 20 {
 		t.Fatalf("%d personas", len(ps))
@@ -79,7 +79,7 @@ func TestPersonaCount(t *testing.T) {
 }
 
 func TestPersonaFilterKeepsAccounts(t *testing.T) {
-	full, _ := testWorld()
+	full, _ := testWorld(t)
 	cfg := full.Config()
 	cfg.Personas = originalPersonas
 	small := New(cfg, Overrides{})
@@ -96,9 +96,10 @@ func TestPersonaFilterKeepsAccounts(t *testing.T) {
 }
 
 func BenchmarkWorldGeneration(b *testing.B) {
+	fees := testFees(b)
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, clock.Lagos)
 	for i := 0; i < b.N; i++ {
-		w := New(Config{Seed: 42, Genesis: clock.DateOf(now).AddDays(-760)}, Overrides{})
+		w := New(Config{Seed: 42, Genesis: clock.DateOf(now).AddDays(-760), Fees: fees}, Overrides{})
 		for _, p := range w.Personas() {
 			for _, k := range p.Accounts {
 				w.LinesFor(k, now)
@@ -108,7 +109,7 @@ func BenchmarkWorldGeneration(b *testing.B) {
 }
 
 func TestCounterpartyAccountsAreValidNUBANs(t *testing.T) {
-	w, now := testWorld()
+	w, now := testWorld(t)
 	seen := 0
 	for _, p := range w.Personas() {
 		for _, k := range p.Accounts {

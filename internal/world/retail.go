@@ -142,6 +142,7 @@ type seedRun struct {
 	seed   uint64
 	now    time.Time
 	cal    *clock.Calendar
+	fees   *charges.Schedule
 	prefix string
 	accts  []*seedAcct
 	rng    *rand.Rand
@@ -149,7 +150,7 @@ type seedRun struct {
 	n      int
 }
 
-func generateRetail(roster []rosterPersona, value int64, bank Institution, banks []Institution, historyDays int, now time.Time, cal *clock.Calendar) Template {
+func generateRetail(roster []rosterPersona, value int64, bank Institution, banks []Institution, historyDays int, now time.Time, cal *clock.Calendar, fees *charges.Schedule) Template {
 	var out Template
 	today := clock.DateOf(now)
 	start := today.AddDays(-historyDays)
@@ -159,7 +160,7 @@ func generateRetail(roster []rosterPersona, value int64, bank Institution, banks
 		}
 		prefix := fmt.Sprintf("seed:%s:%d:%s:%s", TemplateRetail, value, bank.ID, p.id)
 		out.Customers = append(out.Customers, SeedCustomer{Key: prefix, Bank: bank.ID, Name: p.name, Phone: p.phone, DOB: p.dob, Username: p.username, Password: p.password})
-		r := &seedRun{out: &out, bank: &bank, banks: banks, p: p, seed: hash64(TemplateRetail, fmt.Sprint(value)), now: now, cal: cal, prefix: prefix}
+		r := &seedRun{out: &out, bank: &bank, banks: banks, p: p, seed: hash64(TemplateRetail, fmt.Sprint(value)), now: now, cal: cal, fees: fees, prefix: prefix}
 		for _, a := range p.accounts {
 			key := prefix + ":" + a.typ
 			name := accountName(&bank, a.name)
@@ -343,7 +344,7 @@ func (r *seedRun) inflow(a *seedAcct, amt int64, salary bool) {
 	narration, channel := r.transfer("in", cp, cpBank, short)
 	in := r.line(a, "in", amt, t, narration, channel, "", cp, cpBank.NIPCode)
 	r.post(a, in)
-	levy := charges.EMTL(amt, r.d)
+	levy := r.fees.EMTL(amt, r.d)
 	switch {
 	case levy == 0:
 	case channel == "nip":
@@ -355,7 +356,7 @@ func (r *seedRun) inflow(a *seedAcct, amt int64, salary bool) {
 
 func (r *seedRun) fit(a *seedAcct, amt int64, at time.Time) int64 {
 	avail := a.st.projected - a.st.laterCredits(at)
-	total := charges.ForTransfer(amt, r.d, false).Total()
+	total := r.fees.ForTransfer(amt, r.d, false).Total()
 	if avail-amt-total >= buffer {
 		return amt
 	}
@@ -375,7 +376,7 @@ func (r *seedRun) outflow(a *seedAcct) {
 	cp := r.counterpartyName()
 	roll := r.rng.Float64()
 	short := r.sessionRef()
-	tr := charges.ForTransfer(amt, r.d, false)
+	tr := r.fees.ForTransfer(amt, r.d, false)
 	cpBank := r.counterpartyBank(r.nextKey(a, "out"))
 	narration, channel := r.transfer("out", cp, cpBank, short)
 	main := r.line(a, "out", -amt, t, narration, channel, "", cp, cpBank.NIPCode)
@@ -464,19 +465,19 @@ func (r *seedRun) monthEnd() {
 		t := r.d.Start().Add(retailMonthEndHour*time.Hour + time.Duration(i*10)*time.Minute)
 		m := monthOf(t)
 		if alerts := a.alerts[m]; alerts > 0 {
-			sms := min(int64(alerts)*charges.SMSAlertFee(), charges.SMSMonthlyCap())
-			if st.projected-st.laterCredits(t) >= sms+charges.VAT(sms) {
+			sms := min(int64(alerts)*r.fees.SMSAlertFee(), r.fees.SMSMonthlyCap())
+			if st.projected-st.laterCredits(t) >= sms+r.fees.VAT(sms) {
 				r.post(a, r.line(a, "sms", -sms, t, r.narr("sms", month), "charge", charges.CategoryFee, "", ""))
-				r.post(a, r.line(a, "smsvat", -charges.VAT(sms), t.Add(time.Second), r.narr("smsvat", month), "charge", charges.CategoryVAT, "", ""))
+				r.post(a, r.line(a, "smsvat", -r.fees.VAT(sms), t.Add(time.Second), r.narr("smsvat", month), "charge", charges.CategoryVAT, "", ""))
 			}
 		}
 		if turn := a.turnover[m]; a.typ == "current" && turn > 0 {
-			fee := (turn*charges.MaintenancePerMille() + 500) / 1000
-			room := (st.projected - st.laterCredits(t)) * 10000 / (10000 + charges.VATRateBasisPoints())
+			fee := (turn*r.fees.MaintenancePerMille() + 500) / 1000
+			room := (st.projected - st.laterCredits(t)) * 10000 / (10000 + r.fees.VATRateBasisPoints())
 			fee = min(fee, room)
 			if fee > 0 {
 				r.post(a, r.line(a, "maint", -fee, t.Add(2*time.Second), r.narr("maint", month), "charge", charges.CategoryFee, "", ""))
-				r.post(a, r.line(a, "maintvat", -charges.VAT(fee), t.Add(3*time.Second), r.narr("maintvat", month), "charge", charges.CategoryVAT, "", ""))
+				r.post(a, r.line(a, "maintvat", -r.fees.VAT(fee), t.Add(3*time.Second), r.narr("maintvat", month), "charge", charges.CategoryVAT, "", ""))
 			}
 		}
 		delete(a.alerts, m)

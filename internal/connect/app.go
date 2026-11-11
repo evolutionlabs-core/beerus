@@ -242,7 +242,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 }
 
 func (a *App) worldConfig(genesis clock.Date) world.Config {
-	wc := world.Config{Seed: a.cfg.Seed, Genesis: genesis, Calendar: a.cfg.Calendar(), Personas: a.personas}
+	wc := world.Config{Seed: a.cfg.Seed, Genesis: genesis, Calendar: a.cfg.Calendar(), Fees: a.cfg.Fees(), Personas: a.personas}
 	for _, b := range a.cfg.Banks {
 		wc.Institutions = append(wc.Institutions, world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: b.Stable(), Style: b.Style()})
 	}
