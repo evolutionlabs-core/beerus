@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 const (
@@ -77,22 +78,33 @@ func (w wireTxn) presented() (bankLine, error) {
 	return p, nil
 }
 
-func (a *App) pullBank(c *Connection, acct *AccountRec, at time.Time) (pulled, error) {
+type bankPull struct {
+	bank    *config.Bank
+	vid     string
+	consent string
+	nuban   string
+	from    clock.Date
+}
+
+func (a *App) bankPullPlanLocked(c *Connection, acct *AccountRec) (bankPull, error) {
 	b := a.cfg.Bank(c.Institution)
 	if b == nil {
-		return pulled{}, &bankDown{fmt.Errorf("%s is not configured", c.Institution)}
+		return bankPull{}, &bankDown{fmt.Errorf("%s is not configured", c.Institution)}
 	}
-	nuban := acct.NUBAN
 	from := acct.From
 	if !(c.FullDue || !acct.HistoryDone || acct.AsAt.IsZero()) {
 		if w := clock.DateOf(acct.AsAt).AddDays(-syncOverlapDays); w.After(from) {
 			from = w
 		}
 	}
-	out := pulled{from: from, windowed: true}
+	return bankPull{bank: b, vid: c.ID, consent: c.ConsentID, nuban: acct.NUBAN, from: from}, nil
+}
+
+func (a *App) pullBank(p bankPull) (pulled, error) {
+	out := pulled{from: p.from, windowed: true}
 	cursor := ""
 	for {
-		q := url.Values{"page_size": {strconv.Itoa(syncPageSize)}, "from": {from.String()}}
+		q := url.Values{"page_size": {strconv.Itoa(syncPageSize)}, "from": {p.from.String()}}
 		if cursor != "" {
 			q.Set("cursor", cursor)
 		}
@@ -100,15 +112,15 @@ func (a *App) pullBank(c *Connection, acct *AccountRec, at time.Time) (pulled, e
 			Data   []wireTxn `json:"data"`
 			Cursor *string   `json:"next_cursor"`
 		}
-		if err := a.bankGet(b, c.ID, "/accounts/"+nuban+"/transactions?"+q.Encode(), &page); err != nil {
+		if err := a.bankGet(p.bank, p.vid, "/accounts/"+p.nuban+"/transactions?"+q.Encode(), &page); err != nil {
 			return pulled{}, err
 		}
 		for _, w := range page.Data {
-			p, err := w.presented()
+			line, err := w.presented()
 			if err != nil {
 				return pulled{}, err
 			}
-			out.lines = append(out.lines, p)
+			out.lines = append(out.lines, line)
 		}
 		if page.Cursor == nil || *page.Cursor == "" {
 			break
@@ -119,22 +131,18 @@ func (a *App) pullBank(c *Connection, acct *AccountRec, at time.Time) (pulled, e
 		Ledger    wireMoney `json:"ledger_balance"`
 		Available wireMoney `json:"available_balance"`
 	}
-	if err := a.bankGet(b, c.ID, "/accounts/"+nuban+"/balances", &bal); err != nil {
+	if err := a.bankGet(p.bank, p.vid, "/accounts/"+p.nuban+"/balances", &bal); err != nil {
 		return pulled{}, err
 	}
 	out.ledger, out.available = bal.Ledger.Amount, bal.Available.Amount
 	return out, nil
 }
 
-func (a *App) bankBalanceOn(c *Connection, acct *AccountRec, d clock.Date) (int64, error) {
-	b := a.cfg.Bank(c.Institution)
-	if b == nil {
-		return 0, &bankDown{fmt.Errorf("%s is not configured", c.Institution)}
-	}
+func (a *App) bankBalanceOn(p bankPull, d clock.Date) (int64, error) {
 	var out struct {
 		Ledger wireMoney `json:"ledger_balance"`
 	}
-	if err := a.bankGet(b, c.ID, "/accounts/"+acct.NUBAN+"/balances?as_of="+d.String(), &out); err != nil {
+	if err := a.bankGet(p.bank, p.vid, "/accounts/"+p.nuban+"/balances?as_of="+d.String(), &out); err != nil {
 		return 0, err
 	}
 	return out.Ledger.Amount, nil

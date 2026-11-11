@@ -304,12 +304,16 @@ func (a *App) SyncAll() {
 	}
 	a.mu.Lock()
 	now := a.clock.Now()
+	due := make([]*Connection, 0, len(a.st.Connections))
 	for _, c := range a.st.Connections {
 		if c.Status == "active" || c.Status == "syncing" || c.Status == "institution_down" {
-			a.syncConnection(c, now)
+			due = append(due, c)
 		}
 	}
 	a.mu.Unlock()
+	for _, c := range due {
+		a.syncConnection(c, now)
+	}
 	a.Step()
 }
 

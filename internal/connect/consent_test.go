@@ -99,8 +99,6 @@ func TestFailedRevokesAreQueuedAndRetried(t *testing.T) {
 		})},
 	}
 	b := a.cfg.Bank("bank-a")
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.revokeOrQueue(b, "obc_1")
 	if len(a.st.Revokes) != 1 || a.st.Revokes[0].Attempts != 1 {
 		t.Fatalf("queue after a failed revoke: %+v", a.st.Revokes)
@@ -152,10 +150,8 @@ func TestBankAnswerOverTheLimitFailsClearly(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(big)), Header: http.Header{}}, nil
 		})},
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	var out map[string]any
-	err := a.bankDo(a.cfg.Bank("bank-a"), http.MethodGet, "/discover", nil, "", &out)
+	err := a.bankCall(a.cfg.Bank("bank-a"), http.MethodGet, "/discover", nil, "", &out)
 	if err == nil || !strings.Contains(err.Error(), "larger than the 16777216 byte limit") {
 		t.Fatalf("an oversized bank answer: %v", err)
 	}
