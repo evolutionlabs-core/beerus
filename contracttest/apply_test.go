@@ -154,7 +154,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 	if _, err := post("/apply", byeC, map[string]any{"prune": true, "settle_now": true}); err != nil {
 		t.Fatal(err)
 	}
-	s.waitBlocked("bank-c", setup.ReasonMoneyDecisionNeeded, "Abuja Digital holds ₦100.00 for 1 customer. Run beerus apply --prune --money transfer --to <bank>.")
+	s.waitBlocked("bank-c", setup.ReasonMoneyDecisionNeeded, "Abuja Digital holds ₦100.00 for 1 customer. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.")
 	moveTo := map[string]any{"money": "transfer", "to": "bank-a", "customers": map[string]string{"cus_nobody": "leave"}}
 	if _, err := post("/apply", byeC, map[string]any{"prune": true, "money": moveTo}); err != nil {
 		t.Fatal(err)

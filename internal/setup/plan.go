@@ -3,6 +3,7 @@ package setup
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,7 +68,7 @@ type planner struct {
 func Build(desired Spec, st Status, dir []nibss.Institution, today clock.Date) Plan {
 	pack, err := countrypack.Nigeria()
 	if err != nil {
-		return Plan{Setup: desired.Metadata.Name, Errors: []error{fmt.Errorf("load simulator code ranges: %w", err)}}
+		return Plan{Setup: desired.Metadata.Name, Errors: []error{fmt.Errorf("load code ranges: %w", err)}}
 	}
 	p := newPlanner(desired, st, dir, today)
 	c := pack.SimulatorCodes
@@ -541,6 +542,9 @@ func (p *planner) bankRemovals() []Action {
 		b := ordered[i]
 		r, hasRes := p.resource(KindBank, b.ID)
 		if hasRes && r.Phase == PhaseTerminating {
+			if !slices.Contains(r.Done, FinalizerDecideMoney) {
+				p.checkTarget(b.ID, b.OnRemove, "on_remove of removed bank "+b.ID)
+			}
 			continue
 		}
 		p.checkTarget(b.ID, b.OnRemove, "on_remove of removed bank "+b.ID)

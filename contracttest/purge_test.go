@@ -95,7 +95,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	}
 	s.advance("24h")
 	s.advance("24h")
-	s.waitBlocked("abuja-digital", setup.ReasonMoneyDecisionNeeded, "Abuja Digital holds ₦25,100.00 for 1 customer. Run beerus apply --prune --money transfer --to <bank>.")
+	s.waitBlocked("abuja-digital", setup.ReasonMoneyDecisionNeeded, "Abuja Digital holds ₦25,100.00 for 1 customer. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.")
 	if got := databases(); len(got) != 2 {
 		t.Fatalf("the purge dropped databases before the money was decided: %v", got)
 	}
@@ -109,6 +109,10 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	checkSettled(t, s.app)
 	s.ctl("POST", "/nip/settle-now", nil)
 	s.waitGone("bank", "abuja-digital")
+	kept := s.ctl("GET", "/closures/abuja-digital", nil)
+	if lines := kept["lines"].([]any); len(lines) != 1 || lines[0].(map[string]any)["outcome"] != "transferred" || lines[0].(map[string]any)["amount_minor"] != float64(2_510_000) || lines[0].(map[string]any)["to_bank"] != "bank-a" || lines[0].(map[string]any)["to_nuban"] != home.Accounts[0] {
+		t.Fatalf("closure kept after the purge: %v", kept)
+	}
 	if got := databases(); len(got) != 0 {
 		t.Fatalf("databases left behind: %v", got)
 	}

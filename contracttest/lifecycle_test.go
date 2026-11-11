@@ -494,6 +494,16 @@ func TestCloseBank(t *testing.T) {
 	if res["moved_minor"] != float64(2_500_000) || res["left_minor"] != float64(1_000_000) || len(res["revoked_connections"].([]any)) != 1 {
 		t.Fatalf("close: %v", res)
 	}
+	wantLines := fmt.Sprint([]any{
+		map[string]any{"customer": opened["adaeze"].Customer, "name": res["lines"].([]any)[0].(map[string]any)["name"], "nuban": opened["adaeze"].Accounts[0], "outcome": "transferred", "amount_minor": float64(2_500_000), "to_bank": "bank-a", "to_bank_name": "Bank A", "to_nuban": home["adaeze"].Accounts[0]},
+		map[string]any{"customer": opened["tunde"].Customer, "name": res["lines"].([]any)[1].(map[string]any)["name"], "nuban": opened["tunde"].Accounts[0], "outcome": "left", "amount_minor": float64(1_000_000)},
+	})
+	if got := fmt.Sprint(res["lines"]); got != wantLines {
+		t.Fatalf("close lines:\n%s\nwant\n%s", got, wantLines)
+	}
+	if kept := s.ctl("GET", "/closures/abuja-digital", nil); fmt.Sprint(kept["lines"]) != wantLines || kept["name"] != "Abuja Digital" {
+		t.Fatalf("kept closure: %v", kept)
+	}
 	if got := balance(home["adaeze"]); got != before+2_500_000 {
 		t.Fatalf("adaeze at bank-a has %d, want %d", got, before+2_500_000)
 	}
@@ -580,6 +590,20 @@ func TestClosePaysInsuredDeposits(t *testing.T) {
 	res := s.closeResult("kano-microfinance")
 	if res["paid_out_minor"] != float64(200_000_000) || res["claims_minor"] != float64(50_000_000) || res["moved_minor"] != float64(0) {
 		t.Fatalf("close: %v", res)
+	}
+	outcomes := map[string]float64{}
+	for _, l := range res["lines"].([]any) {
+		line := l.(map[string]any)
+		outcomes[fmt.Sprint(line["outcome"])] += line["amount_minor"].(float64)
+		if line["customer"] != who.Customer || line["name"] == "" || line["to_bank"] != nil {
+			t.Fatalf("payout line: %v", line)
+		}
+	}
+	if fmt.Sprint(outcomes) != "map[claim:5e+07 paid_out:2e+08]" {
+		t.Fatalf("payout outcomes: %v", outcomes)
+	}
+	if kept := s.ctl("GET", "/closures/kano-microfinance", nil); fmt.Sprint(kept["lines"]) != fmt.Sprint(res["lines"]) {
+		t.Fatalf("kept closure: %v", kept)
 	}
 	if got := total(from); got != before {
 		t.Fatalf("a cash payout moved %d to bank-a", got-before)

@@ -230,16 +230,31 @@ func (m moneyFlags) removal() (*setup.Removal, error) {
 	if m.money == "" {
 		return nil, errors.New("--to and --customer need --money transfer, payout or leave")
 	}
+	choices := []string{setup.MoneyTransfer, setup.MoneyPayout, setup.MoneyLeave}
+	if !slices.Contains(choices, m.money) {
+		return nil, fmt.Errorf("--money %q is not valid. Use transfer, payout or leave", m.money)
+	}
 	rm := &setup.Removal{Money: m.money, To: m.to}
+	needsTarget := m.money == setup.MoneyTransfer
 	for _, kv := range m.customers {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok || k == "" || v == "" {
 			return nil, fmt.Errorf("--customer takes id=choice, such as cus_1=payout; got %q", kv)
 		}
+		if !slices.Contains(choices, v) {
+			return nil, fmt.Errorf("--customer %s=%s is not valid. Use transfer, payout or leave", k, v)
+		}
+		needsTarget = needsTarget || v == setup.MoneyTransfer
 		if rm.Customers == nil {
 			rm.Customers = map[string]string{}
 		}
 		rm.Customers[k] = v
+	}
+	if needsTarget && m.to == "" {
+		if m.money == setup.MoneyTransfer {
+			return nil, errors.New("--money transfer needs --to <bank>")
+		}
+		return nil, errors.New("--customer with transfer needs --to <bank>")
 	}
 	return rm, nil
 }
@@ -339,6 +354,72 @@ func blockers(r setup.Resource) []string {
 	return out
 }
 
+func needsYou(r setup.Resource) []string {
+	var out []string
+	for _, c := range r.Conditions {
+		if c.Status == "True" && c.Type == setup.ConditionBlocked && (c.Reason == setup.ReasonMoneyDecisionNeeded || c.Reason == setup.ReasonTargetUnavailable) {
+			out = append(out, c.Message)
+		}
+	}
+	return out
+}
+
+func outcomeText(l setup.ClosureLine) string {
+	switch l.Outcome {
+	case setup.OutcomePaidOut:
+		return "paid out in cash"
+	case setup.OutcomeTransferred:
+		return fmt.Sprintf("transferred to %s account %s", l.ToBankName, l.ToNUBAN)
+	case setup.OutcomeClaim:
+		return "uninsured claim left on a frozen account"
+	}
+	return "left on the account"
+}
+
+func writeClosure(w io.Writer, c setup.Closure) error {
+	if len(c.Lines) == 0 {
+		fmt.Fprintf(w, "%s held no customer money when it closed on %s.\n", c.Name, stamp(c.ClosedAt))
+		return nil
+	}
+	fmt.Fprintf(w, "Money of %s on %s:\n", c.Name, stamp(c.ClosedAt))
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	for _, l := range c.Lines {
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", l.Name, l.NUBAN, connect.FormatNaira(l.AmountMinor), outcomeText(l))
+	}
+	return tw.Flush()
+}
+
+func (e *cli) closure(c *ctl, id string) (*setup.Closure, error) {
+	raw, err := c.send("GET", "/closures/"+url.PathEscape(id), nil)
+	var ae *apiError
+	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	cl, err := decode[setup.Closure](raw, "closure")
+	return &cl, err
+}
+
+func (e *cli) printClosures(c *ctl, w io.Writer, targets []target) error {
+	for _, t := range targets {
+		if t.kind != setup.KindBank || (t.op != setup.OpRemove && t.op != setup.OpClose && t.op != opFinish) {
+			continue
+		}
+		cl, err := e.closure(c, t.id)
+		if err != nil {
+			return err
+		}
+		if cl != nil {
+			if err := writeClosure(w, *cl); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (e *cli) resources(c *ctl) ([]setup.Resource, error) {
 	var all []setup.Resource
 	cursor := ""
@@ -372,7 +453,7 @@ func findResource(all []setup.Resource, kind, id string) *setup.Resource {
 	return nil
 }
 
-func (e *cli) wait(c *ctl, p planReply, wait time.Duration) error {
+func (e *cli) wait(c *ctl, p planReply, wait time.Duration, asJSON bool) error {
 	var targets []target
 	for _, a := range p.Actions {
 		if a.Op != setup.OpDrift {
@@ -385,8 +466,15 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration) error {
 	}
 	for _, r := range res {
 		busy := r.Phase == setup.PhaseClosing || r.Phase == setup.PhaseTerminating
-		if busy && !slices.ContainsFunc(targets, func(t target) bool { return t.kind == r.Kind && t.id == r.ID }) {
+		if !busy {
+			continue
+		}
+		i := slices.IndexFunc(targets, func(t target) bool { return t.kind == r.Kind && t.id == r.ID })
+		switch {
+		case i < 0:
 			targets = append(targets, target{kind: r.Kind, id: r.ID, op: opFinish})
+		case targets[i].op == setup.OpUpdate:
+			targets[i].op = opFinish
 		}
 	}
 	if len(targets) == 0 {
@@ -397,7 +485,7 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration) error {
 	tick := time.NewTicker(pollEvery)
 	defer tick.Stop()
 	var shown []string
-	check := func(res []setup.Resource) (pending, blocked []string) {
+	check := func(res []setup.Resource) (pending, blocked, stuck []string) {
 		for _, t := range targets {
 			r := findResource(res, t.kind, t.id)
 			if finished(t, r) {
@@ -406,14 +494,25 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration) error {
 			pending = append(pending, t.label())
 			if r != nil {
 				blocked = append(blocked, blockers(*r)...)
+				stuck = append(stuck, needsYou(*r)...)
 			}
 		}
-		return pending, blocked
+		return pending, blocked, stuck
+	}
+	done := func() error {
+		shown := e.out
+		if asJSON {
+			shown = e.errOut
+		}
+		return e.printClosures(c, shown, targets)
 	}
 	for {
-		pending, blocked := check(res)
+		pending, blocked, stuck := check(res)
 		if len(pending) == 0 {
-			return nil
+			return done()
+		}
+		if len(stuck) > 0 {
+			return errors.New(strings.Join(stuck, "\n"))
 		}
 		for _, b := range blocked {
 			if !slices.Contains(shown, b) {
@@ -426,8 +525,8 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration) error {
 			if res, err = e.resources(c); err != nil {
 				return err
 			}
-			if pending, blocked = check(res); len(pending) == 0 {
-				return nil
+			if pending, blocked, _ = check(res); len(pending) == 0 {
+				return done()
 			}
 			if len(blocked) > 0 {
 				return &statusError{exitBlocked, errors.New(strings.Join(blocked, "\n"))}
@@ -467,7 +566,7 @@ func (e *cli) runApply(c *ctl, req applyRequest, wait time.Duration, asJSON bool
 	if wait == 0 {
 		return nil
 	}
-	return e.wait(c, p, wait)
+	return e.wait(c, p, wait, asJSON)
 }
 
 func checkWait(wait time.Duration) error {
@@ -683,6 +782,14 @@ func indent(text string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
+func closureOf(st setup.Status, id string) *setup.Closure {
+	i := slices.IndexFunc(st.Closures, func(c setup.Closure) bool { return c.Bank == id })
+	if i < 0 {
+		return nil
+	}
+	return &st.Closures[i]
+}
+
 func (e *cli) describeText(r setup.Resource, st setup.Status) error {
 	fmt.Fprintf(e.out, "%s %s\n", r.Kind, r.ID)
 	ok := "no"
@@ -692,10 +799,10 @@ func (e *cli) describeText(r setup.Resource, st setup.Status) error {
 	w := tabwriter.NewWriter(e.out, 0, 2, 2, ' ', 0)
 	fmt.Fprintf(w, "  Phase\t%s\n  Ready\t%s\n  Generation\t%d (observed %d)\n", r.Phase, ok, r.Generation, r.ObservedGeneration)
 	if r.DeletionRequestedAt != nil {
-		fmt.Fprintf(w, "  Deletion requested\t%s\n", r.DeletionRequestedAt.Format(time.RFC3339))
+		fmt.Fprintf(w, "  Deletion requested\t%s\n", stamp(*r.DeletionRequestedAt))
 	}
 	if r.Attempts > 0 && r.NextAttemptAt != nil {
-		fmt.Fprintf(w, "  Attempts\t%d, next at %s\n", r.Attempts, r.NextAttemptAt.Format(time.RFC3339))
+		fmt.Fprintf(w, "  Attempts\t%d, next at %s\n", r.Attempts, stamp(*r.NextAttemptAt))
 	}
 	if err := w.Flush(); err != nil {
 		return err
@@ -740,7 +847,11 @@ func (e *cli) describeText(r setup.Resource, st setup.Status) error {
 			fmt.Fprintf(e.out, "  %s %s\n", o.Kind, o.Name)
 		}
 	}
-	if len(r.Result) > 0 {
+	if cl := closureOf(st, r.ID); cl != nil && r.Kind == setup.KindBank {
+		if err := writeClosure(e.out, *cl); err != nil {
+			return err
+		}
+	} else if len(r.Result) > 0 {
 		var buf bytes.Buffer
 		if err := json.Indent(&buf, r.Result, "  ", "  "); err != nil {
 			return fmt.Errorf("format result: %w", err)
@@ -750,7 +861,7 @@ func (e *cli) describeText(r setup.Resource, st setup.Status) error {
 	if len(r.Events) > 0 {
 		fmt.Fprintln(e.out, "Events")
 		for _, ev := range r.Events {
-			fmt.Fprintf(e.out, "  %s %s x%d %s\n", ev.LastAt.Format(time.RFC3339), ev.Reason, ev.Count, ev.Message)
+			fmt.Fprintf(e.out, "  %s %s x%d %s\n", stamp(ev.LastAt), ev.Reason, ev.Count, ev.Message)
 		}
 	}
 	return nil
@@ -777,6 +888,19 @@ func cmdDescribe(e *cli, args []string) error {
 	}
 	raw, err := c.send("GET", "/resources/"+strings.ToLower(kind)+"/"+url.PathEscape(pos[1]), nil)
 	var ae *apiError
+	if errors.As(err, &ae) && ae.Status == http.StatusNotFound && kind == setup.KindBank {
+		if cl := closureOf(st, pos[1]); cl != nil {
+			if *asJSON {
+				out, merr := json.Marshal(cl)
+				if merr != nil {
+					return fmt.Errorf("encode closure: %w", merr)
+				}
+				return e.printJSON(out)
+			}
+			fmt.Fprintf(e.out, "Bank %s was removed.\n", pos[1])
+			return writeClosure(e.out, *cl)
+		}
+	}
 	if errors.As(err, &ae) && ae.Status == http.StatusNotFound {
 		return fmt.Errorf("there is no %s with ID %s. Run beerus get %ss to list them", strings.ToLower(kind), pos[1], strings.ToLower(kind))
 	}
@@ -885,6 +1009,9 @@ func cmdBankEnd(e *cli, args []string) error {
 	rm, err := mf.removal()
 	if err != nil {
 		return err
+	}
+	if rm != nil && rm.To == id {
+		return fmt.Errorf("--to cannot be %s, the bank being removed. Name another bank", id)
 	}
 	st, err := loadApplied(*dir)
 	if err != nil {
@@ -1033,7 +1160,7 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(e.out, "Beerus Connect (stub) is running. Business time %s, world %s.\n\n", app.Clock().Now().Format(time.RFC1123), app.WorldID())
+	fmt.Fprintf(e.out, "Beerus is running. Business time %s, world %s.\n\n", stamp(app.Clock().Now()), app.WorldID())
 	if err := printInfo(c); err != nil {
 		return err
 	}

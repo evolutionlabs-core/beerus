@@ -148,7 +148,7 @@ func (a *App) position(b *config.Bank) (map[string]any, error) {
 	pos := open.netDebit()
 	source := "configured"
 	if b.CapIsDefault() {
-		source = "simulator_default"
+		source = "default"
 	}
 	var collateral any
 	if b.Collateral > 0 {
@@ -335,6 +335,25 @@ func (a *App) bankTransfer(r *http.Request, bankID string, body transferBody, ke
 		a.mu.Unlock()
 	}
 	return rep
+}
+
+func (a *App) ctlBankQuote(w http.ResponseWriter, r *http.Request) {
+	var body transferBody
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"9010000014","to_bank":"bank-b","to":"9020000011","amount":"25000"}.`)
+		return
+	}
+	amount, err := parseNaira(body.Amount)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if body.From == "" || body.To == "" {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "from and to are required account numbers.")
+		return
+	}
+	res, err := a.Quote(TransferRequest{FromBank: r.PathValue("id"), From: body.From, ToBank: body.ToBank, To: body.To, Amount: amount, Narration: body.Narration})
+	a.transferReply(r, res, err).write(w)
 }
 
 func (a *App) ctlBankTransfer(w http.ResponseWriter, r *http.Request) {

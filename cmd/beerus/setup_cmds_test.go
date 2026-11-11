@@ -374,16 +374,77 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	if _, err := cl.do("POST", "/banks/bank-b/deposits", map[string]string{"account": fmt.Sprint(acct["nuban"]), "amount": "5000"}); err != nil {
 		t.Fatal(err)
 	}
-	r = d(cmdBankEnd, "", false, "purge", "bank-b", "--yes", "--wait", "5s")
-	if r.code != exitBlocked || !strings.Contains(r.err, "bank bank-b: MoneyDecisionNeeded:") || !strings.Contains(r.err, "5,000.00") {
-		t.Fatalf("purge with money and no decision: %+v", r)
+	asked := time.Now()
+	r = d(cmdBankEnd, "", false, "purge", "bank-b", "--yes", "--wait", "5m")
+	if r.code != 1 || r.err != "beerus: Bank B holds ₦5,000.00 for 1 customer. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.\n" || time.Since(asked) > time.Minute {
+		t.Fatalf("purge with money and no decision: %+v after %s", r, time.Since(asked))
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--money", "transfer"}, "beerus: --money transfer needs --to <bank>\n"},
+		{[]string{"--money", "payout", "--customer", "cus_1=transfer"}, "beerus: --customer with transfer needs --to <bank>\n"},
+		{[]string{"--money", "move", "--to", "bank-a"}, "beerus: --money \"move\" is not valid. Use transfer, payout or leave\n"},
+		{[]string{"--money", "leave", "--to", "bank-a"}, "beerus: to is set but no money moves. Remove to, or choose transfer or payout.\n"},
+		{[]string{"--money", "transfer", "--to", "bank-b"}, "beerus: --to cannot be bank-b, the bank being removed. Name another bank\n"},
+	} {
+		if r := d(cmdBankEnd, "", false, append([]string{"purge", "bank-b", "--yes", "--wait", "0"}, c.args...)...); r.code != 1 || r.err != c.want {
+			t.Fatalf("purge %v: %+v", c.args, r)
+		}
+	}
+	if r := d(cmdApply, "", false, "--prune", "--money", "transfer", "--wait", "0"); r.code != 1 || r.err != "beerus: --money transfer needs --to <bank>\n" {
+		t.Fatalf("apply --money transfer without --to: %+v", r)
+	}
+	if r := d(cmdBankEnd, "", false, "purge", "bank-b", "--yes", "--money", "transfer", "--to", "bank-zz", "--wait", "0"); r.code != 1 || !strings.Contains(r.err, "sends money to bank-zz, which is not in the file. Choose a bank in the file.") {
+		t.Fatalf("purge towards a bank that does not exist: %+v", r)
+	}
+	if _, err := cl.do("POST", "/faults", map[string]any{"kind": "down", "bank": "bank-c"}); err != nil {
+		t.Fatal(err)
+	}
+	r = d(cmdBankEnd, "", false, "purge", "bank-b", "--yes", "--money", "transfer", "--to", "bank-c", "--wait", "5m")
+	if r.code != 1 || r.err != "beerus: Abuja Digital is suspended or down, so money cannot move there. Resume it or choose another bank.\n" || !strings.Contains(r.out, "~ bank bank-b") || !strings.Contains(r.out, "on_remove.money") {
+		t.Fatalf("purge towards a bank that is down: %+v", r)
+	}
+	if _, err := cl.do("DELETE", "/faults?bank=bank-c", nil); err != nil {
+		t.Fatal(err)
 	}
 	if r := d(cmdBankEnd, "", false, "close", "bank-a"); r.code != 1 || r.err != "beerus: bank-a needs a money decision. Add --money transfer, payout or leave\n" {
 		t.Fatalf("close without a money decision: %+v", r)
 	}
 	r = d(cmdBankEnd, "", false, "purge", "bank-b", "--yes", "--money", "transfer", "--to", "bank-a", "--settle-now", "--wait", "90s")
-	if r.code != 0 || !strings.Contains(r.out, "~ bank bank-b") || !strings.Contains(r.out, "on_remove.money") || strings.Contains(banks(), "bank-b") {
+	if r.code != 0 || !strings.Contains(r.out, "~ bank bank-b") || !strings.Contains(r.out, "on_remove.to bank-c → bank-a") || strings.Contains(banks(), "bank-b") {
 		t.Fatalf("purge with a money decision: %+v\n%s", r, banks())
+	}
+	if strings.Contains(r.err, "suspended or down") || strings.Contains(r.err, "TargetUnavailable") {
+		t.Fatalf("a stale condition was shown after the new decision: %q", r.err)
+	}
+	ada2, err := cl.do("GET", "/banks/bank-a/accounts", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var adaNUBAN string
+	for _, row := range ada2["data"].([]any) {
+		if m := row.(map[string]any); m["name"] == "Ada Obi" {
+			adaNUBAN = fmt.Sprint(m["nuban"])
+			if m["balance_minor"] != float64(500_000) {
+				t.Fatalf("Ada Obi at bank-a: %v", m)
+			}
+		}
+	}
+	if adaNUBAN == "" {
+		t.Fatalf("Ada Obi has no account at bank-a: %v", ada2)
+	}
+	wantMoney := "Ada Obi  " + fmt.Sprint(acct["nuban"]) + "  ₦5,000.00  transferred to Bank A account " + adaNUBAN
+	if !strings.Contains(strings.Join(strings.Fields(r.out), " "), strings.Join(strings.Fields(wantMoney), " ")) || !strings.Contains(r.out, "Money of Bank B on ") {
+		t.Fatalf("the finished purge did not show where the money went:\n%s", r.out)
+	}
+	if after := d(cmdDescribe, "", false, "bank", "bank-b"); after.code != 0 || !strings.HasPrefix(after.out, "Bank bank-b was removed.\nMoney of Bank B on ") || !strings.Contains(strings.Join(strings.Fields(after.out), " "), strings.Join(strings.Fields(wantMoney), " ")) {
+		t.Fatalf("describe after the purge: %+v", after)
+	}
+	var kept setup.Closure
+	if j := d(cmdDescribe, "", false, "bank", "bank-b", "--json"); j.code != 0 || json.Unmarshal([]byte(j.out), &kept) != nil || len(kept.Lines) != 1 || kept.Lines[0].ToNUBAN != adaNUBAN || kept.Lines[0].AmountMinor != 500_000 || kept.Lines[0].Outcome != setup.OutcomeTransferred {
+		t.Fatalf("describe --json after the purge: %+v %+v", j, kept)
 	}
 	if tombs := mustStatus(t, dir).Tombstones; len(tombs) != 1 || tombs[0].ID != "bank-b" || tombs[0].Status != "removed" {
 		t.Fatalf("tombstones cached after the purge: %+v", tombs)

@@ -239,6 +239,9 @@ type CloseResult struct {
 	Left    int64      `json:"left_minor"`
 	Moves   []Move     `json:"moves"`
 	Revoked []string   `json:"revoked_connections"`
+
+	ClosedAt time.Time           `json:"closed_at"`
+	Lines    []setup.ClosureLine `json:"lines"`
 }
 
 func (a *App) CloseBank(id string, req CloseRequest) (setup.Resource, error) {
@@ -295,6 +298,7 @@ func (a *App) decideMoney(r setup.Resource) (*setup.Condition, error) {
 			return false, errNotFound
 		}
 		cur.Result = raw
+		keepClosure(st, setup.Closure{Bank: id, Name: imp.Bank.Name, ClosedAt: res.ClosedAt, Lines: res.Lines})
 		return true, nil
 	}); err != nil {
 		return nil, fmt.Errorf("record the close result: %w", err)
@@ -327,7 +331,7 @@ func (a *App) closeChoices(r setup.Resource, imp CloseImpact) (map[string]string
 		if total == 0 {
 			return choice, "", nil
 		}
-		return nil, "", a.blocked(setup.ReasonMoneyDecisionNeeded, "%s holds %s for %s. Run beerus apply --prune --money transfer --to <bank>.", imp.Bank.Name, naira(total), plural(held, "customer", "customers"))
+		return nil, "", a.blocked(setup.ReasonMoneyDecisionNeeded, "%s holds %s for %s. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.", imp.Bank.Name, naira(total), plural(held, "customer", "customers"))
 	}
 	for _, cu := range imp.Customers {
 		choice[cu.ID] = rm.Money
@@ -454,11 +458,18 @@ func (a *App) closeOutcome(id string, imp CloseImpact, choice map[string]string,
 	for _, acc := range imp.Accounts {
 		owner[acc.NUBAN] = acc.Owner
 	}
-	targets := map[string]string{}
+	targets := map[string]*config.Bank{}
 	for _, other := range a.bankList() {
-		targets[other.NIPCode] = other.ID
+		targets[other.NIPCode] = other
 	}
-	res := CloseResult{Moves: []Move{}, Revoked: a.revokedConnections(func(c *Connection) bool { return c.Institution == id })}
+	holder := map[string]string{}
+	for _, cu := range imp.Customers {
+		holder[cu.ID] = cu.Name
+	}
+	line := func(nuban, outcome string, amount int64) setup.ClosureLine {
+		return setup.ClosureLine{Customer: owner[nuban], Name: holder[owner[nuban]], NUBAN: nuban, Outcome: outcome, AmountMinor: amount}
+	}
+	res := CloseResult{Moves: []Move{}, Lines: []setup.ClosureLine{}, ClosedAt: a.clock.Now(), Revoked: a.revokedConnections(func(c *Connection) bool { return c.Institution == id })}
 	for _, x := range sent {
 		if _, ok := owner[x.FromNUBAN]; !ok {
 			continue
@@ -466,13 +477,21 @@ func (a *App) closeOutcome(id string, imp CloseImpact, choice map[string]string,
 		if x.Status != nibss.SessionOK {
 			return CloseResult{}, fmt.Errorf("closure session %s from %s is %s, not %s", x.ID, x.FromNUBAN, x.Status, nibss.SessionOK)
 		}
-		res.Moves = append(res.Moves, Move{From: x.FromNUBAN, To: x.ToNUBAN, ToBank: targets[x.ToCode], Amount: x.Amount})
+		dest := targets[x.ToCode]
+		if dest == nil {
+			dest = &config.Bank{Name: x.ToCode}
+		}
+		res.Moves = append(res.Moves, Move{From: x.FromNUBAN, To: x.ToNUBAN, ToBank: dest.ID, Amount: x.Amount})
+		moved := line(x.FromNUBAN, setup.OutcomeTransferred, x.Amount)
+		moved.ToBank, moved.ToBankName, moved.ToNUBAN = dest.ID, dest.Name, x.ToNUBAN
+		res.Lines = append(res.Lines, moved)
 		res.Moved += x.Amount
 	}
 	paid := map[string]int64{}
 	for _, acc := range imp.Accounts {
 		if amount := payouts[acc.NUBAN]; amount > 0 {
 			res.Moves = append(res.Moves, Move{From: acc.NUBAN, Amount: amount, Payout: true})
+			res.Lines = append(res.Lines, line(acc.NUBAN, setup.OutcomePaidOut, amount))
 			res.PaidOut += amount
 			paid[acc.Owner] += amount
 		}
@@ -490,6 +509,7 @@ func (a *App) closeOutcome(id string, imp CloseImpact, choice map[string]string,
 		held[acc.Owner] += bal
 		switch choice[acc.Owner] {
 		case setup.MoneyLeave:
+			res.Lines = append(res.Lines, line(acc.NUBAN, setup.OutcomeLeft, bal))
 			res.Left += bal
 		case setup.MoneyPayout:
 			status, err := bk.AccountStatus(from.ctx, acc.NUBAN)
@@ -499,6 +519,7 @@ func (a *App) closeOutcome(id string, imp CloseImpact, choice map[string]string,
 			if status != "frozen" {
 				return CloseResult{}, fmt.Errorf("%s keeps %s as an NDIC claim but is %s, not frozen", acc.NUBAN, naira(bal), status)
 			}
+			res.Lines = append(res.Lines, line(acc.NUBAN, setup.OutcomeClaim, bal))
 			res.Claims += bal
 		default:
 			return CloseResult{}, fmt.Errorf("%s still holds %s after its money was moved", acc.NUBAN, naira(bal))
@@ -555,4 +576,31 @@ func (a *App) ctlCloseBank(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, res)
+}
+
+func keepClosure(st *setup.Status, c setup.Closure) {
+	st.Closures = slices.DeleteFunc(st.Closures, func(x setup.Closure) bool { return x.Bank == c.Bank })
+	st.Closures = append(st.Closures, c)
+}
+
+func (a *App) Closure(id string) (setup.Closure, error) {
+	st, err := a.ctl.durableStatus()
+	if err != nil {
+		return setup.Closure{}, err
+	}
+	for _, c := range st.Closures {
+		if c.Bank == id {
+			return c, nil
+		}
+	}
+	return setup.Closure{}, errNotFound
+}
+
+func (a *App) ctlClosure(w http.ResponseWriter, r *http.Request) {
+	c, err := a.Closure(r.PathValue("id"))
+	if err != nil {
+		a.applyFailed(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
 }

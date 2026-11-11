@@ -26,6 +26,11 @@ const (
 	MoneyPayout   = "payout"
 	MoneyLeave    = "leave"
 
+	OutcomePaidOut     = "paid_out"
+	OutcomeTransferred = "transferred"
+	OutcomeClaim       = "claim"
+	OutcomeLeft        = "left"
+
 	PhaseProvisioning = "provisioning"
 	PhaseActive       = "active"
 	PhaseSuspended    = "suspended"
@@ -196,6 +201,25 @@ type Status struct {
 	AppliedSHA256 string              `json:"applied_sha256"`
 	Resources     []Resource          `json:"resources"`
 	Tombstones    []nibss.Institution `json:"tombstones,omitempty"`
+	Closures      []Closure           `json:"closures,omitempty"`
+}
+
+type ClosureLine struct {
+	Customer    string `json:"customer"`
+	Name        string `json:"name"`
+	NUBAN       string `json:"nuban"`
+	Outcome     string `json:"outcome"`
+	AmountMinor int64  `json:"amount_minor"`
+	ToBank      string `json:"to_bank,omitempty"`
+	ToBankName  string `json:"to_bank_name,omitempty"`
+	ToNUBAN     string `json:"to_nuban,omitempty"`
+}
+
+type Closure struct {
+	Bank     string        `json:"bank"`
+	Name     string        `json:"name"`
+	ClosedAt time.Time     `json:"closed_at"`
+	Lines    []ClosureLine `json:"lines"`
 }
 
 type Resource struct {

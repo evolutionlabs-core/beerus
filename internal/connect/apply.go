@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -160,6 +161,9 @@ func retargetActions(st setup.Status, retarget map[string]bool, rm *setup.Remova
 		if r.Money != nil {
 			old = *r.Money
 		}
+		if reflect.DeepEqual(old, *rm) {
+			continue
+		}
 		a.Fields = append(a.Fields, setup.FieldChange{Path: "on_remove.money", From: old.Money, To: rm.Money})
 		if old.To != rm.To {
 			a.Fields = append(a.Fields, setup.FieldChange{Path: "on_remove.to", From: old.To, To: rm.To})
@@ -257,7 +261,7 @@ func retargeted(st setup.Status, rm *setup.Removal) map[string]bool {
 		return out
 	}
 	for _, r := range st.Resources {
-		if r.Kind == setup.KindBank && (r.Phase == setup.PhaseClosing || r.Phase == setup.PhaseTerminating) && moneyOpen(&st, r.ID) && !reflect.DeepEqual(r.Money, rm) {
+		if r.Kind == setup.KindBank && (r.Phase == setup.PhaseClosing || r.Phase == setup.PhaseTerminating) && moneyOpen(&st, r.ID) && (!reflect.DeepEqual(r.Money, rm) || waitingOnMoney(r)) {
 			out[r.ID] = true
 		}
 	}
@@ -282,7 +286,55 @@ func partnerIn(spec setup.Spec, id string) (setup.Partner, bool) {
 	return setup.Partner{}, false
 }
 
+func waitingOnMoney(r setup.Resource) bool {
+	return slices.ContainsFunc(r.Conditions, func(c setup.Condition) bool {
+		return c.Type == setup.ConditionBlocked && (c.Reason == setup.ReasonMoneyDecisionNeeded || c.Reason == setup.ReasonTargetUnavailable)
+	})
+}
+
+func clearMoneyConditions(r *setup.Resource) {
+	r.Conditions = slices.DeleteFunc(r.Conditions, func(c setup.Condition) bool {
+		return c.Type == setup.ConditionBlocked && (c.Reason == setup.ReasonMoneyDecisionNeeded || c.Reason == setup.ReasonTargetUnavailable)
+	})
+}
+
+func checkMoney(rm *setup.Removal) error {
+	if rm == nil {
+		return nil
+	}
+	var problems []string
+	choices := []string{setup.MoneyTransfer, setup.MoneyPayout, setup.MoneyLeave}
+	needsTarget := rm.Money == setup.MoneyTransfer
+	if !slices.Contains(choices, rm.Money) {
+		problems = append(problems, fmt.Sprintf("money %q is not valid. Use transfer, payout or leave.", rm.Money))
+	}
+	for _, id := range slices.Sorted(maps.Keys(rm.Customers)) {
+		choice := rm.Customers[id]
+		if !slices.Contains(choices, choice) {
+			problems = append(problems, fmt.Sprintf("customer %s: %q is not valid. Use transfer, payout or leave.", id, choice))
+		}
+		needsTarget = needsTarget || choice == setup.MoneyTransfer
+	}
+	if needsTarget && rm.To == "" {
+		problems = append(problems, "money transfer needs a receiving bank. Name it in to.")
+	}
+	moves := rm.Money != setup.MoneyLeave
+	for _, choice := range rm.Customers {
+		moves = moves || choice != setup.MoneyLeave
+	}
+	if rm.To != "" && !moves {
+		problems = append(problems, "to is set but no money moves. Remove to, or choose transfer or payout.")
+	}
+	if len(problems) > 0 {
+		return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s", strings.Join(problems, "\n"))
+	}
+	return nil
+}
+
 func (a *App) buildPlan(desired setup.Spec, st setup.Status, opt ApplyOptions) (planned, error) {
+	if err := checkMoney(opt.Money); err != nil {
+		return planned{}, err
+	}
 	desired = withMoney(desired, &st, opt.Money)
 	if errs := setup.Validate(desired); len(errs) > 0 {
 		return planned{}, planFailure(errs)
@@ -571,6 +623,7 @@ func admit(st *setup.Status, ad *admission) (bool, error) {
 		if r := findResource(st, setup.KindBank, id); r != nil {
 			r.Money = ad.money
 			r.Attempts, r.NextAttemptAt = 0, nil
+			clearMoneyConditions(r)
 		}
 	}
 	sum, err := specSum(st.Applied)
@@ -597,6 +650,7 @@ func leaving(r *setup.Resource, phase string, finalizers []string, rm *setup.Rem
 func admitBank(st *setup.Status, act setup.Action, ad *admission, fields map[string]string) {
 	switch act.Op {
 	case setup.OpCreate:
+		st.Closures = slices.DeleteFunc(st.Closures, func(c setup.Closure) bool { return c.Bank == act.ID })
 		r := ensureResource(st, setup.KindBank, act.ID)
 		gen := r.Generation + 1
 		ports := ad.ports[act.ID]
