@@ -120,3 +120,59 @@ func TestBankCallsDoNotHoldTheLockAndLateResultsAreDropped(t *testing.T) {
 		})
 	}
 }
+
+func TestRevokeKeepsTokensOfAConnectionRelinkedMeanwhile(t *testing.T) {
+	const wait = 5 * time.Second
+	now := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	a := &App{
+		cfg:   &config.Config{Banks: []*config.Bank{{ID: "bank-a", Port: 7001, APIPort: 7011}}},
+		st:    newState(),
+		log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		clock: clock.New(clock.State{Pace: 1}, func() time.Time { return now }),
+		vault: &vault{master: bytes.Repeat([]byte{7}, vaultKeyBytes)},
+		obHTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			entered <- struct{}{}
+			<-release
+			return &http.Response{StatusCode: http.StatusNoContent, Body: http.NoBody, Header: http.Header{}}, nil
+		})},
+	}
+	c := &Connection{ID: "con_1", PartnerID: "p1", Institution: "bank-a", Status: "active", ConsentID: "obc_1"}
+	a.st.Connections[c.ID] = c
+	token := func(access string) bankToken {
+		return bankToken{Access: access, Refresh: "rt", AccessExpires: now.Add(time.Hour), RefreshExpires: now.Add(2 * time.Hour)}
+	}
+	if err := a.vaultPut(c.ID, token("old-at")); err != nil {
+		t.Fatalf("store token: %v", err)
+	}
+	done := make(chan error)
+	go func() { done <- a.revokeConnectionAtBank(c.ID) }()
+	select {
+	case <-entered:
+	case <-time.After(wait):
+		t.Fatal("the bank was never called")
+	}
+	a.mu.Lock()
+	c.ConsentID = "obc_2"
+	err := a.vaultPut(c.ID, token("new-at"))
+	a.mu.Unlock()
+	if err != nil {
+		t.Fatalf("store new token: %v", err)
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("revoke: %v", err)
+		}
+	case <-time.After(wait):
+		t.Fatal("the revoke never finished")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	got, err := a.openAccessLocked(c.ID)
+	if err != nil || got != "new-at" {
+		t.Fatalf("tokens after the relink: %q, %v", got, err)
+	}
+}

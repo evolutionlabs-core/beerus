@@ -422,6 +422,9 @@ func (a *App) revokeConnectionAtBank(connID string) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if c := a.st.Connections[connID]; c != nil && c.ConsentID != consent {
+		return nil
+	}
 	a.vaultDrop(connID)
 	return nil
 }
