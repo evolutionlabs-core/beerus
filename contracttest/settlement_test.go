@@ -35,7 +35,7 @@ func TestNIPSettlement(t *testing.T) {
 		t.Fatalf("a new setup has %d settlement sessions", first.Sessions)
 	}
 	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "1500")
-	s.advance("72h")
+	s.settleNow()
 	later := checkSettled(t, s.app)
 	if later.Sessions == 0 {
 		t.Fatalf("settlement did not move on: %+v then %+v", first, later)
@@ -44,8 +44,11 @@ func TestNIPSettlement(t *testing.T) {
 		t.Fatalf("bank ledgers: %v %v", err, c)
 	}
 	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "settled"})
-	s.advance("48h")
-	checkSettled(t, s.app)
+	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "1500")
+	s.settleNow()
+	if c := checkSettled(t, s.app); c.Sessions <= later.Sessions {
+		t.Fatalf("settlement did not move on: %d sessions, want more than %d", c.Sessions, later.Sessions)
+	}
 	s.ctl("POST", "/snapshots/"+snap["id"].(string)+"/restore", nil)
 	if c := checkSettled(t, s.app); c.Sessions != later.Sessions {
 		t.Fatalf("after restore: %d sessions, want %d", c.Sessions, later.Sessions)
@@ -99,7 +102,8 @@ func TestSettlementRunsAlongsideTheApp(t *testing.T) {
 	}
 	s := newBankStack(t)
 	checkSettled(t, s.app)
-	s.advance("96h")
+	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "1500")
+	s.settleNow()
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		wg.Add(2)

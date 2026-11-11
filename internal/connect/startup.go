@@ -71,7 +71,6 @@ func Initialized(dir string) (bool, error) {
 func DefaultLocal() setup.Local {
 	return setup.Local{
 		DatabaseURL: defaultDatabaseURL,
-		Pace:        1,
 		Connect: setup.LocalConnect{
 			Host:         defaultConnectHost,
 			PartnerPort:  defaultPartnerPort,
@@ -96,7 +95,7 @@ func FreshLocal(dir string) (setup.Local, error) {
 	return local, nil
 }
 
-func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) error {
+func Init(dir string, spec setup.Spec, local setup.Local, now time.Time) error {
 	ok, err := Initialized(dir)
 	if err != nil {
 		return err
@@ -107,7 +106,7 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	if errs := setup.Validate(spec); len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	plan := setup.Build(spec, setup.Status{}, nil, today)
+	plan := setup.Build(spec, setup.Status{}, nil, clock.DateOf(now))
 	if len(plan.Errors) > 0 {
 		return errors.Join(plan.Errors...)
 	}
@@ -124,7 +123,7 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	if err != nil {
 		return err
 	}
-	st := setup.Status{Version: setup.StatusVersion, Setup: spec.Metadata.Name, SetupKey: key, Applied: pinCodes(spec, plan)}
+	st := setup.Status{Version: setup.StatusVersion, Setup: spec.Metadata.Name, SetupKey: key, StartedAt: now, Applied: pinCodes(spec, plan)}
 	st.Resources = []setup.Resource{
 		{Kind: setup.KindSystem, ID: setup.SystemCBN, Phase: setup.PhaseActive},
 		{Kind: setup.KindSystem, ID: setup.SystemNIBSS, Phase: setup.PhaseProvisioning},
@@ -297,11 +296,7 @@ func LoadConfig(dir string) (*config.Config, error) {
 
 func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config, error) {
 	spec := st.Applied.Spec
-	start, err := time.Parse(time.RFC3339, spec.Start)
-	if err != nil {
-		return nil, fmt.Errorf("start %q: %w", spec.Start, err)
-	}
-	def := setup.DefaultSpec(st.Applied.Metadata.Name, clock.DateOf(start)).Spec
+	def := setup.DefaultSpec(st.Applied.Metadata.Name).Spec
 	tsqAfter, err := time.ParseDuration(orDefault(spec.NIP.TSQAfter, def.NIP.TSQAfter))
 	if err != nil {
 		return nil, fmt.Errorf("nip.tsq_after %q: %w", spec.NIP.TSQAfter, err)
@@ -314,8 +309,7 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 	c := &config.Config{
 		Dir:         dir,
 		DatabaseURL: local.DatabaseURL,
-		Pace:        local.Pace,
-		Start:       start,
+		StartedAt:   st.StartedAt,
 		NIPSessions: spec.NIP.Sessions,
 		TSQAfter:    tsqAfter,
 		TSQAttempts: tsqAttempts,

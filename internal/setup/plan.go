@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
@@ -147,10 +146,7 @@ func (p *planner) setupAction() (Action, bool) {
 	}
 	p.locked("apiVersion", a.APIVersion, d.APIVersion)
 	p.locked("kind", a.Kind, d.Kind)
-	if !sameTime(a.Spec.Start, d.Spec.Start) {
-		p.locked("start", a.Spec.Start, d.Spec.Start)
-	}
-	def := DefaultSpec(d.Metadata.Name, p.today).Spec
+	def := DefaultSpec(d.Metadata.Name).Spec
 	p.locked("nip.sessions", strconv.Itoa(orInt(a.Spec.NIP.Sessions, def.NIP.Sessions)), strconv.Itoa(orInt(d.Spec.NIP.Sessions, def.NIP.Sessions)))
 	var fields []FieldChange
 	add := func(path, from, to string) {
@@ -657,15 +653,6 @@ func removal(rm *Removal) string {
 		s += " (customers " + strings.Join(parts, ", ") + ")"
 	}
 	return s
-}
-
-func sameTime(a, b string) bool {
-	if a == b {
-		return true
-	}
-	ta, errA := time.Parse(time.RFC3339, a)
-	tb, errB := time.Parse(time.RFC3339, b)
-	return errA == nil && errB == nil && ta.Equal(tb)
 }
 
 func sameNUBAN(a, b string) bool {

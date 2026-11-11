@@ -86,7 +86,7 @@ func TestFailedRevokesAreQueuedAndRetried(t *testing.T) {
 		cfg:   &config.Config{Banks: []*config.Bank{{ID: "bank-a", Port: 7001, APIPort: 7011}}},
 		st:    newState(),
 		log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		clock: clock.New(clock.State{Pace: 1}, func() time.Time { return now }),
+		clock: clock.New(func() time.Time { return now }),
 		obHTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 			calls++
 			code := http.StatusServiceUnavailable

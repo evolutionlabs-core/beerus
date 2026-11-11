@@ -95,7 +95,6 @@ type Metadata struct {
 }
 
 type Body struct {
-	Start    string       `yaml:"start" json:"start"`
 	NIP      NIP          `yaml:"nip,omitempty" json:"nip,omitempty"`
 	Holidays Holidays     `yaml:"holidays,omitempty" json:"holidays,omitempty"`
 	Connect  ConnectLegal `yaml:"connect,omitempty" json:"connect,omitempty"`
@@ -160,7 +159,6 @@ type Partner struct {
 type Local struct {
 	DatabaseURL string                  `yaml:"database_url"`
 	Bind        string                  `yaml:"bind,omitempty"`
-	Pace        float64                 `yaml:"pace,omitempty"`
 	Ports       Ports                   `yaml:"ports,omitempty"`
 	Connect     LocalConnect            `yaml:"connect,omitempty"`
 	Partners    map[string]PartnerLocal `yaml:"partners,omitempty"`
@@ -194,6 +192,7 @@ type Status struct {
 	SetupKey      uint64              `json:"setup_key,string"`
 	Applied       Spec                `json:"applied"`
 	AppliedSHA256 string              `json:"applied_sha256"`
+	StartedAt     time.Time           `json:"started_at"`
 	Resources     []Resource          `json:"resources"`
 	Tombstones    []nibss.Institution `json:"tombstones,omitempty"`
 }

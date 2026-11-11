@@ -8,16 +8,15 @@ import (
 	"reflect"
 	"testing"
 	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 func sampleStatus() Status {
 	at := time.Date(2026, time.November, 4, 9, 12, 0, 0, time.UTC)
 	return Status{
+		StartedAt:     at,
 		Setup:         "beerus",
 		SetupKey:      1<<63 + 5,
-		Applied:       DefaultSpec("beerus", clock.Date{Y: 2026, M: time.November, D: 4}),
+		Applied:       DefaultSpec("beerus"),
 		AppliedSHA256: "abc",
 		Resources: []Resource{{
 			Kind:                KindBank,
@@ -55,6 +54,21 @@ func TestStatusRoundTrip(t *testing.T) {
 	}
 	if out.SetupKey != 1<<63+5 {
 		t.Fatalf("setup key = %d", out.SetupKey)
+	}
+}
+
+func TestLoadStatusKeepsAnOldStart(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"version":1,"setup":"beerus","setup_key":"5","applied":{"apiVersion":"beerus.dev/v1","kind":"Setup","metadata":{"name":"beerus"},"spec":{"start":"2026-01-15T08:00:00+01:00","banks":null}},"applied_sha256":"abc","resources":[]}`
+	if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := LoadStatus(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, time.January, 15, 7, 0, 0, 0, time.UTC); !st.StartedAt.Equal(want) {
+		t.Fatalf("started_at = %v, want %v", st.StartedAt, want)
 	}
 }
 
@@ -104,6 +118,7 @@ func TestLoadStatusRejects(t *testing.T) {
 		{"newer version", `{"version":2,"setup":"beerus","future":true}`, "control.json has version 2, but this beerus reads up to version 1. Upgrade beerus"},
 		{"no version", `{"setup":"beerus"}`, "control.json has no valid version (got 0). Run beerus reset to start again"},
 		{"unknown field", `{"version":1,"setup":"beerus","colour":"red"}`, `decode control.json: json: unknown field "colour"`},
+		{"no started_at", `{"version":1,"setup":"beerus"}`, "control.json has no started_at. Run beerus reset to start again"},
 		{"not json", `{`, "decode control.json: unexpected end of JSON input"},
 	}
 	for _, c := range cases {

@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -28,8 +27,6 @@ func (a *App) ControlHandler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "world_id": a.WorldID(), "business_time": ts(a.clock.Now())})
 	})
 	mux.HandleFunc("GET /clock", a.ctlClock)
-	mux.HandleFunc("POST /clock/advance", a.ctlAdvance)
-	mux.HandleFunc("POST /clock/pace", a.ctlPace)
 	mux.HandleFunc("GET /scenarios", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"data": scenarios})
 	})
@@ -41,6 +38,7 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /nip/settlement", a.ctlNIPSettlement)
 	mux.HandleFunc("POST /nip/settle-now", a.ctlSettleNow)
 	mux.HandleFunc("GET /nip/sessions/{id}", a.ctlNIPSession)
+	mux.HandleFunc("POST /nip/sessions/{id}/query", a.ctlNIPQuery)
 	mux.HandleFunc("GET /faults", a.ctlFaults)
 	mux.HandleFunc("POST /faults", a.ctlAddFault)
 	mux.HandleFunc("DELETE /faults", a.ctlClearFaults)
@@ -155,79 +153,7 @@ func (a *App) WorldID() string {
 }
 
 func (a *App) ctlClock(w http.ResponseWriter, r *http.Request) {
-	st := a.clock.State()
-	writeJSON(w, http.StatusOK, map[string]any{"business_time": ts(a.clock.Now()), "business_date": a.clock.Today().String(), "pace": st.Pace, "world_id": a.WorldID()})
-}
-
-var dayRe = regexp.MustCompile(`^(\d+)d$`)
-
-func parseDuration(s string) (time.Duration, error) {
-	if m := dayRe.FindStringSubmatch(s); m != nil {
-		n, _ := strconv.Atoi(m[1])
-		return time.Duration(n) * 24 * time.Hour, nil
-	}
-	return time.ParseDuration(s)
-}
-
-func (a *App) advanceClock(by, to string) error {
-	a.mu.Lock()
-	var err error
-	switch {
-	case by != "":
-		var d time.Duration
-		if d, err = parseDuration(by); err == nil {
-			_, err = a.clock.Advance(d)
-		}
-	case to != "":
-		var t time.Time
-		if t, err = time.Parse(time.RFC3339, to); err == nil {
-			_, err = a.clock.AdvanceTo(t)
-		}
-	default:
-		err = fmt.Errorf("by or to is required")
-	}
-	if err != nil {
-		a.mu.Unlock()
-		return err
-	}
-	a.dirty()
-	a.mu.Unlock()
-	a.Step()
-	return nil
-}
-
-func (a *App) ctlAdvance(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		By string `json:"by"`
-		To string `json:"to"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"by":"24h"}, {"by":"365d"} or {"to":"2027-01-01T09:00:00+01:00"}.`)
-		return
-	}
-	if err := a.advanceClock(body.By, body.To); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	a.ctlClock(w, r)
-}
-
-func (a *App) ctlPace(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Pace float64 `json:"pace"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"pace":60}.`)
-		return
-	}
-	if err := a.clock.SetPace(body.Pace); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	a.mu.Lock()
-	a.dirty()
-	a.mu.Unlock()
-	a.ctlClock(w, r)
+	writeJSON(w, http.StatusOK, map[string]any{"business_time": ts(a.clock.Now()), "business_date": a.clock.Today().String(), "world_id": a.WorldID()})
 }
 
 type scenario struct {
@@ -398,7 +324,6 @@ func (a *App) TakeSnapshot(name string) (meta snapshotMeta, err error) {
 	a.gate.Lock()
 	defer a.gate.Unlock()
 	a.mu.Lock()
-	a.st.Clock = a.clock.State()
 	a.regMu.Lock()
 	b, err := json.Marshal(a.st)
 	a.regMu.Unlock()
@@ -599,7 +524,6 @@ func (a *App) restoreAll(id string, f snapshotFile) (string, error) {
 			a.setStatus(c, "reauth_required", "reauth_required")
 		}
 	}
-	a.clock.Restore(st.Clock)
 	a.mu.Unlock()
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -44,7 +44,7 @@ info:
 
     The public keys are listed by `GET /v1/webhook_keys`. During key rotation, `webhook-signature` carries signatures from both the old and new keys.
 
-    Delivery is at least once. Deduplicate by `webhook-id`. Respond with any 2xx within 15 seconds and do the work afterwards. Anything else is retried with exponential backoff and jitter over about three days, in real time. Events can arrive out of order, so treat them as hints and read the current state through the API. Failed webhooks can be replayed. The payload `timestamp` is business time.
+    Delivery is at least once. Deduplicate by `webhook-id`. Respond with any 2xx within 15 seconds and do the work afterwards. Anything else is retried with exponential backoff and jitter over about three days, in real time. Events can arrive out of order, so treat them as hints and read the current state through the API. Failed webhooks can be replayed. The payload `timestamp` is the real time in Lagos.
 
     ## Errors
 

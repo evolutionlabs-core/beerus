@@ -228,7 +228,7 @@ func (a *App) ensureRTGS() error {
 	}
 	a.rtgsTried, a.rtgsOpening = a.clock.Real(), true
 	a.mu.Unlock()
-	r, err := openRTGS(context.Background(), a.cfg, a.ctl, a.cfg.Start)
+	r, err := openRTGS(context.Background(), a.cfg, a.ctl, a.cfg.StartedAt)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.rtgsOpening = false

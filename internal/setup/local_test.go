@@ -44,7 +44,7 @@ func TestLoadLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.DatabaseURL != "postgres:///postgres?host=/tmp" || l.Bind != "127.0.0.1" || l.Pace != 1 || l.Ports.Window != 300 {
+	if l.DatabaseURL != "postgres:///postgres?host=/tmp" || l.Bind != "127.0.0.1" || l.Ports.Window != 300 {
 		t.Fatalf("%+v", l)
 	}
 	if !l.Connect.WidgetTLS || l.Connect.ControlPort != 7480 || l.Connect.RefreshEvery != "5m" {
@@ -103,11 +103,6 @@ func TestLoadLocalRejects(t *testing.T) {
 		name, old, new, want string
 	}{
 		{"typo", "database_url:", "databse_url:", `local.yaml:1:1: unknown field "databse_url" (did you mean "database_url"?)`},
-		{"zero pace", "pace: 1", "pace: 0", "local.yaml:3:1: pace 0 must be more than zero. Use 1 for real time."},
-		{"nan pace", "pace: 1", "pace: .nan", "local.yaml:3:1: pace NaN is not a finite number. Use 1 for real time."},
-		{"infinite pace", "pace: 1", "pace: .inf", "local.yaml:3:1: pace +Inf is not a finite number. Use 1 for real time."},
-		{"negative infinite pace", "pace: 1", "pace: -.inf", "local.yaml:3:1: pace -Inf is not a finite number. Use 1 for real time."},
-		{"text pace", "pace: 1", "pace: fast", "local.yaml:3:7: pace fast is not a number. Write a number such as 1."},
 		{"bad bind", "bind: 127.0.0.1", "bind: nowhere", `local.yaml:2:1: bind "nowhere" is not an IP address. Use an address such as 127.0.0.1.`},
 		{"port too high", "partner_port: 7443", "partner_port: 70000", "local.yaml:7:3: connect.partner_port 70000 is not a port. Use a number from 1 to 65535, or leave it out."},
 		{"zero window", "window: 300", "window: 0", "local.yaml:4:25: ports.window 0 must be more than zero. Leave it out for the default."},

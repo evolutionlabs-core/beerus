@@ -3,9 +3,8 @@ kind: Setup
 metadata:
   name: beerus
 spec:
-  start: tomorrow
   nip:
-    sessions: 4
+    sessions: 7
     tsq_after: 2m
     tsq_attempts: 3
   connect:

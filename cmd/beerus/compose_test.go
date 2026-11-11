@@ -4,7 +4,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -15,8 +14,7 @@ import (
 func newSetup(t *testing.T, local setup.Local) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
-	today := clock.DateOf(time.Now())
-	if err := connect.Init(dir, setup.DefaultSpec(defaultSetupName, today), local, today); err != nil {
+	if err := connect.Init(dir, setup.DefaultSpec(defaultSetupName), local, clock.New(nil).Now()); err != nil {
 		t.Fatal(err)
 	}
 	c, err := connect.LoadConfig(dir)

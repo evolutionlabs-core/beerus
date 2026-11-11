@@ -82,7 +82,7 @@ func (s *Stack) settleUntil(id, phase string) {
 	s.t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		s.ctl("POST", "/nip/settle-now", nil)
+		s.settleNow()
 		for _, d := range s.ctl("GET", "/banks", nil)["data"].([]any) {
 			if st := d.(map[string]any); st["id"] == id && st["phase"] == phase {
 				return
@@ -288,11 +288,10 @@ func TestBankRepairsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close(context.Background())
-	dropped := time.Now()
+	dropped := s.realNow()
 	if _, err := db.Exec(context.Background(), "DROP DATABASE "+s.cfg.Bank("bank-b").Database+" WITH (FORCE)"); err != nil {
 		t.Fatal(err)
 	}
-	s.advance("24h")
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		st := s.waitPhase("bank-b", connect.PhaseActive, 30*time.Second)
@@ -321,7 +320,7 @@ func TestBankRepairsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.waitBlocked("bank-b", setup.ReasonMoneyDecisionNeeded, "cus_nobody is not a customer of Bank B")
-	dropped = time.Now()
+	dropped = s.realNow()
 	if _, err := db.Exec(context.Background(), "DROP DATABASE "+s.cfg.Bank("bank-b").Database+" WITH (FORCE)"); err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +460,7 @@ func TestCloseBank(t *testing.T) {
 	if accepted["phase"] != setup.PhaseClosing || accepted["deletion_requested_at"] == nil {
 		t.Fatalf("close was not admitted as closing: %v", accepted)
 	}
-	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦35,000.00). Run beerus clock advance to reach it, or add --settle-now.")
+	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦35,000.00). Run beerus nip settle-now to settle it, or add --settle-now.")
 	if ne := s.ctl("GET", "/nip/name-enquiry?bank_code="+s.cfg.Bank("abuja-digital").NIPCode+"&account_number="+opened["tunde"].Accounts[0], nil); ne["response_code"] != "91" {
 		t.Fatalf("name enquiry at a terminating bank: %v", ne)
 	}
@@ -470,8 +469,8 @@ func TestCloseBank(t *testing.T) {
 	}); len(got) != 1 {
 		t.Fatalf("connections must be revoked before the money moves: %v", got)
 	}
-	s.ctl("POST", "/nip/settle-now", nil)
-	s.ctl("POST", "/nip/settle-now", nil)
+	s.settleNow()
+	s.settleNow()
 	s.waitBlocked("abuja-digital", setup.ReasonTargetUnavailable, "Bank A has a fault")
 	if got := balance(home["adaeze"]); got != before {
 		t.Fatalf("money moved while the destination had a fault: %d, want %d", got, before)
@@ -489,7 +488,7 @@ func TestCloseBank(t *testing.T) {
 	}
 	s.ctl("POST", "/banks/bank-a/resume", nil)
 	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 1 transfer (net ₦25,000.00)")
-	s.ctl("POST", "/nip/settle-now", nil)
+	s.settleNow()
 	res := s.closeResult("abuja-digital")
 	if res["moved_minor"] != float64(2_500_000) || res["left_minor"] != float64(1_000_000) || len(res["revoked_connections"].([]any)) != 1 {
 		t.Fatalf("close: %v", res)
@@ -497,7 +496,7 @@ func TestCloseBank(t *testing.T) {
 	if got := balance(home["adaeze"]); got != before+2_500_000 {
 		t.Fatalf("adaeze at bank-a has %d, want %d", got, before+2_500_000)
 	}
-	s.advance("72h")
+	s.settleNow()
 	if got := balance(opened["adaeze"]); got != 0 {
 		t.Fatalf("closed account keeps %d", got)
 	}
@@ -584,7 +583,7 @@ func TestClosePaysInsuredDeposits(t *testing.T) {
 	if got := total(from); got != before {
 		t.Fatalf("a cash payout moved %d to bank-a", got-before)
 	}
-	s.advance("72h")
+	s.settleNow()
 	if got := total(who); got != 50_000_000 {
 		t.Fatalf("claims left at the closed bank: %d", got)
 	}

@@ -567,3 +567,22 @@ func (a *App) Session(id string) (nibss.Session, error) {
 	}
 	return sw.Session(context.Background(), strings.TrimSpace(id))
 }
+
+func (a *App) QuerySession(id string) (nibss.Session, error) {
+	x, err := a.Session(id)
+	if err != nil || x.Status != nibss.SessionPending {
+		return x, err
+	}
+	a.gate.RLock()
+	sw := a.nibssStore()
+	if sw == nil {
+		a.gate.RUnlock()
+		return nibss.Session{}, errors.New("NIBSS is not available right now")
+	}
+	err = a.checkSession(sw, x, a.clock.Now())
+	a.gate.RUnlock()
+	if err != nil {
+		return nibss.Session{}, err
+	}
+	return a.Session(id)
+}

@@ -145,8 +145,7 @@ func initFromEnv(dir string) error {
 			*dst = int(n)
 		}
 	}
-	today := clock.DateOf(time.Now())
-	spec := setup.DefaultSpec(defaultSetupName, today)
+	spec := setup.DefaultSpec(defaultSetupName)
 	if redirect := os.Getenv("BEERUS_PARTNER_REDIRECT_URI"); redirect != "" {
 		p := setup.Partner{ID: os.Getenv("BEERUS_PARTNER_ID"), Name: os.Getenv("BEERUS_PARTNER_NAME"), LegalName: os.Getenv("BEERUS_PARTNER_LEGAL_NAME"), Purpose: os.Getenv("BEERUS_PARTNER_PURPOSE"), RedirectURIs: []string{redirect}, WebhookURL: os.Getenv("BEERUS_PARTNER_WEBHOOK_URL")}
 		if p.ID == "" || p.Name == "" || p.LegalName == "" || p.Purpose == "" {
@@ -154,7 +153,7 @@ func initFromEnv(dir string) error {
 		}
 		spec.Spec.Partners = append(spec.Spec.Partners, p)
 	}
-	return connect.Init(dir, spec, local, today)
+	return connect.Init(dir, spec, local, clock.New(nil).Now())
 }
 
 func cmdHealth(args []string) error {

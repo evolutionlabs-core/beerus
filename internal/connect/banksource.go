@@ -39,7 +39,7 @@ func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, b 
 	if err != nil {
 		return nil, err
 	}
-	s := &ledgerSource{ctx: ctx, st: st, inst: profileOf(b), start: cfg.Start, cfg: cfg, ctl: ctl}
+	s := &ledgerSource{ctx: ctx, st: st, inst: profileOf(b), start: cfg.StartedAt, cfg: cfg, ctl: ctl}
 	if err := s.setup(); err != nil {
 		st.Close()
 		return nil, err

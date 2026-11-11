@@ -67,14 +67,14 @@ func freeLocal(t *testing.T) setup.Local {
 func initDir(t *testing.T, local setup.Local, spec setup.Spec) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := connect.Init(dir, spec, local, clock.DateOf(time.Now())); err != nil {
+	if err := connect.Init(dir, spec, local, clock.New(nil).Now()); err != nil {
 		t.Fatal(err)
 	}
 	return dir
 }
 
 func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
-	spec := setup.DefaultSpec(defaultSetupName, clock.DateOf(time.Now()))
+	spec := setup.DefaultSpec(defaultSetupName)
 	dir := initDir(t, freeLocal(t), spec)
 	file := filepath.Join(dir, "copy.yaml")
 
@@ -207,8 +207,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	}
 	local := freeLocal(t)
 	local.DatabaseURL = url
-	today := clock.DateOf(time.Now())
-	spec := setup.DefaultSpec("cli", today)
+	spec := setup.DefaultSpec("cli")
 	dir := initDir(t, local, spec)
 	withC := spec
 	withC.Spec.Banks = append(append([]setup.Bank(nil), spec.Spec.Banks...), setup.Bank{ID: "bank-c", Name: "Bank C", Type: "digital", SettlesThrough: "bank-a"})
@@ -413,11 +412,8 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 		t.Fatalf("purge at the prompt with --json: %+v", closeJSON)
 	}
 
-	if _, err := cl.send("POST", "/clock/advance", map[string]string{"by": "365d"}); err != nil {
-		t.Fatal(err)
-	}
 	soon := mustStatus(t, dir).Applied
-	soon.Spec.Holidays.Add = []string{time.Now().AddDate(0, 0, 30).Format("2006-01-02")}
+	soon.Spec.Holidays.Add = []string{clock.New(nil).Today().AddDays(-30).String()}
 	holiday, err := setup.Export(soon)
 	if err != nil {
 		t.Fatal(err)
@@ -428,7 +424,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	}
 	live := d(cmdDiff, "", false, "-f", holidayFile)
 	if live.code != 1 || !strings.Contains(live.err, "holidays") {
-		t.Fatalf("a holiday in the past of the business clock, live: %+v", live)
+		t.Fatalf("a holiday in the past, live: %+v", live)
 	}
 	stop()
 	if off := d(cmdDiff, "", false, "-f", holidayFile); off.code != live.code || off.err != live.err {

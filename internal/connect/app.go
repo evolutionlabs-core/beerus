@@ -151,7 +151,6 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	if st == nil {
 		st = newState()
-		st.Clock = clock.State{Pace: cfg.Pace, AnchorBusiness: cfg.Start}
 	} else if _, err := os.Stat(a.runningPath()); err == nil {
 		a.log.Warn("the last run did not shut down cleanly; starting a new run so partners resync", "old_run", st.WorldID)
 		st.WorldID = newID("wld")
@@ -162,7 +161,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		}
 	}
 	a.st = st
-	a.clock = clock.New(st.Clock, o.Real)
+	a.clock = clock.New(o.Real)
 	if err := a.prepareOpenBanking(); err != nil {
 		return nil, err
 	}
@@ -264,7 +263,6 @@ func (a *App) Save() error {
 }
 
 func (a *App) saveLocked() error {
-	a.st.Clock = a.clock.State()
 	a.isDirty.Store(false)
 	a.regMu.Lock()
 	defer a.regMu.Unlock()

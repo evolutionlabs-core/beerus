@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
 )
 
 func TestRevokedConnectionCannotBeReauthorised(t *testing.T) {
@@ -45,15 +44,18 @@ func TestRevokedConnectionCannotBeReauthorised(t *testing.T) {
 }
 
 func TestReconnectWithLaterStartKeepsBalanceInvariant(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs a clock the test can move")
+	}
 	s := newStack(t)
 	c1 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
 	s.spend(s.persona("adaeze"), 3)
-	s.advance("48h")
+	s.advance(48 * time.Hour)
 	s.spend(s.persona("adaeze"), 2)
 	s.syncNow()
 	s.ctl("POST", "/connections/"+c1.ConnectionID+"/revoke", nil)
 	s.spend(s.persona("adaeze"), 2)
-	s.advance("48h")
+	s.advance(48 * time.Hour)
 	start := s.today().AddDays(-1)
 	c2 := s.connect("adaeze", "bank-a", start)
 	id := fmt.Sprint(accountAt(t, c2, "current")["id"])
@@ -114,7 +116,7 @@ func TestReauthSendsSyncAvailable(t *testing.T) {
 	st, _ := s.syncAll(id, "", 500)
 	s.ctl("POST", "/scenarios/token_refresh_failed", map[string]any{"connection_id": conn.ConnectionID})
 	s.spend(s.persona("tunde"), 2)
-	s.advance("72h")
+	s.syncNow()
 	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", nil), 201)
 	res := s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), "", "tunde", nil)
 	mark := len(s.events())
@@ -136,28 +138,6 @@ func TestReauthSendsSyncAvailable(t *testing.T) {
 	}
 }
 
-func TestFrozenClockSurvivesRestart(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	s := newStack(t)
-	if err := s.app.Save(); err != nil {
-		t.Fatal(err)
-	}
-	again, err := connect.New(s.cfg, connect.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p := again.Clock().State().Pace; p != 0 {
-		t.Fatalf("pace after restart %v", p)
-	}
-	before := again.Clock().Now()
-	time.Sleep(20 * time.Millisecond)
-	if !again.Clock().Now().Equal(before) {
-		t.Fatal("a frozen clock moved after restart")
-	}
-}
-
 func TestBankLedgerStaysConsistent(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
@@ -165,7 +145,7 @@ func TestBankLedgerStaysConsistent(t *testing.T) {
 	s := newBankStack(t)
 	s.connect("adaeze", "bank-a", s.today().AddDays(-40))
 	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "20000")
-	s.advance("40d")
+	s.settleNow()
 	c, err := s.app.VerifyBank()
 	if err != nil {
 		t.Fatal(err)

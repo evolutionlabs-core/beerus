@@ -220,7 +220,6 @@ type State struct {
 	ConsentLedger  []ConsentRecord            `json:"consent_ledger"`
 	Access         []AccessEvent              `json:"access"`
 	WorldID        string                     `json:"world_id"`
-	Clock          clock.State                `json:"clock"`
 	Faults         []*Fault                   `json:"faults"`
 	LinkSessions   map[string]*LinkSession    `json:"link_sessions"`
 	WidgetSessions map[string]*WidgetSession  `json:"widget_sessions"`

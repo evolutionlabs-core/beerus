@@ -30,13 +30,51 @@ func LoadStatus(dir string) (Status, error) {
 	case head.Version < 1:
 		return Status{}, fmt.Errorf("%s has no valid version (got %d). Run beerus reset to start again", statusFile, head.Version)
 	}
+	raw, err = dropRemovedStart(raw)
+	if err != nil {
+		return Status{}, fmt.Errorf("decode %s: %w", statusFile, err)
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var s Status
 	if err := dec.Decode(&s); err != nil {
 		return Status{}, fmt.Errorf("decode %s: %w", statusFile, err)
 	}
+	if s.StartedAt.IsZero() {
+		return Status{}, fmt.Errorf("%s has no started_at. Run beerus reset to start again", statusFile)
+	}
 	return s, nil
+}
+
+func dropRemovedStart(raw []byte) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil, err
+	}
+	var applied map[string]json.RawMessage
+	if err := json.Unmarshal(top["applied"], &applied); err != nil {
+		return raw, nil
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(applied["spec"], &body); err != nil {
+		return raw, nil
+	}
+	start, found := body["start"]
+	if !found {
+		return raw, nil
+	}
+	delete(body, "start")
+	if _, has := top["started_at"]; !has {
+		top["started_at"] = start
+	}
+	var err error
+	if applied["spec"], err = json.Marshal(body); err != nil {
+		return nil, err
+	}
+	if top["applied"], err = json.Marshal(applied); err != nil {
+		return nil, err
+	}
+	return json.Marshal(top)
 }
 
 func SaveStatus(dir string, s Status) error {

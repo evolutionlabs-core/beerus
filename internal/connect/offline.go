@@ -35,11 +35,7 @@ func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
 		rows = slices.Clone(st.Tombstones)
 		warning = fmt.Sprintf("NIBSS is not reachable (%v); the plan uses only the removed banks cached in %s, so it cannot check codes against live banks.", err, statusFile)
 	}
-	today, err := offlineToday(cfg)
-	if err != nil {
-		return PlanReply{}, err
-	}
-	plan := setup.Build(desired, st, rows, today)
+	plan := setup.Build(desired, st, rows, clock.New(nil).Today())
 	if len(plan.Errors) > 0 {
 		return PlanReply{}, planFailure(plan.Errors)
 	}
@@ -68,16 +64,4 @@ func offlineDirectory(cfg *config.Config) ([]nibss.Institution, error) {
 func keepTombstone(st *setup.Status, in nibss.Institution) {
 	st.Tombstones = slices.DeleteFunc(st.Tombstones, func(x nibss.Institution) bool { return x.ID == in.ID })
 	st.Tombstones = append(st.Tombstones, in)
-}
-
-func offlineToday(cfg *config.Config) (clock.Date, error) {
-	stub, err := loadState(cfg.Path("stub-state.json"))
-	if err != nil {
-		return clock.Date{}, fmt.Errorf("stub state: %w", err)
-	}
-	cs := clock.State{Pace: cfg.Pace, AnchorBusiness: cfg.Start}
-	if stub != nil {
-		cs = stub.Clock
-	}
-	return clock.New(cs, nil).Today(), nil
 }

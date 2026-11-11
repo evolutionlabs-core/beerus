@@ -1013,7 +1013,7 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := connect.Init(*dir, spec, local, clock.DateOf(time.Now())); err != nil {
+		if err := connect.Init(*dir, spec, local, clock.New(nil).Now()); err != nil {
 			return err
 		}
 		fmt.Fprintf(e.out, "Created %s from %s.\n\n", *dir, req.File)

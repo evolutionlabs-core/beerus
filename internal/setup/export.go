@@ -6,20 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"time"
 
 	"go.yaml.in/yaml/v3"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 //go:embed default.yaml
 var defaultSetup []byte
 
 const (
-	exportIndent     = 2
-	defaultStartHour = 8
-	defaultFile      = "default.yaml"
+	exportIndent = 2
+	defaultFile  = "default.yaml"
 )
 
 func Export(s Spec) ([]byte, error) {
@@ -35,7 +31,7 @@ func Export(s Spec) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func DefaultSpec(name string, today clock.Date) Spec {
+func DefaultSpec(name string) Spec {
 	var s Spec
 	d := &nodeDecoder{file: defaultFile, flatten: "spec", pos: map[string]Pos{}}
 	d.document(defaultSetup, reflect.ValueOf(&s).Elem())
@@ -43,6 +39,5 @@ func DefaultSpec(name string, today clock.Date) Spec {
 		panic(fmt.Errorf("decode embedded %s: %w", defaultFile, errors.Join(d.errs...)))
 	}
 	s.Metadata.Name = name
-	s.Spec.Start = time.Date(today.Y, today.M, today.D, defaultStartHour, 0, 0, 0, clock.Lagos).Format(time.RFC3339)
 	return s
 }

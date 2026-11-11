@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -19,7 +20,7 @@ import (
 
 func testStore(t *testing.T) *ctlStore {
 	t.Helper()
-	s, err := createStore(t.TempDir(), setup.Status{Version: setup.StatusVersion, Setup: "beerus", SetupKey: 9})
+	s, err := createStore(t.TempDir(), setup.Status{Version: setup.StatusVersion, Setup: "beerus", SetupKey: 9, StartedAt: time.Date(2026, 11, 3, 8, 0, 0, 0, clock.Lagos)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,14 +175,14 @@ func TestNewSetupKeyIsRandom(t *testing.T) {
 	}
 }
 
-func initTestConfig(t *testing.T, today clock.Date) *config.Config {
+func initTestConfig(t *testing.T, now time.Time) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
 	local := DefaultLocal()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
-	if err := Init(dir, setup.DefaultSpec("beerus", today), local, today); err != nil {
+	if err := Init(dir, setup.DefaultSpec("beerus"), local, now); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadConfig(dir)
@@ -196,7 +197,7 @@ func newTestApp(t *testing.T, o Options) *App {
 	if testing.Short() {
 		t.Skip("opens bank databases; run without -short")
 	}
-	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
+	cfg := initTestConfig(t, time.Date(2026, 11, 3, 8, 0, 0, 0, clock.Lagos))
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)
 	}

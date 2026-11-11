@@ -123,12 +123,11 @@ type Config struct {
 	TSQAfter    time.Duration `yaml:"-"`
 	TSQAttempts int           `yaml:"-"`
 	Ports       Ports         `yaml:"ports,omitempty"`
-	Pace        float64       `yaml:"pace"`
 	Connect     Connect       `yaml:"connect"`
 	Partners    []*Partner    `yaml:"partners"`
 	Holidays    *Holidays     `yaml:"holidays,omitempty"`
 	Dir         string        `yaml:"-"`
-	Start       time.Time     `yaml:"-"`
+	StartedAt   time.Time     `yaml:"-"`
 	calendar    *clock.Calendar
 }
 
@@ -264,9 +263,6 @@ func (c *Config) Finish() error {
 	}
 	if err := c.validatePorts(); err != nil {
 		return err
-	}
-	if c.Pace <= 0 {
-		c.Pace = 1
 	}
 	return c.buildCalendar()
 }

@@ -170,7 +170,7 @@ func (a *App) listWebhookKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) effectiveStart(start clock.Date, institution string) (clock.Date, bool) {
-	min := clock.DateOf(a.cfg.Start)
+	min := clock.DateOf(a.cfg.StartedAt)
 	if b := a.cfg.Bank(institution); b != nil {
 		if d := a.clock.Today().AddDays(-b.HistoryDays); d.After(min) {
 			min = d

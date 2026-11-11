@@ -17,15 +17,46 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 type cli struct {
-	t    *testing.T
-	bin  string
-	dir  string
-	home string
-	in   string
+	t     *testing.T
+	bin   string
+	dir   string
+	home  string
+	in    string
+	began time.Time
+	now   func() time.Time
+}
+
+var watTime = regexp.MustCompile(`(?:(\w{3} \d{1,2} \w{3} \d{4}) )?(\d\d:\d\d) WAT`)
+
+func checkWAT(t *testing.T, began, now time.Time, line, out string) {
+	t.Helper()
+	now = now.In(clock.Lagos)
+	minutes, dates := map[string]bool{}, map[string]bool{}
+	for m := began.Truncate(time.Minute); !m.After(now.Add(3 * time.Minute)); m = m.Add(time.Minute) {
+		minutes[m.In(clock.Lagos).Format("15:04")] = true
+		dates[m.In(clock.Lagos).Format("Mon 2 Jan 2006")] = true
+	}
+	for _, m := range watTime.FindAllStringSubmatch(out, -1) {
+		if !minutes[m[2]] || (m[1] != "" && !dates[m[1]]) {
+			t.Fatalf("%s printed %q, which is outside the real time the test has run, %s to %s", line, m[0], began.In(clock.Lagos).Format("15:04"), now.Format("15:04"))
+		}
+	}
+}
+
+func (c *cli) stamped(line, out string) string {
+	c.t.Helper()
+	checkWAT(c.t, c.began, c.now(), line, out)
+	return watTime.ReplaceAllStringFunc(out, func(m string) string {
+		if len(m) > len("15:04 WAT") {
+			return "<datetime>"
+		}
+		return "<time>"
+	})
 }
 
 var (
@@ -106,6 +137,9 @@ func (c *cli) ok(args ...string) string {
 	if code != 0 {
 		c.t.Fatalf("beerus %v exited %d: %s", args, code, errOut)
 	}
+	if !c.began.IsZero() {
+		return c.stamped(strings.Join(args, " "), out)
+	}
 	return out
 }
 
@@ -140,6 +174,8 @@ func (c *cli) capture(pattern string, args ...string) (string, string) {
 func TestBankCLI(t *testing.T) {
 	s := newBankStack(t)
 	c := newCLI(t, s)
+	c.now = s.realNow
+	c.began = s.realNow()
 	const noBank = "beerus: No bank selected. Run beerus use <bank> or add --bank."
 	for _, args := range [][]string{{"customers"}, {"accounts"}, {"deposit", "0123456789", "--amount", "5"}, {"transfer", "--from", "1", "--to", "2", "--amount", "5"}, {"fault", "down"}} {
 		if got := c.fails(args...); got != noBank {
@@ -148,7 +184,7 @@ func TestBankCLI(t *testing.T) {
 	}
 
 	adaID, out := c.capture(`Created customer (cus_\w+), Adaeze Okafor, at bank-a\. BVN (\d+)\.`, "customer", "create", "--bank", "bank-a", "--name", "Adaeze Okafor", "--phone", "08031234567", "--dob", "1988-03-14")
-	if !strings.Contains(out, "Business time: Thu 15 Jan 2026 08:00 WAT") {
+	if !strings.Contains(out, "Business time: <datetime>") {
 		t.Errorf("customer create has no business time: %q", out)
 	}
 	bvn := regexp.MustCompile(`BVN (\d+)`).FindStringSubmatch(out)[1]
@@ -184,13 +220,13 @@ func TestBankCLI(t *testing.T) {
 		t.Errorf("accounts at bank-b: %q", out)
 	}
 
-	if got := c.ok("deposit", a1, "--bank", "bank-a", "--amount", "5,000.50"); got != fmt.Sprintf("Deposited ₦5,000.50 into account %s at bank-a. Balance ₦5,000.50.\nBusiness time: Thu 15 Jan 2026 08:00 WAT\n", a1) {
+	if got := c.ok("deposit", a1, "--bank", "bank-a", "--amount", "5,000.50"); got != fmt.Sprintf("Deposited ₦5,000.50 into account %s at bank-a. Balance ₦5,000.50.\nBusiness time: <datetime>\n", a1) {
 		t.Errorf("deposit: %q", got)
 	}
-	if got := c.ok("withdraw", a1, "--bank", "bank-a", "--amount", "0.50"); got != fmt.Sprintf("Withdrew ₦0.50 from account %s at bank-a. Balance ₦5,000.00.\nBusiness time: Thu 15 Jan 2026 08:00 WAT\n", a1) {
+	if got := c.ok("withdraw", a1, "--bank", "bank-a", "--amount", "0.50"); got != fmt.Sprintf("Withdrew ₦0.50 from account %s at bank-a. Balance ₦5,000.00.\nBusiness time: <datetime>\n", a1) {
 		t.Errorf("withdraw: %q", got)
 	}
-	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", a2, "--amount", "1000"); got != fmt.Sprintf("Moved ₦1,000.00 from %s to %s, Adaeze Okafor, at 08:00 WAT. Balance ₦4,000.00.\n", a1, a2) {
+	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", a2, "--amount", "1000"); got != fmt.Sprintf("Moved ₦1,000.00 from %s to %s, Adaeze Okafor, at <time>. Balance ₦4,000.00.\n", a1, a2) {
 		t.Errorf("same-bank transfer: %q", got)
 	}
 
@@ -199,14 +235,15 @@ func TestBankCLI(t *testing.T) {
 	if sent["status"] != "success" || sent["response_code"] != "00" || sent["total_debit_minor"] != total || sent["sender_balance_after_minor"] != 400000-total || sent["fee_minor"].(float64) <= 0 {
 		t.Errorf("nip transfer: %v", sent)
 	}
-	sid, out := c.capture(`Session (\d+): success at 08:00 WAT`, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000.50")
+	sid, out := c.capture(`Session (\d+): success at <time>`, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000.50")
 	if !strings.HasPrefix(out, "Sending ₦1,000.50 to Chidi Okafor at Bank B.\n") || !strings.Contains(out, "Total debit ₦") {
 		t.Errorf("nip transfer text: %q", out)
 	}
-	if got := c.ok("nip", "status", sid); !strings.HasPrefix(got, "Session "+sid+": success at 08:00 WAT\nAmount ₦1,000.50 from "+a1+" (bank code 999001) to "+b1+" (bank code 999002), started at 08:00 WAT.\n") {
+	if got := c.ok("nip", "status", sid); !strings.HasPrefix(got, "Session "+sid+": success at <time>\nAmount ₦1,000.50 from "+a1+" (bank code 999001) to "+b1+" (bank code 999002), started at <time>.\n") {
 		t.Errorf("nip status: %q", got)
 	}
-	if out := c.ok("statement", a1, "--bank", "bank-a", "--from", "2026-01-15", "--to", "2026-01-15"); !strings.Contains(out, "9 entries on this page.") || !strings.Contains(out, sid) || !strings.Contains(out, "−₦1,000.50") {
+	today := s.today().String()
+	if out := c.ok("statement", a1, "--bank", "bank-a", "--from", today, "--to", today); !strings.Contains(out, "9 entries on this page.") || !strings.Contains(out, sid) || !strings.Contains(out, "−₦1,000.50") {
 		t.Errorf("statement: %q", out)
 	}
 	if lines := c.json("statement", a1, "--bank", "bank-a")["data"].([]any); len(lines) != 9 {
@@ -219,30 +256,33 @@ func TestBankCLI(t *testing.T) {
 	if out := c.ok("fault", "list"); !strings.Contains(out, "bank-b") || !strings.Contains(out, "the next transfer times out (outcome credited)") {
 		t.Errorf("fault list: %q", out)
 	}
-	psid, out := c.capture(`Session (\d+): pending\. Beerus will check with NIBSS at \d\d:\d\d WAT\. Run beerus nip status \d+\.`, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "10")
-	if got := c.ok("nip", "status", psid); !strings.HasPrefix(got, "Session "+psid+": pending. Beerus will check with NIBSS at ") {
-		t.Errorf("pending status: %q", got)
-	}
-	s.advance("1h")
-	if got := c.ok("nip", "status", psid); !strings.HasPrefix(got, "Session "+psid+": success at 09:00 WAT\n") {
+	psid, out := c.capture(`Session (\d+): pending\. Beerus will check with NIBSS at <time>\. Run beerus nip status \d+\.`, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "10")
+	if got := c.ok("nip", "status", psid); !strings.HasPrefix(got, "Session "+psid+": success at <time>\n") {
 		t.Errorf("resolved status: %q", got)
 	}
-	if got := c.ok("fault", "clear"); got != "No faults to clear.\nBusiness time: Thu 15 Jan 2026 09:00 WAT\n" {
+	c.ok("fault", "timeout", "--bank", "bank-b", "--outcome", "unknown")
+	usid, _ := c.capture(`Session (\d+): pending\. Beerus will check with NIBSS at <time>\. Run beerus nip status \d+\.`, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "10")
+	if got := c.ok("nip", "status", usid); !strings.HasPrefix(got, "Session "+usid+": pending. Beerus will check with NIBSS at <time>.\n") {
+		t.Errorf("pending status: %q", got)
+	}
+	if got := c.ok("fault", "clear"); got != "No faults to clear.\nBusiness time: <datetime>\n" {
 		t.Errorf("fault clear with none: %q", got)
 	}
 
-	c.ok("fault", "down", "--bank", "bank-b", "--for", "30m")
+	if _, errOut, code := c.run("fault", "down", "--bank", "bank-b", "--for", "30m"); code != 0 {
+		t.Fatalf("fault down: %s", errOut)
+	}
 	if got := c.fails("transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "10"); got != "beerus: Bank B is not available right now, so nothing was debited." {
 		t.Errorf("transfer to a bank that is down: %q", got)
 	}
-	if got := c.ok("fault", "clear", "--bank", "bank-b"); got != "Cleared 1 fault.\nBusiness time: Thu 15 Jan 2026 09:00 WAT\n" {
+	if got := c.ok("fault", "clear", "--bank", "bank-b"); got != "Cleared 1 fault.\nBusiness time: <datetime>\n" {
 		t.Errorf("fault clear: %q", got)
 	}
 
-	if got := c.json("nip", "settle-now"); got["settled_sessions"] == nil || !strings.HasPrefix(fmt.Sprint(got["business_time"]), "2026-01-15T09:00:") {
+	if got := c.json("nip", "settle-now"); got["settled_sessions"] == nil || !strings.HasPrefix(fmt.Sprint(got["business_time"]), today) {
 		t.Errorf("settle-now --json: %v", got)
 	}
-	if got := c.ok("nip", "settle-now"); !strings.HasPrefix(got, "No sessions to settle at 09:00 WAT.") {
+	if got := c.ok("nip", "settle-now"); !strings.HasPrefix(got, "No sessions to settle at <time>.") {
 		t.Errorf("settle-now again: %q", got)
 	}
 	for _, args := range [][]string{{"accounts", "--bank", "bank-a"}, {"fault", "list"}, {"nip", "status", sid}, {"customers", "--bank", "bank-a"}} {
@@ -284,7 +324,7 @@ func TestBankCLI(t *testing.T) {
 		{[]string{"customer", "close", adaID, "--bank", "bank-a"}, "beerus: Customer has open accounts: customer " + adaID + " still has 2 open accounts; close them first."},
 		{[]string{"customer", "close", "cus_none", "--bank", "bank-a"}, "beerus: No such customer."},
 		{[]string{"account", "open", "--bank", "bank-a", "--customer", adaID}, "beerus: --customer and --type are required; usage: beerus account open --customer ID [--type current|savings] | close <nuban>"},
-		{[]string{"account", "close", a1, "--bank", "bank-a"}, "beerus: Account balance is not zero: account " + a1 + " holds ₦1,957.25; move it out by transfer or cash first."},
+		{[]string{"account", "close", a1, "--bank", "bank-a"}, "beerus: Account balance is not zero: account " + a1 + " holds ₦1,936.50; move it out by transfer or cash first."},
 		{[]string{"account"}, "beerus: usage: beerus account open --customer ID [--type current|savings] | close <nuban>"},
 		{[]string{"accounts", "--bank", "bank-a", "--limit", "0"}, "beerus: Limit must be a number from 1 to 1000."},
 		{[]string{"accounts", "--bank", "bank-a", "--cursor", "junk"}, "beerus: That cursor is not valid. Use next_cursor from the last page."},
@@ -406,7 +446,7 @@ func TestBankSession(t *testing.T) {
 			}
 
 			con, tty, cmd := startConsole(t, c, shell, []string{"INPUTRC=" + inputrc}, "use", "bank-a")
-			con.waitFor(t, 0, `Using Bank A\. Business time: Thu 15 Jan 2026 08:00 WAT\. Type exit to leave\.`)
+			con.waitFor(t, 0, `Using Bank A\. Business time: \w{3} \d{1,2} \w{3} \d{4} \d\d:\d\d WAT\. Type exit to leave\.`)
 			con.waitFor(t, 0, `\(bank-a\) \$ `)
 
 			from := con.send(t, tty, "echo file=$BEERUS_SESSION lvl=$SHLVL rc=$USER_RC\n")
@@ -421,9 +461,9 @@ func TestBankSession(t *testing.T) {
 			level := con.waitFor(t, from, `lvl=(\d+)`)
 
 			from = con.send(t, tty, "beerus customers\n")
-			con.waitFor(t, from, `No customers\.\s+Business time: Thu 15 Jan 2026 08:00 WAT`)
+			con.waitFor(t, from, `No customers\.\s+Business time: \w{3} \d{1,2} \w{3} \d{4} \d\d:\d\d WAT`)
 			from = con.send(t, tty, "beerus use bank-b\n")
-			con.waitFor(t, from, `Switched to Bank B\. Business time: Thu 15 Jan 2026 08:00 WAT\. Type exit to leave\.`)
+			con.waitFor(t, from, `Switched to Bank B\. Business time: \w{3} \d{1,2} \w{3} \d{4} \d\d:\d\d WAT\. Type exit to leave\.`)
 			con.waitFor(t, from, `\(bank-b\) \$ `)
 			if raw, _ := os.ReadFile(file); string(raw) != "bank-b\n" {
 				t.Errorf("session file after switching holds %q", raw)

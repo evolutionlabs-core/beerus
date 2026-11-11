@@ -190,7 +190,7 @@ func TestConnectAndSync(t *testing.T) {
 		hooks := s.sink.all()
 		seen := map[string]bool{}
 		for _, h := range hooks {
-			if err := verifyV1a(pub, h); err != nil {
+			if err := verifyV1a(pub, h, s.realNow()); err != nil {
 				t.Fatalf("webhook signature: %v", err)
 			}
 			var ev struct {
@@ -224,7 +224,7 @@ func TestBalanceRangeAndHistoryLimit(t *testing.T) {
 	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
 	eff := fmt.Sprint(c.JSON["effective_start_date"])
 	want := today.AddDays(-s.cfg.Bank("bank-b").HistoryDays)
-	if start := clock.DateOf(s.cfg.Start); start.After(want) {
+	if start := clock.DateOf(s.cfg.StartedAt); start.After(want) {
 		want = start
 	}
 	if eff != want.String() {
@@ -295,7 +295,6 @@ func TestSnapshotRestoreResetsCursor(t *testing.T) {
 	id := fmt.Sprint(conn.Accounts[0]["id"])
 	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "before"})
 	first, _ := s.syncAll(id, "", 100)
-	s.advance("48h")
 	s.ctl("POST", "/banks/bank-a/deposits", map[string]string{"account": s.persona("tunde").Accounts[0], "amount": "15000"})
 	s.syncNow()
 	first, _ = s.syncMore(id, first, 100)
@@ -381,10 +380,13 @@ func TestRevokeAndReconnectKeepsIDs(t *testing.T) {
 }
 
 func TestConsentExpiryAndReauth(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs a clock the test can move")
+	}
 	s := newStack(t)
 	conn := s.connect("tunde", "bank-a", s.today().AddDays(-30))
 	id := fmt.Sprint(conn.Accounts[0]["id"])
-	s.advance("366d")
+	s.advance(366 * 24 * time.Hour)
 	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
 	if c.JSON["status"] != "expired" {
 		t.Fatalf("status after a year: %v", c.JSON["status"])
@@ -465,7 +467,12 @@ func TestBankOutage(t *testing.T) {
 	if b.result == nil || b.result.Query().Get("error") != "institution_down" {
 		t.Fatalf("widget during outage: %v", b.result)
 	}
-	s.advance("3h")
+	if testingExternal() {
+		s.ctl("DELETE", "/faults?bank=bank-b", nil)
+		s.syncNow()
+	} else {
+		s.advance(3 * time.Hour)
+	}
 	c = s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
 	if c.JSON["status"] != "active" {
 		t.Fatalf("status after outage: %v", c.JSON["status"])

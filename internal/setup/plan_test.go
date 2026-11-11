@@ -20,8 +20,7 @@ func spec() Spec {
 		Kind:       KindSetup,
 		Metadata:   Metadata{Name: "beerus"},
 		Spec: Body{
-			Start: "2026-11-04T08:00:00+01:00",
-			NIP:   NIP{Sessions: 4, TSQAfter: "2m", TSQAttempts: 3},
+			NIP: NIP{Sessions: 4, TSQAfter: "2m", TSQAttempts: 3},
 			Connect: ConnectLegal{
 				LegalName:  "Beerus Connect Ltd",
 				BrandName:  "Beerus",
@@ -171,10 +170,6 @@ func TestBuildNoChanges(t *testing.T) {
 			desired: func(s *Spec) { bank(s, "bank-a").State = StateActive },
 		},
 		{
-			name:    "same start in another offset",
-			desired: func(s *Spec) { s.Spec.Start = "2026-11-04T07:00:00Z" },
-		},
-		{
 			name: "holidays reordered and repeated",
 			status: func(st *Status) {
 				st.Applied.Spec.Holidays.Add = []string{"2026-12-28", "2027-01-02"}
@@ -186,7 +181,7 @@ func TestBuildNoChanges(t *testing.T) {
 		{
 			name: "omitted defaults match written defaults",
 			status: func(st *Status) {
-				d := DefaultSpec("beerus", today).Spec
+				d := DefaultSpec("beerus").Spec
 				st.Applied.Spec.NIP, st.Applied.Spec.Connect = d.NIP, d.Connect
 			},
 			desired: func(s *Spec) {
@@ -257,11 +252,6 @@ func TestBuildLockedFields(t *testing.T) {
 			},
 			errs: []string{"setup.yaml:4:9: metadata.name is lagos-dev, but this dir holds setup beerus. Use the file for beerus, or another dir."},
 			is:   ErrSetupMismatch,
-		},
-		{
-			name:    "start",
-			desired: func(s *Spec) { s.Spec.Start = "2026-11-05T08:00:00+01:00" },
-			errs:    []string{"start cannot change from 2026-11-04T08:00:00+01:00 to 2026-11-05T08:00:00+01:00. Put back 2026-11-04T08:00:00+01:00."},
 		},
 		{
 			name:    "nip.sessions",

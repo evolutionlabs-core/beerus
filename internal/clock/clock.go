@@ -2,7 +2,6 @@ package clock
 
 import (
 	"errors"
-	"sync"
 	"time"
 )
 
@@ -16,47 +15,19 @@ func mustLagos() *time.Location {
 	return loc
 }
 
-type State struct {
-	AnchorBusiness time.Time `json:"anchor_business"`
-	AnchorReal     time.Time `json:"anchor_real"`
-	Pace           float64   `json:"pace"`
-}
-
 type Clock struct {
-	mu   sync.RWMutex
-	st   State
 	real func() time.Time
 }
 
-func New(st State, real func() time.Time) *Clock {
+func New(real func() time.Time) *Clock {
 	if real == nil {
 		real = time.Now
 	}
-	if st.Pace < 0 || (st.Pace == 0 && st.AnchorReal.IsZero()) {
-		st.Pace = 1
-	}
-	if st.AnchorReal.IsZero() {
-		now := real()
-		st.AnchorReal = now
-		if st.AnchorBusiness.IsZero() {
-			st.AnchorBusiness = now
-		}
-	}
-	return &Clock{st: st, real: real}
+	return &Clock{real: real}
 }
 
 func (c *Clock) Now() time.Time {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.at(c.real())
-}
-
-func (c *Clock) at(real time.Time) time.Time {
-	elapsed := real.Sub(c.st.AnchorReal)
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	return c.st.AnchorBusiness.Add(time.Duration(float64(elapsed) * c.st.Pace)).In(Lagos).Truncate(time.Millisecond)
+	return c.real().In(Lagos).Truncate(time.Millisecond)
 }
 
 func (c *Clock) Real() time.Time {
@@ -65,58 +36,6 @@ func (c *Clock) Real() time.Time {
 
 func (c *Clock) Today() Date {
 	return DateOf(c.Now())
-}
-
-func (c *Clock) rebase() {
-	now := c.real()
-	c.st.AnchorBusiness = c.at(now)
-	c.st.AnchorReal = now
-}
-
-func (c *Clock) Advance(d time.Duration) (time.Time, error) {
-	if d < 0 {
-		return time.Time{}, errors.New("clock: cannot move backwards")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.rebase()
-	c.st.AnchorBusiness = c.st.AnchorBusiness.Add(d)
-	return c.st.AnchorBusiness.In(Lagos), nil
-}
-
-func (c *Clock) AdvanceTo(t time.Time) (time.Time, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.rebase()
-	if t.Before(c.st.AnchorBusiness) {
-		return time.Time{}, errors.New("clock: cannot move backwards")
-	}
-	c.st.AnchorBusiness = t
-	return t.In(Lagos), nil
-}
-
-func (c *Clock) SetPace(p float64) error {
-	if p < 0 || p > 100000 {
-		return errors.New("clock: pace must be between 0 and 100000")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.rebase()
-	c.st.Pace = p
-	return nil
-}
-
-func (c *Clock) Restore(st State) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.st = State{AnchorBusiness: st.AnchorBusiness, AnchorReal: c.real(), Pace: c.st.Pace}
-}
-
-func (c *Clock) State() State {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.rebase()
-	return c.st
 }
 
 type Date struct {

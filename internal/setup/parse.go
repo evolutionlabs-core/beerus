@@ -16,7 +16,7 @@ const maxSuggestDistance = 2
 
 func Parse(file string, raw []byte) (Spec, []error) {
 	var s Spec
-	d := &nodeDecoder{file: file, flatten: "spec", pos: map[string]Pos{}}
+	d := &nodeDecoder{file: file, flatten: "spec", removed: map[string]string{"start": "start is no longer used. A setup starts at the current time. Remove it."}, pos: map[string]Pos{}}
 	d.document(raw, reflect.ValueOf(&s).Elem())
 	s.pos = d.pos
 	if len(d.errs) > 0 && len(d.pos) == 0 {
@@ -33,6 +33,7 @@ func Parse(file string, raw []byte) (Spec, []error) {
 type nodeDecoder struct {
 	file    string
 	flatten string
+	removed map[string]string
 	pos     map[string]Pos
 	failed  []string
 	errs    []error
@@ -130,13 +131,6 @@ func (d *nodeDecoder) value(n *yaml.Node, path string, v reflect.Value) {
 			return
 		}
 		v.SetInt(i)
-	case reflect.Float64:
-		var f float64
-		if n.Kind != yaml.ScalarNode || (n.Tag != "!!int" && n.Tag != "!!float") || n.Decode(&f) != nil {
-			d.fail(n, path, "%s is not a number. Write a number such as 1", describeNode(n))
-			return
-		}
-		v.SetFloat(f)
 	case reflect.Bool:
 		var b bool
 		if n.Kind != yaml.ScalarNode || n.Tag != "!!bool" || n.Decode(&b) != nil {
@@ -192,6 +186,12 @@ func (d *nodeDecoder) object(n *yaml.Node, path string, v reflect.Value) {
 }
 
 func (d *nodeDecoder) unknown(k *yaml.Node, base string, names []string) {
+	if msg, ok := d.removed[k.Value]; ok && base == "" {
+		if msg != "" {
+			d.errs = append(d.errs, fmt.Errorf("%s:%d:%d: %s", d.file, k.Line, k.Column, msg))
+		}
+		return
+	}
 	if s := suggestName(k.Value, names); s != "" {
 		d.failed = append(d.failed, joinSpecPath(base, s))
 		d.errs = append(d.errs, fmt.Errorf("%s:%d:%d: unknown field %q (did you mean %q?)", d.file, k.Line, k.Column, k.Value, s))

@@ -106,11 +106,6 @@ func (c *specChecker) header() {
 	case !specIDPattern.MatchString(s.Metadata.Name):
 		c.add("metadata.name", "metadata.name %q is not valid. %s", s.Metadata.Name, specIDRule)
 	}
-	if s.Spec.Start == "" {
-		c.add("start", "start is required. Add an RFC 3339 time such as 2026-11-04T08:00:00+01:00")
-	} else if _, err := time.Parse(time.RFC3339, s.Spec.Start); err != nil {
-		c.add("start", "start %q is not an RFC 3339 time. Use a time such as 2026-11-04T08:00:00+01:00", s.Spec.Start)
-	}
 }
 
 func (c *specChecker) positive(path string, v int64, hint string) {

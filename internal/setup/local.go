@@ -3,7 +3,6 @@ package setup
 import (
 	"errors"
 	"fmt"
-	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -26,7 +25,7 @@ func LoadLocal(dir string) (Local, error) {
 		return Local{}, fmt.Errorf("read %s: %w", localFile, err)
 	}
 	var l Local
-	d := &nodeDecoder{file: localFile, pos: map[string]Pos{}}
+	d := &nodeDecoder{file: localFile, removed: map[string]string{"pace": ""}, pos: map[string]Pos{}}
 	d.document(raw, reflect.ValueOf(&l).Elem())
 	if len(d.errs) > 0 && len(d.pos) == 0 {
 		return Local{}, errors.Join(d.errs...)
@@ -81,11 +80,6 @@ func (l Local) check(pos map[string]Pos) []specProblem {
 	}
 	if (l.Bind != "" || c.has("bind")) && net.ParseIP(l.Bind) == nil {
 		c.add("bind", "bind %q is not an IP address. Use an address such as 127.0.0.1", l.Bind)
-	}
-	if math.IsNaN(l.Pace) || math.IsInf(l.Pace, 0) {
-		c.add("pace", "pace %g is not a finite number. Use 1 for real time", l.Pace)
-	} else if l.Pace < 0 || (l.Pace == 0 && c.has("pace")) {
-		c.add("pace", "pace %g must be more than zero. Use 1 for real time", l.Pace)
 	}
 	c.port("ports.api_offset", l.Ports.APIOffset)
 	if l.Ports.Window < 0 || (l.Ports.Window == 0 && c.has("ports.window")) {

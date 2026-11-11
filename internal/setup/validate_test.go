@@ -4,9 +4,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 func validSpec(t *testing.T) Spec {
@@ -15,7 +12,7 @@ func validSpec(t *testing.T) Spec {
 }
 
 func TestValidateDefaultSpecIsClean(t *testing.T) {
-	if errs := Validate(DefaultSpec("beerus", clock.Date{Y: 2026, M: time.November, D: 4})); len(errs) > 0 {
+	if errs := Validate(DefaultSpec("beerus")); len(errs) > 0 {
 		t.Fatal(errStrings(errs))
 	}
 	if errs := Validate(validSpec(t)); len(errs) > 0 {
@@ -35,7 +32,6 @@ func TestValidateRules(t *testing.T) {
 		{"no name", func(s *Spec) { s.Metadata.Name = "" }, []string{"metadata.name is required. Use 2 to 31 lowercase letters, digits or hyphens, starting with a letter."}},
 		{"one letter name", func(s *Spec) { s.Metadata.Name = "a" }, []string{`metadata.name "a" is not valid. Use 2 to 31 lowercase letters, digits or hyphens, starting with a letter.`}},
 		{"32 letter name", func(s *Spec) { s.Metadata.Name = "abcdefghijklmnopqrstuvwxyzabcdef" }, []string{`metadata.name "abcdefghijklmnopqrstuvwxyzabcdef" is not valid. Use 2 to 31 lowercase letters, digits or hyphens, starting with a letter.`}},
-		{"start without offset", func(s *Spec) { s.Spec.Start = "2026-11-04T08:00:00" }, []string{`start "2026-11-04T08:00:00" is not an RFC 3339 time. Use a time such as 2026-11-04T08:00:00+01:00.`}},
 		{"negative sessions", func(s *Spec) { s.Spec.NIP.Sessions = -4 }, []string{"nip.sessions -4 does not split the day into whole minutes. Use a number such as 1, 2, 4, 6, 12 or 24."}},
 		{"bad tsq after", func(s *Spec) { s.Spec.NIP.TSQAfter = "soon" }, []string{`nip.tsq_after "soon" is not a duration. Use a duration such as 2m.`}},
 		{"negative tsq after", func(s *Spec) { s.Spec.NIP.TSQAfter = "-1m" }, []string{"nip.tsq_after -1m must be longer than zero. Use a duration such as 2m."}},
@@ -128,7 +124,7 @@ func TestValidateRules(t *testing.T) {
 func TestValidateUsesPositionsWhenParsed(t *testing.T) {
 	s := parseFixture(t, "default.yaml")
 	s.Spec.Banks[1].Type = "online"
-	want := []string{`setup.yaml:27:7: banks[bank-b].type "online" is not a bank type. Use commercial, digital or microfinance.`}
+	want := []string{`setup.yaml:26:7: banks[bank-b].type "online" is not a bank type. Use commercial, digital or microfinance.`}
 	if got := errStrings(Validate(s)); !slices.Equal(got, want) {
 		t.Fatalf("got %q", got)
 	}
@@ -137,7 +133,7 @@ func TestValidateUsesPositionsWhenParsed(t *testing.T) {
 func TestValidateFallsBackToTheParentPosition(t *testing.T) {
 	s := parseFixture(t, "default.yaml")
 	s.Spec.Banks[0].SettlesThrough = "bank-z"
-	want := []string{`setup.yaml:20:7: banks[bank-a].settles_through "bank-z" is not a bank in this file. Name a bank listed under banks.`}
+	want := []string{`setup.yaml:19:7: banks[bank-a].settles_through "bank-z" is not a bank in this file. Name a bank listed under banks.`}
 	if got := errStrings(Validate(s)); !slices.Equal(got, want) {
 		t.Fatalf("got %q", got)
 	}

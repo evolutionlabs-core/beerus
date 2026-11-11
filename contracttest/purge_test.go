@@ -46,8 +46,9 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	conn := s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
 	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "abuja-digital", "outcome": "credited", "count": 1})
-	if sent, _ := s.payTry("bank-a", home.Accounts[0], "abuja-digital", target, "100", nil); sent["status"] == "success" {
-		t.Fatalf("the timeout fault did not leave the transfer pending: %v", sent)
+	pending, _ := s.payTry("bank-a", home.Accounts[0], "abuja-digital", target, "100", nil)
+	if pending["status"] == "success" {
+		t.Fatalf("the timeout fault did not leave the transfer pending: %v", pending)
 	}
 	snap := fmt.Sprint(s.ctl("POST", "/snapshots", map[string]string{"name": "with abuja"})["id"])
 	databases := func() []string {
@@ -68,7 +69,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if res := s.ctl("POST", "/banks/abuja-digital/purge", nil); res["phase"] != setup.PhaseTerminating {
 		t.Fatalf("purge was not admitted as terminating: %v", res)
 	}
-	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦25,100.00). Run beerus clock advance to reach it, or add --settle-now.")
+	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦25,100.00). Run beerus nip settle-now to settle it, or add --settle-now.")
 	if got := databases(); len(got) != 2 {
 		t.Fatalf("the purge dropped databases while transfers were unsettled: %v", got)
 	}
@@ -93,8 +94,10 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Abuja Digital", "id": "abuja-digital"}); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
 		t.Fatalf("re-adding a bank that is being removed: %v", err)
 	}
-	s.advance("24h")
-	s.advance("24h")
+	if resolved := s.querySession(fmt.Sprint(pending["session_id"])); resolved["status"] != "00" || resolved["outcome"] != "credited" {
+		t.Fatalf("status query on the timed-out transfer: %v", resolved)
+	}
+	s.settleNow()
 	s.waitBlocked("abuja-digital", setup.ReasonMoneyDecisionNeeded, "Abuja Digital holds ₦25,100.00 for 1 customer. Run beerus apply --prune --money transfer --to <bank>.")
 	if got := databases(); len(got) != 2 {
 		t.Fatalf("the purge dropped databases before the money was decided: %v", got)
@@ -107,7 +110,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("adaeze at bank-a holds %d, want %d", got, atBankA+2_510_000)
 	}
 	checkSettled(t, s.app)
-	s.ctl("POST", "/nip/settle-now", nil)
+	s.settleNow()
 	s.waitGone("bank", "abuja-digital")
 	if got := databases(); len(got) != 0 {
 		t.Fatalf("databases left behind: %v", got)
@@ -173,7 +176,6 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if ck, err := s.app.VerifyBank(); err != nil || !ck.OK() {
 		t.Fatalf("bank ledgers after the purge: %v %v", err, ck)
 	}
-	s.advance("72h")
 	checkSettled(t, s.app)
 	before := s.balances(home)
 	if err := s.app.Save(); err != nil {
@@ -284,9 +286,6 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		inner := r.stop
 		r.stop = func() { once.Do(inner) }
 		t.Cleanup(r.stop)
-		if err := r.app.Clock().SetPace(0); err != nil {
-			t.Fatal(err)
-		}
 		return r
 	}
 	r := start()
