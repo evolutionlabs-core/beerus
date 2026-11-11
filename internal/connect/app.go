@@ -381,10 +381,12 @@ func (a *App) Step() {
 	if err := a.settleLocked(a.clock.Now()); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}
+	a.mu.Unlock()
 	a.refreshTokens()
 	a.retryRevokes()
 	a.runConnections()
 	a.runRefreshes()
+	a.mu.Lock()
 	a.sweep()
 	due := a.dueDeliveries()
 	a.mu.Unlock()
@@ -491,89 +493,97 @@ func (a *App) setStatus(c *Connection, status, code string) {
 }
 
 func (a *App) runConnections() {
-	now := a.clock.Now()
-	real := a.clock.Real()
+	a.mu.Lock()
 	ids := make([]string, 0, len(a.st.Connections))
 	for id := range a.st.Connections {
 		ids = append(ids, id)
 	}
+	a.mu.Unlock()
 	sort.Strings(ids)
 	for _, id := range ids {
-		c := a.st.Connections[id]
-		if c == nil {
-			continue
-		}
-		switch c.Status {
-		case "revoked", "expired", "reauth_required", "error":
-			continue
-		}
-		if c.Status == "syncing" && real.Before(c.SyncDueReal) {
-			continue
-		}
-		at := now
-		expired := !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt)
-		if expired {
-			at = c.ExpiresAt.Add(-time.Millisecond)
-		}
-		due := c.Status == "syncing" || c.Status == "institution_down" || expired ||
-			real.Sub(c.LastSyncedReal) >= a.cfg.SyncInterval() ||
-			at.Sub(c.LastSyncedBiz) >= time.Hour
-		if !due {
-			continue
-		}
-		a.syncConnection(c, at)
-		if expired && c.Status != "revoked" {
-			a.setStatus(c, "expired", "reauth_required")
-		}
+		a.runConnection(id)
+	}
+}
+
+func (a *App) runConnection(id string) {
+	a.mu.Lock()
+	c := a.st.Connections[id]
+	if c == nil {
+		a.mu.Unlock()
+		return
+	}
+	switch c.Status {
+	case "revoked", "expired", "reauth_required", "error":
+		a.mu.Unlock()
+		return
+	}
+	now := a.clock.Now()
+	real := a.clock.Real()
+	if c.Status == "syncing" && real.Before(c.SyncDueReal) {
+		a.mu.Unlock()
+		return
+	}
+	at := now
+	expired := !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt)
+	if expired {
+		at = c.ExpiresAt.Add(-time.Millisecond)
+	}
+	due := c.Status == "syncing" || c.Status == "institution_down" || expired ||
+		real.Sub(c.LastSyncedReal) >= a.cfg.SyncInterval() ||
+		at.Sub(c.LastSyncedBiz) >= time.Hour
+	a.mu.Unlock()
+	if !due {
+		return
+	}
+	a.syncConnection(c, at)
+	if !expired {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.st.Connections[id] == c && c.Status != "revoked" {
+		a.setStatus(c, "expired", "reauth_required")
 	}
 }
 
 func (a *App) syncConnection(c *Connection, at time.Time) bool {
+	a.mu.Lock()
+	if a.st.Connections[c.ID] != c {
+		a.mu.Unlock()
+		return false
+	}
 	if !a.live() && a.world.Down(c.Institution, at) {
 		if c.Status != "institution_down" {
 			c.StatusBeforeDown = c.Status
 			a.setStatus(c, "institution_down", "institution_down")
 		}
 		c.LastSyncedReal = a.clock.Real()
+		a.mu.Unlock()
 		return false
 	}
+	accIDs := slices.Clone(c.AccountIDs)
+	a.mu.Unlock()
 	changed := map[string]bool{}
-	for _, accID := range slices.Clone(c.AccountIDs) {
+	for _, accID := range accIDs {
+		a.mu.Lock()
 		acct := a.st.Accounts[accID]
-		if acct == nil || acct.Removed {
+		skip := acct == nil || acct.Removed
+		a.mu.Unlock()
+		if skip {
 			continue
 		}
 		res, err := a.fetchAccount(c, acct, at)
-		if err != nil {
-			if errors.Is(err, errStale) {
-				return false
-			}
-			if a.live() && a.bankFailed(c, err) {
-				c.LastSyncedReal = a.clock.Real()
-				return false
-			}
-			a.log.Error("fetch", "account", accID, "err", err)
-			a.setStatus(c, "error", "internal_error")
+		a.mu.Lock()
+		ok := a.accountSyncedLocked(c, acct, at, res, err, changed)
+		a.mu.Unlock()
+		if !ok {
 			return false
 		}
-		a.recordAccess(c, acct, at)
-		if res.changed() {
-			changed[accID] = true
-		}
-		if !acct.HistoryDone {
-			acct.HistoryDone = true
-			changed[accID] = true
-			var eff any
-			if acct.Cut {
-				eff = acct.From.String()
-			}
-			a.emit(c.PartnerID, "historical_sync.completed", map[string]any{
-				"connection_id":        c.ID,
-				"account_id":           accID,
-				"start_date":           c.StartDate.String(),
-				"effective_start_date": eff,
-			})
-		}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.st.Connections[c.ID] != c || c.Status == "revoked" {
+		return false
 	}
 	c.FullDue = false
 	t := at
@@ -589,6 +599,43 @@ func (a *App) syncConnection(c *Connection, at time.Time) bool {
 		a.setStatus(c, "active", "")
 	}
 	a.dirty()
+	return true
+}
+
+func (a *App) accountSyncedLocked(c *Connection, acct *AccountRec, at time.Time, res fetchResult, err error, changed map[string]bool) bool {
+	if a.st.Connections[c.ID] != c || c.Status == "revoked" {
+		return false
+	}
+	if err != nil {
+		if errors.Is(err, errStale) {
+			return false
+		}
+		if a.live() && a.bankFailed(c, err) {
+			c.LastSyncedReal = a.clock.Real()
+			return false
+		}
+		a.log.Error("fetch", "account", acct.ID, "err", err)
+		a.setStatus(c, "error", "internal_error")
+		return false
+	}
+	a.recordAccess(c, acct, at)
+	if res.changed() {
+		changed[acct.ID] = true
+	}
+	if !acct.HistoryDone {
+		acct.HistoryDone = true
+		changed[acct.ID] = true
+		var eff any
+		if acct.Cut {
+			eff = acct.From.String()
+		}
+		a.emit(c.PartnerID, "historical_sync.completed", map[string]any{
+			"connection_id":        c.ID,
+			"account_id":           acct.ID,
+			"start_date":           c.StartDate.String(),
+			"effective_start_date": eff,
+		})
+	}
 	return true
 }
 
@@ -609,68 +656,91 @@ func (a *App) recordAccess(c *Connection, acct *AccountRec, at time.Time) {
 }
 
 func (a *App) runRefreshes() {
+	a.mu.Lock()
 	ids := make([]string, 0)
 	for id, r := range a.st.Refreshes {
 		if r.Status == "queued" {
 			ids = append(ids, id)
 		}
 	}
+	a.mu.Unlock()
 	sort.Strings(ids)
 	for _, id := range ids {
-		r := a.st.Refreshes[id]
-		if r == nil || r.Status != "queued" {
-			continue
-		}
-		acct := a.st.Accounts[r.AccountID]
-		r.Status = "done"
-		r.DoneReal = a.clock.Real()
-		outcome, code := "succeeded", any(nil)
-		var conn *Connection
-		if acct != nil {
-			if conn, _ = a.grantFor(acct); conn == nil {
-				conn = a.st.Connections[acct.ConnectionID]
-			}
-		}
-		switch {
-		case acct == nil || conn == nil:
-			outcome, code = "failed", "not_found"
-		case conn.Status == "revoked":
-			outcome, code = "failed", "connection_revoked"
-		case conn.Status == "expired" || conn.Status == "reauth_required":
-			outcome, code = "failed", "reauth_required"
-		case !a.live() && a.world.Down(conn.Institution, a.clock.Now()):
-			a.syncConnection(conn, a.clock.Now())
-			outcome, code = "failed", "institution_down"
-		default:
-			conn.FullDue = true
-			if !a.syncConnection(conn, a.clock.Now()) {
-				outcome, code = "failed", "internal_error"
-				switch conn.Status {
-				case "institution_down":
-					code = "institution_down"
-				case "revoked":
-					code = "connection_revoked"
-				case "expired", "reauth_required":
-					code = "reauth_required"
-				}
-			}
-		}
-		connID := ""
-		if conn != nil {
-			connID = conn.ID
-		}
-		partner := ""
-		if acct != nil {
-			partner = acct.PartnerID
-		}
-		a.emit(partner, "refresh.completed", map[string]any{
-			"refresh_id":    r.ID,
-			"connection_id": connID,
-			"account_id":    r.AccountID,
-			"outcome":       outcome,
-			"error_code":    code,
-		})
+		a.runRefresh(id)
 	}
+}
+
+func (a *App) runRefresh(id string) {
+	a.mu.Lock()
+	r := a.st.Refreshes[id]
+	if r == nil || r.Status != "queued" {
+		a.mu.Unlock()
+		return
+	}
+	acct := a.st.Accounts[r.AccountID]
+	r.Status = "done"
+	r.DoneReal = a.clock.Real()
+	outcome, code := "succeeded", any(nil)
+	var conn *Connection
+	if acct != nil {
+		if conn, _ = a.grantFor(acct); conn == nil {
+			conn = a.st.Connections[acct.ConnectionID]
+		}
+	}
+	down := false
+	switch {
+	case acct == nil || conn == nil:
+		outcome, code = "failed", "not_found"
+	case conn.Status == "revoked":
+		outcome, code = "failed", "connection_revoked"
+	case conn.Status == "expired" || conn.Status == "reauth_required":
+		outcome, code = "failed", "reauth_required"
+	case !a.live() && a.world.Down(conn.Institution, a.clock.Now()):
+		down = true
+	default:
+		conn.FullDue = true
+	}
+	if conn != nil && outcome == "succeeded" {
+		now := a.clock.Now()
+		a.mu.Unlock()
+		synced := a.syncConnection(conn, now)
+		a.mu.Lock()
+		outcome, code = a.refreshOutcomeLocked(conn, down, synced)
+	}
+	defer a.mu.Unlock()
+	connID := ""
+	if conn != nil {
+		connID = conn.ID
+	}
+	partner := ""
+	if acct != nil {
+		partner = acct.PartnerID
+	}
+	a.emit(partner, "refresh.completed", map[string]any{
+		"refresh_id":    r.ID,
+		"connection_id": connID,
+		"account_id":    r.AccountID,
+		"outcome":       outcome,
+		"error_code":    code,
+	})
+}
+
+func (a *App) refreshOutcomeLocked(conn *Connection, down, synced bool) (string, any) {
+	if down {
+		return "failed", "institution_down"
+	}
+	if synced {
+		return "succeeded", nil
+	}
+	switch conn.Status {
+	case "institution_down":
+		return "failed", "institution_down"
+	case "revoked":
+		return "failed", "connection_revoked"
+	case "expired", "reauth_required":
+		return "failed", "reauth_required"
+	}
+	return "failed", "internal_error"
 }
 
 var errNotFound = errors.New("not found")

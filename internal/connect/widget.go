@@ -197,16 +197,18 @@ func (a *App) base(ls *LinkSession, ws *WidgetSession) page {
 
 func (a *App) widgetStart(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	ws, ls := a.session(w, r)
 	if ls == nil {
+		a.mu.Unlock()
 		return
 	}
+	if ls.Institution != "" && a.live() {
+		a.mu.Unlock()
+		a.beginBankAuth(w, r, ls)
+		return
+	}
+	defer a.mu.Unlock()
 	if ls.Institution != "" {
-		if a.live() {
-			a.beginBankAuth(w, r, ls)
-			return
-		}
 		http.Redirect(w, r, "/bank/login", http.StatusSeeOther)
 		return
 	}
@@ -218,15 +220,16 @@ func (a *App) widgetStart(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) widgetInstitution(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	_, ls := a.session(w, r)
 	if ls == nil {
+		a.mu.Unlock()
 		return
 	}
 	if ls.Institution == "" {
 		id := r.PostForm.Get("institution")
 		if _, ok := a.world.Institution(id); !ok || a.world.Closed(id, a.clock.Now()) {
 			a.message(w, http.StatusBadRequest, "Unknown bank", "Go back and choose a bank from the list.")
+			a.mu.Unlock()
 			return
 		}
 		ls.Institution = id
@@ -234,9 +237,11 @@ func (a *App) widgetInstitution(w http.ResponseWriter, r *http.Request) {
 		a.dirty()
 	}
 	if a.live() {
+		a.mu.Unlock()
 		a.beginBankAuth(w, r, ls)
 		return
 	}
+	a.mu.Unlock()
 	http.Redirect(w, r, "/bank/login", http.StatusSeeOther)
 }
 
@@ -540,29 +545,35 @@ func (a *App) customerLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) customerRevoke(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	ck, err := r.Cookie(customerCookie)
 	if err != nil {
 		http.Redirect(w, r, "/customer", http.StatusSeeOther)
 		return
 	}
+	a.mu.Lock()
 	ws := a.st.WidgetSessions[hashSecret(ck.Value)]
 	if ws == nil || a.clock.Real().After(ws.ExpiresReal) || r.ParseForm() != nil || subtle.ConstantTimeCompare([]byte(r.PostForm.Get("csrf")), []byte(ws.CSRF)) != 1 {
+		a.mu.Unlock()
 		a.message(w, http.StatusForbidden, "Request refused", "The form expired. Go back and try again.")
 		return
 	}
 	c := a.st.Connections[r.PostForm.Get("connection")]
 	if c == nil || c.PersonaID != ws.LinkSessionID {
+		a.mu.Unlock()
 		a.message(w, http.StatusNotFound, "Not found", "That connection does not exist.")
 		return
 	}
 	if a.live() && c.Status != "revoked" {
-		if err := a.revokeAtBank(c); err != nil {
+		a.mu.Unlock()
+		if err := a.revokeConnectionAtBank(c.ID); err != nil {
 			a.message(w, http.StatusServiceUnavailable, "Bank not reachable", "The bank could not be reached to withdraw access. Try again soon.")
 			return
 		}
+		a.mu.Lock()
 	}
-	a.setStatus(c, "revoked", "connection_revoked")
+	defer a.mu.Unlock()
+	if a.st.Connections[c.ID] == c {
+		a.setStatus(c, "revoked", "connection_revoked")
+	}
 	http.Redirect(w, r, "/customer", http.StatusSeeOther)
 }

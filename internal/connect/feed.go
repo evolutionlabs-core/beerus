@@ -196,22 +196,43 @@ func (a *App) pullWorld(acct *AccountRec, at time.Time) (pulled, error) {
 }
 
 func (a *App) fetchAccount(c *Connection, acct *AccountRec, at time.Time) (fetchResult, error) {
+	a.mu.Lock()
+	if a.st.Connections[c.ID] != c || a.st.Accounts[acct.ID] != acct {
+		a.mu.Unlock()
+		return fetchResult{}, errStale
+	}
+	if !a.live() {
+		defer a.mu.Unlock()
+		return a.fetchWorldLocked(c, acct, at)
+	}
+	plan, err := a.bankPullPlanLocked(c, acct)
+	a.mu.Unlock()
+	if err != nil {
+		return fetchResult{}, err
+	}
+	in, err := a.pullBank(plan)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err != nil {
+		return fetchResult{}, err
+	}
+	if a.st.Connections[c.ID] != c || a.st.Accounts[acct.ID] != acct || c.ConsentID != plan.consent || c.Status == "revoked" || acct.Removed {
+		return fetchResult{}, errStale
+	}
+	return a.applyPullLocked(c, acct, in, at), nil
+}
+
+func (a *App) fetchWorldLocked(c *Connection, acct *AccountRec, at time.Time) (fetchResult, error) {
+	in, err := a.pullWorld(acct, at)
+	if err != nil {
+		return fetchResult{}, err
+	}
+	return a.applyPullLocked(c, acct, in, at), nil
+}
+
+func (a *App) applyPullLocked(c *Connection, acct *AccountRec, in pulled, at time.Time) fetchResult {
 	var res fetchResult
 	partner := c.PartnerID
-	var in pulled
-	var err error
-	if a.live() {
-		consent := c.ConsentID
-		in, err = a.pullBank(c, acct, at)
-		if err == nil && (a.st.Connections[c.ID] != c || a.st.Accounts[acct.ID] != acct || c.ConsentID != consent || c.Status == "revoked" || acct.Removed) {
-			err = errStale
-		}
-	} else {
-		in, err = a.pullWorld(acct, at)
-	}
-	if err != nil {
-		return res, err
-	}
 	feed := a.st.Feeds[acct.ID]
 	if feed == nil {
 		feed = &Feed{Lines: map[string]Txn{}, Gone: map[string]bool{}}
@@ -270,7 +291,7 @@ func (a *App) fetchAccount(c *Connection, acct *AccountRec, at time.Time) (fetch
 	acct.Available = in.available
 	acct.AsAt = at
 	a.dirty()
-	return res, nil
+	return res
 }
 
 type cursor struct {
