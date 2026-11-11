@@ -3,6 +3,7 @@ package connect
 import (
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"html/template"
 	"net"
 	"net/http"
@@ -98,7 +99,9 @@ func (a *App) roomRender(w http.ResponseWriter, r *http.Request, name string, st
 func (a *App) roomLogin(w http.ResponseWriter, r *http.Request) {
 	tok := r.URL.Query().Get("token")
 	if r.Method == http.MethodPost {
-		_ = r.ParseForm()
+		if !roomForm(w, r) {
+			return
+		}
 		tok = strings.TrimSpace(r.PostForm.Get("token"))
 	}
 	if tok != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(a.ctlToken)) == 1 {
@@ -125,25 +128,40 @@ type acctView struct {
 	Pending   int
 }
 
-func (a *App) acctView(acc world.Account, at time.Time) acctView {
+func (a *App) pageFailed(w http.ResponseWriter, what string, err error) {
+	a.log.Error(what, "err", err)
+	http.Error(w, "The request failed. Try again.", http.StatusInternalServerError)
+}
+
+func (a *App) acctView(acc world.Account, at time.Time) (acctView, error) {
 	v := acctView{Account: acc}
 	v.Bank, _ = a.world.Institution(acc.Institution)
 	if p, ok := a.world.Persona(acc.Owner); ok {
 		v.Holder = p.Name
 	}
-	v.Ledger, _ = a.src(acc.Key).LedgerAt(acc.Key, at)
-	pend, _ := a.src(acc.Key).PendingAt(acc.Key, at)
+	var err error
+	v.Ledger, err = a.src(acc.Key).LedgerAt(acc.Key, at)
+	if err != nil {
+		return acctView{}, fmt.Errorf("read balance of %s: %w", acc.Key, err)
+	}
+	pend, err := a.src(acc.Key).PendingAt(acc.Key, at)
+	if err != nil {
+		return acctView{}, fmt.Errorf("read pending total of %s: %w", acc.Key, err)
+	}
 	v.Available = v.Ledger
 	if pend < 0 {
 		v.Available += pend
 	}
-	ls, _ := a.src(acc.Key).Fetch(acc.Key, at, clock.DateOf(at).AddDays(-3))
+	ls, err := a.src(acc.Key).Fetch(acc.Key, at, clock.DateOf(at).AddDays(-3))
+	if err != nil {
+		return acctView{}, fmt.Errorf("read recent lines of %s: %w", acc.Key, err)
+	}
 	for _, l := range ls {
 		if l.Pending {
 			v.Pending++
 		}
 	}
-	return v
+	return v, nil
 }
 
 type lineView struct {
@@ -189,19 +207,27 @@ func (a *App) roomOverview(w http.ResponseWriter, r *http.Request) {
 	for _, acc := range a.world.Accounts() {
 		s := sums[acc.Institution]
 		s.Accounts++
-		bal, _ := a.src(acc.Key).LedgerAt(acc.Key, now)
+		bal, err := a.src(acc.Key).LedgerAt(acc.Key, now)
+		if err != nil {
+			a.pageFailed(w, "overview", fmt.Errorf("read balance of %s: %w", acc.Key, err))
+			return
+		}
 		s.Deposits += bal
-		ls, _ := a.src(acc.Key).Fetch(acc.Key, now, clock.DateOf(now).AddDays(-14))
-		if len(ls) > 6 {
-			ls = ls[len(ls)-6:]
+		ls, err := a.src(acc.Key).Fetch(acc.Key, now, clock.DateOf(now).AddDays(-14))
+		if err != nil {
+			a.pageFailed(w, "overview", fmt.Errorf("read recent lines of %s: %w", acc.Key, err))
+			return
+		}
+		if len(ls) > recentLimit {
+			ls = ls[len(ls)-recentLimit:]
 		}
 		for _, l := range ls {
 			recent = append(recent, a.lineView(acc, l))
 		}
 	}
 	sort.SliceStable(recent, func(i, j int) bool { return recent[i].At.After(recent[j].At) })
-	if len(recent) > 14 {
-		recent = recent[:14]
+	if len(recent) > recentLimit {
+		recent = recent[:recentLimit]
 	}
 	banks := []*bankSum{}
 	var total int64
@@ -220,6 +246,7 @@ func (a *App) roomOverview(w http.ResponseWriter, r *http.Request) {
 		"BankSums":    banks,
 		"Total":       total,
 		"Recent":      recent,
+		"RecentNote":  recentNote(len(recent)),
 		"Connections": len(a.st.Connections),
 		"Active":      active,
 		"WorldID":     a.st.WorldID,
@@ -246,7 +273,11 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 	var total int64
 	for _, acc := range a.world.Accounts() {
 		if acc.Institution == inst.ID {
-			v := a.acctView(acc, now)
+			v, err := a.acctView(acc, now)
+			if err != nil {
+				a.pageFailed(w, "bank", err)
+				return
+			}
 			total += v.Ledger
 			accts = append(accts, v)
 		}
@@ -255,6 +286,15 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 }
 
 const pageSize = 50
+
+const recentLimit = 14
+
+func recentNote(n int) string {
+	if n == 1 {
+		return "Showing the latest transaction across all accounts. Open an account to see its full statement."
+	}
+	return fmt.Sprintf("Showing the latest %d transactions across all accounts. Open an account to see its full statement.", n)
+}
 
 func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
@@ -265,7 +305,11 @@ func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := a.clock.Now()
-	ls, _ := a.statement(acc.Key, now)
+	ls, err := a.statement(acc.Key, now)
+	if err != nil {
+		a.pageFailed(w, "account", fmt.Errorf("read statement of %s: %w", acc.Key, err))
+		return
+	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -299,7 +343,11 @@ func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 		}
 		recs = append(recs, map[string]any{"Partner": name, "ID": rec.ID, "Status": status, "AsAt": rec.AsAt})
 	}
-	v := a.acctView(acc, now)
+	v, err := a.acctView(acc, now)
+	if err != nil {
+		a.pageFailed(w, "account", err)
+		return
+	}
 	a.roomRender(w, r, "account", http.StatusOK, acc.Institution, roomPage{
 		"Title":  v.Name,
 		"A":      v,
@@ -368,10 +416,15 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 		}
 		shares = append(shares, sh)
 	}
+	av, err := a.acctView(acc, now)
+	if err != nil {
+		a.pageFailed(w, "line", err)
+		return
+	}
 	a.roomRender(w, r, "line", http.StatusOK, acc.Institution, roomPage{
 		"Title":   lv.Description,
 		"L":       lv,
-		"A":       a.acctView(acc, now),
+		"A":       av,
 		"Trace":   trace,
 		"Debit":   debit,
 		"Credit":  credit,
@@ -381,19 +434,28 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *App) transferData(r *http.Request) roomPage {
+func (a *App) transferData(r *http.Request) (roomPage, error) {
 	now := a.clock.Now()
 	accts := []acctView{}
 	for _, acc := range a.world.Accounts() {
-		accts = append(accts, a.acctView(acc, now))
+		v, err := a.acctView(acc, now)
+		if err != nil {
+			return nil, err
+		}
+		accts = append(accts, v)
 	}
-	return roomPage{"Title": "New transfer", "Accounts": accts, "From": r.URL.Query().Get("from"), "Others": []string{"Bank C", "Bank D Microfinance", "Bank A", "Bank B"}}
+	return roomPage{"Title": "New transfer", "Accounts": accts, "From": r.URL.Query().Get("from"), "Others": []string{"Bank C", "Bank D Microfinance", "Bank A", "Bank B"}}, nil
 }
 
 func (a *App) roomTransferForm(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.roomRender(w, r, "transfer", http.StatusOK, "transfer", a.transferData(r))
+	data, err := a.transferData(r)
+	if err != nil {
+		a.pageFailed(w, "transfer", err)
+		return
+	}
+	a.roomRender(w, r, "transfer", http.StatusOK, "transfer", data)
 }
 
 func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
@@ -415,7 +477,12 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 		res, err = a.world.Transfer(a.clock.Now(), req)
 	}
 	if err != nil {
-		data := a.transferData(r)
+		data, derr := a.transferData(r)
+		if derr != nil {
+			a.mu.Unlock()
+			a.pageFailed(w, "transfer", derr)
+			return
+		}
 		data["From"] = f.Get("from")
 		data["To"] = f.Get("to")
 		data["Form"] = f
@@ -434,12 +501,27 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/ui/accounts/"+url.PathEscape(res.From)+"/lines/"+url.PathEscape(res.LineKey)+"?done=1", http.StatusSeeOther)
 }
 
+func roomForm(w http.ResponseWriter, r *http.Request) bool {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 func (a *App) roomClock(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
+	if !roomForm(w, r) {
+		return
+	}
 	if by := r.PostForm.Get("by"); by != "" {
 		if d, err := parseDuration(by); err == nil && d > 0 {
 			a.mu.Lock()
-			_, _ = a.clock.Advance(d)
+			_, err := a.clock.Advance(d)
+			if err != nil {
+				a.mu.Unlock()
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+				return
+			}
 			a.dirty()
 			a.mu.Unlock()
 			a.Step()
@@ -447,7 +529,10 @@ func (a *App) roomClock(w http.ResponseWriter, r *http.Request) {
 	}
 	if p := r.PostForm.Get("pace"); p != "" {
 		if v, err := strconv.ParseFloat(p, 64); err == nil {
-			_ = a.clock.SetPace(v)
+			if err := a.clock.SetPace(v); err != nil {
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+				return
+			}
 			a.mu.Lock()
 			a.dirty()
 			a.mu.Unlock()
@@ -487,7 +572,16 @@ func (a *App) roomConnections(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) roomRevoke(w http.ResponseWriter, r *http.Request) {
-	_ = a.RevokeAtBank(r.PathValue("id"))
+	if err := a.RevokeAtBank(r.PathValue("id")); err != nil {
+		if errors.Is(err, errNotFound) {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.roomNotFound(w, r)
+			return
+		}
+		a.pageFailed(w, "revoke", err)
+		return
+	}
 	a.poke()
 	http.Redirect(w, r, "/ui/connections", http.StatusSeeOther)
 }
@@ -495,15 +589,35 @@ func (a *App) roomRevoke(w http.ResponseWriter, r *http.Request) {
 func (a *App) roomWebhooks(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	end := len(a.st.Deliveries) - (page-1)*pageSize
+	if end <= 0 && page > 1 {
+		a.roomNotFound(w, r)
+		return
+	}
+	end = max(end, 0)
+	start := max(end-pageSize, 0)
 	rows := []*Delivery{}
-	for i := len(a.st.Deliveries) - 1; i >= 0 && len(rows) < 100; i-- {
+	for i := end - 1; i >= start; i-- {
 		rows = append(rows, a.st.Deliveries[i])
 	}
-	a.roomRender(w, r, "webhooks", http.StatusOK, "webhooks", roomPage{"Title": "Webhooks", "Rows": rows})
+	a.roomRender(w, r, "webhooks", http.StatusOK, "webhooks", roomPage{"Title": "Webhooks", "Rows": rows, "Page": page, "Older": start > 0, "Newer": page > 1})
 }
 
 func (a *App) roomReplay(w http.ResponseWriter, r *http.Request) {
-	_ = a.Replay(r.PathValue("id"))
+	if err := a.Replay(r.PathValue("id")); err != nil {
+		if errors.Is(err, errNotFound) {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.roomNotFound(w, r)
+			return
+		}
+		a.pageFailed(w, "replay", err)
+		return
+	}
 	http.Redirect(w, r, "/ui/webhooks", http.StatusSeeOther)
 }
 
@@ -609,7 +723,11 @@ func (a *App) roomBanks(w http.ResponseWriter, r *http.Request) {
 			owners[acc.Institution] = map[string]bool{}
 		}
 		owners[acc.Institution][acc.Owner] = true
-		bal, _ := a.src(acc.Key).LedgerAt(acc.Key, now)
+		bal, err := a.src(acc.Key).LedgerAt(acc.Key, now)
+		if err != nil {
+			a.pageFailed(w, "banks", fmt.Errorf("read balance of %s: %w", acc.Key, err))
+			return
+		}
 		row.Deposits += bal
 	}
 	for id, o := range owners {
@@ -656,7 +774,9 @@ func (a *App) orderedStatuses(m map[string]BankStatus) []BankStatus {
 }
 
 func (a *App) roomOpenAccount(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
+	if !roomForm(w, r) {
+		return
+	}
 	id := r.PathValue("id")
 	acc, err := a.OpenAccount(id, r.PostForm.Get("persona"), r.PostForm.Get("type"))
 	if errors.Is(err, errNotFound) {
@@ -674,7 +794,9 @@ func (a *App) roomOpenAccount(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_ = r.ParseForm()
+	if !roomForm(w, r) {
+		return
+	}
 	f := r.PostForm
 	status := http.StatusOK
 	msg := ""
@@ -722,7 +844,9 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) roomPurgeBank(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_ = r.ParseForm()
+	if !roomForm(w, r) {
+		return
+	}
 	status := http.StatusOK
 	msg := ""
 	if r.Method == http.MethodPost {

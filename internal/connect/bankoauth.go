@@ -2,6 +2,7 @@ package connect
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -85,7 +86,11 @@ type consentChoice struct {
 }
 
 func (a *bankSite) consentPage(w http.ResponseWriter, s *bankSession, status int, req *openbanking.Request, errMsg string) {
-	mine, _ := a.ob.Data().Accounts(s.Persona)
+	mine, err := a.ob.Data().Accounts(s.Persona)
+	if err != nil {
+		a.pageFailed(w, "consent", fmt.Errorf("read accounts: %w", err))
+		return
+	}
 	choices := []consentChoice{}
 	for _, m := range mine {
 		choices = append(choices, consentChoice{ID: m.ID, Name: m.Name, Type: m.Type, Checked: true})

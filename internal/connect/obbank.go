@@ -30,7 +30,7 @@ import (
 
 func (a *App) prepareOpenBanking() error {
 	a.obs = map[string]*openbanking.Server{}
-	if err := a.cfg.EnsureCertificates(); err != nil {
+	if err := a.cfg.EnsureCertificates(a.clock.Real()); err != nil {
 		return err
 	}
 	return a.ensureRegistry()
@@ -430,7 +430,7 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	if b.APIPort == 0 {
 		return nil, fmt.Errorf("%s has no API port", b.ID)
 	}
-	if err := a.cfg.EnsureBankCertificates(nil, time.Time{}); err != nil {
+	if err := a.cfg.EnsureBankCertificates(nil, a.clock.Real()); err != nil {
 		return nil, err
 	}
 	ob := a.openBanking(b.ID)

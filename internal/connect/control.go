@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -590,7 +591,10 @@ func (a *App) RestoreSnapshot(id string) (result string, err error) {
 		}
 	}
 	a.clock.Restore(st.Clock)
-	genesis, _ := a.cfg.GenesisDate()
+	genesis, err := a.cfg.GenesisDate()
+	if err != nil {
+		return "", fmt.Errorf("read genesis date: %w", err)
+	}
 	a.world = world.New(a.worldConfig(genesis), st.World)
 	for _, b := range a.cfg.Banks {
 		a.alignSuspensionLocked(b)
@@ -625,15 +629,23 @@ func (a *App) RestoreSnapshot(id string) (result string, err error) {
 }
 
 func (a *App) ctlSnapshots(w http.ResponseWriter, r *http.Request) {
-	entries, _ := os.ReadDir(a.snapshotDir())
+	entries, err := os.ReadDir(a.snapshotDir())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		writeError(w, r, http.StatusInternalServerError, "internal_error", fmt.Sprintf("read snapshots: %v", err))
+		return
+	}
 	out := []snapshotMeta{}
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(a.snapshotDir(), e.Name()))
-		if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
+		}
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "internal_error", fmt.Sprintf("read snapshot %s: %v", e.Name(), err))
+			return
 		}
 		var f struct {
 			Meta snapshotMeta `json:"meta"`
@@ -651,7 +663,10 @@ func (a *App) ctlTakeSnapshot(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if r.ContentLength != 0 {
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object with an optional name.")
+			return
+		}
 	}
 	meta, err := a.TakeSnapshot(body.Name)
 	if err != nil {

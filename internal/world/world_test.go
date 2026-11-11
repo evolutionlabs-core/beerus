@@ -31,11 +31,11 @@ func TestChargesMatchRules(t *testing.T) {
 	if VAT(1000) != 75 || VAT(2500) != 188 || VAT(5000) != 375 {
 		t.Fatalf("vat %d %d %d", VAT(1000), VAT(2500), VAT(5000))
 	}
-	if NIPFee(500000) != 1000 || NIPFee(500100) != 2500 || NIPFee(5000100) != 5000 {
-		t.Fatal("fee bands")
-	}
 	d25 := clock.Date{Y: 2025, M: 12, D: 31}
 	d26 := clock.Date{Y: 2026, M: 1, D: 1}
+	if NIPFee(500000, d26) != 1000 || NIPFee(500100, d26) != 2500 || NIPFee(5000100, d26) != 5000 {
+		t.Fatal("fee bands")
+	}
 	if StampDuty(1000000, d25, false) != 0 || StampDuty(1000000, d26, false) != 5000 || StampDuty(999900, d26, false) != 0 || StampDuty(1000000, d26, true) != 0 {
 		t.Fatal("stamp duty")
 	}

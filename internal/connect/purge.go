@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -36,7 +37,12 @@ func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
 	if !ok || b == nil {
 		return PurgeImpact{}, errNotFound
 	}
-	out := PurgeImpact{Bank: st, Database: b.Database, Snapshots: a.snapshotsWith(id), Blockers: []string{}}
+	out := PurgeImpact{Bank: st, Database: b.Database, Blockers: []string{}}
+	snaps, err := a.snapshotsWith(id)
+	if err != nil {
+		return PurgeImpact{}, err
+	}
+	out.Snapshots = snaps
 	if st.Phase != PhaseClosed {
 		out.Blockers = append(out.Blockers, "the bank is "+st.Phase+"; close it before purging it")
 	}
@@ -58,16 +64,22 @@ func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
 	return out, nil
 }
 
-func (a *App) snapshotsWith(id string) []string {
+func (a *App) snapshotsWith(id string) ([]string, error) {
 	out := []string{}
-	entries, _ := os.ReadDir(a.snapshotDir())
+	entries, err := os.ReadDir(a.snapshotDir())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read snapshots: %w", err)
+	}
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(a.snapshotDir(), e.Name()))
-		if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read snapshot %s: %w", e.Name(), err)
 		}
 		var f struct {
 			Meta snapshotMeta `json:"meta"`
@@ -77,7 +89,7 @@ func (a *App) snapshotsWith(id string) []string {
 		}
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
 
 func (a *App) PurgeBank(id string) (PurgeResult, error) {

@@ -27,6 +27,12 @@ const (
 	refreshMargin  = time.Minute
 	refreshAhead   = 2 * time.Minute
 	bankCallBudget = 20 * time.Second
+
+	bankDialTimeout      = 5 * time.Second
+	bankIdleTimeout      = 90 * time.Second
+	bankIdleConnsPerHost = 4
+	bankBodyLimit        = 16 << 20
+	bankRetryWait        = 100 * time.Millisecond
 )
 
 type bankToken struct {
@@ -91,9 +97,11 @@ func (a *App) bankClient() (*http.Client, error) {
 			return &pair, err
 		},
 	}
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	dialer := &net.Dialer{Timeout: bankDialTimeout}
 	var rt http.RoundTripper = &http.Transport{
-		TLSClientConfig: tc,
+		TLSClientConfig:     tc,
+		IdleConnTimeout:     bankIdleTimeout,
+		MaxIdleConnsPerHost: bankIdleConnsPerHost,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
 			if err == nil && !multiProcess() && strings.HasSuffix(host, ".localhost") {
@@ -121,7 +129,7 @@ func (a *App) assertion(b *config.Bank) (string, error) {
 	return openbanking.Sign(a.obKey, "connect-1", map[string]any{"iss": id, "sub": id, "aud": b.APIURL(), "jti": newSecret("j_", 12), "exp": a.clock.Real().Add(time.Minute).Unix()})
 }
 
-func (a *App) bankDo(b *config.Bank, method, path string, form url.Values, token string, out any) error {
+func (a *App) bankDoUnlockingMu(b *config.Bank, method, path string, form url.Values, token string, out any) error {
 	cl, err := a.bankClient()
 	if err != nil {
 		return err
@@ -150,13 +158,20 @@ func (a *App) bankDo(b *config.Bank, method, path string, form url.Values, token
 	a.mu.Unlock()
 	resp, err := cl.Do(req)
 	var raw []byte
+	var readErr error
 	if err == nil {
-		raw, _ = io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		raw, readErr = io.ReadAll(io.LimitReader(resp.Body, bankBodyLimit+1))
 		resp.Body.Close()
 	}
 	a.mu.Lock()
 	if err != nil {
 		return &bankDown{err}
+	}
+	if readErr != nil {
+		return fmt.Errorf("read bank response: %w", readErr)
+	}
+	if len(raw) > bankBodyLimit {
+		return fmt.Errorf("bank response is larger than the %d byte limit", bankBodyLimit)
 	}
 	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusBadGateway {
 		return &bankDown{fmt.Errorf("HTTP %d", resp.StatusCode)}
@@ -221,7 +236,7 @@ func (a *App) bankPAR(b *config.Bank, ls *LinkSession, state, challenge string) 
 	var out struct {
 		RequestURI string `json:"request_uri"`
 	}
-	if err := a.bankDo(b, http.MethodPost, "/par", form, "", &out); err != nil {
+	if err := a.bankDoUnlockingMu(b, http.MethodPost, "/par", form, "", &out); err != nil {
 		return "", err
 	}
 	return out.RequestURI, nil
@@ -229,14 +244,14 @@ func (a *App) bankPAR(b *config.Bank, ls *LinkSession, state, challenge string) 
 
 func (a *App) bankExchange(b *config.Bank, code, verifier string) (bankToken, error) {
 	var r tokenReply
-	err := a.bankDo(b, http.MethodPost, "/token", url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {a.callbackURL()}}, "", &r)
+	err := a.bankDoUnlockingMu(b, http.MethodPost, "/token", url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {a.callbackURL()}}, "", &r)
 	if err != nil {
 		return bankToken{}, err
 	}
 	return a.toToken(r), nil
 }
 
-func (a *App) refreshToken(vid string, b *config.Bank) error {
+func (a *App) refreshTokenUnlockingMu(vid string, b *config.Bank) error {
 	e := a.st.Vault[vid]
 	if e == nil {
 		return errReauth
@@ -247,12 +262,12 @@ func (a *App) refreshToken(vid string, b *config.Bank) error {
 	}
 	var r tokenReply
 	for attempt := 0; ; attempt++ {
-		err = a.bankDo(b, http.MethodPost, "/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}}, "", &r)
+		err = a.bankDoUnlockingMu(b, http.MethodPost, "/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}}, "", &r)
 		if err == nil || !isDown(err) || attempt == 1 {
 			break
 		}
 		a.mu.Unlock()
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(bankRetryWait)
 		a.mu.Lock()
 	}
 	cur := a.st.Vault[vid]
@@ -281,7 +296,7 @@ func (a *App) accessToken(vid string, b *config.Bank, force bool) (string, error
 		return "", errReauth
 	}
 	if force || !e.AccessExpires.After(a.clock.Real().Add(refreshMargin)) {
-		if err := a.refreshToken(vid, b); err != nil {
+		if err := a.refreshTokenUnlockingMu(vid, b); err != nil {
 			return "", err
 		}
 		e = a.st.Vault[vid]
@@ -299,7 +314,7 @@ func (a *App) bankGet(b *config.Bank, vid, path string, out any) error {
 		if err != nil {
 			return err
 		}
-		err = a.bankDo(b, http.MethodGet, path, nil, tok, out)
+		err = a.bankDoUnlockingMu(b, http.MethodGet, path, nil, tok, out)
 		var be *bankError
 		if attempt == 0 && errors.As(err, &be) && be.Status == http.StatusUnauthorized && be.Code == "invalid_token" {
 			continue
@@ -309,7 +324,7 @@ func (a *App) bankGet(b *config.Bank, vid, path string, out any) error {
 }
 
 func (a *App) bankRevoke(b *config.Bank, consentID string) error {
-	err := a.bankDo(b, http.MethodDelete, "/consents/"+url.PathEscape(consentID), nil, "", nil)
+	err := a.bankDoUnlockingMu(b, http.MethodDelete, "/consents/"+url.PathEscape(consentID), nil, "", nil)
 	var be *bankError
 	if errors.As(err, &be) && be.Status == http.StatusNotFound {
 		return nil
@@ -363,7 +378,7 @@ func (a *App) bankMetaFor(b *config.Bank) (bankMeta, error) {
 		return m, nil
 	}
 	var m bankMeta
-	if err := a.bankDo(b, http.MethodGet, "/discover", nil, "", &m); err != nil {
+	if err := a.bankDoUnlockingMu(b, http.MethodGet, "/discover", nil, "", &m); err != nil {
 		return m, err
 	}
 	if a.metas == nil {
@@ -397,7 +412,7 @@ func (a *App) refreshTokens() {
 		if e == nil || b == nil || e.AccessExpires.After(real.Add(refreshAhead)) {
 			continue
 		}
-		if err := a.refreshToken(c.ID, b); err != nil {
+		if err := a.refreshTokenUnlockingMu(c.ID, b); err != nil {
 			a.bankFailed(c, err)
 		}
 	}

@@ -3,7 +3,9 @@ package connect
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,5 +75,44 @@ func TestFingerprintIgnoresBankIDs(t *testing.T) {
 	}
 	if len(ids) != 4 {
 		t.Fatalf("identical lines collided: %d distinct", len(ids))
+	}
+}
+
+func TestVaultKeyIsCreatedOnlyWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vault.key")
+	if _, err := loadVault(path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("key file: %v %v", info, err)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(dir, "*.tmp"))
+	if len(leftovers) != 0 {
+		t.Fatalf("temp files left behind: %v", leftovers)
+	}
+
+	bad := filepath.Join(dir, "bad.key")
+	if err := os.WriteFile(bad, []byte("not hex\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadVault(bad); err == nil || err.Error() != "the vault key is malformed" {
+		t.Fatalf("malformed key: %v", err)
+	}
+	if raw, _ := os.ReadFile(bad); string(raw) != "not hex\n" {
+		t.Fatalf("a malformed key was overwritten: %q", raw)
+	}
+
+	unreadable := filepath.Join(dir, "dir.key")
+	if err := os.Mkdir(unreadable, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = loadVault(unreadable)
+	if err == nil || !strings.HasPrefix(err.Error(), "read vault key: ") {
+		t.Fatalf("unreadable key: %v", err)
+	}
+	if info, err := os.Stat(unreadable); err != nil || !info.IsDir() {
+		t.Fatal("an unreadable key was replaced")
 	}
 }

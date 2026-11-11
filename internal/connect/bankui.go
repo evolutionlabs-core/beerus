@@ -3,6 +3,7 @@ package connect
 import (
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"html/template"
 	"net"
 	"net/http"
@@ -274,13 +275,17 @@ func (a *bankSite) obLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-func (a *bankSite) myAccounts(persona string) []acctView {
+func (a *bankSite) myAccounts(persona string) ([]acctView, error) {
 	now := a.clock.Now()
 	out := []acctView{}
 	for _, acc := range a.world.AccountsAt(persona, a.bank.ID) {
-		out = append(out, a.acctView(acc, now))
+		v, err := a.acctView(acc, now)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
 	}
-	return out
+	return out, nil
 }
 
 func (a *bankSite) myAccount(persona, nuban string) (world.Account, bool) {
@@ -299,7 +304,11 @@ func (a *bankSite) obAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	accts := a.myAccounts(s.Persona)
+	accts, err := a.myAccounts(s.Persona)
+	if err != nil {
+		a.pageFailed(w, "accounts", err)
+		return
+	}
 	var total int64
 	for _, v := range accts {
 		total += v.Available
@@ -320,7 +329,11 @@ func (a *bankSite) obStatement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := a.clock.Now()
-	ls, _ := a.statement(acc.Key, now)
+	ls, err := a.statement(acc.Key, now)
+	if err != nil {
+		a.pageFailed(w, "statement", fmt.Errorf("read statement of %s: %w", acc.Key, err))
+		return
+	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -340,7 +353,12 @@ func (a *bankSite) obStatement(w http.ResponseWriter, r *http.Request) {
 		}
 		lines = append(lines, lv)
 	}
-	a.bankRender(w, "bank_statement", http.StatusOK, s, roomPage{"Title": acc.Name, "Nav": "accounts", "A": a.acctView(acc, now), "Lines": lines, "Page": page, "Older": start > 0, "Newer": page > 1})
+	av, err := a.acctView(acc, now)
+	if err != nil {
+		a.pageFailed(w, "statement", err)
+		return
+	}
+	a.bankRender(w, "bank_statement", http.StatusOK, s, roomPage{"Title": acc.Name, "Nav": "accounts", "A": av, "Lines": lines, "Page": page, "Older": start > 0, "Newer": page > 1})
 }
 
 func (a *bankSite) obTx(w http.ResponseWriter, r *http.Request) {
@@ -362,7 +380,11 @@ func (a *bankSite) obTx(w http.ResponseWriter, r *http.Request) {
 	}
 	related := []lineView{}
 	if l.SessionID != "" {
-		ls, _ := a.statement(acc.Key, a.clock.Now())
+		ls, err := a.statement(acc.Key, a.clock.Now())
+		if err != nil {
+			a.pageFailed(w, "transaction", fmt.Errorf("read statement of %s: %w", acc.Key, err))
+			return
+		}
 		for _, x := range ls {
 			if x.SessionID == l.SessionID && x.Key != l.Key {
 				lv := a.lineView(acc, x)
@@ -371,17 +393,27 @@ func (a *bankSite) obTx(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	a.bankRender(w, "bank_tx", http.StatusOK, s, roomPage{"Title": Normalise(l.Narration), "Nav": "accounts", "A": a.acctView(acc, a.clock.Now()), "L": a.lineView(acc, l), "Related": related, "Done": r.URL.Query().Get("done") == "1"})
+	av, err := a.acctView(acc, a.clock.Now())
+	if err != nil {
+		a.pageFailed(w, "transaction", err)
+		return
+	}
+	a.bankRender(w, "bank_tx", http.StatusOK, s, roomPage{"Title": Normalise(l.Narration), "Nav": "accounts", "A": av, "L": a.lineView(acc, l), "Related": related, "Done": r.URL.Query().Get("done") == "1"})
 }
 
 type payee struct {
 	Key, Label string
 }
 
-func (a *bankSite) transferPage(s *bankSession, data roomPage) roomPage {
+func (a *bankSite) renderTransfer(w http.ResponseWriter, status int, s *bankSession, data roomPage) {
+	accts, err := a.myAccounts(s.Persona)
+	if err != nil {
+		a.pageFailed(w, "transfer", err)
+		return
+	}
 	data["Title"] = "Send money"
 	data["Nav"] = "transfer"
-	data["Accounts"] = a.myAccounts(s.Persona)
+	data["Accounts"] = accts
 	own := []payee{}
 	if p, ok := a.world.Persona(s.Persona); ok {
 		for _, k := range p.Accounts {
@@ -392,7 +424,7 @@ func (a *bankSite) transferPage(s *bankSession, data roomPage) roomPage {
 	}
 	data["Own"] = own
 	data["Banks"] = []string{"Bank A", "Bank B", "Bank C", "Bank D Microfinance"}
-	return data
+	a.bankRender(w, "bank_transfer", status, s, data)
 }
 
 func (a *bankSite) obTransferForm(w http.ResponseWriter, r *http.Request) {
@@ -402,7 +434,7 @@ func (a *bankSite) obTransferForm(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.bankRender(w, "bank_transfer", http.StatusOK, s, a.transferPage(s, roomPage{"From": r.URL.Query().Get("from")}))
+	a.renderTransfer(w, http.StatusOK, s, roomPage{"From": r.URL.Query().Get("from")})
 }
 
 func (a *bankSite) obTransferRequest(s *bankSession, f url.Values) (world.TransferRequest, error) {
@@ -455,7 +487,7 @@ func (a *bankSite) obTransferReview(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, world.ErrInsufficientFunds) {
 			msg = "There isn't enough available money for this transfer and its charges."
 		}
-		a.bankRender(w, "bank_transfer", http.StatusUnprocessableEntity, s, a.transferPage(s, roomPage{"Error": msg, "From": r.PostForm.Get("from"), "Form": r.PostForm}))
+		a.renderTransfer(w, http.StatusUnprocessableEntity, s, roomPage{"Error": msg, "From": r.PostForm.Get("from"), "Form": r.PostForm})
 		return
 	}
 	a.bankRender(w, "bank_review", http.StatusOK, s, roomPage{"Title": "Review transfer", "Nav": "transfer", "Q": q, "Form": r.PostForm})
@@ -481,7 +513,7 @@ func (a *bankSite) obTransferConfirm(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, world.ErrInsufficientFunds) {
 			msg = "There isn't enough available money for this transfer and its charges."
 		}
-		a.bankRender(w, "bank_transfer", http.StatusUnprocessableEntity, s, a.transferPage(s, roomPage{"Error": msg, "From": r.PostForm.Get("from"), "Form": r.PostForm}))
+		a.renderTransfer(w, http.StatusUnprocessableEntity, s, roomPage{"Error": msg, "From": r.PostForm.Get("from"), "Form": r.PostForm})
 		a.mu.Unlock()
 		return
 	}
@@ -504,13 +536,35 @@ type accessRow struct {
 	At               time.Time
 }
 
+const (
+	historyPageSize = 25
+	maxHistoryPages = 1000
+)
+
 func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 	s := a.bankUser(w, r)
 	if s == nil {
 		return
 	}
-	consents, _ := a.ob.Consents(r.Context(), s.Persona)
-	access, _ := a.ob.AccessHistory(r.Context(), s.Persona, 25)
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	if page > maxHistoryPages {
+		http.Error(w, fmt.Sprintf("The access history has at most %d pages.", maxHistoryPages), http.StatusUnprocessableEntity)
+		return
+	}
+	need := page*historyPageSize + 1
+	consents, err := a.ob.Consents(r.Context(), s.Persona)
+	if err != nil {
+		a.pageFailed(w, "apps", fmt.Errorf("read consents: %w", err))
+		return
+	}
+	access, err := a.ob.AccessHistory(r.Context(), s.Persona, need)
+	if err != nil {
+		a.pageFailed(w, "apps", fmt.Errorf("read access history: %w", err))
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	mine := map[string]string{}
@@ -568,7 +622,7 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Since.After(rows[j].Since) })
 	history := []accessRow{}
-	for i := len(a.st.Access) - 1; i >= 0 && len(history) < 25; i-- {
+	for i := len(a.st.Access) - 1; i >= 0 && len(history) < need; i-- {
 		e := a.st.Access[i]
 		label, ok := mine[e.WorldKey]
 		if !ok {
@@ -591,10 +645,11 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 		history = append(history, accessRow{Partner: names[e.ConsentID], Account: byNUBAN[e.Account], At: e.At})
 	}
 	sort.SliceStable(history, func(i, j int) bool { return history[i].At.After(history[j].At) })
-	if len(history) > 25 {
-		history = history[:25]
-	}
-	a.bankRender(w, "bank_apps", http.StatusOK, s, roomPage{"Title": "Connected apps", "Nav": "apps", "Apps": rows, "History": history, "Revoked": r.URL.Query().Get("revoked") == "1", "Via": a.cfg.Connect.BrandName})
+	start := min((page-1)*historyPageSize, len(history))
+	end := min(page*historyPageSize, len(history))
+	older := len(history) > end
+	history = history[start:end]
+	a.bankRender(w, "bank_apps", http.StatusOK, s, roomPage{"Title": "Connected apps", "Nav": "apps", "Apps": rows, "History": history, "Page": page, "Older": older, "Newer": page > 1, "Revoked": r.URL.Query().Get("revoked") == "1", "Via": a.cfg.Connect.BrandName})
 }
 
 func (a *bankSite) obRevoke(w http.ResponseWriter, r *http.Request) {
@@ -620,7 +675,14 @@ func (a *bankSite) obRevoke(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	_ = a.RevokeAtBank(id)
+	if err := a.RevokeAtBank(id); err != nil {
+		if errors.Is(err, errNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		a.pageFailed(w, "revoke", err)
+		return
+	}
 	a.poke()
 	http.Redirect(w, r, "/apps?revoked=1", http.StatusSeeOther)
 }

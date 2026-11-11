@@ -241,7 +241,7 @@ func cmdUp(args []string) error {
 	if err := connect.CheckPorts(c); err != nil {
 		return err
 	}
-	if err := c.EnsureCertificates(); err != nil {
+	if err := c.EnsureCertificates(time.Now()); err != nil {
 		return err
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))

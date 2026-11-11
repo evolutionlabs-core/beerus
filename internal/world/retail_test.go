@@ -482,7 +482,7 @@ func TestRetailMaintenanceFeeLeavesOutReversedDebits(t *testing.T) {
 			continue
 		}
 		m := month{p.Account, monthOf(p.PostedAt)}
-		want := (turnover[m]*charges.MaintenancePerMille + 500) / 1000
+		want := (turnover[m]*charges.MaintenancePerMille() + 500) / 1000
 		if -p.Amount != want {
 			t.Fatalf("maintenance fee %s is %d, want %d on turnover %d", p.Key, -p.Amount, want, turnover[m])
 		}

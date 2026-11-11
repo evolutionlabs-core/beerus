@@ -464,15 +464,15 @@ func (r *seedRun) monthEnd() {
 		t := r.d.Start().Add(retailMonthEndHour*time.Hour + time.Duration(i*10)*time.Minute)
 		m := monthOf(t)
 		if alerts := a.alerts[m]; alerts > 0 {
-			sms := min(int64(alerts)*charges.SMSAlertFee, charges.SMSMonthlyCap)
+			sms := min(int64(alerts)*charges.SMSAlertFee(), charges.SMSMonthlyCap())
 			if st.projected-st.laterCredits(t) >= sms+charges.VAT(sms) {
 				r.post(a, r.line(a, "sms", -sms, t, r.narr("sms", month), "charge", charges.CategoryFee, "", ""))
 				r.post(a, r.line(a, "smsvat", -charges.VAT(sms), t.Add(time.Second), r.narr("smsvat", month), "charge", charges.CategoryVAT, "", ""))
 			}
 		}
 		if turn := a.turnover[m]; a.typ == "current" && turn > 0 {
-			fee := (turn*charges.MaintenancePerMille + 500) / 1000
-			room := (st.projected - st.laterCredits(t)) * 10000 / (10000 + charges.VATRateBasisPoints)
+			fee := (turn*charges.MaintenancePerMille() + 500) / 1000
+			room := (st.projected - st.laterCredits(t)) * 10000 / (10000 + charges.VATRateBasisPoints())
 			fee = min(fee, room)
 			if fee > 0 {
 				r.post(a, r.line(a, "maint", -fee, t.Add(2*time.Second), r.narr("maint", month), "charge", charges.CategoryFee, "", ""))

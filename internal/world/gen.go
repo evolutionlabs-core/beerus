@@ -36,8 +36,8 @@ func CounterpartyBanks() []Institution {
 	return out
 }
 
-func NIPFee(amount int64) int64 {
-	return charges.NIPFee(amount)
+func NIPFee(amount int64, d clock.Date) int64 {
+	return charges.NIPFeeOn(amount, d)
 }
 
 func VAT(base int64) int64 {

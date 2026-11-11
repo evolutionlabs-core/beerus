@@ -68,19 +68,19 @@ const roomTemplates = `
 <div class="mb-7"><h1 class="text-[24px]">Overview</h1><p class="mt-1.5 text-[13.5px] text-muted">Business time {{when .Now}} WAT · world <span class="num">{{.WorldID}}</span></p></div>
 <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
 {{template "stat" (list "Customer deposits" (naira .Total) "Across all banks")}}
-{{range .BankSums}}{{template "stat" (list .Name (naira .Deposits) (printf "%d accounts" .Accounts))}}{{end}}
+{{range .BankSums}}{{template "stat" (list .Name (naira .Deposits) (count .Accounts "account" "accounts"))}}{{end}}
 {{template "stat" (list "Connections" (printf "%d active" .Active) (printf "%d in total" .Connections))}}
 </div>
 <section class="mt-8 rounded-2xl border border-line bg-panel">
 <div class="flex items-center justify-between border-b border-line px-5 py-3.5"><h2 class="text-[15px]">Recent activity</h2><a href="/ui/transfer" class="btn btn-primary btn-sm">New transfer</a></div>
-{{if .Recent}}{{template "lines" .Recent}}{{else}}<p class="px-5 py-10 text-center text-muted">No activity yet.</p>{{end}}
+{{if .Recent}}{{template "lines" .Recent}}<p class="border-t border-line px-5 py-3 text-[13px] text-muted">{{.RecentNote}}</p>{{else}}<p class="px-5 py-10 text-center text-muted">No activity yet.</p>{{end}}
 </section>
 {{template "room_foot" .}}{{end}}
 
 {{define "bank"}}{{template "room_head" .}}
 <div class="{{.Bank.ID}} mb-7 flex items-center gap-4">
 <span class="grid size-11 place-items-center rounded-xl border border-line-strong bg-raised text-[17px] text-bank">{{initial .Bank.Name}}</span>
-<div><h1 class="text-[24px]">{{.Bank.Name}}</h1><p class="mt-1 text-[13.5px] text-muted">{{if eq .Bank.Type "digital"}}Digital bank{{else if eq .Bank.Type "microfinance"}}Microfinance bank{{else}}Commercial bank{{end}} · NIP code <span class="num">{{.Bank.NIPCode}}</span> · history kept {{.Bank.HistoryDays}} days</p></div>
+<div><h1 class="text-[24px]">{{.Bank.Name}}</h1><p class="mt-1 text-[13.5px] text-muted">{{if eq .Bank.Type "digital"}}Digital bank{{else if eq .Bank.Type "microfinance"}}Microfinance bank{{else}}Commercial bank{{end}} · NIP code <span class="num">{{.Bank.NIPCode}}</span> · history kept {{count .Bank.HistoryDays "day" "days"}}</p></div>
 <div class="ml-auto flex items-center gap-2.5">
 {{if eq .Status.Phase "closed"}}<span class="badge">Closed</span>{{else if eq .Status.Phase "suspended"}}<span class="badge badge-warn">Suspended</span>{{else if .Down}}<span class="badge badge-bad">Unavailable</span>{{else}}<span class="badge badge-ok">Operational</span>{{end}}
 {{if and .Managed (ne .Status.Phase "closed")}}{{if eq .Status.Phase "suspended"}}<form method="post" action="/ui/banks/{{.Bank.ID}}/resume"><button type="submit" class="btn btn-secondary btn-sm">Resume</button></form>{{else}}<form method="post" action="/ui/banks/{{.Bank.ID}}/suspend"><button type="submit" class="btn btn-secondary btn-sm">Suspend</button></form>{{end}}<a href="/ui/banks/{{.Bank.ID}}/close" class="btn btn-danger btn-sm">Close bank</a>{{end}}
@@ -230,7 +230,7 @@ const roomTemplates = `
 {{range .Impact.Blockers}}<p class="mb-3 rounded-[10px] border border-warn/30 bg-warn/10 px-4 py-3 text-[13px] text-warn" role="alert">This bank cannot be closed yet: {{.}}.</p>{{end}}
 {{if .Error}}<p class="mb-3 rounded-[10px] border border-neg/30 bg-neg/10 px-4 py-3 text-[13px] text-neg" role="alert">{{.Error}}</p>{{end}}
 <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-{{template "stat" (list "Customers" (printf "%d" (len .Impact.Customers)) (printf "%d accounts" (len .Impact.Accounts)))}}
+{{template "stat" (list "Customers" (printf "%d" (len .Impact.Customers)) (count (len .Impact.Accounts) "account" "accounts"))}}
 {{template "stat" (list "Deposits" (naira .Impact.Deposits) "")}}
 {{template "stat" (list "Insured by NDIC" (naira .Impact.Insured) (printf "Up to %s per depositor" (naira .Impact.InsuredLimit)))}}
 {{template "stat" (list "Connect consents" (printf "%d" (len .Impact.Connections)) "Revoked when the bank closes")}}
@@ -345,7 +345,7 @@ const roomTemplates = `
 {{template "room_foot" .}}{{end}}
 
 {{define "webhooks"}}{{template "room_head" .}}
-<div class="mb-7"><h1 class="text-[24px]">Webhooks</h1><p class="mt-1.5 text-[13.5px] text-muted">The latest 100 deliveries, signed with Ed25519.</p></div>
+<div class="mb-7"><h1 class="text-[24px]">Webhooks</h1><p class="mt-1.5 text-[13.5px] text-muted">Newest first, signed with Ed25519.</p></div>
 <section class="rounded-2xl border border-line bg-panel">
 {{if .Rows}}<div class="overflow-x-auto"><table class="w-full min-w-[640px] border-collapse text-[13.5px]">
 <thead><tr class="text-left text-[12px] text-faint"><th class="border-b border-line px-5 py-2.5 font-normal">Event</th><th class="border-b border-line px-5 py-2.5 font-normal">Status</th><th class="border-b border-line px-5 py-2.5 font-normal">Attempts</th><th class="border-b border-line px-5 py-2.5 font-normal">Sent</th><th class="border-b border-line px-5 py-2.5 font-normal"></th></tr></thead>
@@ -356,6 +356,11 @@ const roomTemplates = `
 <td class="border-b border-line px-5 py-3 whitespace-nowrap text-muted group-last:border-b-0">{{when .CreatedReal}}</td>
 <td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><form method="post" action="/ui/webhooks/{{.ID}}/replay"><button type="submit" class="btn btn-secondary btn-sm">Replay</button></form></td>
 </tr>{{end}}</tbody></table></div>{{else}}<p class="px-5 py-10 text-center text-muted">No webhooks sent yet.</p>{{end}}
+{{if or .Older .Newer}}<div class="flex items-center justify-between border-t border-line px-5 py-3 text-[13px]">
+{{if .Newer}}<a href="?page={{add .Page -1}}" class="btn btn-secondary btn-sm">Newer</a>{{else}}<span></span>{{end}}
+<span class="text-muted">Page {{.Page}}</span>
+{{if .Older}}<a href="?page={{add .Page 1}}" class="btn btn-secondary btn-sm">Older</a>{{else}}<span></span>{{end}}
+</div>{{end}}
 </section>
 {{template "room_foot" .}}{{end}}
 

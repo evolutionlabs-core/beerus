@@ -86,7 +86,7 @@ func TestReplicaPullTakesLocksInOrder(t *testing.T) {
 func TestSlowSimulatorDoesNotQueueEveryRequest(t *testing.T) {
 	var calls int
 	var mu sync.Mutex
-	a := &App{role: RoleBank, coreURL: "http://sim.invalid", peers: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+	a := &App{role: RoleBank, clock: clock.New(clock.State{Pace: 1}, nil), coreURL: "http://sim.invalid", peers: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
@@ -143,7 +143,7 @@ func TestControlAcceptsOnlyLoopbackPeersWhenBoundToLoopback(t *testing.T) {
 func TestSlowPullDoesNotHoldThePullLock(t *testing.T) {
 	in, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	a := &App{role: RoleBank, coreURL: "http://sim.invalid", peers: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+	a := &App{role: RoleBank, clock: clock.New(clock.State{Pace: 1}, nil), coreURL: "http://sim.invalid", peers: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		calls.Add(1)
 		in <- struct{}{}
 		<-release
@@ -163,7 +163,6 @@ func TestSlowPullDoesNotHoldThePullLock(t *testing.T) {
 	if !free {
 		t.Fatal("the pull lock is held during the call to the simulator")
 	}
-	time.Sleep(50 * time.Millisecond)
 	close(release)
 	for i := 0; i < 3; i++ {
 		if err := <-errs; err == nil {
@@ -198,7 +197,7 @@ func pausingSim(t *testing.T, fail map[string]string) (*App, *sync.Mutex, map[st
 	cfg.Banks = append(cfg.Banks, &config.Bank{ID: "bank-b", Name: "Bank B", Type: "digital", NIPCode: "999002", NUBANCode: "902", HistoryDays: 30, Port: 7446})
 	var mu sync.Mutex
 	calls := map[string][]string{}
-	a := &App{cfg: cfg, role: RoleSim, st: newState(), log: slog.New(slog.NewTextHandler(io.Discard, nil)), ledgers: []*ledgerSource{{inst: world.Institution{ID: "bank-a"}}, {inst: world.Institution{ID: "bank-b"}}}}
+	a := &App{cfg: cfg, role: RoleSim, resumeWait: time.Millisecond, st: newState(), log: slog.New(slog.NewTextHandler(io.Discard, nil)), ledgers: []*ledgerSource{{inst: world.Institution{ID: "bank-a"}}, {inst: world.Institution{ID: "bank-b"}}}}
 	a.peers = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -229,9 +228,6 @@ func TestFailedPauseStopsAndResumesTheOthers(t *testing.T) {
 }
 
 func TestFailedResumeIsRetriedThenReported(t *testing.T) {
-	old := resumeWait
-	resumeWait = time.Millisecond
-	defer func() { resumeWait = old }()
 	a, mu, calls := pausingSim(t, map[string]string{"bank-a": "/internal/resume"})
 	resume, err := a.pauseBanks()
 	if err != nil {

@@ -22,6 +22,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
+	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -38,7 +39,8 @@ type App struct {
 	log          *slog.Logger
 	isDirty      atomic.Bool
 	limiters     map[string]*rate.Limiter
-	idemLock     sync.Map
+	idemMu       sync.Mutex
+	idemLocks    map[string]*idemEntry
 	client       *http.Client
 	wake         chan struct{}
 	statePath    string
@@ -87,10 +89,13 @@ type App struct {
 	pauseTimer   *time.Timer
 	pullMu       sync.Mutex
 	pulledAt     time.Time
+	pullWarned   string
 	pullFailed   time.Time
 	pullErr      error
 	pulling      *pullFlight
 	peers        *http.Client
+	probeHTTP    *http.Client
+	resumeWait   time.Duration
 	eventMu      sync.Mutex
 	eventHTTP    map[string]*http.Client
 	bankWrap     func(http.RoundTripper) http.RoundTripper
@@ -128,19 +133,21 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		return nil, fmt.Errorf("control token: %w", err)
 	}
 	a := &App{
-		cfg:       cfg,
-		key:       key,
-		ctlToken:  token,
-		log:       o.Logger,
-		limiters:  map[string]*rate.Limiter{},
-		peers:     &http.Client{},
-		coreURL:   o.CoreURL,
-		client:    o.Client,
-		bankWrap:  o.BankWrap,
-		role:      o.Role,
-		wake:      make(chan struct{}, 1),
-		statePath: cfg.Path("stub-state.json"),
-		sending:   make(chan struct{}, 4),
+		cfg:        cfg,
+		key:        key,
+		ctlToken:   token,
+		log:        o.Logger,
+		limiters:   map[string]*rate.Limiter{},
+		peers:      &http.Client{Timeout: peerTimeout},
+		probeHTTP:  &http.Client{Timeout: probeTimeout},
+		resumeWait: defaultResume,
+		coreURL:    o.CoreURL,
+		client:     o.Client,
+		bankWrap:   o.BankWrap,
+		role:       o.Role,
+		wake:       make(chan struct{}, 1),
+		statePath:  cfg.Path("stub-state.json"),
+		sending:    make(chan struct{}, 4),
 	}
 	a.settleDone = sync.NewCond(&a.mu)
 	if a.log == nil {
@@ -322,7 +329,7 @@ func (a *App) runningPath() string {
 }
 
 func (a *App) Run(ctx context.Context) {
-	if err := os.WriteFile(a.runningPath(), []byte(time.Now().Format(time.RFC3339)), 0o600); err != nil {
+	if err := pki.WriteFile(a.runningPath(), []byte(a.clock.Real().Format(time.RFC3339)), 0o600); err != nil {
 		a.log.Error("write run marker", "err", err)
 	}
 	defer os.Remove(a.runningPath())
@@ -400,7 +407,6 @@ func (a *App) sweep() {
 	for k, rec := range a.st.Idem {
 		if real.Sub(rec.CreatedReal) > idemTTL {
 			delete(a.st.Idem, k)
-			a.idemLock.Delete(k)
 		}
 	}
 	a.pruneNIPLocked(real)

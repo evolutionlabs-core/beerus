@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
+	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -318,16 +320,12 @@ func loadState(path string) (*State, error) {
 func saveJSON(path string, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return err
+		return fmt.Errorf("encode %s: %w", path, err)
 	}
-	tmp := path + ".tmp"
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+		return fmt.Errorf("create directory for %s: %w", path, err)
 	}
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return pki.WriteFile(path, b, 0o600)
 }
 
 var idEncoding = base32.NewEncoding("0123456789abcdefghjkmnpqrstvwxyz").WithPadding(base32.NoPadding)

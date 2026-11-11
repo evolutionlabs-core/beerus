@@ -2,6 +2,7 @@ package connect
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -94,8 +95,14 @@ func (a *App) CloseImpact(id string) (CloseImpact, error) {
 		if acc.Institution != id || (!acc.OpenedAt.IsZero() && acc.OpenedAt.After(now)) {
 			continue
 		}
-		bal, _ := a.world.LedgerAt(acc.Key, now)
-		pend, _ := a.world.PendingAt(acc.Key, now)
+		bal, err := a.world.LedgerAt(acc.Key, now)
+		if err != nil {
+			return CloseImpact{}, fmt.Errorf("read balance of %s: %w", acc.Key, err)
+		}
+		pend, err := a.world.PendingAt(acc.Key, now)
+		if err != nil {
+			return CloseImpact{}, fmt.Errorf("read pending total of %s: %w", acc.Key, err)
+		}
 		out.Accounts = append(out.Accounts, ImpactAccount{Key: acc.Key, NUBAN: acc.NUBAN, Name: acc.Name, Type: acc.Type, Owner: acc.Owner, Balance: bal, Pending: pend, Connected: connected[acc.Key]})
 		out.Pending += pend
 		cu := customers[acc.Owner]

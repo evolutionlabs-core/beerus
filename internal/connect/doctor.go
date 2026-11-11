@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -59,14 +60,20 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		byID[b.ID] = b
 	}
 	dir := c.Path("snapshots")
-	entries, _ := os.ReadDir(dir)
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return rep, fmt.Errorf("read snapshots: %w", err)
+	}
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
+		}
+		if err != nil {
+			return rep, fmt.Errorf("read snapshot %s: %w", e.Name(), err)
 		}
 		var f struct {
 			Meta snapshotMeta `json:"meta"`
@@ -92,7 +99,7 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		}
 	}
 	prefix := config.DatabaseName(c.Dir, "")
-	all, err := store.List(ctx, c.DatabaseURL, "beerus_")
+	all, err := store.List(ctx, c.DatabaseURL, config.DatabasePrefix)
 	if err != nil {
 		return rep, err
 	}

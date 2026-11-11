@@ -108,12 +108,14 @@ func (b *Bank) Style() string {
 	return "traditional"
 }
 
+const DatabasePrefix = "beerus_"
+
 func DatabaseName(dir, bankID string) string {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		abs = dir
 	}
-	return "beerus_" + HashKey(abs)[:12] + "_" + strings.ReplaceAll(bankID, "-", "_")
+	return DatabasePrefix + HashKey(abs)[:12] + "_" + strings.ReplaceAll(bankID, "-", "_")
 }
 
 type Holidays struct {
@@ -283,18 +285,18 @@ func (c *Config) Finish() error {
 func randomToken(prefix string, n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		return "", err
+		return "", fmt.Errorf("read random bytes: %w", err)
 	}
 	return prefix + strings.TrimRight(base64.RawURLEncoding.EncodeToString(b), "="), nil
 }
 
-func Prepare(c *Config) error {
+func Prepare(c *Config, now time.Time) error {
 	for _, sub := range []string{"ca", "connect", "partners", "webhook", "snapshots"} {
 		if err := os.MkdirAll(c.Path(sub), 0o700); err != nil {
 			return fmt.Errorf("create %s: %w", sub, err)
 		}
 	}
-	if err := c.EnsureCertificates(); err != nil {
+	if err := c.EnsureCertificates(now); err != nil {
 		return fmt.Errorf("issue certificates: %w", err)
 	}
 	if _, err := WebhookKey(c); err != nil {
@@ -318,25 +320,7 @@ func NewAPIKey() (string, error) {
 }
 
 func WriteSecret(path, body string) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if _, err := tmp.WriteString(body); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return pki.WriteFile(path, []byte(body), 0o600)
 }
 
 const (
@@ -344,50 +328,49 @@ const (
 	caLife   = 10 * 365 * 24 * time.Hour
 )
 
-func (c *Config) EnsureCertificates() error {
+func (c *Config) EnsureCertificates(now time.Time) error {
 	root, err := loadOrCreateCA(c.Path("ca"), "root", "Beerus CBN Trust Anchor")
 	if err != nil {
-		return err
+		return fmt.Errorf("load root authority: %w", err)
 	}
 	partnerCA, err := loadOrCreateCA(c.Path("ca"), "connect-partners", "Beerus Connect Partner CA")
 	if err != nil {
-		return err
+		return fmt.Errorf("load partner authority: %w", err)
 	}
-	now := time.Now()
 	server := c.Path("connect", "server.crt")
 	if pki.NeedsRenewal(server, now) {
 		leaf, err := root.IssueServer([]string{c.Connect.Host, "localhost"}, leafLife)
 		if err != nil {
-			return err
+			return fmt.Errorf("issue connect server certificate: %w", err)
 		}
 		if err := leaf.Save(c.Path("connect"), "server"); err != nil {
-			return err
+			return fmt.Errorf("save connect server certificate: %w", err)
 		}
 	}
 	if err := c.ensureOpenBanking(root, now); err != nil {
-		return err
+		return fmt.Errorf("ensure open banking certificates: %w", err)
 	}
 	for _, p := range c.Partners {
 		dir := c.Path("partners", p.ID)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
+			return fmt.Errorf("create partner dir %s: %w", dir, err)
 		}
 		if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
 			leaf, err := partnerCA.IssueClient(p.CertCN, "partner", leafLife)
 			if err != nil {
-				return err
+				return fmt.Errorf("issue certificate for partner %s: %w", p.ID, err)
 			}
 			if err := leaf.Save(dir, "client"); err != nil {
-				return err
+				return fmt.Errorf("save certificate for partner %s: %w", p.ID, err)
 			}
 		}
 		fp, err := pki.FileThumbprint(filepath.Join(dir, "client.crt"))
 		if err != nil {
-			return err
+			return fmt.Errorf("fingerprint certificate for partner %s: %w", p.ID, err)
 		}
 		p.CertSHA256 = fp
-		if err := os.WriteFile(filepath.Join(dir, "ca.crt"), root.PEM, 0o644); err != nil {
-			return err
+		if err := pki.WriteFile(filepath.Join(dir, "ca.crt"), root.PEM, 0o644); err != nil {
+			return fmt.Errorf("save root certificate for partner %s: %w", p.ID, err)
 		}
 	}
 	return nil
@@ -403,19 +386,19 @@ const (
 func (c *Config) ensureOpenBanking(root *pki.Authority, now time.Time) error {
 	dir := c.Path("connect")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+		return fmt.Errorf("create connect dir: %w", err)
 	}
 	if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
 		leaf, err := root.IssueClient(AggregatorCN, AggregatorRole, leafLife)
 		if err != nil {
-			return err
+			return fmt.Errorf("issue aggregator certificate: %w", err)
 		}
 		if err := leaf.Save(dir, "client"); err != nil {
-			return err
+			return fmt.Errorf("save aggregator certificate: %w", err)
 		}
 	}
 	if _, err := c.SigningKey(); err != nil {
-		return err
+		return fmt.Errorf("load signing key: %w", err)
 	}
 	return c.EnsureBankCertificates(root, now)
 }
@@ -424,31 +407,30 @@ func (c *Config) EnsureBankCertificates(root *pki.Authority, now time.Time) erro
 	if root == nil {
 		var err error
 		if root, err = pki.LoadAuthority(c.Path("ca"), "root"); err != nil {
-			return err
+			return fmt.Errorf("load root authority: %w", err)
 		}
-		now = time.Now()
 	}
 	for _, b := range c.Banks {
 		dir := c.Path("banks", b.ID)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
+			return fmt.Errorf("create bank dir %s: %w", dir, err)
 		}
 		if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
 			leaf, err := root.IssueServer([]string{b.ID + ".localhost", "localhost"}, leafLife)
 			if err != nil {
-				return err
+				return fmt.Errorf("issue server certificate for bank %s: %w", b.ID, err)
 			}
 			if err := leaf.Save(dir, "server"); err != nil {
-				return err
+				return fmt.Errorf("save server certificate for bank %s: %w", b.ID, err)
 			}
 		}
 		if pki.NeedsRenewal(filepath.Join(dir, EventSignerName+".crt"), now) {
 			leaf, err := root.IssueSigner(b.ID+"-events", EventSignerRole, leafLife)
 			if err != nil {
-				return err
+				return fmt.Errorf("issue event signer for bank %s: %w", b.ID, err)
 			}
 			if err := leaf.Save(dir, EventSignerName); err != nil {
-				return err
+				return fmt.Errorf("save event signer for bank %s: %w", b.ID, err)
 			}
 		}
 	}
@@ -464,7 +446,7 @@ func (c *Config) SigningKey() (*ecdsa.PrivateKey, error) {
 		}
 		k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("parse connect/ob-signing.key: %w", err)
 		}
 		key, ok := k.(*ecdsa.PrivateKey)
 		if !ok {
@@ -474,16 +456,19 @@ func (c *Config) SigningKey() (*ecdsa.PrivateKey, error) {
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generate signing key: %w", err)
 	}
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal signing key: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create signing key dir: %w", err)
 	}
-	return key, os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600)
+	if err := pki.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		return nil, fmt.Errorf("save signing key: %w", err)
+	}
+	return key, nil
 }
 
 func loadOrCreateCA(dir, name, cn string) (*pki.Authority, error) {
@@ -492,9 +477,12 @@ func loadOrCreateCA(dir, name, cn string) (*pki.Authority, error) {
 	}
 	a, err := pki.NewAuthority(cn, caLife)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create authority %s: %w", name, err)
 	}
-	return a, a.Save(dir, name)
+	if err := a.Save(dir, name); err != nil {
+		return nil, fmt.Errorf("save authority %s: %w", name, err)
+	}
+	return a, nil
 }
 
 type SigningKey struct {
@@ -527,18 +515,18 @@ func WebhookKey(c *Config) (SigningKey, error) {
 	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return SigningKey{}, err
+		return SigningKey{}, fmt.Errorf("generate webhook key: %w", err)
 	}
 	id, err := randomToken("whk_", 8)
 	if err != nil {
-		return SigningKey{}, err
+		return SigningKey{}, fmt.Errorf("generate webhook key id: %w", err)
 	}
 	k := SigningKey{ID: id, Private: priv}
-	if err := os.WriteFile(path, []byte(id+" "+k.SecretWH()+"\n"), 0o600); err != nil {
-		return SigningKey{}, err
+	if err := pki.WriteFile(path, []byte(id+" "+k.SecretWH()+"\n"), 0o600); err != nil {
+		return SigningKey{}, fmt.Errorf("save webhook signing key: %w", err)
 	}
-	if err := os.WriteFile(c.Path("webhook", "public.key"), []byte(k.PublicWH()+"\n"), 0o644); err != nil {
-		return SigningKey{}, err
+	if err := pki.WriteFile(c.Path("webhook", "public.key"), []byte(k.PublicWH()+"\n"), 0o644); err != nil {
+		return SigningKey{}, fmt.Errorf("save webhook public key: %w", err)
 	}
 	return k, nil
 }
@@ -546,7 +534,7 @@ func WebhookKey(c *Config) (SigningKey, error) {
 func ReadSecret(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read secret: %w", err)
 	}
 	return strings.TrimSpace(string(b)), nil
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -162,15 +163,24 @@ func readFiles(dir string) (map[string][]byte, error) {
 }
 
 func writeFiles(dir string, files map[string][]byte) error {
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("restore %s: %w", dir, err)
-	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("restore %s: %w", dir, err)
 	}
 	for name, raw := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
+		if err := pki.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
 			return fmt.Errorf("restore %s: %w", name, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("list %s: %w", dir, err)
+	}
+	for _, e := range entries {
+		if _, keep := files[e.Name()]; keep {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return fmt.Errorf("remove %s: %w", e.Name(), err)
 		}
 	}
 	return nil
@@ -193,7 +203,7 @@ func (a *App) replacePartner(id string, p *config.Partner) {
 
 func (a *App) issuePartnerCert(p *config.Partner) error {
 	c := config.Config{Dir: a.cfg.Dir, Connect: a.cfg.Connect, Partners: []*config.Partner{p}}
-	if err := c.EnsureCertificates(); err != nil {
+	if err := c.EnsureCertificates(a.clock.Real()); err != nil {
 		return fmt.Errorf("issue certificate for %s: %w", p.ID, err)
 	}
 	return nil

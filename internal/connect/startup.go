@@ -134,7 +134,7 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	if cfg, err = buildConfig(dir, st, local); err != nil {
 		return err
 	}
-	if err := config.Prepare(cfg); err != nil {
+	if err := config.Prepare(cfg, time.Now()); err != nil {
 		return err
 	}
 	recordCertPrints(cfg, &st)

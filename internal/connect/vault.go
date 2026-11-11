@@ -6,9 +6,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 const (
@@ -37,19 +40,23 @@ type vault struct {
 var errVault = errors.New("the stored token cannot be read")
 
 func loadVault(path string) (*vault, error) {
-	if b, err := os.ReadFile(path); err == nil {
+	b, err := os.ReadFile(path)
+	if err == nil {
 		key, err := hex.DecodeString(strings.TrimSpace(string(b)))
 		if err != nil || len(key) != vaultKeyBytes {
 			return nil, errors.New("the vault key is malformed")
 		}
 		return &vault{master: key}, nil
 	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read vault key: %w", err)
+	}
 	key := make([]byte, vaultKeyBytes)
 	if _, err := rand.Read(key); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generate vault key: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
-		return nil, err
+	if err := pki.WriteFile(path, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
+		return nil, fmt.Errorf("write vault key: %w", err)
 	}
 	return &vault{master: key}, nil
 }
@@ -57,7 +64,7 @@ func loadVault(path string) (*vault, error) {
 func gcm(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create cipher: %w", err)
 	}
 	return cipher.NewGCM(block)
 }
@@ -65,22 +72,22 @@ func gcm(key []byte) (cipher.AEAD, error) {
 func (v *vault) seal(plain, aad string) (Sealed, error) {
 	dk := make([]byte, vaultKeyBytes)
 	if _, err := rand.Read(dk); err != nil {
-		return Sealed{}, err
+		return Sealed{}, fmt.Errorf("generate data key: %w", err)
 	}
 	inner, err := gcm(dk)
 	if err != nil {
-		return Sealed{}, err
+		return Sealed{}, fmt.Errorf("open data cipher: %w", err)
 	}
 	outer, err := gcm(v.master)
 	if err != nil {
-		return Sealed{}, err
+		return Sealed{}, fmt.Errorf("open master cipher: %w", err)
 	}
 	s := Sealed{Nonce: make([]byte, inner.NonceSize()), KeyNonce: make([]byte, outer.NonceSize())}
 	if _, err := rand.Read(s.Nonce); err != nil {
-		return Sealed{}, err
+		return Sealed{}, fmt.Errorf("generate nonce: %w", err)
 	}
 	if _, err := rand.Read(s.KeyNonce); err != nil {
-		return Sealed{}, err
+		return Sealed{}, fmt.Errorf("generate key nonce: %w", err)
 	}
 	s.Data = inner.Seal(nil, s.Nonce, []byte(plain), []byte(aad))
 	s.Wrapped = outer.Seal(nil, s.KeyNonce, dk, []byte(aad))
@@ -90,7 +97,7 @@ func (v *vault) seal(plain, aad string) (Sealed, error) {
 func (v *vault) open(s Sealed, aad string) (string, error) {
 	outer, err := gcm(v.master)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("open master cipher: %w", err)
 	}
 	if len(s.KeyNonce) != outer.NonceSize() {
 		return "", errVault
@@ -113,11 +120,11 @@ func (v *vault) open(s Sealed, aad string) (string, error) {
 func (v *vault) put(id, access, refresh string, accessExp, refreshExp time.Time) (*VaultEntry, error) {
 	a, err := v.seal(access, id+"/access")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("seal access token: %w", err)
 	}
 	r, err := v.seal(refresh, id+"/refresh")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("seal refresh token: %w", err)
 	}
 	return &VaultEntry{Access: a, Refresh: r, AccessExpires: accessExp, RefreshExpires: refreshExp}, nil
 }
@@ -125,7 +132,7 @@ func (v *vault) put(id, access, refresh string, accessExp, refreshExp time.Time)
 func (a *App) vaultPut(id string, t bankToken) error {
 	e, err := a.vault.put(id, t.Access, t.Refresh, t.AccessExpires, t.RefreshExpires)
 	if err != nil {
-		return err
+		return fmt.Errorf("store token: %w", err)
 	}
 	a.st.Vault[id] = e
 	a.dirty()

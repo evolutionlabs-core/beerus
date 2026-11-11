@@ -58,9 +58,9 @@ func (b *Bank) MonthEnd(ctx context.Context, month time.Month, year int, at time
 	for _, a := range list {
 		lines := []ledger.Line{}
 		if a.events > 0 {
-			sms := a.events * charges.SMSAlertFee
-			if sms > charges.SMSMonthlyCap {
-				sms = charges.SMSMonthlyCap
+			sms := a.events * charges.SMSAlertFee()
+			if sms > charges.SMSMonthlyCap() {
+				sms = charges.SMSMonthlyCap()
 			}
 			vat := charges.VAT(sms)
 			lines = append(lines,
@@ -68,7 +68,7 @@ func (b *Bank) MonthEnd(ctx context.Context, month time.Month, year int, at time
 				dr(a.code, vat, "VAT ON SMS ALERT CHARGES "+label), cr(VATPayable, vat, "VAT ON SMS ALERT CHARGES "+label))
 		}
 		if a.product == "current" && a.turnover > 0 {
-			fee := (a.turnover*charges.MaintenancePerMille + 500) / 1000
+			fee := (a.turnover*charges.MaintenancePerMille() + 500) / 1000
 			if fee > 0 {
 				vat := charges.VAT(fee)
 				lines = append(lines,

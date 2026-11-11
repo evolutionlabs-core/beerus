@@ -193,6 +193,9 @@ const bankTemplates = `
 <section class="mt-8 rounded-2xl border border-line bg-panel">
 <div class="border-b border-line px-5 py-3.5"><h2 class="text-[15px]">Access history</h2></div>
 {{if .History}}<ul>{{range .History}}<li class="flex items-center justify-between gap-4 border-b border-line px-5 py-3 text-[13.5px] last:border-b-0"><span>{{.Partner}} read {{.Account}}</span><span class="text-muted">{{when .At}}</span></li>{{end}}</ul>{{else}}<p class="px-5 py-8 text-center text-muted">No access yet.</p>{{end}}
+{{if or .Older .Newer}}<div class="flex items-center justify-between border-t border-line px-5 py-3 text-[13px]">
+{{if .Newer}}<a href="?page={{add .Page -1}}" class="btn btn-secondary btn-sm">Newer</a>{{else}}<span></span>{{end}}<span class="text-muted">Page {{.Page}}</span>{{if .Older}}<a href="?page={{add .Page 1}}" class="btn btn-secondary btn-sm">Older</a>{{else}}<span></span>{{end}}
+</div>{{end}}
 </section>
 {{template "bank_foot" .}}{{end}}
 
