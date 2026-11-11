@@ -288,7 +288,7 @@ func TestBankRepairsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close(context.Background())
-	dropped := time.Now()
+	dropped := s.realNow()
 	if _, err := db.Exec(context.Background(), "DROP DATABASE "+s.cfg.Bank("bank-b").Database+" WITH (FORCE)"); err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestBankRepairsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.waitBlocked("bank-b", setup.ReasonMoneyDecisionNeeded, "cus_nobody is not a customer of Bank B")
-	dropped = time.Now()
+	dropped = s.realNow()
 	if _, err := db.Exec(context.Background(), "DROP DATABASE "+s.cfg.Bank("bank-b").Database+" WITH (FORCE)"); err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +461,7 @@ func TestCloseBank(t *testing.T) {
 	if accepted["phase"] != setup.PhaseClosing || accepted["deletion_requested_at"] == nil {
 		t.Fatalf("close was not admitted as closing: %v", accepted)
 	}
-	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦35,000.00). Run beerus clock advance to reach it, or add --settle-now.")
+	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦35,000.00). Wait for it, or run beerus nip settle-now.")
 	if ne := s.ctl("GET", "/nip/name-enquiry?bank_code="+s.cfg.Bank("abuja-digital").NIPCode+"&account_number="+opened["tunde"].Accounts[0], nil); ne["response_code"] != "91" {
 		t.Fatalf("name enquiry at a terminating bank: %v", ne)
 	}

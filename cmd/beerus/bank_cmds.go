@@ -690,7 +690,7 @@ func cmdNip(args []string) error {
 		if err != nil {
 			return err
 		}
-		out, err := c.do("GET", "/nip/sessions/"+url.PathEscape(pos[1]), nil)
+		out, err := c.do("POST", "/nip/sessions/"+url.PathEscape(pos[1])+"/status", nil)
 		if err != nil {
 			return err
 		}

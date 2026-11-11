@@ -161,8 +161,6 @@ func newBankStackWith(t *testing.T, edit func(*config.Config)) *Stack {
 	return startStack(t, edit)
 }
 
-const stackStart = "2026-01-15T08:00:00+01:00"
-
 func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	t.Helper()
 	if testing.Short() {
@@ -174,13 +172,8 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 		local.DatabaseURL = u
 	}
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort = ports[0], ports[1], ports[2], ports[3]
-	start, err := time.Parse(time.RFC3339, stackStart)
-	if err != nil {
-		return nil, err
-	}
-	today := clock.DateOf(start)
+	today := clock.DateOf(time.Now())
 	spec := setup.DefaultSpec("contract", today)
-	spec.Spec.Start = stackStart
 	spec.Spec.Partners = []setup.Partner{{
 		ID:           "balance",
 		Name:         "Balance",
@@ -236,9 +229,6 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 			}
 			app, err := connect.New(cfg, opts)
 			if err != nil {
-				t.Fatal(err)
-			}
-			if err := app.Clock().SetPace(0); err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
@@ -298,9 +288,6 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 	s.api = &http.Client{Timeout: 30 * time.Second, Transport: &validating{s: s, base: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool}}}}
 	s.raw = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
 	s.waitHealthy()
-	if s.external {
-		s.ctl("POST", "/clock/pace", map[string]float64{"pace": 0})
-	}
 	t.Cleanup(func() {
 		s.vmu.Lock()
 		defer s.vmu.Unlock()
@@ -572,8 +559,23 @@ func (s *Stack) syncNow() {
 
 func (s *Stack) advance(by string) {
 	s.t.Helper()
-	s.ctl("POST", "/clock/advance", map[string]string{"by": by})
+	if s.external {
+		s.t.Fatalf("advance %s needs an in-process stack; a running beerus cannot move its clock", by)
+	}
+	d, err := parseSpan(by)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	s.skewReal(d)
 	s.syncNow()
+}
+
+func parseSpan(s string) (time.Duration, error) {
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		n, err := strconv.Atoi(days)
+		return time.Duration(n) * 24 * time.Hour, err
+	}
+	return time.ParseDuration(s)
 }
 
 func (s *Stack) today() clock.Date {
@@ -907,14 +909,14 @@ func num(v any) int64 {
 	return 0
 }
 
-func verifyV1a(pub ed25519.PublicKey, h hook) error {
+func verifyV1a(pub ed25519.PublicKey, h hook, now time.Time) error {
 	id := h.Header.Get("webhook-id")
 	tsHeader := h.Header.Get("webhook-timestamp")
 	sec, err := strconv.ParseInt(tsHeader, 10, 64)
 	if err != nil {
 		return fmt.Errorf("bad timestamp %q", tsHeader)
 	}
-	if d := time.Since(time.Unix(sec, 0)); d > 5*time.Minute || d < -5*time.Minute {
+	if d := now.Sub(time.Unix(sec, 0)); d > 5*time.Minute || d < -5*time.Minute {
 		return fmt.Errorf("timestamp outside tolerance")
 	}
 	msg := append([]byte(id+"."+tsHeader+"."), h.Body...)

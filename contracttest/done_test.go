@@ -155,7 +155,7 @@ func TestDoneStory(t *testing.T) {
 			if err := json.Unmarshal(h.Body, &ev); err != nil || ev.Type != typ || !match(ev.Data) {
 				continue
 			}
-			check(verifyV1a(pub, h) == nil, "webhook signature")
+			check(verifyV1a(pub, h, s.realNow()) == nil, "webhook signature")
 			n++
 		}
 		return n

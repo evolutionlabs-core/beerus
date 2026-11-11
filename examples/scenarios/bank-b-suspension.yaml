@@ -1,6 +1,5 @@
 name: bank-b-suspension
-description: Bank B is suspended for two days, then comes back. Transfers into Bank B fail while it is suspended.
+description: Bank B is suspended and then resumed, so partners see a short outage.
 steps:
   - suspend: bank-b
-  - advance: 2d
   - resume: bank-b

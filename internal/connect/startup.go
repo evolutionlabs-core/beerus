@@ -41,6 +41,8 @@ const (
 	stepDone = "done"
 )
 
+var ErrFutureWorld = errors.New("This setup was moved ahead of real time by an older Beerus. Run beerus reset, then beerus up.")
+
 var ErrOldSetup = errors.New("This setup was made by an older Beerus. Run beerus reset, then beerus up.")
 
 func refuseOld(dir string) error {
@@ -71,7 +73,6 @@ func Initialized(dir string) (bool, error) {
 func DefaultLocal() setup.Local {
 	return setup.Local{
 		DatabaseURL: defaultDatabaseURL,
-		Pace:        1,
 		Connect: setup.LocalConnect{
 			Host:         defaultConnectHost,
 			PartnerPort:  defaultPartnerPort,
@@ -314,7 +315,6 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 	c := &config.Config{
 		Dir:         dir,
 		DatabaseURL: local.DatabaseURL,
-		Pace:        local.Pace,
 		Start:       start,
 		NIPSessions: spec.NIP.Sessions,
 		TSQAfter:    tsqAfter,

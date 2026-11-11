@@ -3,10 +3,8 @@ package contracttest
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
 )
 
 func TestRevokedConnectionCannotBeReauthorised(t *testing.T) {
@@ -133,28 +131,6 @@ func TestReauthSendsSyncAvailable(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("reauth brought new lines but sent no sync.available")
-	}
-}
-
-func TestFrozenClockSurvivesRestart(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	s := newStack(t)
-	if err := s.app.Save(); err != nil {
-		t.Fatal(err)
-	}
-	again, err := connect.New(s.cfg, connect.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p := again.Clock().State().Pace; p != 0 {
-		t.Fatalf("pace after restart %v", p)
-	}
-	before := again.Clock().Now()
-	time.Sleep(20 * time.Millisecond)
-	if !again.Clock().Now().Equal(before) {
-		t.Fatal("a frozen clock moved after restart")
 	}
 }
 

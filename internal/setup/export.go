@@ -17,9 +17,8 @@ import (
 var defaultSetup []byte
 
 const (
-	exportIndent     = 2
-	defaultStartHour = 8
-	defaultFile      = "default.yaml"
+	exportIndent = 2
+	defaultFile  = "default.yaml"
 )
 
 func Export(s Spec) ([]byte, error) {
@@ -43,6 +42,6 @@ func DefaultSpec(name string, today clock.Date) Spec {
 		panic(fmt.Errorf("decode embedded %s: %w", defaultFile, errors.Join(d.errs...)))
 	}
 	s.Metadata.Name = name
-	s.Spec.Start = time.Date(today.Y, today.M, today.D, defaultStartHour, 0, 0, 0, clock.Lagos).Format(time.RFC3339)
+	s.Spec.Start = today.Start().Format(time.RFC3339)
 	return s
 }

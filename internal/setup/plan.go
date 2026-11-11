@@ -17,6 +17,7 @@ import (
 var (
 	ErrSetupMismatch = errors.New("setup mismatch")
 	ErrBeingRemoved  = errors.New("being removed")
+	ErrFutureStart   = errors.New("start is in the future")
 )
 
 const (
@@ -72,6 +73,7 @@ func Build(desired Spec, st Status, dir []nibss.Institution, today clock.Date) P
 	c := pack.SimulatorCodes
 	p.nipCodes = codeRange{field: fieldNIPCode, first: c.NIP.First, last: c.NIP.Last}
 	p.nubanCodes = codeRange{field: fieldNUBANCode, first: c.NUBAN.First, last: c.NUBAN.Last}
+	p.checkStart()
 	var actions []Action
 	if a, ok := p.setupAction(); ok {
 		actions = append(actions, a)
@@ -90,6 +92,13 @@ func Build(desired Spec, st Status, dir []nibss.Institution, today clock.Date) P
 		return Plan{Setup: desired.Metadata.Name, Errors: p.errs}
 	}
 	return Plan{Setup: desired.Metadata.Name, Actions: actions}
+}
+
+func (p *planner) checkStart() {
+	start, err := time.Parse(time.RFC3339, p.desired.Spec.Start)
+	if err == nil && clock.DateOf(start).After(p.today) {
+		p.fail("start", ErrFutureStart, "start %s is after today, %s. Beerus runs on real time; use today or an earlier date.", p.desired.Spec.Start, p.today)
+	}
 }
 
 func newPlanner(desired Spec, st Status, dir []nibss.Institution, today clock.Date) *planner {

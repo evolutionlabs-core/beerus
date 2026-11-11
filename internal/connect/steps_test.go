@@ -62,7 +62,7 @@ func finalizerApp(t *testing.T, r setup.Resource) *App {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return &App{ctl: s, clock: clock.New(clock.State{}, func() time.Time { return time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC) }), log: slog.New(slog.DiscardHandler)}
+	return &App{ctl: s, clock: clock.New(func() time.Time { return time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC) }), log: slog.New(slog.DiscardHandler)}
 }
 
 func TestOneFinalizerPerStep(t *testing.T) {

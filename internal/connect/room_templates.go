@@ -32,15 +32,7 @@ const roomTemplates = `
 <header class="sticky top-0 z-10 flex h-14 items-center justify-between gap-4 border-b border-line bg-canvas/85 px-5 backdrop-blur-md lg:px-8">
 <div class="truncate text-[13.5px] text-muted">{{block "crumbs" .}}{{.Title}}{{end}}</div>
 <div class="flex items-center gap-2.5">
-<form method="post" action="/ui/clock" class="flex items-center gap-2.5 text-[12.5px]">
-<input type="hidden" name="back" value="{{.Back}}">
-<span class="hidden text-muted sm:inline">{{when .Now}} WAT</span>
-{{if isFrozen .Pace}}<span class="badge badge-warn">Clock paused</span>{{end}}
-<select name="by" class="h-7.5 rounded-full border border-line bg-raised px-2.5 text-[12.5px] text-ink" aria-label="Advance the clock by">
-<option value="1h">+1 hour</option><option value="1d">+1 day</option><option value="7d">+7 days</option><option value="30d">+30 days</option><option value="365d">+1 year</option>
-</select>
-<button type="submit" class="btn btn-secondary btn-sm">Advance</button>
-</form>
+<span class="hidden text-muted sm:inline text-[12.5px]">{{when .Now}} WAT</span>
 {{themeToggle}}
 </div>
 </header>

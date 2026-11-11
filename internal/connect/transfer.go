@@ -560,6 +560,21 @@ func (a *App) checkSession(sw *nibss.Store, x nibss.Session, now time.Time) erro
 	return a.fail(sw, from, x.ID, nip.Unavailable, now)
 }
 
+func (a *App) QuerySession(id string) (nibss.Session, error) {
+	x, err := a.Session(id)
+	if err != nil || x.Status != nibss.SessionPending {
+		return x, err
+	}
+	sw := a.nibssStore()
+	a.gate.RLock()
+	err = a.checkSession(sw, x, a.clock.Now())
+	a.gate.RUnlock()
+	if err != nil {
+		return nibss.Session{}, fmt.Errorf("query session %s: %w", id, err)
+	}
+	return a.Session(id)
+}
+
 func (a *App) Session(id string) (nibss.Session, error) {
 	sw := a.nibssStore()
 	if sw == nil {

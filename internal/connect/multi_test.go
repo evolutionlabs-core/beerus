@@ -49,7 +49,7 @@ func TestPausingBanksDoesNotHoldTheAppLock(t *testing.T) {
 
 func TestReplicaPullTakesLocksInOrder(t *testing.T) {
 	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(replica{WorldID: "wld_1", Now: time.Now(), Pace: 1, Phases: map[string]string{"bank-a": PhaseActive}})
+		_ = json.NewEncoder(w).Encode(replica{WorldID: "wld_1", Phases: map[string]string{"bank-a": PhaseActive}})
 	}))
 	defer core.Close()
 	cfg := testBankConfig()
@@ -57,7 +57,7 @@ func TestReplicaPullTakesLocksInOrder(t *testing.T) {
 	a := &App{
 		cfg: cfg, role: RoleBank, bankID: "bank-a", coreURL: core.URL, peers: &http.Client{}, st: newState(),
 		log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
-		clock:  clock.New(clock.State{Pace: 1}, func() time.Time { return now }),
+		clock:  clock.New(func() time.Time { return now }),
 		status: map[string]*BankStatus{"bank-a": {ID: "bank-a", Phase: PhaseProvisioning}},
 	}
 	a.lifeMu.Lock()

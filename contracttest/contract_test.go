@@ -190,7 +190,7 @@ func TestConnectAndSync(t *testing.T) {
 		hooks := s.sink.all()
 		seen := map[string]bool{}
 		for _, h := range hooks {
-			if err := verifyV1a(pub, h); err != nil {
+			if err := verifyV1a(pub, h, s.realNow()); err != nil {
 				t.Fatalf("webhook signature: %v", err)
 			}
 			var ev struct {

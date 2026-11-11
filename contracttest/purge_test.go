@@ -68,7 +68,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if res := s.ctl("POST", "/banks/abuja-digital/purge", nil); res["phase"] != setup.PhaseTerminating {
 		t.Fatalf("purge was not admitted as terminating: %v", res)
 	}
-	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦25,100.00). Run beerus clock advance to reach it, or add --settle-now.")
+	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦25,100.00). Wait for it, or run beerus nip settle-now.")
 	if got := databases(); len(got) != 2 {
 		t.Fatalf("the purge dropped databases while transfers were unsettled: %v", got)
 	}
@@ -284,9 +284,6 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		inner := r.stop
 		r.stop = func() { once.Do(inner) }
 		t.Cleanup(r.stop)
-		if err := r.app.Clock().SetPace(0); err != nil {
-			t.Fatal(err)
-		}
 		return r
 	}
 	r := start()

@@ -106,7 +106,7 @@ func (a *App) inflightWith(code, id string) (string, error) {
 	}
 	if transfers > 0 {
 		cutoff := a.schedule().next(a.clock.Now()).In(clock.Lagos).Format("15:04")
-		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Run beerus clock advance to reach it, or add --settle-now.", cutoff, plural(transfers, "transfer", "transfers"), naira(max(net, -net))), nil
+		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Wait for it, or run beerus nip settle-now.", cutoff, plural(transfers, "transfer", "transfers"), naira(max(net, -net))), nil
 	}
 	unposted, err := sw.Unposted(ctx)
 	if err != nil {

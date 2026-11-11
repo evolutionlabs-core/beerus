@@ -220,7 +220,7 @@ type State struct {
 	ConsentLedger  []ConsentRecord            `json:"consent_ledger"`
 	Access         []AccessEvent              `json:"access"`
 	WorldID        string                     `json:"world_id"`
-	Clock          clock.State                `json:"clock"`
+	LegacyClock    *legacyClock               `json:"clock,omitempty"`
 	Faults         []*Fault                   `json:"faults"`
 	LinkSessions   map[string]*LinkSession    `json:"link_sessions"`
 	WidgetSessions map[string]*WidgetSession  `json:"widget_sessions"`
@@ -295,6 +295,10 @@ func (s *State) fill() {
 			f.Gone = map[string]bool{}
 		}
 	}
+}
+
+type legacyClock struct {
+	AnchorBusiness time.Time `json:"anchor_business"`
 }
 
 func loadState(path string) (*State, error) {

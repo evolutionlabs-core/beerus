@@ -33,7 +33,6 @@ type scenarioStep struct {
 	Run        string            `yaml:"run"`
 	Connection string            `yaml:"connection"`
 	Transfer   *scenarioTransfer `yaml:"transfer"`
-	Advance    string            `yaml:"advance"`
 	Suspend    string            `yaml:"suspend"`
 	Resume     string            `yaml:"resume"`
 }
@@ -65,9 +64,6 @@ func (s scenarioStep) action() (string, int) {
 	if s.Transfer != nil {
 		names = append(names, "transfer")
 	}
-	if s.Advance != "" {
-		names = append(names, "advance")
-	}
 	if s.Suspend != "" {
 		names = append(names, "suspend")
 	}
@@ -98,9 +94,9 @@ func (a *App) validateScenarioFile(f *scenarioFile) error {
 		action, n := s.action()
 		switch {
 		case n == 0:
-			return bad("use one of run, transfer, advance, suspend or resume")
+			return bad("use one of run, transfer, suspend or resume")
 		case n > 1:
-			return bad("use only one of run, transfer, advance, suspend or resume")
+			return bad("use only one of run, transfer, suspend or resume")
 		}
 		if action != "run" && s.Connection != "" {
 			return bad("connection only goes with run")
@@ -120,10 +116,6 @@ func (a *App) validateScenarioFile(f *scenarioFile) error {
 			}
 			if _, err := parseNaira(t.Amount); err != nil {
 				return bad("%s", err.Error())
-			}
-		case "advance":
-			if _, err := parseDuration(s.Advance); err != nil {
-				return bad("advance must look like 24h or 3d")
 			}
 		case "suspend", "resume":
 			id := s.Suspend + s.Resume
@@ -169,11 +161,6 @@ func (a *App) runScenarioStep(s scenarioStep) (string, string, error) {
 		}
 		a.SyncAll()
 		return "transfer", fmt.Sprintf("%s %s, %s in charges", naira(res.Amount), res.Status, naira(res.Fee+res.VAT+res.StampDuty)), nil
-	case "advance":
-		if err := a.advanceClock(s.Advance, ""); err != nil {
-			return "advance " + s.Advance, "", err
-		}
-		return "advance " + s.Advance, "clock at " + ts(a.clock.Now()), nil
 	case "suspend":
 		if err := a.SetBankSuspended(s.Suspend, true); err != nil {
 			return "suspend " + s.Suspend, "", errors.New(bankMessage(err))

@@ -44,7 +44,7 @@ Usage:
   beerus partner list
   beerus partner rotate-key <id>
   beerus partner remove <id>
-  beerus clock [advance <24h|7d|365d> | pace <n>]
+  beerus clock
   beerus scenarios
   beerus scenario run <file.yaml>
   beerus scenario <name> --connection ID
@@ -332,20 +332,10 @@ func cmdControl(cmd string, args []string) error {
 	var out map[string]any
 	switch cmd {
 	case "clock":
-		switch {
-		case len(args) == 0:
-			out, err = c.do("GET", "/clock", nil)
-		case args[0] == "advance" && len(args) == 2:
-			out, err = c.do("POST", "/clock/advance", map[string]string{"by": args[1]})
-		case args[0] == "pace" && len(args) == 2:
-			var p float64
-			if _, e := fmt.Sscan(args[1], &p); e != nil {
-				return e
-			}
-			out, err = c.do("POST", "/clock/pace", map[string]float64{"pace": p})
-		default:
-			return errors.New("usage: beerus clock [advance <dur> | pace <n>]")
+		if len(args) != 0 {
+			return errors.New("usage: beerus clock")
 		}
+		out, err = c.do("GET", "/clock", nil)
 	case "scenarios":
 		out, err = c.do("GET", "/scenarios", nil)
 	case "scenario":

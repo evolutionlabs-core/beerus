@@ -24,9 +24,9 @@ kind: Setup
 metadata:
   name: story
 spec:
-  start: 2026-11-04T08:00:00+01:00
+  start: 2026-11-04T00:00:00+01:00
   nip:
-    sessions: 4
+    sessions: 1
     tsq_after: 2m
     tsq_attempts: 3
   banks:
@@ -187,12 +187,13 @@ func TestStory(t *testing.T) {
 	}
 	c := newCLIAt(t, dir)
 	const (
-		at8  = "Business time: Wed 4 Nov 2026 08:00 WAT\n"
-		at13 = "Business time: Wed 4 Nov 2026 13:00 WAT\n"
+		at       = `Business time: [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT\n`
+		hm       = `\d\d:\d\d`
+		settleAt = `adhoc:\S+`
 	)
 
 	out, errOut := startUp(t, c, spec)
-	if !regexp.MustCompile(`^Created `+quote(dir)+` from `+quote(spec)+`\.\n\nBeerus Connect \(stub\) is running\. Business time Wed, 04 Nov 2026 08:00:\d\d WAT, world wld_\w+\.\n\n[\s\S]*\nBanks are empty\. Create a customer with beerus customer create\.\n\nPress Ctrl\+C to stop\.\n$`).MatchString(out.String()) || strings.Contains(errOut.String(), "level=ERROR") {
+	if !regexp.MustCompile(`^Created `+quote(dir)+` from `+quote(spec)+`\.\n\nBeerus Connect \(stub\) is running\. Business time [A-Z][a-z]{2}, \d\d [A-Z][a-z]{2} \d{4} \d\d:\d\d:\d\d WAT, world wld_\w+\.\n\n[\s\S]*\nBanks are empty\. Create a customer with beerus customer create\.\n\nPress Ctrl\+C to stop\.\n$`).MatchString(out.String()) || strings.Contains(errOut.String(), "level=ERROR") {
 		t.Fatalf("up printed %q and logged %q", out.String(), errOut.String())
 	}
 	if got := c.ok("diff"); got != "No changes.\n" {
@@ -201,11 +202,13 @@ func TestStory(t *testing.T) {
 	if got := c.ok("get", "banks"); !regexp.MustCompile(`^ID +NAME +PHASE +READY +GEN +MESSAGE\nbank-a +Bank A +active +yes +1 *\nbank-b +Bank B +active +yes +1 *\nbank-c +Bank C +active +yes +1 *\n$`).MatchString(got) {
 		t.Errorf("get banks after up: %q", got)
 	}
-	clockAt := func(hour string) string {
-		return `^\{\n  "business_date": "2026-11-04",\n  "business_time": "2026-11-04T` + hour + `:00:\d\d\+01:00",\n  "pace": 0,\n  "world_id": "wld_\w+"\n\}\n$`
+	if got := c.ok("clock"); !regexp.MustCompile(`^\{\n  "business_date": "\d{4}-\d\d-\d\d",\n  "business_time": "\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?\+01:00",\n  "world_id": "wld_\w+"\n\}\n$`).MatchString(got) {
+		t.Errorf("clock: %q", got)
 	}
-	if got := c.ok("clock", "pace", "0"); !regexp.MustCompile(clockAt("08")).MatchString(got) {
-		t.Errorf("clock pace 0: %q", got)
+	for _, args := range [][]string{{"advance", "1h"}, {"pace", "0"}} {
+		if got := c.fails(append([]string{"clock"}, args...)...); got != "beerus: usage: beerus clock" {
+			t.Errorf("clock %s: %q", args[0], got)
+		}
 	}
 
 	t.Setenv("BEERUS_CONTRACT_DIR", dir)
@@ -223,55 +226,52 @@ func TestStory(t *testing.T) {
 	}
 	c.home = home
 	con, tty, cmd := startConsole(t, c, shell, []string{"INPUTRC=" + inputrc}, "use", "bank-a")
-	con.waitFor(t, 0, `Using Bank A\. Business time: Wed 4 Nov 2026 08:00 WAT\. Type exit to leave\.`)
+	con.waitFor(t, 0, `Using Bank A\. Business time: [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT\. Type exit to leave\.`)
 	con.waitFor(t, 0, `\(bank-a\) \$ `)
 	sh := &session{t: t, con: con, tty: tty}
 	sh.refuse("beerus customers --bank bank-z", "beerus: No such bank.")
 
-	ada := sh.expect(`beerus customer create --name "Adaeze Okafor" --phone 08031234567 --dob 1988-03-14`, `Created customer (cus_\w+), Adaeze Okafor, at bank-a\. BVN (\d+)\.\n`+quote(at8))
+	ada := sh.expect(`beerus customer create --name "Adaeze Okafor" --phone 08031234567 --dob 1988-03-14`, `Created customer (cus_\w+), Adaeze Okafor, at bank-a\. BVN (\d+)\.\n`+at)
 	adaA, bvn := ada[0], ada[1]
-	if got := sh.expect("beerus customers", `ID +NAME +PHONE +BVN +STATUS\n`+quote(adaA)+` +Adaeze Okafor +2348031234567 +`+bvn+` +active\n1 customer on this page\.\n`+quote(at8)); got == nil {
+	if got := sh.expect("beerus customers", `ID +NAME +PHONE +BVN +STATUS\n`+quote(adaA)+` +Adaeze Okafor +2348031234567 +`+bvn+` +active\n1 customer on this page\.\n`+at); got == nil {
 		t.Fatal("no customers")
 	}
-	nubA := sh.expect("beerus account open --customer "+adaA+" --type current", `Opened current account (\d{10}) for Adaeze Okafor \(`+adaA+`\) at bank-a\. Balance ₦0\.00\.\n`+quote(at8))[0]
-	sh.expect("beerus deposit "+nubA+" --amount 500000", `Deposited ₦500,000\.00 into account `+nubA+` at bank-a\. Balance ₦500,000\.00\.\n`+quote(at8))
+	nubA := sh.expect("beerus account open --customer "+adaA+" --type current", `Opened current account (\d{10}) for Adaeze Okafor \(`+adaA+`\) at bank-a\. Balance ₦0\.00\.\n`+at)[0]
+	sh.expect("beerus deposit "+nubA+" --amount 500000", `Deposited ₦500,000\.00 into account `+nubA+` at bank-a\. Balance ₦500,000\.00\.\n`+at)
 
-	sh.expect("beerus use bank-b", `Switched to Bank B\. Business time: Wed 4 Nov 2026 08:00 WAT\. Type exit to leave\.\n`)
+	sh.expect("beerus use bank-b", `Switched to Bank B\. Business time: [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT\. Type exit to leave\.\n`)
 	con.waitFor(t, 0, `\(bank-b\) \$ `)
-	adaB := sh.expect("echo beerus-test-adaeze | beerus customer create --name \"Adaeze Okafor\" --phone 08031234567 --dob 1988-03-14 --username adaeze --password-stdin", `Created customer (cus_\w+), Adaeze Okafor, at bank-b\. BVN `+bvn+`\.\nAdaeze Okafor can sign in to online banking as adaeze\.\n`+quote(at8))[0]
-	chidi := sh.expect(`beerus customer create --name "Chidi Okafor" --phone 08034567890 --dob 1995-05-30`, `Created customer (cus_\w+), Chidi Okafor, at bank-b\. BVN (\d+)\.\n`+quote(at8))[0]
-	nubAdaB := sh.expect("beerus account open --customer "+adaB+" --type savings", `Opened savings account (\d{10}) for Adaeze Okafor \(`+adaB+`\) at bank-b\. Balance ₦0\.00\.\n`+quote(at8))[0]
-	nubChidi := sh.expect("beerus account open --customer "+chidi+" --type current", `Opened current account (\d{10}) for Chidi Okafor \(`+chidi+`\) at bank-b\. Balance ₦0\.00\.\n`+quote(at8))[0]
+	adaB := sh.expect("echo beerus-test-adaeze | beerus customer create --name \"Adaeze Okafor\" --phone 08031234567 --dob 1988-03-14 --username adaeze --password-stdin", `Created customer (cus_\w+), Adaeze Okafor, at bank-b\. BVN `+bvn+`\.\nAdaeze Okafor can sign in to online banking as adaeze\.\n`+at)[0]
+	chidi := sh.expect(`beerus customer create --name "Chidi Okafor" --phone 08034567890 --dob 1995-05-30`, `Created customer (cus_\w+), Chidi Okafor, at bank-b\. BVN (\d+)\.\n`+at)[0]
+	nubAdaB := sh.expect("beerus account open --customer "+adaB+" --type savings", `Opened savings account (\d{10}) for Adaeze Okafor \(`+adaB+`\) at bank-b\. Balance ₦0\.00\.\n`+at)[0]
+	nubChidi := sh.expect("beerus account open --customer "+chidi+" --type current", `Opened current account (\d{10}) for Chidi Okafor \(`+chidi+`\) at bank-b\. Balance ₦0\.00\.\n`+at)[0]
 
-	sh.expect("beerus use bank-c", `Switched to Bank C\. Business time: Wed 4 Nov 2026 08:00 WAT\. Type exit to leave\.\n`)
-	tunde := sh.expect(`beerus customer create --name "Tunde Motors" --phone 08032345678 --dob 1979-07-02`, `Created customer (cus_\w+), Tunde Motors, at bank-c\. BVN (\d+)\.\n`+quote(at8))[0]
-	nubTunde := sh.expect("beerus account open --customer "+tunde+" --type current", `Opened current account (\d{10}) for Tunde Motors \(`+tunde+`\) at bank-c\. Balance ₦0\.00\.\n`+quote(at8))[0]
-	sh.expect("beerus deposit "+nubTunde+" --amount 3000", `Deposited ₦3,000\.00 into account `+nubTunde+` at bank-c\. Balance ₦3,000\.00\.\n`+quote(at8))
-	sh.expect("beerus use bank-a", `Switched to Bank A\. Business time: Wed 4 Nov 2026 08:00 WAT\. Type exit to leave\.\n`)
+	sh.expect("beerus use bank-c", `Switched to Bank C\. Business time: [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT\. Type exit to leave\.\n`)
+	tunde := sh.expect(`beerus customer create --name "Tunde Motors" --phone 08032345678 --dob 1979-07-02`, `Created customer (cus_\w+), Tunde Motors, at bank-c\. BVN (\d+)\.\n`+at)[0]
+	nubTunde := sh.expect("beerus account open --customer "+tunde+" --type current", `Opened current account (\d{10}) for Tunde Motors \(`+tunde+`\) at bank-c\. Balance ₦0\.00\.\n`+at)[0]
+	sh.expect("beerus deposit "+nubTunde+" --amount 3000", `Deposited ₦3,000\.00 into account `+nubTunde+` at bank-c\. Balance ₦3,000\.00\.\n`+at)
+	sh.expect("beerus use bank-a", `Switched to Bank A\. Business time: [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT\. Type exit to leave\.\n`)
 
 	sh.refuse("beerus transfer --from "+nubA+" --to 9999999999 --to-bank bank-b --amount 5", "beerus: That is not a valid account at Bank B, so nothing was debited.")
-	first := sh.expect("beerus transfer --from "+nubA+" --to "+nubChidi+" --to-bank bank-b --amount 5000 --narration rent", `Sending ₦5,000\.00 to Chidi Okafor at Bank B\.\nSession (\d+): success at 08:00 WAT\nTotal debit ₦5,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦494,989\.25\.\n`)[0]
+	first := sh.expect("beerus transfer --from "+nubA+" --to "+nubChidi+" --to-bank bank-b --amount 5000 --narration rent", `Sending ₦5,000\.00 to Chidi Okafor at Bank B\.\nSession (\d+): success at `+hm+` WAT\nTotal debit ₦5,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦494,989\.25\.\n`)[0]
 
-	sh.expect("beerus fault timeout --bank bank-b --outcome credited", `Fault flt_\w+ on bank-b: the next transfer times out \(outcome credited\)\.\n`+quote(at8))
-	if got := sh.expect("beerus fault list", `ID +BANK +WHAT\nflt_\w+ +bank-b +the next transfer times out \(outcome credited\)\n`+quote(at8)); got == nil {
+	sh.expect("beerus fault timeout --bank bank-b --outcome credited", `Fault flt_\w+ on bank-b: the next transfer times out \(outcome credited\)\.\n`+at)
+	if got := sh.expect("beerus fault list", `ID +BANK +WHAT\nflt_\w+ +bank-b +the next transfer times out \(outcome credited\)\n`+at); got == nil {
 		t.Fatal("no fault listed")
 	}
-	pending := sh.expect("beerus transfer --from "+nubA+" --to "+nubAdaB+" --to-bank bank-b --amount 1000", `Sending ₦1,000\.00 to Adaeze Okafor at Bank B\.\nSession (\d+): pending\. Beerus will check with NIBSS at 08:02 WAT\. Run beerus nip status (\d+)\.\nTotal debit ₦1,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦493,978\.50\.\n`)
+	pending := sh.expect("beerus transfer --from "+nubA+" --to "+nubAdaB+" --to-bank bank-b --amount 1000", `Sending ₦1,000\.00 to Adaeze Okafor at Bank B\.\nSession (\d+): pending\. Beerus will check with NIBSS at `+hm+` WAT\. Run beerus nip status (\d+)\.\nTotal debit ₦1,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦493,978\.50\.\n`)
 	if pending[0] != pending[1] {
 		t.Fatalf("the pending transfer names two sessions: %v", pending)
 	}
-	sh.expect("beerus fault list", `No faults\.\n`+quote(at8))
-	sh.expect("beerus nip status "+pending[0], `Session `+pending[0]+`: pending\. Beerus will check with NIBSS at 08:02 WAT\.\nAmount ₦1,000\.00 from `+nubA+` \(bank code 999001\) to `+nubAdaB+` \(bank code 999002\), started at 08:00 WAT\.\n`)
+	sh.expect("beerus fault list", `No faults\.\n`+at)
 	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 0\n\}\n`)
-
-	sh.expect("beerus clock advance 1h", clockAt("09"))
-	sh.expect("beerus nip status "+pending[0], `Session `+pending[0]+`: success at 09:00 WAT\nAmount ₦1,000\.00 from `+nubA+` \(bank code 999001\) to `+nubAdaB+` \(bank code 999002\), started at 08:00 WAT\.\n`)
-	sh.expect("beerus clock advance 4h", clockAt("13"))
+	sh.expect("beerus nip status "+pending[0], `Session `+pending[0]+`: success at `+hm+` WAT\nAmount ₦1,000\.00 from `+nubA+` \(bank code 999001\) to `+nubAdaB+` \(bank code 999002\), started at `+hm+` WAT\.\n`)
+	sh.expect("beerus nip settle-now", `Settled 1 session at `+hm+` WAT\.\n`)
 	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 1\n\}\n`)
-	sh.expect("beerus nip status "+first, `Session `+first+`: success at 08:00 WAT\nAmount ₦5,000\.00 from `+nubA+` \(bank code 999001\) to `+nubChidi+` \(bank code 999002\), started at 08:00 WAT\.\nSettled in settlement session 2026-11-04T12:00\.\n`)
-	sh.expect("beerus nip settle-now", `No sessions to settle at 13:00 WAT\.\n`)
+	sh.expect("beerus nip status "+first, `Session `+first+`: success at `+hm+` WAT\nAmount ₦5,000\.00 from `+nubA+` \(bank code 999001\) to `+nubChidi+` \(bank code 999002\), started at `+hm+` WAT\.\nSettled in settlement session `+settleAt+`\.\n`)
+	sh.expect("beerus nip settle-now", `No sessions to settle at `+hm+` WAT\.\n`)
 
-	sh.expect("beerus transfer --from "+nubA+" --to "+nubTunde+" --to-bank bank-c --amount 4000", `Sending ₦4,000\.00 to Tunde Motors at Bank C\.\nSession \d+: success at 13:00 WAT\nTotal debit ₦4,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦489,967\.75\.\n`)
+	sh.expect("beerus transfer --from "+nubA+" --to "+nubTunde+" --to-bank bank-c --amount 4000", `Sending ₦4,000\.00 to Tunde Motors at Bank C\.\nSession \d+: success at `+hm+` WAT\nTotal debit ₦4,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦489,967\.75\.\n`)
 	dropBank(t, dir, "bank-c")
 	out1, err1, code1 := c.run("apply", "--prune", "--money", "transfer", "--to", "bank-a", "--settle-now", "--wait", "60s")
 	wantPlanC := "Setup story\n\n  - bank bank-c      remove   DESTRUCTIVE\n        stop routing; settle 1 open transfer (net ₦4,000.00);\n        transfer ₦7,000.00 for 1 customer to Bank A (on_remove); settle the moves;\n        drop 1 database. Its ID, name and codes stay reserved.\n\nPlan: 1 to remove.\n"
@@ -282,21 +282,21 @@ func TestStory(t *testing.T) {
 		t.Errorf("get banks after removing bank-c: %q", got)
 	}
 	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 3\n\}\n`)
-	sh.expect("beerus accounts", `NUBAN +OWNER +CUSTOMER +TYPE +STATUS +BALANCE\n`+nubA+` +Adaeze Okafor +`+adaA+` +current +active +₦489,967\.75\n(\d{10}) +Tunde Motors +`+`cus_\w+`+` +current +active +₦7,000\.00\n2 accounts on this page\.\n`+quote(at13))
+	sh.expect("beerus accounts", `NUBAN +OWNER +CUSTOMER +TYPE +STATUS +BALANCE\n`+nubA+` +Adaeze Okafor +`+adaA+` +current +active +₦489,967\.75\n(\d{10}) +Tunde Motors +`+`cus_\w+`+` +current +active +₦7,000\.00\n2 accounts on this page\.\n`+at)
 	s.people["adaeze@bank-b"] = persona{ID: "adaeze", Bank: "bank-b", Name: "Adaeze Okafor", Username: "adaeze", Password: "beerus-test-adaeze", Customer: adaB, BVN: bvn, Accounts: []string{nubAdaB}}
 	conn := s.connect("adaeze", "bank-b", s.today().AddDays(-3))
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
 	snapshot := fmt.Sprint(c.json("snapshot", "take", "before-removal")["id"])
 
-	sh.expect("beerus transfer --from "+nubA+" --to "+nubChidi+" --to-bank bank-b --amount 2000", `Sending ₦2,000\.00 to Chidi Okafor at Bank B\.\nSession \d+: success at 13:00 WAT\nTotal debit ₦2,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦487,957\.00\.\n`)
-	sh.expect("beerus fault timeout --bank bank-b --outcome credited", `Fault flt_\w+ on bank-b: the next transfer times out \(outcome credited\)\.\n`+quote(at13))
-	late := sh.expect("beerus transfer --from "+nubA+" --to "+nubAdaB+" --to-bank bank-b --amount 300", `Sending ₦300\.00 to Adaeze Okafor at Bank B\.\nSession (\d+): pending\. Beerus will check with NIBSS at 13:02 WAT\. Run beerus nip status \d+\.\nTotal debit ₦310\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦487,646\.25\.\n`)[0]
+	sh.expect("beerus transfer --from "+nubA+" --to "+nubChidi+" --to-bank bank-b --amount 2000", `Sending ₦2,000\.00 to Chidi Okafor at Bank B\.\nSession \d+: success at `+hm+` WAT\nTotal debit ₦2,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦487,957\.00\.\n`)
+	sh.expect("beerus fault timeout --bank bank-b --outcome credited", `Fault flt_\w+ on bank-b: the next transfer times out \(outcome credited\)\.\n`+at)
+	late := sh.expect("beerus transfer --from "+nubA+" --to "+nubAdaB+" --to-bank bank-b --amount 300", `Sending ₦300\.00 to Adaeze Okafor at Bank B\.\nSession (\d+): pending\. Beerus will check with NIBSS at `+hm+` WAT\. Run beerus nip status \d+\.\nTotal debit ₦310\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦487,646\.25\.\n`)[0]
 
 	dropBank(t, dir, "bank-b")
 	if got := c.fails("apply"); got != "beerus: The plan removes bank-b. Nothing was changed. Run again with --prune to remove it." {
 		t.Errorf("removal without --prune: %q", got)
 	}
-	settlePending := "SettlementPending: Waiting for the 18:00 NIP session to settle 2 transfers (net ₦2,300.00). Run beerus clock advance to reach it, or add --settle-now."
+	settlePending := "SettlementPending: Waiting for the 00:00 NIP session to settle 2 transfers (net ₦2,300.00). Wait for it, or run beerus nip settle-now."
 	out2, err2, code2 := c.run("apply", "--prune", "--wait", "1s")
 	wantPlanB := "Setup story\n\n  - bank bank-b      remove   DESTRUCTIVE\n        stop routing; revoke 1 connection; settle 2 open transfers (net ₦2,300.00);\n        ₦8,300.00 for 2 customers needs a money decision: add on_remove or run with --money;\n        drop 1 database and 1 snapshot. Its ID, name and codes stay reserved.\n\nPlan: 1 to remove.\n"
 	if code2 != 3 || out2 != wantPlanB || !regexp.MustCompile(`^(bank bank-b: `+quote(settlePending)+`\n)?beerus: bank bank-b: `+quote(settlePending)+`$`).MatchString(err2) {
@@ -325,9 +325,8 @@ func TestStory(t *testing.T) {
 		t.Errorf("re-adding bank-b while it is terminating: %q", got)
 	}
 
-	sh.expect("beerus clock advance 1h", clockAt("14"))
-	sh.expect("beerus clock advance 5h", clockAt("19"))
-	sh.expect("beerus nip status "+late, `Session `+late+`: success at 14:00 WAT\nAmount ₦300\.00 from `+nubA+` \(bank code 999001\) to `+nubAdaB+` \(bank code 999002\), started at 13:00 WAT\.\nSettled in settlement session 2026-11-04T18:00\.\n`)
+	sh.expect("beerus nip status "+late, `Session `+late+`: success at `+hm+` WAT\nAmount ₦300\.00 from `+nubA+` \(bank code 999001\) to `+nubAdaB+` \(bank code 999002\), started at `+hm+` WAT\.\n`)
+	sh.expect("beerus nip settle-now", `Settled 1 session at `+hm+` WAT\.\n`)
 	moneyDecision := `bank bank-b: MoneyDecisionNeeded: Bank B holds ₦8,300.00 for 2 customers. Run beerus apply --prune --money transfer --to <bank>.`
 	waitFor(t, "the money decision to be asked", func() bool { return strings.Contains(c.ok("get", "banks"), moneyDecision) })
 	if out, errText, code := c.run("apply", "--prune", "--money", "transfer", "--to", "bank-a", "--wait", "0"); code != 0 || errText != "" || out != "Setup story\n\n  ~ bank bank-b      update   on_remove.money +transfer; on_remove.to +bank-a\n\nPlan: 1 to update.\n" {
@@ -336,13 +335,13 @@ func TestStory(t *testing.T) {
 	waitFor(t, "the moves to wait for settlement", func() bool {
 		return strings.Contains(c.ok("get", "banks"), "SettlementPending: Waiting for the 00:00 NIP session to settle 2 transfers (net ₦8,300.00).")
 	})
-	sh.expect("beerus nip settle-now", `Settled 1 session at 19:00 WAT\.\n`)
+	sh.expect("beerus nip settle-now", `Settled 1 session at `+hm+` WAT\.\n`)
 	waitFor(t, "bank-b to be removed", func() bool { return !strings.Contains(c.ok("get", "banks"), "bank-b") })
 	if got := c.ok("get", "banks"); !regexp.MustCompile(`^ID +NAME +PHASE +READY +GEN +MESSAGE\nbank-a +Bank A +active +yes +1 *\n$`).MatchString(got) {
 		t.Errorf("get banks at the end: %q", got)
 	}
 
-	sh.expect("beerus accounts", `NUBAN +OWNER +CUSTOMER +TYPE +STATUS +BALANCE\n`+nubA+` +Adaeze Okafor +`+adaA+` +current +active +₦487,646\.25\n(\d{10}) +Tunde Motors +`+`cus_\w+`+` +current +active +₦7,000\.00\n(\d{10}) +Adaeze Okafor +`+adaA+` +savings +active +₦1,300\.00\n(\d{10}) +Chidi Okafor +cus_\w+ +current +active +₦7,000\.00\n4 accounts on this page\.\n`+quote("Business time: Wed 4 Nov 2026 19:00 WAT\n"))
+	sh.expect("beerus accounts", `NUBAN +OWNER +CUSTOMER +TYPE +STATUS +BALANCE\n`+nubA+` +Adaeze Okafor +`+adaA+` +current +active +₦487,646\.25\n(\d{10}) +Tunde Motors +`+`cus_\w+`+` +current +active +₦7,000\.00\n(\d{10}) +Adaeze Okafor +`+adaA+` +savings +active +₦1,300\.00\n(\d{10}) +Chidi Okafor +cus_\w+ +current +active +₦7,000\.00\n4 accounts on this page\.\n`+at)
 	if out, code := sh.run("beerus statement " + nubA); code != 0 || !strings.Contains(out, "NIP TRF TO Chidi Okafor/Bank B/") {
 		t.Errorf("statement after the removal: exit %d, %q", code, out)
 	}

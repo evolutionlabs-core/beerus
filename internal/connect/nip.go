@@ -196,7 +196,15 @@ func (a *App) ctlSettleNow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlNIPSession(w http.ResponseWriter, r *http.Request) {
-	x, err := a.Session(r.PathValue("id"))
+	a.writeNIPSession(w, r, a.Session)
+}
+
+func (a *App) ctlNIPSessionStatus(w http.ResponseWriter, r *http.Request) {
+	a.writeNIPSession(w, r, a.QuerySession)
+}
+
+func (a *App) writeNIPSession(w http.ResponseWriter, r *http.Request, get func(string) (nibss.Session, error)) {
+	x, err := get(r.PathValue("id"))
 	switch {
 	case errors.Is(err, nibss.ErrNoRecord):
 		writeError(w, r, http.StatusNotFound, "not_found", "No NIP session has that ID.")

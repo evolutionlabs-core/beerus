@@ -73,7 +73,6 @@ func (a *App) roomHandler() http.Handler {
 	mux.HandleFunc("GET /ui/accounts/{key}/lines/{line}", a.roomLine)
 	mux.HandleFunc("GET /ui/transfer", a.roomTransferForm)
 	mux.HandleFunc("POST /ui/transfer", a.roomTransfer)
-	mux.HandleFunc("POST /ui/clock", a.roomClock)
 	mux.HandleFunc("GET /ui/connections", a.roomConnections)
 	mux.HandleFunc("POST /ui/connections/{id}/revoke", a.roomRevoke)
 	mux.HandleFunc("GET /ui/webhooks", a.roomWebhooks)
@@ -84,10 +83,7 @@ func (a *App) roomHandler() http.Handler {
 type roomPage map[string]any
 
 func (a *App) roomRender(w http.ResponseWriter, r *http.Request, name string, status int, nav string, data roomPage) {
-	st := a.clock.State()
-	data["Back"] = r.URL.RequestURI()
 	data["Now"] = a.clock.Now()
-	data["Pace"] = st.Pace
 	data["Nav"] = nav
 	data["Banks"] = a.openInstitutions()
 	setPageHeaders(w)
@@ -483,32 +479,6 @@ func sentence(msg string) string {
 	return strings.ToUpper(msg[:1]) + strings.TrimSuffix(msg[1:], ".") + "."
 }
 
-func (a *App) roomClock(w http.ResponseWriter, r *http.Request) {
-	_ = r.ParseForm()
-	if by := r.PostForm.Get("by"); by != "" {
-		if d, err := parseDuration(by); err == nil && d > 0 {
-			a.mu.Lock()
-			_, _ = a.clock.Advance(d)
-			a.dirty()
-			a.mu.Unlock()
-			a.Step()
-		}
-	}
-	if p := r.PostForm.Get("pace"); p != "" {
-		if v, err := strconv.ParseFloat(p, 64); err == nil {
-			_ = a.clock.SetPace(v)
-			a.mu.Lock()
-			a.dirty()
-			a.mu.Unlock()
-		}
-	}
-	back := r.PostForm.Get("back")
-	if !strings.HasPrefix(back, "/ui") {
-		back = "/ui"
-	}
-	http.Redirect(w, r, back, http.StatusSeeOther)
-}
-
 func (a *App) roomConnections(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -567,7 +537,6 @@ var roomPages = template.Must(template.New("").Funcs(uiFuncs).Funcs(template.Fun
 		}
 		return "text-ink"
 	},
-	"isFrozen":   func(p float64) bool { return p == 0 },
 	"list":       func(v ...any) []any { return v },
 	"trimScheme": func(u string) string { return strings.TrimPrefix(u, "http://") },
 }).Parse(roomTemplates))

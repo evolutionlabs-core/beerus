@@ -413,11 +413,8 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 		t.Fatalf("purge at the prompt with --json: %+v", closeJSON)
 	}
 
-	if _, err := cl.send("POST", "/clock/advance", map[string]string{"by": "365d"}); err != nil {
-		t.Fatal(err)
-	}
 	soon := mustStatus(t, dir).Applied
-	soon.Spec.Holidays.Add = []string{time.Now().AddDate(0, 0, 30).Format("2006-01-02")}
+	soon.Spec.Holidays.Add = []string{time.Now().AddDate(0, 0, -30).Format("2006-01-02")}
 	holiday, err := setup.Export(soon)
 	if err != nil {
 		t.Fatal(err)
@@ -428,7 +425,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	}
 	live := d(cmdDiff, "", false, "-f", holidayFile)
 	if live.code != 1 || !strings.Contains(live.err, "holidays") {
-		t.Fatalf("a holiday in the past of the business clock, live: %+v", live)
+		t.Fatalf("a holiday in the past, live: %+v", live)
 	}
 	stop()
 	if off := d(cmdDiff, "", false, "-f", holidayFile); off.code != live.code || off.err != live.err {

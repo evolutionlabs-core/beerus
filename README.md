@@ -17,6 +17,10 @@ Beerus is a full simulation of the Nigerian banking system that runs on your own
 
 Each institution is a separate service with its own database. They communicate only over mTLS with signed, idempotent messages, as they would in production.
 
+## Time
+
+Business time is real Lagos time. Nobody can move the clock of NIBSS or the CBN, so Beerus cannot either. Settlement and status queries run when real time reaches them, or when you run `beerus nip settle-now` or `beerus nip status <session_id>`.
+
 ## Standards
 
 Open banking follows the CBN Operational Guidelines for Open Banking (March 2023): FAPI 2.0, mTLS, certificate-bound tokens, time-bound consent and a central registry. Interbank messages follow the structure of ISO 20022. These controls are enforced in every environment, including local development.

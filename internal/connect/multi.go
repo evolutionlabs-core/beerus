@@ -47,8 +47,6 @@ func remotePeers() bool {
 
 type replica struct {
 	WorldID   string            `json:"world_id"`
-	Now       time.Time         `json:"business_now"`
-	Pace      float64           `json:"pace"`
 	Banks     []*config.Bank    `json:"banks"`
 	Phases    map[string]string `json:"phases"`
 	Directory []nip.Participant `json:"directory"`
@@ -65,9 +63,9 @@ func (a *App) ctlReplica(w http.ResponseWriter, r *http.Request) {
 		c := *b
 		rep.Banks = append(rep.Banks, &c)
 	}
-	rep.WorldID, rep.Now, rep.Pace = a.st.WorldID, a.clock.Now(), a.clock.State().Pace
+	rep.WorldID = a.st.WorldID
 	rep.Directory = slices.Clone(a.members)
-	rep.Faults = a.faultsLocked(rep.Now)
+	rep.Faults = a.faultsLocked(a.clock.Now())
 	a.mu.Unlock()
 	for _, id := range ids {
 		rep.Phases[id] = a.bankPhase(id)
@@ -186,11 +184,7 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 		a.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
 	a.st = newState()
-	now := time.Now()
-	if o.Real != nil {
-		now = o.Real()
-	}
-	a.clock = clock.New(clock.State{AnchorBusiness: now, AnchorReal: now}, o.Real)
+	a.clock = clock.New(o.Real)
 	if a.ctl, err = readStore(cfg.Dir); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -271,8 +265,6 @@ func (a *App) fetchReplica() error {
 	}
 	a.lifeMu.Unlock()
 	a.mu.Lock()
-	a.clock.Restore(clock.State{AnchorBusiness: rep.Now})
-	_ = a.clock.SetPace(rep.Pace)
 	a.peerBanks = rep.Banks
 	a.members = rep.Directory
 	a.st.Faults = nil
