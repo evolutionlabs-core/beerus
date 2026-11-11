@@ -980,9 +980,18 @@ func (s *Stack) publicKey() ed25519.PublicKey {
 }
 
 func (s *Stack) events() []map[string]any {
-	out := s.ctl("GET", "/webhooks/deliveries?limit=100000", nil)
+	data := []any{}
+	path := "/webhooks/deliveries?limit=500"
+	for {
+		out := s.ctl("GET", path, nil)
+		data = append(data, out["data"].([]any)...)
+		next, _ := out["next_cursor"].(string)
+		if next == "" {
+			break
+		}
+		path = "/webhooks/deliveries?limit=500&cursor=" + next
+	}
 	evs := []map[string]any{}
-	data := out["data"].([]any)
 	for i := len(data) - 1; i >= 0; i-- {
 		m := data[i].(map[string]any)
 		body := map[string]any{}

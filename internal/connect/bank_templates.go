@@ -192,6 +192,9 @@ const bankTemplates = `
 <section class="mt-8 rounded-2xl border border-line bg-panel">
 <div class="border-b border-line px-5 py-3.5"><h2 class="text-[15px]">Access history</h2></div>
 {{if .History}}<ul>{{range .History}}<li class="flex items-center justify-between gap-4 border-b border-line px-5 py-3 text-[13.5px] last:border-b-0"><span>{{.Partner}} read {{.Account}}</span><span class="text-muted">{{when .At}}</span></li>{{end}}</ul>{{else}}<p class="px-5 py-8 text-center text-muted">No access yet.</p>{{end}}
+{{if or .Older .Newer}}<div class="flex items-center justify-between border-t border-line px-5 py-3 text-[13px]">
+{{if .Newer}}<a href="?page={{add .Page -1}}" class="btn btn-secondary btn-sm">Newer</a>{{else}}<span></span>{{end}}<span class="text-muted">Page {{.Page}}</span>{{if .Older}}<a href="?page={{add .Page 1}}" class="btn btn-secondary btn-sm">Older</a>{{else}}<span></span>{{end}}
+</div>{{end}}
 </section>
 {{template "bank_foot" .}}{{end}}
 
@@ -212,7 +215,7 @@ const bankTemplates = `
 <dt class="text-muted">Acting for</dt><dd>{{.PartnerLegal}} ({{.Partner}})</dd>
 <dt class="text-muted">Access</dt><dd>{{.Shared}}. Read only.</dd>
 <dt class="text-muted">History from</dt><dd>{{.Start}}{{if .Capped}} <span class="text-muted">· {{$.Bank.Name}} shares history from {{.Effective}}</span>{{end}}</dd>
-<dt class="text-muted">Duration</dt><dd>{{.Months}} months, until {{.Until}}</dd>
+<dt class="text-muted">Duration</dt><dd>{{count .Months "month" "months"}}, until {{.Until}}</dd>
 <dt class="text-muted">Frequency</dt><dd>Several times a day, and when {{.Partner}} asks</dd>
 </dl>
 </section>

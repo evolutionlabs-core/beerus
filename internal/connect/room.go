@@ -93,10 +93,20 @@ func (a *App) roomRender(w http.ResponseWriter, r *http.Request, name string, st
 	}
 }
 
+func parseForm(w http.ResponseWriter, r *http.Request) bool {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "The form could not be read.", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 func (a *App) roomLogin(w http.ResponseWriter, r *http.Request) {
 	tok := r.URL.Query().Get("token")
 	if r.Method == http.MethodPost {
-		_ = r.ParseForm()
+		if !parseForm(w, r) {
+			return
+		}
 		tok = strings.TrimSpace(r.PostForm.Get("token"))
 	}
 	if tok != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(a.ctlToken)) == 1 {
@@ -504,23 +514,62 @@ func (a *App) roomConnections(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) roomRevoke(w http.ResponseWriter, r *http.Request) {
-	_ = a.RevokeAtBank(r.PathValue("id"))
+	if err := a.RevokeAtBank(r.PathValue("id")); err != nil {
+		if errors.Is(err, errNotFound) {
+			a.roomNotFound(w, r)
+			return
+		}
+		a.log.Error("revoke consent", "connection", r.PathValue("id"), "err", err)
+		http.Error(w, "The bank did not revoke the consent. Try again.", http.StatusBadGateway)
+		return
+	}
 	a.poke()
 	http.Redirect(w, r, "/ui/connections", http.StatusSeeOther)
+}
+
+func pagesOf(rows, size int) int {
+	return max((rows+size-1)/size, 1)
+}
+
+func pageParam(w http.ResponseWriter, r *http.Request, what string, last int) (int, bool) {
+	raw := r.URL.Query().Get("page")
+	if raw == "" {
+		return 1, true
+	}
+	page, err := strconv.Atoi(raw)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		http.Error(w, fmt.Sprintf("The page %q must be a whole number.", raw), http.StatusUnprocessableEntity)
+		return 0, false
+	}
+	page = max(page, 1)
+	if page > last {
+		http.Error(w, fmt.Sprintf("The page %s is too high. The %s allows pages 1 to %d.", raw, what, last), http.StatusUnprocessableEntity)
+		return 0, false
+	}
+	return page, true
 }
 
 func (a *App) roomWebhooks(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	page, ok := pageParam(w, r, "webhook list", pagesOf(len(a.st.Deliveries), pageSize))
+	if !ok {
+		return
+	}
+	end := max(len(a.st.Deliveries)-(page-1)*pageSize, 0)
+	start := max(end-pageSize, 0)
 	rows := []*Delivery{}
-	for i := len(a.st.Deliveries) - 1; i >= 0 && len(rows) < 100; i-- {
+	for i := end - 1; i >= start; i-- {
 		rows = append(rows, a.st.Deliveries[i])
 	}
-	a.roomRender(w, r, "webhooks", http.StatusOK, "webhooks", roomPage{"Title": "Webhooks", "Rows": rows})
+	a.roomRender(w, r, "webhooks", http.StatusOK, "webhooks", roomPage{"Title": "Webhooks", "Rows": rows, "Page": page, "Older": start > 0, "Newer": page > 1})
 }
 
 func (a *App) roomReplay(w http.ResponseWriter, r *http.Request) {
-	_ = a.Replay(r.PathValue("id"))
+	if err := a.Replay(r.PathValue("id")); err != nil {
+		a.roomNotFound(w, r)
+		return
+	}
 	http.Redirect(w, r, "/ui/webhooks", http.StatusSeeOther)
 }
 
@@ -649,7 +698,9 @@ type bankFilter struct {
 
 func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_ = r.ParseForm()
+	if !parseForm(w, r) {
+		return
+	}
 	f := r.PostForm
 	status := http.StatusOK
 	msg := ""
@@ -708,7 +759,9 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) roomPurgeBank(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	_ = r.ParseForm()
+	if !parseForm(w, r) {
+		return
+	}
 	status := http.StatusOK
 	msg := ""
 	if r.Method == http.MethodPost {

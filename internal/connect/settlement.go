@@ -113,7 +113,7 @@ func (r *rtgs) keepSchedule() error {
 		return err
 	}
 	if kept != r.cfg.Sessions() {
-		return fmt.Errorf("%w: the CBN has settled with %d sessions a day, so nip_sessions must stay %d", errSessions, kept, kept)
+		return fmt.Errorf("%w: the CBN has settled with %s a day, so nip_sessions must stay %d", errSessions, plural(kept, "session", "sessions"), kept)
 	}
 	return nil
 }

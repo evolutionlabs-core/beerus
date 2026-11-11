@@ -90,12 +90,10 @@ const (
 	peerTimeout    = 30 * time.Second
 	replicaTimeout = 5 * time.Second
 	replicaRetry   = time.Second
-	replicaMaxAge  = 2 * time.Millisecond
-)
-
-var (
-	resumeWait = time.Second
-	leaseRetry = 10 * time.Second
+	replicaFresh   = 2 * time.Millisecond
+	probeTimeout   = 5 * time.Second
+	defaultResume  = time.Second
+	leaseRetry     = 10 * time.Second
 )
 
 func (a *App) coreDo(method, path string, in, out any) (int, error) {
@@ -169,16 +167,18 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 		return nil, fmt.Errorf("control token: %w", err)
 	}
 	a := &App{
-		cfg:      cfg,
-		ctlToken: token,
-		log:      o.Logger,
-		limiters: map[string]*rate.Limiter{},
-		peers:    &http.Client{},
-		wake:     make(chan struct{}, 1),
-		sending:  make(chan struct{}, 4),
-		role:     RoleBank,
-		bankID:   b.ID,
-		coreURL:  o.CoreURL,
+		cfg:        cfg,
+		ctlToken:   token,
+		log:        o.Logger,
+		limiters:   map[string]*rate.Limiter{},
+		peers:      &http.Client{Timeout: peerTimeout},
+		probeHTTP:  &http.Client{Timeout: probeTimeout},
+		resumeWait: defaultResume,
+		wake:       make(chan struct{}, 1),
+		sending:    make(chan struct{}, 4),
+		role:       RoleBank,
+		bankID:     b.ID,
+		coreURL:    o.CoreURL,
 	}
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -209,20 +209,30 @@ func (a *App) freshen() {
 		return
 	}
 	a.pullMu.Lock()
-	stale := time.Since(a.pulledAt) > replicaMaxAge
+	stale := a.clock.Real().Sub(a.pulledAt) > replicaFresh
 	a.pullMu.Unlock()
-	if stale {
-		_ = a.pullReplica()
+	if !stale {
+		return
+	}
+	err := a.pullReplica()
+	a.pullMu.Lock()
+	defer a.pullMu.Unlock()
+	switch {
+	case err == nil:
+		a.pullWarned = ""
+	case a.pullWarned != err.Error():
+		a.pullWarned = err.Error()
+		a.log.Warn("replica is stale; serving the last copy", "bank", a.bankID, "err", err)
 	}
 }
 
 func (a *App) pullReplica() error {
 	a.pullMu.Lock()
-	if time.Since(a.pulledAt) < replicaMaxAge && a.synced.Load() {
+	if a.clock.Real().Sub(a.pulledAt) < replicaFresh && a.synced.Load() {
 		a.pullMu.Unlock()
 		return nil
 	}
-	if a.pullErr != nil && time.Since(a.pullFailed) < replicaRetry {
+	if a.pullErr != nil && a.clock.Real().Sub(a.pullFailed) < replicaRetry {
 		err := a.pullErr
 		a.pullMu.Unlock()
 		return err
@@ -239,10 +249,10 @@ func (a *App) pullReplica() error {
 	a.pullMu.Lock()
 	a.pulling = nil
 	if flight.err != nil {
-		a.pullErr, a.pullFailed = flight.err, time.Now()
+		a.pullErr, a.pullFailed = flight.err, a.clock.Real()
 	} else {
 		a.pullErr = nil
-		a.pulledAt = time.Now()
+		a.pulledAt = a.clock.Real()
 	}
 	a.pullMu.Unlock()
 	close(flight.done)
@@ -505,7 +515,7 @@ func (a *App) resumeBanks(banks []*config.Bank) error {
 		var err error
 		for attempt := 0; attempt < resumeAttempts; attempt++ {
 			if attempt > 0 {
-				time.Sleep(resumeWait)
+				time.Sleep(a.resumeWait)
 			}
 			if _, err = a.peerDo(b.URL(), http.MethodPost, "/internal/resume", nil, nil); err == nil {
 				break

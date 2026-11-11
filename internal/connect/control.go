@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -258,19 +259,43 @@ func (a *App) ctlConnections(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
+const (
+	deliveryPageDefault = 50
+	deliveryPageMax     = 500
+)
+
 func (a *App) ctlDeliveries(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	limit := 50
-	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
+	q := r.URL.Query()
+	limit := deliveryPageDefault
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > deliveryPageMax {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("limit must be a number from 1 to %d.", deliveryPageMax))
+			return
+		}
 		limit = n
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	from := len(a.st.Deliveries) - 1
+	if cursor := q.Get("cursor"); cursor != "" {
+		from = slices.IndexFunc(a.st.Deliveries, func(d *Delivery) bool { return d.ID == cursor }) - 1
+		if from < -1 {
+			writeError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")
+			return
+		}
+	}
 	out := []map[string]any{}
-	for i := len(a.st.Deliveries) - 1; i >= 0 && len(out) < limit; i-- {
+	next := ""
+	for i := from; i >= 0; i-- {
 		d := a.st.Deliveries[i]
+		if len(out) == limit {
+			next = out[len(out)-1]["id"].(string)
+			break
+		}
 		out = append(out, map[string]any{"id": d.ID, "type": d.Type, "status": d.Status, "attempts": d.Attempts, "last_status": d.LastStatus, "last_error": d.LastError, "body": d.Body})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": out})
+	writeJSON(w, http.StatusOK, listPage(out, next))
 }
 
 func (a *App) SyncAll() {
@@ -583,7 +608,10 @@ func (a *App) ctlTakeSnapshot(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if r.ContentLength != 0 {
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Send a JSON object with an optional name.")
+			return
+		}
 	}
 	meta, err := a.TakeSnapshot(body.Name)
 	if err != nil {

@@ -595,18 +595,28 @@ type accessRow struct {
 	At               time.Time
 }
 
+const (
+	historyPageSize = 25
+	maxHistoryPages = 1000
+)
+
 func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 	s := a.bankUser(w, r)
 	if s == nil {
 		return
 	}
+	page, ok := pageParam(w, r, "access history", maxHistoryPages)
+	if !ok {
+		return
+	}
+	need := page*historyPageSize + 1
 	ctx := r.Context()
 	consents, err := a.ob.Consents(ctx, s.Customer)
 	if err != nil {
 		a.bankFail(w, r, err)
 		return
 	}
-	access, err := a.ob.AccessHistory(ctx, s.Customer, 25)
+	access, err := a.ob.AccessHistory(ctx, s.Customer, need)
 	if err != nil {
 		a.bankFail(w, r, err)
 		return
@@ -659,10 +669,19 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 		history = append(history, accessRow{Partner: names[e.ConsentID], Account: byNUBAN[e.Account], At: e.At})
 	}
 	sort.SliceStable(history, func(i, j int) bool { return history[i].At.After(history[j].At) })
+	if len(history) < need {
+		if _, ok := pageParam(w, r, "access history", pagesOf(len(history), historyPageSize)); !ok {
+			return
+		}
+	}
+	start := min((page-1)*historyPageSize, len(history))
+	end := min(page*historyPageSize, len(history))
+	older := len(history) > end
+	history = history[start:end]
 	a.mu.Lock()
 	via := a.cfg.Connect.BrandName
 	a.mu.Unlock()
-	a.bankRender(w, "bank_apps", http.StatusOK, s, roomPage{"Title": "Connected apps", "Nav": "apps", "Apps": rows, "History": history, "Revoked": r.URL.Query().Get("revoked") == "1", "Via": via})
+	a.bankRender(w, "bank_apps", http.StatusOK, s, roomPage{"Title": "Connected apps", "Nav": "apps", "Apps": rows, "History": history, "Page": page, "Older": older, "Newer": page > 1, "Revoked": r.URL.Query().Get("revoked") == "1", "Via": via})
 }
 
 func (a *bankSite) obRevoke(w http.ResponseWriter, r *http.Request) {

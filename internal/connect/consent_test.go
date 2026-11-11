@@ -1,9 +1,11 @@
 package connect
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -139,5 +141,22 @@ func TestConsentLedgerIgnoresRepeatedSourceEvents(t *testing.T) {
 	}
 	if got[2].Status != string(openbanking.Authorised) || got[1].Status != string(openbanking.Revoked) || got[2].SourceSeq != 1 || got[1].SourceSeq != 2 {
 		t.Fatalf("ledger order %+v", got)
+	}
+}
+
+func TestBankAnswerOverTheLimitFailsClearly(t *testing.T) {
+	big := bytes.Repeat([]byte(" "), bankBodyLimit+1)
+	a := &App{
+		cfg: &config.Config{Banks: []*config.Bank{{ID: "bank-a", Port: 7001, APIPort: 7011}}},
+		obHTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(big)), Header: http.Header{}}, nil
+		})},
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out map[string]any
+	err := a.bankDo(a.cfg.Bank("bank-a"), http.MethodGet, "/discover", nil, "", &out)
+	if err == nil || !strings.Contains(err.Error(), "larger than the 16777216 byte limit") {
+		t.Fatalf("an oversized bank answer: %v", err)
 	}
 }

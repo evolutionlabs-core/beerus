@@ -150,7 +150,7 @@ func (a *App) postgresRoom(ctx context.Context) error {
 		return err
 	}
 	if used+connectionsPerBank+5 > max {
-		return invalid("Postgres has %d of %d connections in use; another bank needs up to %d", used, max, connectionsPerBank)
+		return invalid("Postgres has %d of %s in use; another bank needs up to %s", used, plural(max, "connection", "connections"), plural(connectionsPerBank, "connection", "connections"))
 	}
 	return nil
 }

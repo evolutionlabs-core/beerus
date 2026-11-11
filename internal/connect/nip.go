@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
@@ -313,10 +312,8 @@ func (a *App) bankTransfer(r *http.Request, bankID string, body transferBody, ke
 	}
 	scope := "control POST /banks/" + bankID + "/transfers key " + key
 	hash := body.hash(bankID)
-	lockAny, _ := a.idemLock.LoadOrStore(scope, &sync.Mutex{})
-	lock := lockAny.(*sync.Mutex)
-	lock.Lock()
-	defer lock.Unlock()
+	entry := a.idemAcquire(scope)
+	defer a.idemRelease(scope, entry)
 	a.mu.Lock()
 	rec := a.idemGetLocked(scope)
 	a.mu.Unlock()

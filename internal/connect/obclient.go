@@ -28,6 +28,12 @@ const (
 	refreshMargin  = time.Minute
 	refreshAhead   = 2 * time.Minute
 	bankCallBudget = 20 * time.Second
+
+	bankDialTimeout      = 5 * time.Second
+	bankIdleTimeout      = 90 * time.Second
+	bankIdleConnsPerHost = 4
+	bankBodyLimit        = 16 << 20
+	bankRetryWait        = 100 * time.Millisecond
 )
 
 type bankToken struct {
@@ -92,9 +98,11 @@ func (a *App) bankClient() (*http.Client, error) {
 			return &pair, err
 		},
 	}
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	dialer := &net.Dialer{Timeout: bankDialTimeout}
 	var rt http.RoundTripper = &http.Transport{
-		TLSClientConfig: tc,
+		TLSClientConfig:     tc,
+		IdleConnTimeout:     bankIdleTimeout,
+		MaxIdleConnsPerHost: bankIdleConnsPerHost,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
 			if err == nil && !multiProcess() && strings.HasSuffix(host, ".localhost") {
@@ -151,13 +159,20 @@ func (a *App) bankDo(b *config.Bank, method, path string, form url.Values, token
 	a.mu.Unlock()
 	resp, err := cl.Do(req)
 	var raw []byte
+	var readErr error
 	if err == nil {
-		raw, _ = io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		raw, readErr = io.ReadAll(io.LimitReader(resp.Body, bankBodyLimit+1))
 		resp.Body.Close()
 	}
 	a.mu.Lock()
 	if err != nil {
 		return &bankDown{err}
+	}
+	if readErr != nil {
+		return fmt.Errorf("read bank response: %w", readErr)
+	}
+	if len(raw) > bankBodyLimit {
+		return fmt.Errorf("bank response is larger than the %d byte limit", bankBodyLimit)
 	}
 	if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusBadGateway {
 		return &bankDown{fmt.Errorf("HTTP %d", resp.StatusCode)}
@@ -272,7 +287,7 @@ func (a *App) refreshToken(vid string, b *config.Bank) error {
 			break
 		}
 		a.mu.Unlock()
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(bankRetryWait)
 		a.mu.Lock()
 	}
 	cur := a.st.Vault[vid]

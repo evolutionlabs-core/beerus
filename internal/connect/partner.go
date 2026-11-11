@@ -468,7 +468,11 @@ func (a *App) reauth(w http.ResponseWriter, r *http.Request) {
 		RedirectURI string `json:"redirect_uri"`
 		State       string `json:"state"`
 	}
-	raw, _ := io.ReadAll(r.Body)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body could not be read.")
+		return
+	}
 	if len(raw) > 0 {
 		r.Body = io.NopCloser(bytes.NewReader(raw))
 		if err := decodeBody(r, &body); err != nil {
