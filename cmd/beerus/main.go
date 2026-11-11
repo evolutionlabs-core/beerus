@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -25,7 +26,7 @@ var version = "0.1.0"
 
 const defaultSetupName = "beerus"
 
-const usage = `Beerus simulates a Nigerian banking ecosystem on your machine.
+const usage = `Beerus is a copy of Nigeria's banking infrastructure: banks, NIBSS, the CBN and open banking, all in one binary.
 
 Usage:
   beerus init [--dir .beerus] [--partner-port 7443] [--widget-port 7444] [--control-port 7480] [--health-port 7490]
@@ -36,7 +37,7 @@ Usage:
   beerus describe bank|partner <id> [--json]
   beerus export [-o file] [--json]
   beerus verify [--json]
-  beerus run --participant cbn|sim|bank-a|bank-b [--dir .beerus] [--bind 0.0.0.0] [--core URL]
+  beerus run --participant cbn|core|<bank-id> [--dir .beerus] [--bind 0.0.0.0] [--core URL]
   beerus compose [--dir .beerus]
   beerus health URL [--token-file FILE]
   beerus info [--dir .beerus]
@@ -55,7 +56,7 @@ Usage:
   beerus accounts [--bank ID] [--customer ID] [--limit N] [--cursor C]
   beerus deposit|withdraw <nuban> [--bank ID] --amount NAIRA
   beerus statement <nuban> [--bank ID] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit N] [--cursor C]
-  beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT]
+  beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT] [--dry-run]
   beerus nip status <session_id> | settle-now | name-enquiry <bank_code> <nuban> | participants | positions | settlement
   beerus fault down [--bank ID] [--for 1h] | timeout [--bank ID] --outcome credited|failed|unknown [--count N] | list | clear [--bank ID]
   beerus connections
@@ -74,8 +75,9 @@ Usage:
   beerus trust [--dir .beerus]
   beerus untrust [--dir .beerus]
   beerus version
+  beerus help [command]
 
-The state directory defaults to .beerus, or $BEERUS_DIR when set.
+Run beerus <command> --help for one command. The state directory defaults to .beerus, or $BEERUS_DIR when set.
 Banking commands use the bank chosen by beerus use when --bank is left out, and take --json to print the API response.
 `
 
@@ -85,6 +87,20 @@ func main() {
 		os.Exit(2)
 	}
 	cmd, args := os.Args[1], os.Args[2:]
+	if cmd == "help" || cmd == "-h" || cmd == "--help" {
+		if len(args) == 0 {
+			fmt.Print(usage)
+			return
+		}
+		if args[0] == "-h" || args[0] == "--help" {
+			fmt.Print(usage)
+			return
+		}
+		os.Exit(printCommandHelp(args[0]))
+	}
+	if slices.ContainsFunc(args, func(a string) bool { return a == "-h" || a == "--help" }) {
+		os.Exit(printCommandHelp(cmd))
+	}
 	var err error
 	switch cmd {
 	case "init":
@@ -132,15 +148,43 @@ func main() {
 		err = cmdBanking(cmd, args)
 	case "version":
 		fmt.Println("beerus", version)
-	case "help", "-h", "--help":
-		fmt.Print(usage)
-	default:
+	case "clock", "scenarios", "scenario", "connections", "revoke", "sync", "webhooks", "registry", "snapshot":
 		err = cmdControl(cmd, args)
+	default:
+		os.Exit(unknownCommand(cmd))
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "beerus:", err)
 		os.Exit(1)
 	}
+}
+
+func commandUsage(cmd string) []string {
+	var out []string
+	for _, line := range strings.Split(usage, "\n") {
+		if words := strings.Fields(line); len(words) >= 2 && words[0] == "beerus" && slices.Contains(strings.Split(words[1], "|"), cmd) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func printCommandHelp(cmd string) int {
+	lines := commandUsage(cmd)
+	if len(lines) == 0 {
+		return unknownCommand(cmd)
+	}
+	fmt.Println("Usage:")
+	for _, l := range lines {
+		fmt.Println(l)
+	}
+	fmt.Println("\nThe state directory defaults to .beerus, or $BEERUS_DIR when set.")
+	return 0
+}
+
+func unknownCommand(cmd string) int {
+	fmt.Fprintf(os.Stderr, "beerus: unknown command %q\nRun beerus help to list the commands.\n", cmd)
+	return 1
 }
 
 func defaultDir() string {
@@ -392,7 +436,6 @@ func cmdControl(cmd string, args []string) error {
 			return errors.New("usage: beerus snapshot [take [name] | restore <id>]")
 		}
 	default:
-		fmt.Print(usage)
 		return fmt.Errorf("unknown command %q", cmd)
 	}
 	if err != nil {

@@ -190,7 +190,7 @@ func TestBankCLI(t *testing.T) {
 	if got := c.ok("withdraw", a1, "--bank", "bank-a", "--amount", "0.50"); !matches(`Withdrew ₦0\.50 from account `+a1+` at bank-a\. Balance ₦5,000\.00\.\nBusiness time: `+businessWAT+`\n`, got) {
 		t.Errorf("withdraw: %q", got)
 	}
-	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", a2, "--amount", "1000"); !matches(`Moved ₦1,000\.00 from `+a1+` to `+a2+`, Adaeze Okafor, at 09:0\d WAT\. Balance ₦4,000\.00\.\n`, got) {
+	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", a2, "--amount", "1000"); !matches(`Moved ₦1,000\.00 from `+a1+` to `+a2+`, Adaeze Okafor, at `+businessWAT+`\. Balance ₦4,000\.00\.\n`, got) {
 		t.Errorf("same-bank transfer: %q", got)
 	}
 
@@ -199,11 +199,11 @@ func TestBankCLI(t *testing.T) {
 	if sent["status"] != "success" || sent["response_code"] != "00" || sent["total_debit_minor"] != total || sent["sender_balance_after_minor"] != 400000-total || sent["fee_minor"].(float64) <= 0 {
 		t.Errorf("nip transfer: %v", sent)
 	}
-	sid, out := c.capture(`Session (\d+): success at 09:0\d WAT`, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000.50")
+	sid, out := c.capture(`Session (\d+): success at `+businessWAT+``, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000.50")
 	if !strings.HasPrefix(out, "Sending ₦1,000.50 to Chidi Okafor at Bank B.\n") || !strings.Contains(out, "Total debit ₦") {
 		t.Errorf("nip transfer text: %q", out)
 	}
-	if got := c.ok("nip", "status", sid); !matches(`Session `+sid+`: success at 09:0\d WAT\nAmount ₦1,000\.50 from `+a1+` \(bank code 999001\) to `+b1+` \(bank code 999002\), started at 09:0\d WAT\.\n`, got) {
+	if got := c.ok("nip", "status", sid); !matches(`Session `+sid+`: success at `+businessWAT+`\nAmount ₦1,000\.50 from `+a1+` \(bank code 999001\) to `+b1+` \(bank code 999002\), started at `+businessWAT+`\.\n`, got) {
 		t.Errorf("nip status: %q", got)
 	}
 	if out := c.ok("statement", a1, "--bank", "bank-a", "--from", s.today().String(), "--to", s.today().String()); !strings.Contains(out, "9 entries on this page.") || !strings.Contains(out, sid) || !strings.Contains(out, "−₦1,000.50") {
@@ -213,14 +213,33 @@ func TestBankCLI(t *testing.T) {
 		t.Errorf("statement --json has %d lines, want 9", len(lines))
 	}
 
+	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000", "--dry-run"); !matches(`^Sending ₦1,000\.00 to Chidi Okafor at Bank B\.\nFee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Total debit ₦1,010\.75\. Balance after ₦\d[\d,]*\.\d\d\.\nThis was a quote\. Nothing was sent\.\n$`, got) {
+		t.Errorf("transfer --dry-run: %q", got)
+	}
+	if lines := c.json("statement", a1, "--bank", "bank-a")["data"].([]any); len(lines) != 9 {
+		t.Errorf("a quote posted to the statement: %d lines, want 9", len(lines))
+	}
+	if help := c.ok("transfer", "--help"); !strings.HasPrefix(help, "Usage:\n  beerus transfer --from NUBAN --to NUBAN --amount NAIRA") || !strings.Contains(help, "[--dry-run]") || strings.Contains(help, "beerus customer") {
+		t.Errorf("transfer --help: %q", help)
+	}
+	if help := c.ok("bank", "close", "-h"); strings.Count(help, "\n  beerus bank ") != 5 {
+		t.Errorf("bank close -h: %q", help)
+	}
+	if got := c.fails("bogus"); got != "beerus: unknown command \"bogus\"\nRun beerus help to list the commands." {
+		t.Errorf("unknown command: %q", got)
+	}
+	if out, _, code := c.run("bogus", "--help"); code != 1 || out != "" {
+		t.Errorf("help for an unknown command: exit %d, output %q", code, out)
+	}
+
 	if out := c.ok("fault", "timeout", "--bank", "bank-b", "--outcome", "credited"); !regexp.MustCompile(`^Fault flt_\w+ on bank-b: the next transfer times out \(outcome credited\)\.\n`).MatchString(out) {
 		t.Errorf("fault timeout: %q", out)
 	}
 	if out := c.ok("fault", "list"); !strings.Contains(out, "bank-b") || !strings.Contains(out, "the next transfer times out (outcome credited)") {
 		t.Errorf("fault list: %q", out)
 	}
-	psid, out := c.capture(`Session (\d+): pending\. Beerus will check with NIBSS at 09:0\d WAT\. Run beerus nip status \d+\.`, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "10")
-	if got := c.ok("nip", "status", psid); !matches(`Session `+psid+`: success at 09:0\d WAT\nAmount ₦10\.00 .*\n`, got) {
+	psid, out := c.capture(`Session (\d+): pending\. Beerus will check with NIBSS at `+businessWAT+`\. Run beerus nip status \d+\.`, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "10")
+	if got := c.ok("nip", "status", psid); !matches(`Session `+psid+`: was pending; now success at `+businessWAT+`\nAmount ₦10\.00 .*\n`, got) {
 		t.Errorf("status query: %q", got)
 	}
 	if got := c.ok("fault", "clear"); !matches(`No faults to clear\.\nBusiness time: `+businessWAT+`\n`, got) {
@@ -238,7 +257,7 @@ func TestBankCLI(t *testing.T) {
 	if got := c.json("nip", "settle-now"); got["settled_sessions"] == nil || !matches(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d.*`, fmt.Sprint(got["business_time"])) {
 		t.Errorf("settle-now --json: %v", got)
 	}
-	if got := c.ok("nip", "settle-now"); !matches(`No sessions to settle at 09:0\d WAT\.\n`, got) {
+	if got := c.ok("nip", "settle-now"); !matches(`No sessions to settle at `+businessWAT+`\.\n`, got) {
 		t.Errorf("settle-now again: %q", got)
 	}
 	for _, args := range [][]string{{"accounts", "--bank", "bank-a"}, {"fault", "list"}, {"nip", "status", sid}, {"customers", "--bank", "bank-a"}} {
@@ -273,8 +292,8 @@ func TestBankCLI(t *testing.T) {
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", a1, "--amount", "5"}, "beerus: The from and to accounts are the same."},
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", "9999999999", "--to-bank", "bank-b", "--amount", "5"}, "beerus: That is not a valid account at Bank B, so nothing was debited."},
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-z", "--amount", "5"}, `beerus: Find bank "bank-z": not in the NIBSS directory.`},
-		{[]string{"transfer", "--bank", "bank-a", "--from", a1}, "beerus: --from, --to and --amount are required; usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT]"},
-		{[]string{"transfer", "--bogus"}, "beerus: flag provided but not defined: -bogus; usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT]"},
+		{[]string{"transfer", "--bank", "bank-a", "--from", a1}, "beerus: --from, --to and --amount are required; usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT] [--dry-run]"},
+		{[]string{"transfer", "--bogus"}, "beerus: flag provided but not defined: -bogus; usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT] [--dry-run]"},
 		{[]string{"customer", "create", "--bank", "bank-a", "--name", "X"}, "beerus: --name, --phone and --dob are required; usage: beerus customer create --name N --phone P --dob YYYY-MM-DD [--username U --password-stdin] | close <id>"},
 		{[]string{"customer", "create", "--bank", "bank-a", "--name", "X", "--phone", "08031234567", "--dob", "soon"}, `beerus: Dob "soon" must be a date like 1990-04-21.`},
 		{[]string{"customer", "close", adaID, "--bank", "bank-a"}, "beerus: Customer has open accounts: customer " + adaID + " still has 2 open accounts; close them first."},

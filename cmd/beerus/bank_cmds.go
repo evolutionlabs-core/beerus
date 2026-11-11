@@ -113,10 +113,6 @@ func stamp(t time.Time) string {
 	return t.In(clock.Lagos).Format("Mon 2 Jan 2006 15:04 MST")
 }
 
-func hm(t time.Time) string {
-	return t.In(clock.Lagos).Format("15:04 MST")
-}
-
 func plural(n int, one, many string) string {
 	if n == 1 {
 		return "1 " + one
@@ -445,7 +441,7 @@ func printStatement(c *ctl, out map[string]any, nuban string) error {
 	w := newTable()
 	fmt.Fprintln(w, "DATE\tTIME\tAMOUNT\tBALANCE\tNARRATION\tSESSION")
 	for _, r := range rows {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ValueDate, hm(r.PostedAt), connect.FormatNaira(r.Amount), connect.FormatNaira(r.BalanceAfter), r.Narration, r.SessionID)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ValueDate, stamp(r.PostedAt), connect.FormatNaira(r.Amount), connect.FormatNaira(r.BalanceAfter), r.Narration, r.SessionID)
 	}
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("print the statement: %w", err)
@@ -494,7 +490,7 @@ func cmdCash(kind string, args []string) error {
 }
 
 func cmdTransfer(args []string) error {
-	const usage = "usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT]"
+	const usage = "usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT] [--dry-run]"
 	f := newFlags("transfer", true)
 	f.fs.StringVar(f.bank, "from-bank", "", "bank of the paying account; the session bank when empty")
 	from := f.fs.String("from", "", "account number to pay from")
@@ -502,6 +498,7 @@ func cmdTransfer(args []string) error {
 	to := f.fs.String("to", "", "account number to pay into")
 	amount := f.fs.String("amount", "", "amount in naira, such as 25000 or 2500.50")
 	narration := f.fs.String("narration", "", "narration")
+	dry := f.fs.Bool("dry-run", false, "show the fee, VAT, stamp duty and total debit without sending")
 	if _, err := f.parse(args, 0, usage); err != nil {
 		return err
 	}
@@ -512,7 +509,11 @@ func cmdTransfer(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, err := c.do("POST", bankPath(id, "transfers"), map[string]string{"from": *from, "to_bank": *toBank, "to": *to, "amount": *amount, "narration": *narration})
+	path := bankPath(id, "transfers")
+	if *dry {
+		path = bankPath(id, "transfers", "quote")
+	}
+	out, err := c.do("POST", path, map[string]string{"from": *from, "to_bank": *toBank, "to": *to, "amount": *amount, "narration": *narration})
 	if err != nil {
 		return err
 	}
@@ -521,12 +522,30 @@ func cmdTransfer(args []string) error {
 		if err != nil {
 			return err
 		}
+		if *dry {
+			return printQuote(c, r)
+		}
 		return printTransfer(c, r)
 	})
 }
 
+func printQuote(c *ctl, r connect.TransferResult) error {
+	if r.Kind == "internal" {
+		fmt.Printf("Moving %s from %s to %s, %s, costs no charges. Balance after %s.\n", connect.FormatNaira(r.Amount), r.From, r.To, r.ToName, connect.FormatNaira(r.BalanceAfter))
+	} else {
+		to, err := bankStatus(c, r.ToBank)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Sending %s to %s at %s.\n", connect.FormatNaira(r.Amount), r.ToName, to.Name)
+		fmt.Printf("Fee %s, VAT %s and stamp duty %s. Total debit %s. Balance after %s.\n", connect.FormatNaira(r.Fee), connect.FormatNaira(r.VAT), connect.FormatNaira(r.StampDuty), connect.FormatNaira(r.TotalDebit), connect.FormatNaira(r.BalanceAfter))
+	}
+	fmt.Println("This was a quote. Nothing was sent.")
+	return nil
+}
+
 func printTransfer(c *ctl, r connect.TransferResult) error {
-	at := hm(r.At)
+	at := stamp(r.At)
 	if r.Kind == "internal" {
 		fmt.Printf("Moved %s from %s to %s, %s, at %s. Balance %s.\n", connect.FormatNaira(r.Amount), r.From, r.To, r.ToName, at, connect.FormatNaira(r.BalanceAfter))
 		return nil
@@ -545,7 +564,7 @@ func printTransfer(c *ctl, r connect.TransferResult) error {
 			fmt.Printf("Session %s: pending. Run beerus nip status %s.\n%s\n", r.SessionID, r.SessionID, charges)
 			break
 		}
-		fmt.Printf("Session %s: pending. Beerus will check with NIBSS at %s. Run beerus nip status %s.\n%s\n", r.SessionID, hm(*r.NextCheckAt), r.SessionID, charges)
+		fmt.Printf("Session %s: pending. Beerus will check with NIBSS at %s. Run beerus nip status %s.\n%s\n", r.SessionID, stamp(*r.NextCheckAt), r.SessionID, charges)
 	case nip.Reversed:
 		fmt.Printf("Session %s: failed with code %s. The debit and its charges were reversed at %s. Balance %s.\n", r.SessionID, r.ResponseCode, at, connect.FormatNaira(r.BalanceAfter))
 	default:
@@ -560,7 +579,7 @@ func describeFault(f connect.Fault) string {
 		if f.Until == nil {
 			return "down until cleared"
 		}
-		return "down until " + hm(*f.Until)
+		return "down until " + stamp(*f.Until)
 	case connect.FaultTimeout:
 		if f.Left == 1 {
 			return fmt.Sprintf("the next transfer times out (outcome %s)", f.Outcome)
@@ -690,16 +709,24 @@ func cmdNip(args []string) error {
 		if err != nil {
 			return err
 		}
+		before, err := c.do("GET", "/nip/sessions/"+url.PathEscape(pos[1]), nil)
+		if err != nil {
+			return err
+		}
 		out, err := c.do("POST", "/nip/sessions/"+url.PathEscape(pos[1])+"/status", nil)
 		if err != nil {
 			return err
 		}
 		return f.show(out, func() error {
+			was, err := decodeMap[nibss.Session](before)
+			if err != nil {
+				return err
+			}
 			s, err := decodeMap[nibss.Session](out)
 			if err != nil {
 				return err
 			}
-			printSession(s)
+			printSession(s, was.Status == nibss.SessionPending)
 			return nil
 		})
 	case "settle-now":
@@ -723,10 +750,10 @@ func cmdNip(args []string) error {
 				return err
 			}
 			if r.Settled == 0 {
-				fmt.Printf("No sessions to settle at %s.\n", hm(r.At))
+				fmt.Printf("No sessions to settle at %s.\n", stamp(r.At))
 				return nil
 			}
-			fmt.Printf("Settled %s at %s.\n", plural(r.Settled, "session", "sessions"), hm(r.At))
+			fmt.Printf("Settled %s at %s.\n", plural(r.Settled, "session", "sessions"), stamp(r.At))
 			return nil
 		})
 	case "name-enquiry", "participants", "positions", "settlement":
@@ -756,12 +783,14 @@ func cmdNip(args []string) error {
 	return errors.New(usage)
 }
 
-func printSession(s nibss.Session) {
+func printSession(s nibss.Session, wasPending bool) {
 	switch {
+	case s.Status == nibss.SessionOK && s.ResolvedAt != nil && wasPending:
+		fmt.Printf("Session %s: was pending; now success at %s\n", s.ID, stamp(*s.ResolvedAt))
 	case s.Status == nibss.SessionOK && s.ResolvedAt != nil:
-		fmt.Printf("Session %s: success at %s\n", s.ID, hm(*s.ResolvedAt))
+		fmt.Printf("Session %s: success at %s\n", s.ID, stamp(*s.ResolvedAt))
 	case s.Status == nibss.SessionPending && s.NextTSQAt != nil:
-		fmt.Printf("Session %s: pending. Beerus will check with NIBSS at %s.\n", s.ID, hm(*s.NextTSQAt))
+		fmt.Printf("Session %s: pending. Beerus will check with NIBSS at %s.\n", s.ID, stamp(*s.NextTSQAt))
 	case s.Status == nibss.SessionPending:
 		fmt.Printf("Session %s: pending.\n", s.ID)
 	case s.Outcome == nibss.OutcomeReversed:
@@ -769,7 +798,10 @@ func printSession(s nibss.Session) {
 	default:
 		fmt.Printf("Session %s: failed with code %s. The sender's debit is being reversed.\n", s.ID, s.Status)
 	}
-	fmt.Printf("Amount %s from %s (bank code %s) to %s (bank code %s), started at %s.\n", connect.FormatNaira(s.Amount), s.FromNUBAN, s.FromCode, s.ToNUBAN, s.ToCode, hm(s.CreatedAt))
+	if wasPending && s.Status != nibss.SessionPending && s.Status != nibss.SessionOK {
+		fmt.Println("The session was pending; this check resolved it.")
+	}
+	fmt.Printf("Amount %s from %s (bank code %s) to %s (bank code %s), started at %s.\n", connect.FormatNaira(s.Amount), s.FromNUBAN, s.FromCode, s.ToNUBAN, s.ToCode, stamp(s.CreatedAt))
 	if s.Settlement != "" {
 		fmt.Printf("Settled in settlement session %s.\n", s.Settlement)
 	}

@@ -29,14 +29,19 @@ beerus nip status <session_id>
 
 ## Start
 
-Beerus needs a Postgres server. The default is `postgres:///postgres`; change `database_url` in `.beerus/local.yaml` if yours differs.
+1. Run a Postgres server. Beerus connects to `postgres:///postgres` by default; change `database_url` in `.beerus/local.yaml` if yours differs.
+2. Build and start it:
 
 ```
 go build -o beerus ./cmd/beerus
 ./beerus up
 ```
 
-`beerus up` creates `.beerus` on the first run, starts every participant and stays in the foreground. It prints the ports and the control room link. Use `beerus info` to print them again. Run other commands from a second terminal, in the same directory or with `BEERUS_DIR` set.
+3. Open a second terminal and use the other commands.
+
+`beerus up` creates the state directory on the first run, starts every participant and stays in the foreground. Press Ctrl+C to stop it. It prints the ports and the control room link; `beerus info` prints them again. The state directory is `.beerus` in the current directory. Set `BEERUS_DIR` to use another one, and set it the same way in every terminal.
+
+`beerus help` lists every command, and `beerus <command> --help` shows one command's usage.
 
 `beerus compose > compose.yaml` prints a Docker Compose file if you prefer containers.
 
@@ -109,7 +114,7 @@ beerus nip positions
 beerus nip settlement
 ```
 
-A transfer between banks goes through the NIP switch and settles in a later session.
+A transfer between banks goes through the NIP switch and settles in a later session. Add `--dry-run` to `beerus transfer` to see the fee, VAT, stamp duty and total debit without sending.
 
 ## Faults
 
@@ -122,7 +127,7 @@ beerus fault list
 beerus fault clear --bank bank-b
 ```
 
-A timed-out transfer has an outcome of `credited`, `failed` or `unknown`. Check it with `beerus nip status <session_id>`.
+A timed-out transfer has an outcome of `credited`, `failed` or `unknown`. Check it with `beerus nip status <session_id>`, which says when it found a pending session resolved.
 
 ## Removing a bank
 
@@ -130,9 +135,11 @@ Closing a bank needs a decision about its customers' money: `transfer` it to ano
 
 ```
 beerus bank close bank-b --money transfer --to bank-a
-beerus bank close bank-b --money payout --customer <customer_id>=leave
+beerus bank close bank-b --money payout --to bank-a --customer <customer_id>=leave
 beerus bank purge bank-b --yes
 ```
+
+When the bank has finished, Beerus prints what happened to each customer account: paid out in cash, transferred to an account at another bank, or left as an uninsured claim on a frozen account. `beerus describe bank <id>` shows the same after the bank is purged. If the decision is missing, or the receiving bank is down, the command stops at once and says what to do.
 
 `close` moves the bank to the closed state and handles its customers' money as you chose. `purge` deletes the closed bank's database and cannot be undone. Both wait up to five minutes for the bank to finish; change this with `--wait`, and add `--settle-now` to run an extra settlement session. Removing a bank from the setup file and running `beerus apply` does the same work, with the decision in the bank's `on_remove` block.
 

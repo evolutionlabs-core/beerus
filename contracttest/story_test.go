@@ -188,12 +188,12 @@ func TestStory(t *testing.T) {
 	c := newCLIAt(t, dir)
 	const (
 		at       = `Business time: [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT\n`
-		hm       = `\d\d:\d\d`
+		hm       = `[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d`
 		settleAt = `adhoc:\S+`
 	)
 
 	out, errOut := startUp(t, c, spec)
-	if !regexp.MustCompile(`^Created `+quote(dir)+` from `+quote(spec)+`\.\n\nBeerus Connect \(stub\) is running\. Business time [A-Z][a-z]{2}, \d\d [A-Z][a-z]{2} \d{4} \d\d:\d\d:\d\d WAT, world wld_\w+\.\n\n[\s\S]*\nBanks are empty\. Create a customer with beerus customer create\.\n\nPress Ctrl\+C to stop\.\n$`).MatchString(out.String()) || strings.Contains(errOut.String(), "level=ERROR") {
+	if !regexp.MustCompile(`^Created `+quote(dir)+` from `+quote(spec)+`\.\n\nBeerus is running\. Business time [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT, world wld_\w+\.\n\n[\s\S]*\nBanks are empty\. Create a customer with beerus customer create\.\n\nPress Ctrl\+C to stop\.\n$`).MatchString(out.String()) || strings.Contains(errOut.String(), "level=ERROR") {
 		t.Fatalf("up printed %q and logged %q", out.String(), errOut.String())
 	}
 	if got := c.ok("diff"); got != "No changes.\n" {
@@ -265,7 +265,7 @@ func TestStory(t *testing.T) {
 	}
 	sh.expect("beerus fault list", `No faults\.\n`+at)
 	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 0\n\}\n`)
-	sh.expect("beerus nip status "+pending[0], `Session `+pending[0]+`: success at `+hm+` WAT\nAmount ₦1,000\.00 from `+nubA+` \(bank code 999001\) to `+nubAdaB+` \(bank code 999002\), started at `+hm+` WAT\.\n`)
+	sh.expect("beerus nip status "+pending[0], `Session `+pending[0]+`: was pending; now success at `+hm+` WAT\nAmount ₦1,000\.00 from `+nubA+` \(bank code 999001\) to `+nubAdaB+` \(bank code 999002\), started at `+hm+` WAT\.\n`)
 	sh.expect("beerus nip settle-now", `Settled 1 session at `+hm+` WAT\.\n`)
 	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 1\n\}\n`)
 	sh.expect("beerus nip status "+first, `Session `+first+`: success at `+hm+` WAT\nAmount ₦5,000\.00 from `+nubA+` \(bank code 999001\) to `+nubChidi+` \(bank code 999002\), started at `+hm+` WAT\.\nSettled in settlement session `+settleAt+`\.\n`)
@@ -275,7 +275,7 @@ func TestStory(t *testing.T) {
 	dropBank(t, dir, "bank-c")
 	out1, err1, code1 := c.run("apply", "--prune", "--money", "transfer", "--to", "bank-a", "--settle-now", "--wait", "60s")
 	wantPlanC := "Setup story\n\n  - bank bank-c      remove   DESTRUCTIVE\n        stop routing; settle 1 open transfer (net ₦4,000.00);\n        transfer ₦7,000.00 for 1 customer to Bank A (on_remove); settle the moves;\n        drop 1 database. Its ID, name and codes stay reserved.\n\nPlan: 1 to remove.\n"
-	if code1 != 0 || out1 != wantPlanC || err1 != "" {
+	if code1 != 0 || !regexp.MustCompile(`^`+quote(wantPlanC)+`Money of Bank C on `+hm+` WAT:\n  Tunde Motors +\d{10} +₦7,000\.00 +transferred to Bank A account \d{10}\n$`).MatchString(out1) || err1 != "" {
 		t.Fatalf("removing bank-c with --settle-now: exit %d, output %q, error %q", code1, out1, err1)
 	}
 	if got := c.ok("get", "banks"); !regexp.MustCompile(`^ID +NAME +PHASE +READY +GEN +MESSAGE\nbank-a +Bank A +active +yes +1 *\nbank-b +Bank B +active +yes +1 *\n$`).MatchString(got) {
@@ -325,9 +325,9 @@ func TestStory(t *testing.T) {
 		t.Errorf("re-adding bank-b while it is terminating: %q", got)
 	}
 
-	sh.expect("beerus nip status "+late, `Session `+late+`: success at `+hm+` WAT\nAmount ₦300\.00 from `+nubA+` \(bank code 999001\) to `+nubAdaB+` \(bank code 999002\), started at `+hm+` WAT\.\n`)
+	sh.expect("beerus nip status "+late, `Session `+late+`: was pending; now success at `+hm+` WAT\nAmount ₦300\.00 from `+nubA+` \(bank code 999001\) to `+nubAdaB+` \(bank code 999002\), started at `+hm+` WAT\.\n`)
 	sh.expect("beerus nip settle-now", `Settled 1 session at `+hm+` WAT\.\n`)
-	moneyDecision := `bank bank-b: MoneyDecisionNeeded: Bank B holds ₦8,300.00 for 2 customers. Run beerus apply --prune --money transfer --to <bank>.`
+	moneyDecision := `bank bank-b: MoneyDecisionNeeded: Bank B holds ₦8,300.00 for 2 customers. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.`
 	waitFor(t, "the money decision to be asked", func() bool { return strings.Contains(c.ok("get", "banks"), moneyDecision) })
 	if out, errText, code := c.run("apply", "--prune", "--money", "transfer", "--to", "bank-a", "--wait", "0"); code != 0 || errText != "" || out != "Setup story\n\n  ~ bank bank-b      update   on_remove.money +transfer; on_remove.to +bank-a\n\nPlan: 1 to update.\n" {
 		t.Fatalf("money decision: exit %d, output %q, error %q", code, out, errText)
