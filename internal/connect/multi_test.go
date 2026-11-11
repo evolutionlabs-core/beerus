@@ -26,7 +26,7 @@ func testBankConfig() *config.Config {
 
 func TestPausingBanksDoesNotHoldTheAppLock(t *testing.T) {
 	cfg := testBankConfig()
-	a := &App{cfg: cfg, role: RoleSim, st: newState(), log: slog.New(slog.NewTextHandler(io.Discard, nil)), ledgers: []*ledgerSource{{inst: bank.Profile{ID: "bank-a"}}}}
+	a := &App{cfg: cfg, role: RoleCore, st: newState(), log: slog.New(slog.NewTextHandler(io.Discard, nil)), ledgers: []*ledgerSource{{inst: bank.Profile{ID: "bank-a"}}}}
 	in, release := make(chan struct{}), make(chan struct{})
 	a.peers = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		in <- struct{}{}
@@ -196,7 +196,7 @@ func pausingSim(t *testing.T, fail map[string]string) (*App, *sync.Mutex, map[st
 	cfg.Banks = append(cfg.Banks, &config.Bank{ID: "bank-b", Name: "Bank B", Type: "digital", NIPCode: "999002", NUBANCode: "902", HistoryDays: 30, Port: 7446})
 	var mu sync.Mutex
 	calls := map[string][]string{}
-	a := &App{cfg: cfg, role: RoleSim, st: newState(), log: slog.New(slog.NewTextHandler(io.Discard, nil)), ledgers: []*ledgerSource{{inst: bank.Profile{ID: "bank-a"}}, {inst: bank.Profile{ID: "bank-b"}}}}
+	a := &App{cfg: cfg, role: RoleCore, st: newState(), log: slog.New(slog.NewTextHandler(io.Discard, nil)), ledgers: []*ledgerSource{{inst: bank.Profile{ID: "bank-a"}}, {inst: bank.Profile{ID: "bank-b"}}}}
 	a.peers = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		mu.Lock()
 		defer mu.Unlock()

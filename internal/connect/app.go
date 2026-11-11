@@ -627,7 +627,7 @@ func (a *App) RevokeAtBank(connID string) error {
 	}
 	bank, consent := c.Institution, c.ConsentID
 	a.mu.Unlock()
-	if b := a.cfg.Bank(bank); a.role == RoleSim && b != nil && consent != "" {
+	if b := a.cfg.Bank(bank); a.role == RoleCore && b != nil && consent != "" {
 		if err := a.revokeRemote(b, consent); err != nil {
 			return err
 		}

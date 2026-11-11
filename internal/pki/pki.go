@@ -56,7 +56,7 @@ func NewAuthority(commonName string, lifetime time.Duration) (*Authority, error)
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:                sn,
-		Subject:                     pkix.Name{CommonName: commonName, Organization: []string{"Beerus Simulator"}},
+		Subject:                     pkix.Name{CommonName: commonName, Organization: []string{"Beerus"}},
 		NotBefore:                   now.Add(-time.Minute),
 		NotAfter:                    now.Add(lifetime),
 		IsCA:                        true,
@@ -105,7 +105,7 @@ func (a *Authority) IssueServer(names []string, lifetime time.Duration) (*Leaf, 
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: sn,
-		Subject:      pkix.Name{CommonName: names[0], Organization: []string{"Beerus Simulator"}},
+		Subject:      pkix.Name{CommonName: names[0], Organization: []string{"Beerus"}},
 		NotBefore:    now.Add(-time.Minute),
 		NotAfter:     now.Add(lifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -124,7 +124,7 @@ func (a *Authority) IssueClient(commonName, role string, lifetime time.Duration)
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: sn,
-		Subject:      pkix.Name{CommonName: commonName, Organization: []string{"Beerus Simulator"}, OrganizationalUnit: []string{role}},
+		Subject:      pkix.Name{CommonName: commonName, Organization: []string{"Beerus"}, OrganizationalUnit: []string{role}},
 		NotBefore:    now.Add(-time.Minute),
 		NotAfter:     now.Add(lifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -141,7 +141,7 @@ func (a *Authority) IssueSigner(commonName, purpose string, lifetime time.Durati
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: sn,
-		Subject:      pkix.Name{CommonName: commonName, Organization: []string{"Beerus Simulator"}, OrganizationalUnit: []string{purpose}},
+		Subject:      pkix.Name{CommonName: commonName, Organization: []string{"Beerus"}, OrganizationalUnit: []string{purpose}},
 		NotBefore:    now.Add(-time.Minute),
 		NotAfter:     now.Add(lifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

@@ -237,7 +237,7 @@ func (a *App) startBankSite(b *config.Bank) error {
 	serving := a.serving
 	_, running := a.sites[b.ID]
 	a.lifeMu.Unlock()
-	if !serving || running || a.role == RoleSim {
+	if !serving || running || a.role == RoleCore {
 		return nil
 	}
 	a.forgetOpenBanking(b.ID)
@@ -355,7 +355,7 @@ func CheckPorts(c *config.Config) error {
 }
 
 func (a *App) siteProbeURL(b *config.Bank) string {
-	if a.role == RoleSim {
+	if a.role == RoleCore {
 		return b.URL() + "/health"
 	}
 	return fmt.Sprintf("http://127.0.0.1:%d/login", b.Port)

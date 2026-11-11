@@ -283,7 +283,7 @@ func (a *App) probeSite(b *config.Bank) error {
 	a.lifeMu.Lock()
 	serving := a.serving
 	a.lifeMu.Unlock()
-	if !serving || a.role == RoleSim {
+	if !serving || a.role == RoleCore {
 		return nil
 	}
 	c := &http.Client{Timeout: 5 * time.Second}
@@ -303,7 +303,7 @@ func (a *App) checkBankAPI(b *config.Bank) error {
 	serving := a.serving
 	site := a.sites[b.ID]
 	a.lifeMu.Unlock()
-	if !serving || a.role == RoleSim {
+	if !serving || a.role == RoleCore {
 		return nil
 	}
 	a.obMu.Lock()

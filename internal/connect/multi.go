@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	RoleSim  = "sim"
+	RoleCore = "core"
 	RoleBank = "bank"
 )
 
@@ -162,7 +162,7 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 		return nil, fmt.Errorf("no bank %q in %s", o.BankID, cfg.Path(statusFile))
 	}
 	if o.CoreURL == "" {
-		return nil, errors.New("a bank needs --core or BEERUS_CORE_URL, the simulator's control URL")
+		return nil, errors.New("a bank needs --core or BEERUS_CORE_URL, the control URL of the core participant")
 	}
 	token, err := config.ReadSecret(cfg.Path("control-token"))
 	if err != nil {
@@ -316,7 +316,7 @@ func (a *App) ServeBank(ctx context.Context) error {
 			a.flushLedger()
 			if err := a.pullReplica(); err != nil {
 				if msg := err.Error(); msg != lastErr {
-					a.log.Warn("simulator not reachable", "err", err)
+					a.log.Warn("core not reachable", "err", err)
 					lastErr = msg
 				}
 			} else {
@@ -451,7 +451,7 @@ func (a *App) leaseExpired() {
 }
 
 func (a *App) pauseBanks() (func() error, error) {
-	if a.role != RoleSim {
+	if a.role != RoleCore {
 		return func() error { return nil }, nil
 	}
 	var targets, paused []*config.Bank

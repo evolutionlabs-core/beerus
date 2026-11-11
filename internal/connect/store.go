@@ -21,7 +21,7 @@ const (
 	ownedDir      = "dir"
 )
 
-var errStoreReadOnly = errors.New("only the simulator process writes control.json")
+var errStoreReadOnly = errors.New("only the core process writes control.json")
 
 type ctlStore struct {
 	mu       sync.Mutex

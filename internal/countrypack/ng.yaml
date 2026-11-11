@@ -17,7 +17,7 @@ islamic:
 simulator_codes:
   nip: {first: 999001, last: 999999}
   nuban: {first: 901, last: 999}
-  source: Beerus placeholder ranges for allocating codes to simulated banks. They are not real CBN or NIBSS allocations.
+  source: Beerus placeholder ranges for allocating codes to banks created in Beerus. They are not real CBN or NIBSS allocations.
 declared:
   - year: 2022
     remove: [2022-05-04]

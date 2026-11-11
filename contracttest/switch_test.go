@@ -152,7 +152,7 @@ func TestNetDebitPositionCountsAllTransfers(t *testing.T) {
 	if row["cap_source"] != "configured" || row["collateral_minor"] != nil {
 		t.Fatalf("a cap that was set and collateral that was not: %v", row)
 	}
-	if def := s.position("bank-b"); def["cap_source"] != "simulator_default" || def["collateral_minor"] != nil {
+	if def := s.position("bank-b"); def["cap_source"] != "default" || def["collateral_minor"] != nil {
 		t.Fatalf("the default cap: %v", def)
 	}
 	s.ctl("POST", "/banks/bank-a/net-debit-cap", map[string]string{"cap": "9000000", "collateral": "9500000"})
