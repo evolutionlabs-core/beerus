@@ -84,14 +84,15 @@ func TestValidateRules(t *testing.T) {
 		{"negative consent months", func(s *Spec) { s.Spec.Banks[0].OpenBanking.ConsentMonths = -1 }, []string{"banks[bank-a].open_banking.consent_months -1 must be more than zero. Leave it out for the default."}},
 		{"no money choice", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{To: "bank-a"} }, []string{"banks[bank-b].on_remove.money is required. Use transfer, payout or leave."}},
 		{"bad money choice", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: "burn"} }, []string{`banks[bank-b].on_remove.money "burn" is not valid. Use transfer, payout or leave.`}},
-		{"transfer without target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyTransfer} }, []string{"banks[bank-b].on_remove.to is required when money moves. Name the bank that receives it."}},
-		{"payout without target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyPayout} }, []string{"banks[bank-b].on_remove.to is required when money moves. Name the bank that receives it."}},
-		{"leave with target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, To: "bank-a"} }, []string{"banks[bank-b].on_remove.to is set but no money moves. Remove to, or choose transfer or payout."}},
+		{"transfer without target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyTransfer} }, []string{"banks[bank-b].on_remove.to is required when money is transferred. Name the bank that receives it."}},
+		{"payout without target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyPayout} }, nil},
+		{"payout with target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyPayout, To: "bank-a"} }, []string{"banks[bank-b].on_remove.to is set but no money is transferred. Payout is cash and needs no bank. Remove to, or choose transfer."}},
+		{"leave with target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, To: "bank-a"} }, []string{"banks[bank-b].on_remove.to is set but no money is transferred. Payout is cash and needs no bank. Remove to, or choose transfer."}},
 		{"leave with a customer moving", func(s *Spec) {
 			s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, Customers: map[string]string{"cus_1": MoneyTransfer}}
-		}, []string{"banks[bank-b].on_remove.to is required when money moves. Name the bank that receives it."}},
+		}, []string{"banks[bank-b].on_remove.to is required when money is transferred. Name the bank that receives it."}},
 		{"leave with a customer moving and target", func(s *Spec) {
-			s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, To: "bank-a", Customers: map[string]string{"cus_1": MoneyPayout}}
+			s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, To: "bank-a", Customers: map[string]string{"cus_1": MoneyTransfer}}
 		}, nil},
 		{"bad customer choices sorted", func(s *Spec) {
 			s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, Customers: map[string]string{"cus_b": "keep", "cus_a": "gift"}}

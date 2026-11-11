@@ -193,7 +193,7 @@ func TestStory(t *testing.T) {
 	)
 
 	out, errOut := startUp(t, c, spec)
-	if !regexp.MustCompile(`^Created `+quote(dir)+` from `+quote(spec)+`\.\n\nBeerus is running\. Business time [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT, world wld_\w+\.\n\n[\s\S]*\nBanks are empty\. Create a customer with beerus customer create\.\n\nPress Ctrl\+C to stop\.\n$`).MatchString(out.String()) || strings.Contains(errOut.String(), "level=ERROR") {
+	if !regexp.MustCompile(`^Created `+quote(dir)+` from `+quote(spec)+`\.\n\nBeerus is running\. [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT\.\n\n[\s\S]*\nBanks are empty\. Create a customer with beerus customer create\.\n\nPress Ctrl\+C to stop\.\n$`).MatchString(out.String()) || strings.Count(out.String(), "Partner API") != 1 || strings.Contains(errOut.String(), "level=ERROR") {
 		t.Fatalf("up printed %q and logged %q", out.String(), errOut.String())
 	}
 	if got := c.ok("diff"); got != "No changes.\n" {

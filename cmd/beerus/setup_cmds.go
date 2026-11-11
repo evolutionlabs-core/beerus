@@ -250,6 +250,9 @@ func (m moneyFlags) removal() (*setup.Removal, error) {
 		}
 		rm.Customers[k] = v
 	}
+	if !needsTarget && m.to != "" {
+		return nil, errors.New("--to is only for --money transfer. Payout is cash and needs no bank")
+	}
 	if needsTarget && m.to == "" {
 		if m.money == setup.MoneyTransfer {
 			return nil, errors.New("--money transfer needs --to <bank>")
@@ -1130,10 +1133,9 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 	fresh := !ok
 	switch {
 	case fresh && *file == "":
-		if err := cmdInit([]string{"--dir", *dir}); err != nil {
+		if _, err := initState([]string{"--dir", *dir}); err != nil {
 			return err
 		}
-		fmt.Fprintln(e.out)
 	case fresh:
 		spec, _ := setup.Parse(req.File, []byte(req.Spec))
 		local, err := connect.FreshLocal(*dir)
@@ -1160,7 +1162,7 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(e.out, "Beerus is running. Business time %s, world %s.\n\n", stamp(app.Clock().Now()), app.WorldID())
+	fmt.Fprintf(e.out, "Beerus is running. %s.\n\n", stamp(app.Clock().Now()))
 	if err := printInfo(c); err != nil {
 		return err
 	}

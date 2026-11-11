@@ -195,6 +195,14 @@ func defaultDir() string {
 }
 
 func cmdInit(args []string) error {
+	c, err := initState(args)
+	if err != nil {
+		return err
+	}
+	return printInfo(c)
+}
+
+func initState(args []string) (*config.Config, error) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	flagged := connect.DefaultLocal().Connect
@@ -205,7 +213,7 @@ func cmdInit(args []string) error {
 	fs.Parse(args)
 	local, err := connect.FreshLocal(*dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -221,14 +229,14 @@ func cmdInit(args []string) error {
 	})
 	today := clock.DateOf(time.Now())
 	if err := connect.Init(*dir, setup.DefaultSpec(defaultSetupName, today), local, today); err != nil {
-		return err
+		return nil, err
 	}
 	c, err := connect.LoadConfig(*dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fmt.Printf("Created %s. The setup is in %s; machine settings are in %s.\n\n", c.Dir, c.Path(connect.SpecFile), c.Path(connect.LocalFile))
-	return printInfo(c)
+	return c, nil
 }
 
 func printInfo(c *config.Config) error {

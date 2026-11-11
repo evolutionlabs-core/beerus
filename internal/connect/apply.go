@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -133,7 +134,7 @@ func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt Apply
 	}
 	if !changes(pl.plan) && len(retarget) == 0 {
 		a.requestSettleNow(opt, settling)
-		return pl.plan, nil
+		return pl.plan, a.syncSetupFile(pl.desired)
 	}
 	ad, err := a.prepare(pl, opt.Money, retarget)
 	if err != nil {
@@ -147,7 +148,39 @@ func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt Apply
 	a.poke()
 	plan := pl.plan
 	plan.Actions = append(slices.Clone(plan.Actions), retargetActions(pl.st, retarget, opt.Money)...)
-	return plan, nil
+	return plan, a.syncSetupFile(pl.desired)
+}
+
+func (a *App) syncSetupFile(desired setup.Spec) error {
+	st, err := a.ctl.status()
+	if err != nil {
+		return err
+	}
+	spec := st.Applied
+	spec.Spec.Banks = slices.DeleteFunc(slices.Clone(spec.Spec.Banks), func(b setup.Bank) bool {
+		_, ok := bankIn(desired, b.ID)
+		return !ok
+	})
+	spec.Spec.Partners = slices.DeleteFunc(slices.Clone(spec.Spec.Partners), func(p setup.Partner) bool {
+		_, ok := partnerIn(desired, p.ID)
+		return !ok
+	})
+	raw, err := setup.Export(spec)
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", SpecFile, err)
+	}
+	path := a.cfg.Path(SpecFile)
+	if cur, err := os.ReadFile(path); err == nil {
+		if parsed, errs := setup.Parse(SpecFile, cur); len(errs) == 0 {
+			if same, err := setup.Export(parsed); err == nil && bytes.Equal(same, raw) {
+				return nil
+			}
+		}
+	}
+	if err := config.WriteSecret(path, string(raw)); err != nil {
+		return fmt.Errorf("the plan was applied, but %s could not be updated: %w", SpecFile, err)
+	}
+	return nil
 }
 
 func retargetActions(st setup.Status, retarget map[string]bool, rm *setup.Removal) []setup.Action {
@@ -318,12 +351,8 @@ func checkMoney(rm *setup.Removal) error {
 	if needsTarget && rm.To == "" {
 		problems = append(problems, "money transfer needs a receiving bank. Name it in to.")
 	}
-	moves := rm.Money != setup.MoneyLeave
-	for _, choice := range rm.Customers {
-		moves = moves || choice != setup.MoneyLeave
-	}
-	if rm.To != "" && !moves {
-		problems = append(problems, "to is set but no money moves. Remove to, or choose transfer or payout.")
+	if rm.To != "" && !needsTarget {
+		problems = append(problems, "to is set but no money is transferred. Payout is cash and needs no bank. Remove to, or choose transfer.")
 	}
 	if len(problems) > 0 {
 		return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s", strings.Join(problems, "\n"))

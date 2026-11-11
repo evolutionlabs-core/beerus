@@ -282,14 +282,14 @@ func (c *specChecker) bankRules(p string, b Bank, byID map[string]Bank) {
 
 func (c *specChecker) removal(p string, b Bank, byID map[string]Bank) {
 	r := b.OnRemove
-	moves := false
+	transfers, chosen := false, false
 	switch {
 	case r.Money == "":
 		c.add(p+".money", "%s.money is required. Use %s", p, specChoices(specMoneyChoices))
 	case !slices.Contains(specMoneyChoices, r.Money):
 		c.add(p+".money", "%s.money %q is not valid. Use %s", p, r.Money, specChoices(specMoneyChoices))
 	default:
-		moves = r.Money != MoneyLeave
+		transfers, chosen = r.Money == MoneyTransfer, true
 	}
 	customers := make([]string, 0, len(r.Customers))
 	for id := range r.Customers {
@@ -302,14 +302,14 @@ func (c *specChecker) removal(p string, b Bank, byID map[string]Bank) {
 			c.add(p+".customers["+id+"]", "%s.customers[%s] %q is not valid. Use %s", p, id, choice, specChoices(specMoneyChoices))
 			continue
 		}
-		moves = moves || choice != MoneyLeave
+		transfers = transfers || choice == MoneyTransfer
 	}
 	switch {
-	case r.To == "" && moves:
-		c.add(p+".to", "%s.to is required when money moves. Name the bank that receives it", p)
+	case r.To == "" && transfers:
+		c.add(p+".to", "%s.to is required when money is transferred. Name the bank that receives it", p)
 	case r.To == "":
-	case !moves && r.Money == MoneyLeave:
-		c.add(p+".to", "%s.to is set but no money moves. Remove to, or choose %s or %s", p, MoneyTransfer, MoneyPayout)
+	case !transfers && chosen:
+		c.add(p+".to", "%s.to is set but no money is transferred. Payout is cash and needs no bank. Remove to, or choose %s", p, MoneyTransfer)
 	case r.To == b.ID:
 		c.add(p+".to", "%s.to cannot name the bank being removed. Name another bank", p)
 	default:

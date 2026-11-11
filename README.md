@@ -131,11 +131,11 @@ A timed-out transfer has an outcome of `credited`, `failed` or `unknown`. Check 
 
 ## Removing a bank
 
-Closing a bank needs a decision about its customers' money: `transfer` it to another bank, `payout` to the customers, or `leave` it.
+Closing a bank needs a decision about its customers' money: `transfer` it to another bank, `payout` to the customers, or `leave` it. Only `transfer` takes `--to`: a payout is cash and needs no receiving bank. After every apply, the state directory's `setup.yaml` is rewritten to match what was applied, so a later `beerus up` starts from it.
 
 ```
 beerus bank close bank-b --money transfer --to bank-a
-beerus bank close bank-b --money payout --to bank-a --customer <customer_id>=leave
+beerus bank close bank-b --money payout --customer <customer_id>=leave
 beerus bank purge bank-b --yes
 ```
 

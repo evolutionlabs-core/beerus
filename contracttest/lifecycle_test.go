@@ -440,7 +440,7 @@ func TestCloseBank(t *testing.T) {
 		return s.balances(p)[p.Accounts[0]]
 	}
 	before := balance(home["adaeze"])
-	for _, bad := range []map[string]any{{"money": "transfer"}, {"money": "transfer", "to": "abuja-digital"}, {"money": "keep", "to": "bank-a"}} {
+	for _, bad := range []map[string]any{{"money": "transfer"}, {"money": "transfer", "to": "abuja-digital"}, {"money": "keep", "to": "bank-a"}, {"money": "payout", "to": "bank-a"}} {
 		if _, err := s.ctlTry("POST", "/banks/abuja-digital/close", bad); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
 			t.Fatalf("close with %v: %v", bad, err)
 		}
@@ -586,7 +586,7 @@ func TestClosePaysInsuredDeposits(t *testing.T) {
 		return sum
 	}
 	before := total(from)
-	s.ctl("POST", "/banks/kano-microfinance/close", map[string]any{"money": "payout", "to": "bank-a"})
+	s.ctl("POST", "/banks/kano-microfinance/close", map[string]any{"money": "payout"})
 	res := s.closeResult("kano-microfinance")
 	if res["paid_out_minor"] != float64(200_000_000) || res["claims_minor"] != float64(50_000_000) || res["moved_minor"] != float64(0) {
 		t.Fatalf("close: %v", res)
