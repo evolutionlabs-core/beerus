@@ -175,6 +175,9 @@ const stackStart = "2026-01-15T08:00:00+01:00"
 
 func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("starts a full stack; run without -short")
+	}
 	ports := stackPorts(t, len(setup.DefaultSpec("contract", clock.Date{Y: 2026, M: 1, D: 15}).Spec.Banks))
 	local := connect.DefaultLocal()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
@@ -222,6 +225,9 @@ func startStack(t *testing.T, worldOnly bool, edits ...func(*config.Config)) *St
 
 func startStackWith(t *testing.T, worldOnly bool, opts connect.Options, edits ...func(*config.Config)) *Stack {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("starts a full stack; run without -short")
+	}
 	opts.WorldOnly = worldOnly
 	if opts.Personas == nil {
 		opts.Personas = bankStackPersonas(worldOnly)
