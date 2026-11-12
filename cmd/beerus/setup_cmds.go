@@ -275,6 +275,18 @@ func specRequest(dir, file string) (applyRequest, error) {
 	return applyRequest{File: path, Spec: string(raw)}, nil
 }
 
+func readSpec(path string) (setup.Spec, error) {
+	req, err := specRequest("", path)
+	if err != nil {
+		return setup.Spec{}, err
+	}
+	spec, errs := setup.Parse(req.File, []byte(req.Spec))
+	if len(errs) > 0 {
+		return setup.Spec{}, errors.Join(errs...)
+	}
+	return spec, nil
+}
+
 func (e *cli) plan(c *ctl, req applyRequest) ([]byte, planReply, error) {
 	raw, err := c.send("POST", "/plan", req)
 	if err != nil {

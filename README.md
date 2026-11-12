@@ -49,7 +49,16 @@ go build -o beerus ./cmd/beerus
 
 `beerus help` lists every command, and `beerus <command> --help` shows one command's usage.
 
-`beerus compose > compose.yaml` prints a Docker Compose file if you prefer containers.
+`beerus compose` prints a Docker Compose file if you prefer containers. It has one service for each bank in the setup, so a new setup gives a stack with no banks. To start containers with banks, write a setup file, render the compose file from it, and give the file to the cbn container through the state folder:
+
+```
+beerus init --dir render -f my-setup.yaml
+beerus compose --dir render > compose.yaml
+mkdir state && cp my-setup.yaml state/setup.yaml
+BEERUS_STATE=$PWD/state BEERUS_UID=$(id -u) BEERUS_GID=$(id -g) BEERUS_SETUP_FILE=/state/setup.yaml docker compose up -d --build --wait
+```
+
+`BEERUS_SETUP_FILE` is read once, when the state is first made. A file that is missing or invalid stops the cbn container with the reason.
 
 ## Setup file
 
@@ -58,7 +67,10 @@ The setup lives in `.beerus/setup.yaml`. It lists the banks and partners, and th
 ```
 apiVersion: beerus.dev/v1
 kind: Setup
+metadata:
+  name: beerus
 spec:
+  start: "2026-11-04T08:00:00+01:00"
   nip:
     sessions: 4
     tsq_after: 2m

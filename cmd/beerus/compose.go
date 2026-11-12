@@ -48,6 +48,7 @@ services:
     command: ["run", "--participant", "cbn"]
     environment:
       <<: *env
+      BEERUS_SETUP_FILE: ${BEERUS_SETUP_FILE:-}
 {{- if .NeedsPartner}}
       BEERUS_PARTNER_ID: ${BEERUS_PARTNER_ID:?set the partner app's ID}
       BEERUS_PARTNER_NAME: ${BEERUS_PARTNER_NAME:?set the partner app's name}

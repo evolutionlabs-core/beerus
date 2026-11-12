@@ -147,6 +147,12 @@ func initFromEnv(dir string) error {
 	}
 	today := clock.DateOf(time.Now())
 	spec := setup.DefaultSpec(defaultSetupName, today)
+	if path := os.Getenv("BEERUS_SETUP_FILE"); path != "" {
+		var err error
+		if spec, err = readSpec(path); err != nil {
+			return fmt.Errorf("BEERUS_SETUP_FILE: %w", err)
+		}
+	}
 	if redirect := os.Getenv("BEERUS_PARTNER_REDIRECT_URI"); redirect != "" {
 		p := setup.Partner{ID: os.Getenv("BEERUS_PARTNER_ID"), Name: os.Getenv("BEERUS_PARTNER_NAME"), LegalName: os.Getenv("BEERUS_PARTNER_LEGAL_NAME"), Purpose: os.Getenv("BEERUS_PARTNER_PURPOSE"), RedirectURIs: []string{redirect}, WebhookURL: os.Getenv("BEERUS_PARTNER_WEBHOOK_URL")}
 		if p.ID == "" || p.Name == "" || p.LegalName == "" || p.Purpose == "" {
