@@ -257,7 +257,7 @@ func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.As(err, &te):
 		writeError(w, r, te.status, te.errCode, sentence(te.Error()))
 	case errors.Is(err, errBankNotFound):
-		writeError(w, r, http.StatusNotFound, "not_found", "No such bank.")
+		a.noSuchBank(w, r)
 	case errors.Is(err, errBankNotActive):
 		writeError(w, r, http.StatusConflict, "bank_not_active", sentence(err.Error()))
 	case errors.Is(err, bank.ErrUnknownCustomer):

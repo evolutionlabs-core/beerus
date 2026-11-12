@@ -69,10 +69,16 @@ func TestFreshUpHasNoBanks(t *testing.T) {
 	if got := c.fails("customer", "create", "--name", "Ada Obi", "--phone", "08030000000", "--dob", "1990-04-12"); got != noBanks {
 		t.Errorf("customer create: %q", got)
 	}
-	if got := c.fails("customer", "create", "--bank", "bank-a", "--name", "Ada Obi", "--phone", "08030000000", "--dob", "1990-04-12"); got != "beerus: No such bank." {
+	if got := c.fails("customer", "create", "--bank", "bank-a", "--name", "Ada Obi", "--phone", "08030000000", "--dob", "1990-04-12"); got != noBanks {
 		t.Errorf("customer create at an unknown bank: %q", got)
 	}
+	if got := c.fails("fault", "down", "--bank", "bank-a"); got != noBanks {
+		t.Errorf("fault down at an unknown bank: %q", got)
+	}
 	c.ok("bank", "create", "--name", "Bank A")
+	if got := c.fails("fault", "down", "--bank", "bank-z"); got != "beerus: No such bank." {
+		t.Errorf("fault down at an unknown bank: %q", got)
+	}
 	if got := c.ok("get", "banks"); !strings.Contains(got, "bank-a  Bank A  active  yes") {
 		t.Errorf("get banks after the first bank: %q", got)
 	}
