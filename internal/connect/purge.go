@@ -2,17 +2,18 @@ package connect
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -24,29 +25,32 @@ type PurgeImpact struct {
 	Blockers    []string   `json:"blockers"`
 }
 
-type PurgeResult struct {
-	Bank      string   `json:"bank"`
-	Database  string   `json:"database"`
-	Snapshots []string `json:"snapshots_deleted"`
-}
-
 func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
 	st, ok := a.bankStatus(id)
-	b := a.cfg.Bank(id)
+	banks := a.bankList()
+	b := findBank(banks, id)
 	if !ok || b == nil {
 		return PurgeImpact{}, errNotFound
 	}
-	out := PurgeImpact{Bank: st, Database: b.Database, Snapshots: a.snapshotsWith(id), Blockers: []string{}}
-	if st.Phase != PhaseClosed {
-		out.Blockers = append(out.Blockers, "the bank is "+st.Phase+"; close it before purging it")
+	snaps, err := a.snapshotsWith(id)
+	if err != nil {
+		return PurgeImpact{}, err
 	}
-	if len(a.cfg.Banks) == 1 {
+	out := PurgeImpact{Bank: st, Database: b.Database, Snapshots: snaps, Blockers: []string{}}
+	if len(banks) == 1 {
 		out.Blockers = append(out.Blockers, "it is the only bank left; add another bank first")
 	}
-	for _, other := range a.cfg.Banks {
+	for _, other := range banks {
 		if other.SettlesThrough == id {
 			out.Blockers = append(out.Blockers, other.Name+" settles through this bank; purge it first")
 		}
+	}
+	waiting, err := a.inflightWith(b.NIPCode, id)
+	if err != nil {
+		return PurgeImpact{}, err
+	}
+	if waiting != "" {
+		out.Blockers = append(out.Blockers, waiting)
 	}
 	a.mu.Lock()
 	for _, c := range a.st.Connections {
@@ -58,100 +62,210 @@ func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
 	return out, nil
 }
 
-func (a *App) snapshotsWith(id string) []string {
+func (a *App) snapshotsWith(id string) ([]string, error) {
+	metas, err := a.snapshotMetas()
+	if err != nil {
+		return nil, err
+	}
 	out := []string{}
-	entries, _ := os.ReadDir(a.snapshotDir())
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(a.snapshotDir(), e.Name()))
-		if err != nil {
-			continue
-		}
-		var f struct {
-			Meta snapshotMeta `json:"meta"`
-		}
-		if json.Unmarshal(raw, &f) == nil && slices.Contains(f.Meta.Banks, id) {
-			out = append(out, f.Meta.ID)
+	for _, m := range metas {
+		if slices.Contains(m.Banks, id) {
+			out = append(out, m.ID)
 		}
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
 
-func (a *App) PurgeBank(id string) (PurgeResult, error) {
-	a.recMu.Lock()
-	defer a.recMu.Unlock()
-	imp, err := a.PurgeImpact(id)
+func (a *App) PurgeBank(id string, settleNow bool) (setup.Resource, error) {
+	err := a.applyEdit(func(sp *setup.Spec) error {
+		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
+		if i < 0 {
+			return errNotFound
+		}
+		sp.Spec.Banks = slices.Delete(sp.Spec.Banks, i, i+1)
+		return nil
+	}, ApplyOptions{Prune: true, SettleNow: settleNow})
 	if err != nil {
-		return PurgeResult{}, err
+		return setup.Resource{}, err
 	}
-	if len(imp.Blockers) > 0 {
-		return PurgeResult{}, invalid("%s cannot be purged: %s", imp.Bank.Name, strings.Join(imp.Blockers, "; "))
+	return a.Resource(setup.KindBank, id)
+}
+
+func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
+	id := r.ID
+	waiting, err := a.inflightWith(r.Allocated.NIPCode, id)
+	if err != nil {
+		return nil, err
 	}
-	a.mu.Lock()
-	if err := a.world.Purge(id); err != nil {
+	if waiting != "" {
+		return a.blocked(setup.ReasonSettlementPending, "%s", waiting), nil
+	}
+	b := a.bankByID(id)
+	snaps, err := a.snapshotsWith(id)
+	if err != nil {
+		return nil, err
+	}
+	a.sendLocks.Delete(id)
+	var ls *ledgerSource
+	if b != nil {
+		a.detach(b, setup.StepSite)
+		a.mu.Lock()
+		ls = a.ledgerFor(id)
 		a.mu.Unlock()
-		return PurgeResult{}, invalid("%s", err.Error())
+		a.detach(b, setup.StepDatabase)
 	}
-	err = a.saveLocked()
-	a.mu.Unlock()
+	var errs []error
+	switch {
+	case ls != nil:
+		errs = append(errs, ls.Drop())
+	case r.Allocated.Database != "":
+		errs = append(errs, store.DropDatabases(context.Background(), a.cfg.DatabaseURL, []string{r.Allocated.Database}))
+	}
+	for _, snap := range snaps {
+		errs = append(errs, a.dropSnapshotEverywhere(snap))
+	}
+	a.obMu.Lock()
+	delete(a.obs, id)
+	a.obMu.Unlock()
+	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.removeMember(id))
+	a.dropBankRows(id)
+	if err := errors.Join(errs...); err != nil {
+		return nil, fmt.Errorf("purge %s: %w", id, err)
+	}
+	tomb, err := a.readBackPurge(r)
 	if err != nil {
-		return PurgeResult{}, err
+		return nil, err
 	}
+	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
+		st.Applied.Spec.Banks = slices.DeleteFunc(st.Applied.Spec.Banks, func(x setup.Bank) bool { return x.ID == id })
+		st.Resources = slices.DeleteFunc(st.Resources, func(x setup.Resource) bool { return x.Kind == setup.KindBank && x.ID == id })
+		keepTombstone(st, tomb)
+		return true, resum(st)
+	}); err != nil {
+		return nil, err
+	}
+	a.clearSettleNow(setup.KindBank, id)
 	a.lifeMu.Lock()
-	b := a.cfg.Bank(id)
-	st := a.status[id]
 	a.mu.Lock()
-	banks := a.cfg.Banks
-	a.cfg.Banks = slices.DeleteFunc(slices.Clone(banks), func(x *config.Bank) bool { return x.ID == id })
+	a.cfg.Banks = slices.DeleteFunc(slices.Clone(a.cfg.Banks), func(x *config.Bank) bool { return x.ID == id })
 	a.mu.Unlock()
 	delete(a.status, id)
 	a.lifeMu.Unlock()
-	if err := a.saveBanks(func() {
-		a.mu.Lock()
-		a.cfg.Banks = banks
-		a.mu.Unlock()
-		a.status[id] = st
-	}); err != nil {
-		return PurgeResult{}, err
-	}
-	memberErr := a.removeMember(id)
-	a.detach(b, setup.StepSite)
-	ls := a.ledgerFor(id)
-	a.detach(b, setup.StepDatabase)
-	errs := []error{memberErr}
-	if ls != nil {
-		errs = append(errs, ls.Drop())
-	} else if err := store.DropDatabases(context.Background(), a.cfg.DatabaseURL, []string{b.Database}); err != nil {
-		errs = append(errs, err)
-	} else {
-		errs = append(errs, a.ctl.forget(setup.KindBank, id))
-	}
-	for _, snap := range imp.Snapshots {
-		a.mu.Lock()
-		others := slices.Clone(a.ledgers)
-		a.mu.Unlock()
-		for _, l := range others {
-			errs = append(errs, l.DropSnapshot(snap))
-		}
-		if a.rtgs != nil {
-			errs = append(errs, a.rtgs.DropSnapshot(snap))
-		}
-		if err := os.Remove(filepath.Join(a.snapshotDir(), snap+".json")); err != nil && !os.IsNotExist(err) {
-			errs = append(errs, err)
-		}
-	}
 	a.poke()
-	res := PurgeResult{Bank: id, Database: imp.Database, Snapshots: imp.Snapshots}
-	if err := errors.Join(errs...); err != nil {
-		a.lifeMu.Lock()
-		a.warn("%s was purged, but something was left behind (%v); run beerus doctor --fix", id, err)
-		a.lifeMu.Unlock()
-		return res, err
+	return nil, nil
+}
+
+func (a *App) dropBankRows(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for cid, c := range a.st.Connections {
+		if c.Institution == id {
+			a.vaultDrop(cid)
+		}
 	}
-	return res, nil
+	for lid, l := range a.st.LinkSessions {
+		if l.Institution == id {
+			delete(a.st.LinkSessions, lid)
+		}
+	}
+	a.st.Revokes = slices.DeleteFunc(a.st.Revokes, func(p PendingRevoke) bool { return p.Bank == id })
+	a.dirty()
+}
+
+func (a *App) readBackPurge(r setup.Resource) (nibss.Institution, error) {
+	id := r.ID
+	if r.Allocated.Database != "" {
+		left, err := store.List(context.Background(), a.cfg.DatabaseURL, r.Allocated.Database)
+		if err != nil {
+			return nibss.Institution{}, fmt.Errorf("read back the databases of %s: %w", id, err)
+		}
+		if slices.Contains(left, r.Allocated.Database) {
+			return nibss.Institution{}, fmt.Errorf("database %s of %s still exists after the purge", r.Allocated.Database, id)
+		}
+	}
+	if _, err := os.Stat(a.cfg.Path("banks", id)); !os.IsNotExist(err) {
+		return nibss.Institution{}, fmt.Errorf("banks/%s still exists after the purge", id)
+	}
+	sw := a.nibssStore()
+	if sw == nil {
+		return nibss.Institution{}, errors.New("NIBSS is not open, so its tombstone for the bank cannot be read back; try again soon")
+	}
+	in, err := sw.Institution(context.Background(), r.Allocated.NIPCode)
+	if err != nil {
+		return nibss.Institution{}, fmt.Errorf("read back the NIBSS status of %s: %w", id, err)
+	}
+	if in.Status != nibss.StatusRemoved {
+		return nibss.Institution{}, fmt.Errorf("NIBSS shows %s as %s, not %s", id, in.Status, nibss.StatusRemoved)
+	}
+	return in, nil
+}
+
+func (a *App) dropSnapshotEverywhere(snap string) error {
+	a.mu.Lock()
+	others := slices.Clone(a.ledgers)
+	r := a.rtgs
+	a.mu.Unlock()
+	var errs []error
+	for _, l := range others {
+		errs = append(errs, l.DropSnapshot(snap))
+	}
+	if r != nil {
+		errs = append(errs, r.DropSnapshot(snap))
+	}
+	errs = append(errs, a.dropNIBSSSnapshot(snap))
+	if err := os.Remove(filepath.Join(a.snapshotDir(), snap+".json")); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func (a *App) purgePartner(r setup.Resource) (*setup.Condition, error) {
+	id := r.ID
+	a.partnerMu.Lock()
+	defer a.partnerMu.Unlock()
+	a.dropPartnerRows(id)
+	if err := os.RemoveAll(a.cfg.Path("partners", id)); err != nil {
+		return nil, fmt.Errorf("remove partners/%s: %w", id, err)
+	}
+	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
+		st.Applied.Spec.Partners = slices.DeleteFunc(st.Applied.Spec.Partners, func(x setup.Partner) bool { return x.ID == id })
+		st.Resources = slices.DeleteFunc(st.Resources, func(x setup.Resource) bool { return x.Kind == setup.KindPartner && x.ID == id })
+		return true, resum(st)
+	}); err != nil {
+		return nil, err
+	}
+	a.replacePartner(id, nil)
+	return nil, nil
+}
+
+func (a *App) dropPartnerRows(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for cid, c := range a.st.Connections {
+		if c.PartnerID == id {
+			a.vaultDrop(cid)
+			delete(a.st.Connections, cid)
+		}
+	}
+	for aid, acct := range a.st.Accounts {
+		if acct.PartnerID == id {
+			delete(a.st.Accounts, aid)
+			delete(a.st.Feeds, aid)
+		}
+	}
+	for rid, ref := range a.st.Refreshes {
+		if a.st.Accounts[ref.AccountID] == nil {
+			delete(a.st.Refreshes, rid)
+		}
+	}
+	for lid, l := range a.st.LinkSessions {
+		if l.PartnerID == id {
+			delete(a.st.LinkSessions, lid)
+		}
+	}
+	a.st.Deliveries = slices.DeleteFunc(a.st.Deliveries, func(d *Delivery) bool { return d.PartnerID == id })
+	a.dirty()
 }
 
 func (a *App) ctlPurgeImpact(w http.ResponseWriter, r *http.Request) {
@@ -164,10 +278,17 @@ func (a *App) ctlPurgeImpact(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlPurgeBank(w http.ResponseWriter, r *http.Request) {
-	res, err := a.PurgeBank(r.PathValue("id"))
+	var req struct {
+		SettleNow bool `json:"settle_now"`
+	}
+	if err := decodeBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send nothing or {"settle_now":true}.`)
+		return
+	}
+	res, err := a.PurgeBank(r.PathValue("id"), req.SettleNow)
 	if err != nil {
 		a.bankError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusAccepted, res)
 }

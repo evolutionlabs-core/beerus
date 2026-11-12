@@ -161,6 +161,37 @@ func (a *App) idemPutLocked(scope, hash string, status int, contentType string, 
 	a.st.Idem[scope] = &IdemRec{Hash: hash, Status: status, ContentType: contentType, Body: body, CreatedReal: a.clock.Real()}
 }
 
+type idemEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func (a *App) idemAcquire(scope string) *idemEntry {
+	a.idemMu.Lock()
+	if a.idemLocks == nil {
+		a.idemLocks = map[string]*idemEntry{}
+	}
+	e := a.idemLocks[scope]
+	if e == nil {
+		e = &idemEntry{}
+		a.idemLocks[scope] = e
+	}
+	e.refs++
+	a.idemMu.Unlock()
+	e.mu.Lock()
+	return e
+}
+
+func (a *App) idemRelease(scope string, e *idemEntry) {
+	e.mu.Unlock()
+	a.idemMu.Lock()
+	e.refs--
+	if e.refs == 0 {
+		delete(a.idemLocks, scope)
+	}
+	a.idemMu.Unlock()
+}
+
 func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("Idempotency-Key")
@@ -177,10 +208,8 @@ func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
 		scope := strings.Join([]string{p.ID, r.Method, r.URL.Path, key}, " ")
 		sum := sha256.Sum256(append([]byte(r.Method+" "+r.URL.RequestURI()+"\n"), body...))
 		hash := hex.EncodeToString(sum[:])
-		lockAny, _ := a.idemLock.LoadOrStore(scope, &sync.Mutex{})
-		lock := lockAny.(*sync.Mutex)
-		lock.Lock()
-		defer lock.Unlock()
+		entry := a.idemAcquire(scope)
+		defer a.idemRelease(scope, entry)
 		a.mu.Lock()
 		rec := a.idemGetLocked(scope)
 		a.mu.Unlock()

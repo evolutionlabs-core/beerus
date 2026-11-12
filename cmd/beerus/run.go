@@ -46,9 +46,9 @@ func envNumber(key string, positive bool) (int64, error) {
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	participant := fs.String("participant", "", "cbn, sim, bank-a, bank-b or any bank ID")
+	participant := fs.String("participant", "", "cbn, core or a bank ID")
 	bind := fs.String("bind", envOr("BEERUS_BIND", "127.0.0.1"), "address to listen on")
-	core := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "the simulator's control URL, for banks")
+	core := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "control URL of the core participant, for banks")
 	fs.Parse(args)
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -56,22 +56,22 @@ func cmdRun(args []string) error {
 	connect.SetBind(*bind)
 	switch *participant {
 	case "":
-		return errors.New("usage: beerus run --participant cbn|sim|bank-a|bank-b")
+		return errors.New("usage: beerus run --participant cbn|core|<bank-id>")
 	case "cbn":
 		return runCBN(ctx, *dir, *bind, log)
-	case "sim":
+	case "core":
 		c, err := connect.LoadConfig(*dir)
 		if err != nil {
 			return err
 		}
-		app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleSim, CoreURL: *core})
+		app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleCore, CoreURL: *core})
 		if err != nil {
 			return err
 		}
-		log.Info("simulator running", "world", app.WorldID())
+		log.Info("core running", "world", app.WorldID())
 		return app.Serve(ctx)
 	case "connect", "nibss":
-		return fmt.Errorf("%s runs inside the sim participant; start --participant sim", *participant)
+		return fmt.Errorf("%s runs inside the core participant; start --participant core", *participant)
 	}
 	c, err := connect.LoadConfig(*dir)
 	if err != nil {
@@ -113,7 +113,7 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 	if id := os.Getenv("BEERUS_PARTNER_ID"); ok && os.Getenv("BEERUS_PARTNER_REDIRECT_URI") != "" && c.Partner(id) == nil {
 		log.Warn("BEERUS_PARTNER_* only applies when the setup is first made; register the partner with beerus partner add once Beerus is running", "partner", id)
 	}
-	if err := c.EnsureCertificates(); err != nil {
+	if err := c.EnsureCertificates(time.Now()); err != nil {
 		return err
 	}
 	mux := http.NewServeMux()

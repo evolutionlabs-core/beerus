@@ -2,20 +2,29 @@ package connect
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
+
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSession) {
+	a.mu.Lock()
 	b := a.cfg.Bank(ls.Institution)
 	if b == nil || b.APIPort == 0 {
+		defer a.mu.Unlock()
 		a.failSession(w, r, ls, "institution_down")
 		return
 	}
 	verifier, challenge := pkcePair()
 	state := newSecret("bs_", 16)
-	uri, err := a.bankPAR(b, ls, state, challenge)
+	form := a.parFormLocked(ls, state, challenge)
+	a.mu.Unlock()
+	uri, err := a.bankPAR(b, form)
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if err != nil {
 		if !isDown(err) {
 			a.log.Error("pushed authorisation request", "bank", b.ID, "err", err)
@@ -35,17 +44,35 @@ func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSess
 	http.Redirect(w, r, b.URL()+"/authorize?"+q.Encode(), http.StatusSeeOther)
 }
 
-func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+func (a *App) accountOwner(bankID, nuban string) (string, error) {
+	l := a.obLedger(bankID)
+	if l == nil {
+		return "", fmt.Errorf("the books of %s are not open", bankID)
+	}
+	acc, err := l.Account(nuban)
+	if err != nil {
+		return "", fmt.Errorf("look up the owner of %s: %w", nuban, err)
+	}
+	return acc.Owner, nil
+}
+
+type bankCallbackInput struct {
+	ls       *LinkSession
+	bank     *config.Bank
+	vid      string
+	code     string
+	verifier string
+}
+
+func (a *App) bankCallbackBeginLocked(w http.ResponseWriter, r *http.Request) (bankCallbackInput, bool) {
 	_, ls := a.session(w, r)
 	if ls == nil {
-		return
+		return bankCallbackInput{}, false
 	}
 	q := r.URL.Query()
-	if !a.live() || ls.BankState == "" || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(ls.BankState)) != 1 {
+	if ls.BankState == "" || subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(ls.BankState)) != 1 {
 		a.message(w, http.StatusForbidden, "Request refused", "This sign-in does not match your session. Go back to the app and start again.")
-		return
+		return bankCallbackInput{}, false
 	}
 	b := a.cfg.Bank(ls.Institution)
 	verifier := ls.Verifier
@@ -53,7 +80,7 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 	a.dirty()
 	if b == nil || q.Get("iss") != b.APIURL() {
 		a.failSession(w, r, ls, "server_error")
-		return
+		return bankCallbackInput{}, false
 	}
 	if e := q.Get("error"); e != "" {
 		if e == "access_denied" {
@@ -61,67 +88,91 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 		} else {
 			a.failSession(w, r, ls, "server_error")
 		}
+		return bankCallbackInput{}, false
+	}
+	return bankCallbackInput{ls: ls, bank: b, vid: linkVaultPrefix + ls.ID, code: q.Get("code"), verifier: verifier}, true
+}
+
+func (a *App) bankSignIn(in bankCallbackInput) (bankToken, bankGrant, string, error) {
+	var g bankGrant
+	tok, err := a.bankExchange(in.bank, in.code, in.verifier)
+	if err != nil {
+		return tok, g, "", err
+	}
+	a.mu.Lock()
+	err = a.vaultPut(in.vid, tok)
+	a.mu.Unlock()
+	if err != nil {
+		return tok, g, "", err
+	}
+	if err := a.bankGet(in.bank, in.vid, "/accounts", &g); err != nil {
+		return tok, g, "", err
+	}
+	if len(g.Accounts) == 0 {
+		return tok, g, "", nil
+	}
+	owner, err := a.accountOwner(in.bank.ID, g.Accounts[0].ID)
+	return tok, g, owner, err
+}
+
+func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	in, ok := a.bankCallbackBeginLocked(w, r)
+	a.mu.Unlock()
+	if !ok {
 		return
 	}
-	vid := linkVaultPrefix + ls.ID
-	tok, err := a.bankExchange(b, q.Get("code"), verifier)
-	if err == nil {
-		err = a.vaultPut(vid, tok)
-	}
-	var g bankGrant
-	if err == nil {
-		err = a.bankGet(b, vid, "/accounts", &g)
-	}
+	tok, g, owner, err := a.bankSignIn(in)
+	a.mu.Lock()
 	if err != nil {
-		a.log.Error("bank sign-in", "bank", b.ID, "err", err)
-		a.vaultDrop(vid)
+		defer a.mu.Unlock()
+		a.log.Error("bank sign-in", "bank", in.bank.ID, "err", err)
+		a.vaultDrop(in.vid)
 		if isDown(err) {
-			a.failSession(w, r, ls, "institution_down")
+			a.failSession(w, r, in.ls, "institution_down")
 		} else {
-			a.failSession(w, r, ls, "server_error")
+			a.failSession(w, r, in.ls, "server_error")
 		}
 		return
 	}
-	if a.st.LinkSessions[ls.ID] != ls || ls.Status != "at_bank" {
-		a.revokeOrQueue(b, tok.ConsentID)
-		a.vaultDrop(vid)
+	if a.st.LinkSessions[in.ls.ID] != in.ls || in.ls.Status != "at_bank" {
+		a.vaultDrop(in.vid)
+		a.mu.Unlock()
+		a.revokeOrQueue(in.bank, tok.ConsentID)
 		a.message(w, http.StatusConflict, "Already finished", "This sign-in is no longer needed. Go back to the app and start again.")
 		return
 	}
-	drop := func(code string) {
-		a.revokeOrQueue(b, tok.ConsentID)
-		a.vaultDrop(vid)
-		a.failSession(w, r, ls, code)
-	}
-	keys, owner := []string{}, ""
+	keys := []string{}
 	for _, ba := range g.Accounts {
-		acc, err := a.world.FindAccount(ba.ID)
-		if err != nil || acc.Institution != b.ID {
-			continue
-		}
-		keys = append(keys, acc.Key)
-		owner = acc.Owner
+		keys = append(keys, acctKey(in.bank.ID, ba.ID))
 	}
+	code := ""
 	if len(keys) == 0 {
-		drop("server_error")
+		code = "server_error"
+	} else if in.ls.ConnectionID != "" {
+		if c := a.st.Connections[in.ls.ConnectionID]; c == nil || c.Status == "revoked" || c.CustomerID != owner {
+			code = "access_denied"
+		}
+	}
+	if code != "" {
+		a.vaultDrop(in.vid)
+		a.mu.Unlock()
+		a.revokeOrQueue(in.bank, tok.ConsentID)
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.failSession(w, r, in.ls, code)
 		return
 	}
-	if ls.ConnectionID != "" {
-		c := a.st.Connections[ls.ConnectionID]
-		if c == nil || c.Status == "revoked" || c.PersonaID != owner {
-			drop("access_denied")
-			return
-		}
-	}
+	defer a.mu.Unlock()
 	slices.Sort(keys)
-	code := newSecret("oc_", 16)
-	ls.PersonaID, ls.Accounts, ls.BankAccounts = owner, keys, g.Accounts
-	ls.BankConsentID, ls.ConsentEnds, ls.BankFrom = tok.ConsentID, g.Ends, g.From
-	ls.Status = "authorised"
-	ls.CodeHash = hashSecret(code)
-	ls.CodeExpires = a.clock.Real().Add(codeLife)
+	secret := newSecret("oc_", 16)
+	in.ls.CustomerID, in.ls.Accounts, in.ls.BankAccounts = owner, keys, g.Accounts
+	in.ls.BankConsentID, in.ls.ConsentEnds, in.ls.BankFrom = tok.ConsentID, g.Ends, g.From
+	in.ls.Status = "authorised"
+	in.ls.CodeHash = hashSecret(secret)
+	in.ls.CodeExpires = a.clock.Real().Add(codeLife)
 	if err := a.saveLocked(); err != nil {
 		a.log.Error("save state", "err", err)
 	}
-	a.redirectPartner(w, r, ls, url.Values{"code": {code}})
+	a.redirectPartner(w, r, in.ls, url.Values{"code": {secret}})
 }

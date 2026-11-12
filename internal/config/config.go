@@ -19,7 +19,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
@@ -61,7 +63,6 @@ type Bank struct {
 	HistoryDays    int     `yaml:"history_days"`
 	Port           int     `yaml:"port"`
 	APIPort        int     `yaml:"api_port,omitempty"`
-	StableIDs      *bool   `yaml:"stable_ids,omitempty"`
 	Database       string  `yaml:"database"`
 	SettlesThrough string  `yaml:"settles_through,omitempty"`
 	State          string  `yaml:"state,omitempty"`
@@ -83,10 +84,6 @@ func (b *Bank) CapIsDefault() bool {
 
 func (b *Bank) Suspended() bool {
 	return b.State == "suspended"
-}
-
-func (b *Bank) Stable() bool {
-	return b.StableIDs == nil || *b.StableIDs
 }
 
 func (b *Bank) Closed() bool {
@@ -122,22 +119,37 @@ type Holidays struct {
 }
 
 type Config struct {
-	DatabaseURL string     `yaml:"database_url"`
-	Banks       []*Bank    `yaml:"banks,omitempty"`
-	NIPSessions int        `yaml:"nip_sessions,omitempty"`
-	Ports       Ports      `yaml:"ports,omitempty"`
-	Seed        int64      `yaml:"seed"`
-	Genesis     string     `yaml:"genesis"`
-	Pace        float64    `yaml:"pace"`
-	Connect     Connect    `yaml:"connect"`
-	Partners    []*Partner `yaml:"partners"`
-	Holidays    *Holidays  `yaml:"holidays,omitempty"`
-	Dir         string     `yaml:"-"`
-	Start       time.Time  `yaml:"-"`
+	DatabaseURL string        `yaml:"database_url"`
+	Banks       []*Bank       `yaml:"banks,omitempty"`
+	NIPSessions int           `yaml:"nip_sessions,omitempty"`
+	TSQAfter    time.Duration `yaml:"-"`
+	TSQAttempts int           `yaml:"-"`
+	Ports       Ports         `yaml:"ports,omitempty"`
+	Connect     Connect       `yaml:"connect"`
+	Partners    []*Partner    `yaml:"partners"`
+	Holidays    *Holidays     `yaml:"holidays,omitempty"`
+	Dir         string        `yaml:"-"`
+	Start       time.Time     `yaml:"-"`
 	calendar    *clock.Calendar
+	fees        *charges.Schedule
 }
 
 const DatabaseURLEnv = "BEERUS_DATABASE_URL"
+
+func (c *Config) Fees() *charges.Schedule {
+	return c.fees
+}
+
+func (c *Config) buildFees() error {
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return fmt.Errorf("load country pack: %w", err)
+	}
+	if c.fees, err = charges.New(pack.Fees); err != nil {
+		return fmt.Errorf("build fee schedule: %w", err)
+	}
+	return nil
+}
 
 func (c *Config) Calendar() *clock.Calendar {
 	return c.calendar
@@ -190,10 +202,6 @@ func (c *Config) validateSessions() error {
 
 func (c *Config) Path(parts ...string) string {
 	return filepath.Join(append([]string{c.Dir}, parts...)...)
-}
-
-func (c *Config) GenesisDate() (clock.Date, error) {
-	return clock.ParseDate(c.Genesis)
 }
 
 func (c *Config) SyncInterval() time.Duration {
@@ -265,8 +273,8 @@ func HashKey(key string) string {
 }
 
 func (c *Config) Finish() error {
-	if _, err := c.GenesisDate(); err != nil {
-		return fmt.Errorf("genesis: %w", err)
+	if c.TSQAfter <= 0 || c.TSQAttempts <= 0 {
+		return fmt.Errorf("nip status queries need a wait and a number of tries, not %s and %d", c.TSQAfter, c.TSQAttempts)
 	}
 	if err := c.validateSessions(); err != nil {
 		return err
@@ -274,8 +282,8 @@ func (c *Config) Finish() error {
 	if err := c.validatePorts(); err != nil {
 		return err
 	}
-	if c.Pace <= 0 {
-		c.Pace = 1
+	if err := c.buildFees(); err != nil {
+		return err
 	}
 	return c.buildCalendar()
 }
@@ -283,18 +291,18 @@ func (c *Config) Finish() error {
 func randomToken(prefix string, n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		return "", err
+		return "", fmt.Errorf("read random bytes: %w", err)
 	}
 	return prefix + strings.TrimRight(base64.RawURLEncoding.EncodeToString(b), "="), nil
 }
 
-func Prepare(c *Config) error {
+func Prepare(c *Config, now time.Time) error {
 	for _, sub := range []string{"ca", "connect", "partners", "webhook", "snapshots"} {
 		if err := os.MkdirAll(c.Path(sub), 0o700); err != nil {
 			return fmt.Errorf("create %s: %w", sub, err)
 		}
 	}
-	if err := c.EnsureCertificates(); err != nil {
+	if err := c.EnsureCertificates(now); err != nil {
 		return fmt.Errorf("issue certificates: %w", err)
 	}
 	if _, err := WebhookKey(c); err != nil {
@@ -318,25 +326,7 @@ func NewAPIKey() (string, error) {
 }
 
 func WriteSecret(path, body string) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if _, err := tmp.WriteString(body); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return pki.WriteFile(path, []byte(body), 0o600)
 }
 
 const (
@@ -344,50 +334,49 @@ const (
 	caLife   = 10 * 365 * 24 * time.Hour
 )
 
-func (c *Config) EnsureCertificates() error {
+func (c *Config) EnsureCertificates(now time.Time) error {
 	root, err := loadOrCreateCA(c.Path("ca"), "root", "Beerus CBN Trust Anchor")
 	if err != nil {
-		return err
+		return fmt.Errorf("load root authority: %w", err)
 	}
 	partnerCA, err := loadOrCreateCA(c.Path("ca"), "connect-partners", "Beerus Connect Partner CA")
 	if err != nil {
-		return err
+		return fmt.Errorf("load partner authority: %w", err)
 	}
-	now := time.Now()
 	server := c.Path("connect", "server.crt")
 	if pki.NeedsRenewal(server, now) {
 		leaf, err := root.IssueServer([]string{c.Connect.Host, "localhost"}, leafLife)
 		if err != nil {
-			return err
+			return fmt.Errorf("issue connect server certificate: %w", err)
 		}
 		if err := leaf.Save(c.Path("connect"), "server"); err != nil {
-			return err
+			return fmt.Errorf("save connect server certificate: %w", err)
 		}
 	}
 	if err := c.ensureOpenBanking(root, now); err != nil {
-		return err
+		return fmt.Errorf("ensure open banking certificates: %w", err)
 	}
 	for _, p := range c.Partners {
 		dir := c.Path("partners", p.ID)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
+			return fmt.Errorf("create partner dir %s: %w", dir, err)
 		}
 		if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
 			leaf, err := partnerCA.IssueClient(p.CertCN, "partner", leafLife)
 			if err != nil {
-				return err
+				return fmt.Errorf("issue certificate for partner %s: %w", p.ID, err)
 			}
 			if err := leaf.Save(dir, "client"); err != nil {
-				return err
+				return fmt.Errorf("save certificate for partner %s: %w", p.ID, err)
 			}
 		}
 		fp, err := pki.FileThumbprint(filepath.Join(dir, "client.crt"))
 		if err != nil {
-			return err
+			return fmt.Errorf("fingerprint certificate for partner %s: %w", p.ID, err)
 		}
 		p.CertSHA256 = fp
-		if err := os.WriteFile(filepath.Join(dir, "ca.crt"), root.PEM, 0o644); err != nil {
-			return err
+		if err := pki.WriteFile(filepath.Join(dir, "ca.crt"), root.PEM, 0o644); err != nil {
+			return fmt.Errorf("save root certificate for partner %s: %w", p.ID, err)
 		}
 	}
 	return nil
@@ -403,52 +392,54 @@ const (
 func (c *Config) ensureOpenBanking(root *pki.Authority, now time.Time) error {
 	dir := c.Path("connect")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+		return fmt.Errorf("create connect dir: %w", err)
 	}
 	if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
 		leaf, err := root.IssueClient(AggregatorCN, AggregatorRole, leafLife)
 		if err != nil {
-			return err
+			return fmt.Errorf("issue aggregator certificate: %w", err)
 		}
 		if err := leaf.Save(dir, "client"); err != nil {
-			return err
+			return fmt.Errorf("save aggregator certificate: %w", err)
 		}
 	}
 	if _, err := c.SigningKey(); err != nil {
-		return err
+		return fmt.Errorf("load signing key: %w", err)
 	}
-	return c.EnsureBankCertificates(root, now)
+	if err := c.EnsureBankCertificates(root, now); err != nil {
+		return fmt.Errorf("ensure bank certificates: %w", err)
+	}
+	return nil
 }
 
 func (c *Config) EnsureBankCertificates(root *pki.Authority, now time.Time) error {
 	if root == nil {
 		var err error
 		if root, err = pki.LoadAuthority(c.Path("ca"), "root"); err != nil {
-			return err
+			return fmt.Errorf("load root authority: %w", err)
 		}
-		now = time.Now()
 	}
 	for _, b := range c.Banks {
 		dir := c.Path("banks", b.ID)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
+			return fmt.Errorf("create bank dir %s: %w", dir, err)
 		}
 		if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
 			leaf, err := root.IssueServer([]string{b.ID + ".localhost", "localhost"}, leafLife)
 			if err != nil {
-				return err
+				return fmt.Errorf("issue server certificate for bank %s: %w", b.ID, err)
 			}
 			if err := leaf.Save(dir, "server"); err != nil {
-				return err
+				return fmt.Errorf("save server certificate for bank %s: %w", b.ID, err)
 			}
 		}
 		if pki.NeedsRenewal(filepath.Join(dir, EventSignerName+".crt"), now) {
 			leaf, err := root.IssueSigner(b.ID+"-events", EventSignerRole, leafLife)
 			if err != nil {
-				return err
+				return fmt.Errorf("issue event signer for bank %s: %w", b.ID, err)
 			}
 			if err := leaf.Save(dir, EventSignerName); err != nil {
-				return err
+				return fmt.Errorf("save event signer for bank %s: %w", b.ID, err)
 			}
 		}
 	}
@@ -464,7 +455,7 @@ func (c *Config) SigningKey() (*ecdsa.PrivateKey, error) {
 		}
 		k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("parse connect/ob-signing.key: %w", err)
 		}
 		key, ok := k.(*ecdsa.PrivateKey)
 		if !ok {
@@ -474,16 +465,19 @@ func (c *Config) SigningKey() (*ecdsa.PrivateKey, error) {
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("generate signing key: %w", err)
 	}
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal signing key: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create signing key dir: %w", err)
 	}
-	return key, os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600)
+	if err := pki.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		return nil, fmt.Errorf("save signing key: %w", err)
+	}
+	return key, nil
 }
 
 func loadOrCreateCA(dir, name, cn string) (*pki.Authority, error) {
@@ -492,9 +486,12 @@ func loadOrCreateCA(dir, name, cn string) (*pki.Authority, error) {
 	}
 	a, err := pki.NewAuthority(cn, caLife)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create authority %s: %w", name, err)
 	}
-	return a, a.Save(dir, name)
+	if err := a.Save(dir, name); err != nil {
+		return nil, fmt.Errorf("save authority %s: %w", name, err)
+	}
+	return a, nil
 }
 
 type SigningKey struct {
@@ -527,18 +524,18 @@ func WebhookKey(c *Config) (SigningKey, error) {
 	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return SigningKey{}, err
+		return SigningKey{}, fmt.Errorf("generate webhook key: %w", err)
 	}
 	id, err := randomToken("whk_", 8)
 	if err != nil {
-		return SigningKey{}, err
+		return SigningKey{}, fmt.Errorf("generate webhook key id: %w", err)
 	}
 	k := SigningKey{ID: id, Private: priv}
-	if err := os.WriteFile(path, []byte(id+" "+k.SecretWH()+"\n"), 0o600); err != nil {
-		return SigningKey{}, err
+	if err := pki.WriteFile(path, []byte(id+" "+k.SecretWH()+"\n"), 0o600); err != nil {
+		return SigningKey{}, fmt.Errorf("save webhook signing key: %w", err)
 	}
-	if err := os.WriteFile(c.Path("webhook", "public.key"), []byte(k.PublicWH()+"\n"), 0o644); err != nil {
-		return SigningKey{}, err
+	if err := pki.WriteFile(c.Path("webhook", "public.key"), []byte(k.PublicWH()+"\n"), 0o644); err != nil {
+		return SigningKey{}, fmt.Errorf("save webhook public key: %w", err)
 	}
 	return k, nil
 }
@@ -546,7 +543,7 @@ func WebhookKey(c *Config) (SigningKey, error) {
 func ReadSecret(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read secret: %w", err)
 	}
 	return strings.TrimSpace(string(b)), nil
 }

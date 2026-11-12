@@ -69,7 +69,7 @@ func TestBanksJoinTheNIBSSDirectory(t *testing.T) {
 	found := false
 	for _, p := range s.ctl("GET", "/nip/participants", nil)["data"].([]any) {
 		m := p.(map[string]any)
-		if m["bank_id"] == "bank-a" && m["outside"] == false {
+		if m["bank_id"] == "bank-a" && m["status"] == nibss.StatusActive {
 			found = true
 		}
 	}

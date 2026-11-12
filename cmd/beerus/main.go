@@ -8,13 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
+	"slices"
 	"strings"
-	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -28,12 +26,18 @@ var version = "0.1.0"
 
 const defaultSetupName = "beerus"
 
-const usage = `Beerus simulates a Nigerian banking ecosystem on your machine.
+const usage = `Beerus is a copy of Nigeria's banking infrastructure: banks, NIBSS, the CBN and open banking, all in one binary.
 
 Usage:
   beerus init [--dir .beerus] [--partner-port 7443] [--widget-port 7444] [--control-port 7480] [--health-port 7490]
-  beerus up [--dir .beerus]
-  beerus run --participant cbn|sim|bank-a|bank-b [--dir .beerus] [--bind 0.0.0.0] [--core URL]
+  beerus up [-f file] [--prune] [--dir .beerus]
+  beerus apply [-f file] [--prune] [--money transfer|payout|leave --to BANK --customer ID=CHOICE] [--settle-now] [--wait 5m] [--json]
+  beerus diff [-f file] [--json]
+  beerus get banks|partners [--limit N] [--cursor C] [--json]
+  beerus describe bank|partner <id> [--json]
+  beerus export [-o file] [--json]
+  beerus verify [--json]
+  beerus run --participant cbn|core|<bank-id> [--dir .beerus] [--bind 0.0.0.0] [--core URL]
   beerus compose [--dir .beerus]
   beerus health URL [--token-file FILE]
   beerus info [--dir .beerus]
@@ -41,13 +45,20 @@ Usage:
   beerus partner list
   beerus partner rotate-key <id>
   beerus partner remove <id>
-  beerus clock [advance <24h|7d|365d> | pace <n>]
+  beerus clock
   beerus scenarios
   beerus scenario run <file.yaml>
-  beerus scenario <name> [--account ID] [--institution bank-a] [--persona adaeze] [--connection ID] [--duration 2h] [--count N]
-  beerus personas
-  beerus nip name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions
-  beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA [--to-bank "Bank C"] [--to-name NAME] [--narration TEXT]
+  beerus scenario <name> --connection ID
+  beerus use <bank>
+  beerus customer create [--bank ID] --name N --phone P --dob YYYY-MM-DD [--username U --password-stdin] | close <id>
+  beerus customers [--bank ID] [--limit N] [--cursor C]
+  beerus account open [--bank ID] --customer ID --type current|savings | close <nuban>
+  beerus accounts [--bank ID] [--customer ID] [--limit N] [--cursor C]
+  beerus deposit|withdraw <nuban> [--bank ID] --amount NAIRA
+  beerus statement <nuban> [--bank ID] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit N] [--cursor C]
+  beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT] [--dry-run]
+  beerus nip status <session_id> | settle-now | name-enquiry <bank_code> <nuban> | participants | positions | settlement
+  beerus fault down [--bank ID] [--for 1h] | timeout [--bank ID] --outcome credited|failed|unknown [--count N] | list | clear [--bank ID]
   beerus connections
   beerus revoke <connection-id>
   beerus sync
@@ -56,17 +67,18 @@ Usage:
   beerus bank [list]
   beerus bank create --name NAME [--type commercial|digital|microfinance] [--id ID] [--nip-code N] [--nuban-code N] [--settles-through ID]
   beerus bank suspend|resume <id>
-  beerus bank open-account <id> --persona ID [--type current|savings]
-  beerus bank close <id> --to BANK [--money transfer|payout|leave] [--customers a=payout,b=leave] [--dry-run] [--yes]
-  beerus bank purge <id> [--yes]
+  beerus bank close <id> [--money transfer|payout|leave --to BANK --customer ID=CHOICE] [--settle-now] [--wait 5m] [--yes] [--json]
+  beerus bank purge <id> [--money transfer|payout|leave --to BANK --customer ID=CHOICE] [--settle-now] [--wait 5m] [--yes] [--json]
   beerus registry [list | add-client <id> --cert-cn CN --public-key FILE --redirect-uri URL [--name N] [--legal-name N] [--cac N] | consents [--bank ID]]
   beerus doctor [--dir .beerus] [--fix]
-  beerus reset <setup-name> [--dir .beerus]
+  beerus reset <setup-name> [--dir .beerus] [--json]
   beerus trust [--dir .beerus]
   beerus untrust [--dir .beerus]
   beerus version
+  beerus help [command]
 
-The state directory defaults to .beerus, or $BEERUS_DIR when set.
+Run beerus <command> --help for one command. The state directory defaults to .beerus, or $BEERUS_DIR when set.
+Banking commands use the bank chosen by beerus use when --bank is left out, and take --json to print the API response.
 `
 
 func main() {
@@ -75,12 +87,43 @@ func main() {
 		os.Exit(2)
 	}
 	cmd, args := os.Args[1], os.Args[2:]
+	if cmd == "help" || cmd == "-h" || cmd == "--help" {
+		if len(args) == 0 {
+			fmt.Print(usage)
+			return
+		}
+		if args[0] == "-h" || args[0] == "--help" {
+			fmt.Print(usage)
+			return
+		}
+		os.Exit(printCommandHelp(args[0]))
+	}
+	if slices.ContainsFunc(args, func(a string) bool { return a == "-h" || a == "--help" }) {
+		os.Exit(printCommandHelp(cmd))
+	}
 	var err error
 	switch cmd {
 	case "init":
 		err = cmdInit(args)
 	case "up":
 		err = cmdUp(args)
+	case "apply":
+		os.Exit(runSetup(cmdApply, args))
+	case "diff":
+		os.Exit(runSetup(cmdDiff, args))
+	case "get":
+		os.Exit(runSetup(cmdGet, args))
+	case "describe":
+		os.Exit(runSetup(cmdDescribe, args))
+	case "export":
+		os.Exit(runSetup(cmdExport, args))
+	case "verify":
+		os.Exit(runSetup(cmdVerify, args))
+	case "bank":
+		if len(args) > 0 && (args[0] == "close" || args[0] == "purge") {
+			os.Exit(runSetup(cmdBankEnd, args))
+		}
+		err = cmdControl(cmd, args)
 	case "run":
 		err = cmdRun(args)
 	case "compose":
@@ -99,17 +142,49 @@ func main() {
 		err = cmdTrust(args, true)
 	case "untrust":
 		err = cmdTrust(args, false)
+	case "use":
+		err = cmdUse(args)
+	case "customer", "customers", "account", "accounts", "statement", "deposit", "withdraw", "transfer", "fault", "nip":
+		err = cmdBanking(cmd, args)
 	case "version":
 		fmt.Println("beerus", version)
-	case "help", "-h", "--help":
-		fmt.Print(usage)
-	default:
+	case "clock", "scenarios", "scenario", "connections", "revoke", "sync", "webhooks", "registry", "snapshot":
 		err = cmdControl(cmd, args)
+	default:
+		os.Exit(unknownCommand(cmd))
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "beerus:", err)
 		os.Exit(1)
 	}
+}
+
+func commandUsage(cmd string) []string {
+	var out []string
+	for _, line := range strings.Split(usage, "\n") {
+		if words := strings.Fields(line); len(words) >= 2 && words[0] == "beerus" && slices.Contains(strings.Split(words[1], "|"), cmd) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func printCommandHelp(cmd string) int {
+	lines := commandUsage(cmd)
+	if len(lines) == 0 {
+		return unknownCommand(cmd)
+	}
+	fmt.Println("Usage:")
+	for _, l := range lines {
+		fmt.Println(l)
+	}
+	fmt.Println("\nThe state directory defaults to .beerus, or $BEERUS_DIR when set.")
+	return 0
+}
+
+func unknownCommand(cmd string) int {
+	fmt.Fprintf(os.Stderr, "beerus: unknown command %q\nRun beerus help to list the commands.\n", cmd)
+	return 1
 }
 
 func defaultDir() string {
@@ -120,24 +195,48 @@ func defaultDir() string {
 }
 
 func cmdInit(args []string) error {
-	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	dir := fs.String("dir", defaultDir(), "state directory")
-	local := connect.DefaultLocal()
-	fs.IntVar(&local.Connect.PartnerPort, "partner-port", local.Connect.PartnerPort, "partner API port; banks take the next free ports")
-	fs.IntVar(&local.Connect.WidgetPort, "widget-port", local.Connect.WidgetPort, "widget port")
-	fs.IntVar(&local.Connect.ControlPort, "control-port", local.Connect.ControlPort, "control API port")
-	fs.IntVar(&local.Connect.HealthPort, "health-port", local.Connect.HealthPort, "health port of the cbn container")
-	fs.Parse(args)
-	today := clock.DateOf(time.Now())
-	if err := connect.Init(*dir, setup.DefaultSpec(defaultSetupName, today), local, today); err != nil {
-		return err
-	}
-	c, err := connect.LoadConfig(*dir)
+	c, err := initState(args)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Created %s. The setup is in %s; machine settings are in %s.\n\n", c.Dir, c.Path(connect.SpecFile), c.Path(connect.LocalFile))
 	return printInfo(c)
+}
+
+func initState(args []string) (*config.Config, error) {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	dir := fs.String("dir", defaultDir(), "state directory")
+	flagged := connect.DefaultLocal().Connect
+	fs.IntVar(&flagged.PartnerPort, "partner-port", flagged.PartnerPort, "partner API port; banks take the next free ports")
+	fs.IntVar(&flagged.WidgetPort, "widget-port", flagged.WidgetPort, "widget port")
+	fs.IntVar(&flagged.ControlPort, "control-port", flagged.ControlPort, "control API port")
+	fs.IntVar(&flagged.HealthPort, "health-port", flagged.HealthPort, "health port of the cbn container")
+	fs.Parse(args)
+	local, err := connect.FreshLocal(*dir)
+	if err != nil {
+		return nil, err
+	}
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "partner-port":
+			local.Connect.PartnerPort = flagged.PartnerPort
+		case "widget-port":
+			local.Connect.WidgetPort = flagged.WidgetPort
+		case "control-port":
+			local.Connect.ControlPort = flagged.ControlPort
+		case "health-port":
+			local.Connect.HealthPort = flagged.HealthPort
+		}
+	})
+	today := clock.DateOf(time.Now())
+	if err := connect.Init(*dir, setup.DefaultSpec(defaultSetupName, today), local, today); err != nil {
+		return nil, err
+	}
+	c, err := connect.LoadConfig(*dir)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("Created %s. The setup is in %s; machine settings are in %s.\n\n", c.Dir, c.Path(connect.SpecFile), c.Path(connect.LocalFile))
+	return c, nil
 }
 
 func printInfo(c *config.Config) error {
@@ -220,50 +319,6 @@ func cmdDoctor(args []string) error {
 	return nil
 }
 
-func cmdUp(args []string) error {
-	fs := flag.NewFlagSet("up", flag.ExitOnError)
-	dir := fs.String("dir", defaultDir(), "state directory")
-	fs.Parse(args)
-	ok, err := connect.Initialized(*dir)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		if err := cmdInit([]string{"--dir", *dir}); err != nil {
-			return err
-		}
-		fmt.Println()
-	}
-	c, err := connect.LoadConfig(*dir)
-	if err != nil {
-		return err
-	}
-	if err := connect.CheckPorts(c); err != nil {
-		return err
-	}
-	if err := c.EnsureCertificates(); err != nil {
-		return err
-	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	app, err := connect.New(c, connect.Options{Logger: log})
-	if err != nil {
-		return err
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	fmt.Printf("Beerus Connect (stub) is running. Business time %s, world %s.\n\n", app.Clock().Now().Format(time.RFC1123), app.WorldID())
-	if err := printInfo(c); err != nil {
-		return err
-	}
-	fmt.Printf("\nControl room        %s\n", app.RoomURL())
-	fmt.Println("\nPersonas (username / password):")
-	for _, p := range app.World().Personas() {
-		fmt.Printf("  %-8s %s  %s\n", p.Username, p.Password, p.Name)
-	}
-	fmt.Println("\nPress Ctrl+C to stop.")
-	return app.Serve(ctx)
-}
-
 type ctl struct {
 	base  string
 	token string
@@ -329,20 +384,10 @@ func cmdControl(cmd string, args []string) error {
 	var out map[string]any
 	switch cmd {
 	case "clock":
-		switch {
-		case len(args) == 0:
-			out, err = c.do("GET", "/clock", nil)
-		case args[0] == "advance" && len(args) == 2:
-			out, err = c.do("POST", "/clock/advance", map[string]string{"by": args[1]})
-		case args[0] == "pace" && len(args) == 2:
-			var p float64
-			if _, e := fmt.Sscan(args[1], &p); e != nil {
-				return e
-			}
-			out, err = c.do("POST", "/clock/pace", map[string]float64{"pace": p})
-		default:
-			return errors.New("usage: beerus clock [advance <dur> | pace <n>]")
+		if len(args) != 0 {
+			return errors.New("usage: beerus clock")
 		}
+		out, err = c.do("GET", "/clock", nil)
 	case "scenarios":
 		out, err = c.do("GET", "/scenarios", nil)
 	case "scenario":
@@ -361,41 +406,9 @@ func cmdControl(cmd string, args []string) error {
 			break
 		}
 		fs := flag.NewFlagSet("scenario", flag.ExitOnError)
-		acc := fs.String("account", "", "account ID")
-		inst := fs.String("institution", "", "institution ID")
-		persona := fs.String("persona", "", "persona ID")
 		conn := fs.String("connection", "", "connection ID")
-		dur := fs.String("duration", "", "duration")
-		count := fs.Int("count", 0, "count")
 		fs.Parse(args[1:])
-		out, err = c.do("POST", "/scenarios/"+args[0], map[string]any{"account_id": *acc, "institution": *inst, "persona": *persona, "connection_id": *conn, "duration": *dur, "count": *count})
-	case "personas":
-		out, err = c.do("GET", "/personas", nil)
-	case "transfer":
-		fs := flag.NewFlagSet("transfer", flag.ExitOnError)
-		from := fs.String("from", "", "account number, bank:number or acc_ ID to pay from")
-		to := fs.String("to", "", "account number, bank:number or acc_ ID to pay to")
-		amount := fs.String("amount", "", "amount in naira, such as 25000 or 2500.50")
-		toBank := fs.String("to-bank", "", "bank of an outside account (Bank A, Bank B, Bank C, Bank D Microfinance)")
-		toName := fs.String("to-name", "", "name of an outside beneficiary")
-		narration := fs.String("narration", "", "narration for the debit")
-		sessionID := fs.String("session-id", "", "30-digit NIP session ID; sending the same one again returns the first answer")
-		fs.Parse(args)
-		if *from == "" || *to == "" || *amount == "" {
-			return errors.New("usage: beerus transfer --from ACCOUNT --to ACCOUNT --amount NAIRA")
-		}
-		out, err = c.do("POST", "/transfers", map[string]string{"from": *from, "to": *to, "amount": *amount, "to_bank": *toBank, "to_name": *toName, "narration": *narration, "session_id": *sessionID})
-	case "nip":
-		switch {
-		case len(args) == 3 && args[0] == "name-enquiry":
-			out, err = c.do("GET", "/nip/name-enquiry?bank_code="+url.QueryEscape(args[1])+"&account_number="+url.QueryEscape(args[2]), nil)
-		case len(args) == 2 && args[0] == "status":
-			out, err = c.do("GET", "/nip/transfers/"+url.PathEscape(args[1]), nil)
-		case len(args) == 1 && (args[0] == "participants" || args[0] == "positions"):
-			out, err = c.do("GET", "/nip/"+args[0], nil)
-		default:
-			return errors.New("usage: beerus nip [name-enquiry <bank_code> <nuban> | status <session_id> | participants | positions]")
-		}
+		out, err = c.do("POST", "/scenarios/"+args[0], map[string]any{"connection_id": *conn})
 	case "connections":
 		out, err = c.do("GET", "/connections", nil)
 	case "revoke":
@@ -431,7 +444,6 @@ func cmdControl(cmd string, args []string) error {
 			return errors.New("usage: beerus snapshot [take [name] | restore <id>]")
 		}
 	default:
-		fmt.Print(usage)
 		return fmt.Errorf("unknown command %q", cmd)
 	}
 	if err != nil {
@@ -504,56 +516,8 @@ func cmdBank(c *ctl, args []string) (map[string]any, error) {
 		return waitBank(c, fmt.Sprint(out["id"]))
 	case (args[0] == "suspend" || args[0] == "resume") && len(args) == 2:
 		return c.do("POST", "/banks/"+args[1]+"/"+args[0], nil)
-	case args[0] == "close" && len(args) >= 2:
-		fs := flag.NewFlagSet("bank close", flag.ExitOnError)
-		dry := fs.Bool("dry-run", false, "show what closing the bank would affect, without closing it")
-		money := fs.String("money", "transfer", "what happens to customers' money: transfer, payout or leave")
-		to := fs.String("to", "", "bank that receives transferred or paid-out money")
-		each := fs.String("customers", "", "choices for single customers, such as adaeze=payout,tunde=leave")
-		yes := fs.Bool("yes", false, "close the bank; this cannot be undone")
-		fs.Parse(args[2:])
-		if *dry || !*yes {
-			out, err := c.do("GET", "/banks/"+args[1]+"/close", nil)
-			if err == nil && !*dry {
-				out["next"] = "Nothing was closed. Run again with --yes to close the bank; closing cannot be undone."
-			}
-			return out, err
-		}
-		customers := map[string]string{}
-		for _, kv := range strings.Split(*each, ",") {
-			if kv == "" {
-				continue
-			}
-			k, v, ok := strings.Cut(kv, "=")
-			if !ok {
-				return nil, errors.New("--customers takes persona=choice pairs, such as adaeze=payout")
-			}
-			customers[strings.TrimSpace(k)] = strings.TrimSpace(v)
-		}
-		return c.do("POST", "/banks/"+args[1]+"/close", map[string]any{"money": *money, "to": *to, "customers": customers})
-	case args[0] == "purge" && len(args) >= 2:
-		fs := flag.NewFlagSet("bank purge", flag.ExitOnError)
-		yes := fs.Bool("yes", false, "purge the bank; this cannot be undone")
-		fs.Parse(args[2:])
-		if !*yes {
-			out, err := c.do("GET", "/banks/"+args[1]+"/purge", nil)
-			if err == nil {
-				out["next"] = "Nothing was purged. Run again with --yes to delete the bank's database, its snapshot copies and its entry in the setup; purging cannot be undone."
-			}
-			return out, err
-		}
-		return c.do("POST", "/banks/"+args[1]+"/purge", nil)
-	case args[0] == "open-account" && len(args) >= 2:
-		fs := flag.NewFlagSet("bank open-account", flag.ExitOnError)
-		persona := fs.String("persona", "", "persona who opens the account")
-		typ := fs.String("type", "current", "current or savings")
-		fs.Parse(args[2:])
-		if *persona == "" {
-			return nil, errors.New("usage: beerus bank open-account <id> --persona ID [--type current|savings]")
-		}
-		return c.do("POST", "/banks/"+args[1]+"/accounts", map[string]string{"persona": *persona, "type": *typ})
 	}
-	return nil, errors.New("usage: beerus bank [list [--state STATE] | create --name NAME | suspend <id> | resume <id> | open-account <id> --persona ID | close <id> --to BANK [--money transfer|payout|leave] --yes | purge <id> --yes]")
+	return nil, errors.New("usage: beerus bank [list [--state STATE] | create --name NAME | suspend <id> | resume <id> | close <id> | purge <id>]")
 }
 
 func waitBank(c *ctl, id string) (map[string]any, error) {

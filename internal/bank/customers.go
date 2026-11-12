@@ -73,7 +73,7 @@ func digits(s string) bool {
 	return s != "" && strings.Trim(s, "0123456789") == ""
 }
 
-func validUsername(u string) bool {
+func ValidUsername(u string) bool {
 	return u != "" && strings.Trim(u, "abcdefghijklmnopqrstuvwxyz0123456789._-") == ""
 }
 
@@ -99,7 +99,7 @@ func validateCustomer(key, name, phone string, dob clock.Date, bvn, username, pa
 		return invalid("BVN %q must be digits", bvn)
 	case username == "" && passwordHash != "":
 		return invalid("a password needs a username")
-	case username != "" && !validUsername(username):
+	case username != "" && !ValidUsername(username):
 		return invalid("username %q may only use a-z, 0-9, dot, dash and underscore", username)
 	case username != "" && passwordHash == "":
 		return invalid("username %q needs a password", username)
@@ -426,6 +426,47 @@ func (b *Bank) Customers(ctx context.Context, limit int, cursor string) ([]Custo
 	return out, "", nil
 }
 
+func (b *Bank) Customer(ctx context.Context, id string) (Customer, error) {
+	c, err := scanCustomer(b.L.Pool().QueryRow(ctx, `SELECT `+customerCols+` FROM customers WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Customer{}, fmt.Errorf("%w: %s", ErrUnknownCustomer, id)
+	}
+	if err != nil {
+		return Customer{}, fmt.Errorf("read customer %s: %w", id, err)
+	}
+	return c, nil
+}
+
+func (b *Bank) CustomerByBVN(ctx context.Context, bvn string) (Customer, error) {
+	c, err := scanCustomer(b.L.Pool().QueryRow(ctx, `SELECT `+customerCols+` FROM customers WHERE bvn = $1 AND status = $2 ORDER BY seq LIMIT 1`, bvn, CustomerActive))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Customer{}, fmt.Errorf("%w: no active customer with BVN %s", ErrUnknownCustomer, bvn)
+	}
+	if err != nil {
+		return Customer{}, fmt.Errorf("find customer by BVN: %w", err)
+	}
+	return c, nil
+}
+
+func (b *Bank) CustomerAccounts(ctx context.Context, customer string) ([]ledger.Account, error) {
+	if customer == "" {
+		return nil, invalid("customer is empty")
+	}
+	out := []ledger.Account{}
+	cursor := ""
+	for {
+		page, next, err := b.Accounts(ctx, customer, MaxPage, cursor)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page...)
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
+}
+
 func (b *Bank) Accounts(ctx context.Context, customer string, limit int, cursor string) ([]ledger.Account, string, error) {
 	if err := checkLimit(limit); err != nil {
 		return nil, "", err
@@ -581,4 +622,22 @@ func (b *Bank) Authenticate(ctx context.Context, username, password string) (Cus
 		return Customer{}, ErrBadLogin
 	}
 	return c, nil
+}
+
+func (b *Bank) NUBANSerial(ctx context.Context) (int64, error) {
+	var n int64
+	if err := b.L.Pool().QueryRow(ctx, `SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM nuban_serial`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("read the NUBAN serial of %s: %w", b.P.ID, err)
+	}
+	return n, nil
+}
+
+func (b *Bank) RaiseNUBANSerial(ctx context.Context, n int64) error {
+	if n < 1 {
+		return nil
+	}
+	if _, err := b.L.Pool().Exec(ctx, `SELECT setval('nuban_serial', greatest($1, (SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM nuban_serial)))`, n); err != nil {
+		return fmt.Errorf("raise the NUBAN serial of %s to %d: %w", b.P.ID, n, err)
+	}
+	return nil
 }

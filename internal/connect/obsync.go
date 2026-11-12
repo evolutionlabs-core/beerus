@@ -3,13 +3,11 @@ package connect
 import (
 	"fmt"
 	"net/url"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/world"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 const (
@@ -42,78 +40,71 @@ type wireTxn struct {
 	HadPending   bool   `json:"had_pending"`
 }
 
-func (w wireTxn) presented() (world.Presented, error) {
+type bankLine struct {
+	Key          string
+	Pending      bool
+	HadPending   bool
+	Amount       int64
+	BookedAt     time.Time
+	ValueDate    clock.Date
+	Narration    string
+	Counterparty *Counterparty
+	SessionID    string
+	BankRef      string
+	Channel      string
+	BalanceAfter int64
+	Seq          int64
+}
+
+func (w wireTxn) presented() (bankLine, error) {
 	vd, err := clock.ParseDate(w.ValueDate)
 	if err != nil {
-		return world.Presented{}, err
+		return bankLine{}, err
 	}
-	p := world.Presented{Key: w.ID, Pending: w.Status == "pending", HadPending: w.HadPending, Amount: w.Amount, ValueDate: vd, Narration: w.Description, SessionID: w.SessionID, BankRef: w.BankRef, Channel: w.Channel, Seq: w.Sequence}
+	p := bankLine{Key: w.ID, Pending: w.Status == "pending", HadPending: w.HadPending, Amount: w.Amount, ValueDate: vd, Narration: w.Description, SessionID: w.SessionID, BankRef: w.BankRef, Channel: w.Channel, Seq: w.Sequence}
 	if !p.Pending {
 		p.BalanceAfter = w.BalanceAfter
 		if w.BookedAt != nil {
 			bt, err := time.Parse(time.RFC3339, *w.BookedAt)
 			if err != nil {
-				return world.Presented{}, err
+				return bankLine{}, err
 			}
-			p.BookedAt, p.At = bt, bt
+			p.BookedAt = bt
 		}
 	}
 	if w.Counterparty != nil {
-		p.Counterparty = &world.Counterparty{Name: w.Counterparty.Name, AccountNumber: w.Counterparty.AccountNumber, BankCode: w.Counterparty.BankCode, BankName: w.Counterparty.BankName}
+		p.Counterparty = &Counterparty{Name: strp(w.Counterparty.Name), AccountNumber: strp(w.Counterparty.AccountNumber), BankCode: strp(w.Counterparty.BankCode), BankName: strp(w.Counterparty.BankName)}
 	}
 	return p, nil
 }
 
-func (a *App) nubanOf(acct *AccountRec) string {
-	if acct.NUBAN != "" {
-		return acct.NUBAN
-	}
-	wa, _ := a.world.Account(acct.WorldKey)
-	return wa.NUBAN
+type bankPull struct {
+	bank    *config.Bank
+	vid     string
+	consent string
+	nuban   string
+	from    clock.Date
 }
 
-func fingerprint(lines []world.Presented) {
-	sort.SliceStable(lines, func(i, j int) bool { return lines[i].Seq < lines[j].Seq })
-	seen := map[string]int{}
-	for i := range lines {
-		p := &lines[i]
-		dir := "cr"
-		amt := p.Amount
-		if amt < 0 {
-			dir, amt = "dr", -amt
-		}
-		parts := []string{p.ValueDate.String(), dir, strconv.FormatInt(amt, 10), Normalise(p.Narration)}
-		if !p.Pending {
-			parts = append(parts, strconv.FormatInt(p.BalanceAfter, 10))
-		}
-		base := strings.Join(parts, "|")
-		n := seen[base]
-		seen[base]++
-		p.Key = world.ID("fp", base, strconv.Itoa(n))
-		p.HadPending = false
-	}
-}
-
-func (a *App) pullBank(c *Connection, acct *AccountRec, at time.Time) (pulled, error) {
+func (a *App) bankPullPlanLocked(c *Connection, acct *AccountRec) (bankPull, error) {
 	b := a.cfg.Bank(c.Institution)
 	if b == nil {
-		return pulled{}, &bankDown{fmt.Errorf("%s is not configured", c.Institution)}
+		return bankPull{}, &bankDown{fmt.Errorf("%s is not configured", c.Institution)}
 	}
-	meta, err := a.bankMetaFor(b)
-	if err != nil {
-		return pulled{}, err
-	}
-	nuban := a.nubanOf(acct)
 	from := acct.From
 	if !(c.FullDue || !acct.HistoryDone || acct.AsAt.IsZero()) {
 		if w := clock.DateOf(acct.AsAt).AddDays(-syncOverlapDays); w.After(from) {
 			from = w
 		}
 	}
-	out := pulled{from: from, windowed: true}
+	return bankPull{bank: b, vid: c.ID, consent: c.ConsentID, nuban: acct.NUBAN, from: from}, nil
+}
+
+func (a *App) pullBank(p bankPull) (pulled, error) {
+	out := pulled{from: p.from, windowed: true}
 	cursor := ""
 	for {
-		q := url.Values{"page_size": {strconv.Itoa(syncPageSize)}, "from": {from.String()}}
+		q := url.Values{"page_size": {strconv.Itoa(syncPageSize)}, "from": {p.from.String()}}
 		if cursor != "" {
 			q.Set("cursor", cursor)
 		}
@@ -121,44 +112,37 @@ func (a *App) pullBank(c *Connection, acct *AccountRec, at time.Time) (pulled, e
 			Data   []wireTxn `json:"data"`
 			Cursor *string   `json:"next_cursor"`
 		}
-		if err := a.bankGet(b, c.ID, "/accounts/"+nuban+"/transactions?"+q.Encode(), &page); err != nil {
+		if err := a.bankGet(p.bank, p.vid, "/accounts/"+p.nuban+"/transactions?"+q.Encode(), &page); err != nil {
 			return pulled{}, err
 		}
 		for _, w := range page.Data {
-			p, err := w.presented()
+			line, err := w.presented()
 			if err != nil {
 				return pulled{}, err
 			}
-			out.lines = append(out.lines, p)
+			out.lines = append(out.lines, line)
 		}
 		if page.Cursor == nil || *page.Cursor == "" {
 			break
 		}
 		cursor = *page.Cursor
 	}
-	if !meta.StableIDs {
-		fingerprint(out.lines)
-	}
 	var bal struct {
 		Ledger    wireMoney `json:"ledger_balance"`
 		Available wireMoney `json:"available_balance"`
 	}
-	if err := a.bankGet(b, c.ID, "/accounts/"+nuban+"/balances", &bal); err != nil {
+	if err := a.bankGet(p.bank, p.vid, "/accounts/"+p.nuban+"/balances", &bal); err != nil {
 		return pulled{}, err
 	}
 	out.ledger, out.available = bal.Ledger.Amount, bal.Available.Amount
 	return out, nil
 }
 
-func (a *App) bankBalanceOn(c *Connection, acct *AccountRec, d clock.Date) (int64, error) {
-	b := a.cfg.Bank(c.Institution)
-	if b == nil {
-		return 0, &bankDown{fmt.Errorf("%s is not configured", c.Institution)}
-	}
+func (a *App) bankBalanceOn(p bankPull, d clock.Date) (int64, error) {
 	var out struct {
 		Ledger wireMoney `json:"ledger_balance"`
 	}
-	if err := a.bankGet(b, c.ID, "/accounts/"+a.nubanOf(acct)+"/balances?as_of="+d.String(), &out); err != nil {
+	if err := a.bankGet(p.bank, p.vid, "/accounts/"+p.nuban+"/balances?as_of="+d.String(), &out); err != nil {
 		return 0, err
 	}
 	return out.Ledger.Amount, nil

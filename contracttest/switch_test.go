@@ -3,12 +3,9 @@ package contracttest
 import (
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -32,64 +29,61 @@ func (s *Stack) setCap(bank string, minor int64) {
 	s.ctl("POST", "/banks/"+bank+"/net-debit-cap", map[string]string{"cap": minorToNaira(minor)})
 }
 
+func (s *Stack) sessionCredits(bank, nuban, sid string) int {
+	s.t.Helper()
+	n := 0
+	for _, l := range s.ctl("GET", "/banks/"+bank+"/accounts/"+nuban+"/statement?limit=1000", nil)["data"].([]any) {
+		if m := l.(map[string]any); m["session_id"] == sid && m["amount_minor"].(float64) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
 func TestNIPSwitch(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
 	s := newStack(t)
-	w := s.app.World()
-	from, to := w.AccountsAt("adaeze", "bank-a")[0], w.AccountsAt("ngozi", "bank-b")[0]
+	from, to := s.persona("adaeze").Accounts[0], s.persona("ngozi").Accounts[0]
 
 	enquiry := func(code, nuban string) map[string]any {
 		return s.ctl("GET", "/nip/name-enquiry?bank_code="+code+"&account_number="+nuban, nil)
 	}
-	if ne := enquiry("999002", to.NUBAN); ne["response_code"] != "00" || !strings.Contains(fmt.Sprint(ne["account_name"]), "NGOZI") {
+	if ne := enquiry("999002", to); ne["response_code"] != "00" || ne["account_name"] != "Ngozi Fabrics Ventures" {
 		t.Fatalf("name enquiry: %v", ne)
 	}
-	for name, ne := range map[string]map[string]any{
-		"unknown account": enquiry("999002", "0000000001"),
-		"short number":    enquiry("999002", "123"),
-		"unknown bank":    enquiry("000111", to.NUBAN),
+	for name, c := range map[string]struct {
+		ne   map[string]any
+		code any
+	}{
+		"unknown account": {enquiry("999002", world.NUBAN("902", 99)), "25"},
+		"bad check digit": {enquiry("999002", "0000000001"), "07"},
+		"short number":    {enquiry("999002", "123"), "07"},
+		"unknown bank":    {enquiry("000111", to), nil},
+		"no such bank":    {enquiry("999003", world.NUBAN("903", 1)), nil},
 	} {
-		if ne["response_code"] != "07" {
-			t.Fatalf("%s: %v", name, ne)
+		if c.ne["response_code"] != c.code {
+			t.Fatalf("%s: %v", name, c.ne)
 		}
 	}
-	if ne := enquiry("999003", world.NUBAN("999003", 123456)); ne["response_code"] != "00" {
-		t.Fatalf("outside bank: %v", ne)
-	}
-	checked := 0
-	for _, l := range w.LinesFor(from.Key, s.app.Clock().Now()) {
-		if l.Counterparty == nil || slices.ContainsFunc(s.cfg.Banks, func(b *config.Bank) bool { return b.NIPCode == l.Counterparty.BankCode }) {
-			continue
-		}
-		if ne := enquiry(l.Counterparty.BankCode, l.Counterparty.AccountNumber); ne["response_code"] != "00" {
-			t.Fatalf("name enquiry on a generated counterparty: %v", ne)
-		}
-		if checked++; checked == 20 {
-			break
-		}
-	}
-	if checked == 0 {
-		t.Fatal("no generated counterparties")
-	}
-	if ne := enquiry("999003", "0123456789"); ne["response_code"] != "07" {
-		t.Fatalf("outside bank, bad check digit: %v", ne)
+	if ne := enquiry("000111", to); ne["message"] != "Bank code 000111 is not in the NIBSS directory." {
+		t.Fatalf("unknown bank: %v", ne)
 	}
 	s.ctl("POST", "/banks/bank-b/suspend", nil)
-	if ne := enquiry("999002", to.NUBAN); ne["response_code"] != "91" {
+	if ne := enquiry("999002", to); ne["response_code"] != "91" {
 		t.Fatalf("suspended bank: %v", ne)
 	}
-	if _, err := s.ctlTry("POST", "/transfers", map[string]any{"from": from.Key, "to": to.Key, "amount": "100"}); err == nil || !strings.Contains(err.Error(), `"response_code":"91"`) {
+	if _, err := s.payTry("bank-a", from, "bank-b", to, "100", nil); err == nil || !strings.Contains(err.Error(), `"response_code":"91"`) {
 		t.Fatalf("transfer to a suspended bank: %v", err)
 	}
 	s.ctl("POST", "/banks/bank-b/resume", nil)
-	if ne := enquiry("999002", to.NUBAN); ne["response_code"] != "00" {
+	if ne := enquiry("999002", to); ne["response_code"] != "00" {
 		t.Fatalf("resumed bank: %v", ne)
 	}
 
-	body := map[string]any{"from": from.Key, "to": to.Key, "amount": "1500"}
-	first, _, err := s.ctlWith("POST", "/transfers", body, map[string]string{"Idempotency-Key": "k-1"})
+	key := map[string]string{"Idempotency-Key": "k-1"}
+	first, err := s.payTry("bank-a", from, "bank-b", to, "1500", key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,60 +91,43 @@ func TestNIPSwitch(t *testing.T) {
 	if len(sid) != 30 || first["response_code"] != "00" || !strings.HasPrefix(sid, "999001") {
 		t.Fatalf("first send: %v", first)
 	}
-	again, resp, err := s.ctlWith("POST", "/transfers", body, map[string]string{"Idempotency-Key": "k-1"})
+	again, resp, err := s.ctlWith("POST", "/banks/bank-a/transfers", map[string]string{"from": from, "to_bank": "bank-b", "to": to, "amount": "1500"}, key)
 	if err != nil || resp.Header.Get("Idempotent-Replayed") != "true" || fmt.Sprint(again) != fmt.Sprint(first) {
 		t.Fatalf("repeat by key: %v %v", again, err)
 	}
-	body["session_id"] = sid
-	again, _, err = s.ctlWith("POST", "/transfers", body, nil)
-	if err != nil || fmt.Sprint(again["session_id"]) != sid {
-		t.Fatalf("repeat by session: %v %v", again, err)
-	}
-	delete(body, "session_id")
-	if _, _, err := s.ctlWith("POST", "/transfers", map[string]any{"from": from.Key, "to": to.Key, "amount": "1600"}, map[string]string{"Idempotency-Key": "k-1"}); err == nil || !strings.Contains(err.Error(), "422") {
+	if _, err := s.payTry("bank-a", from, "bank-b", to, "1600", key); err == nil || !strings.Contains(err.Error(), "422") {
 		t.Fatalf("key reused for another transfer: %v", err)
 	}
-	now, _ := time.Parse(time.RFC3339, fmt.Sprint(s.ctl("GET", "/clock", nil)["business_time"]))
-	credits := 0
-	for _, tr := range w.Trace(sid, now.Add(48*time.Hour)) {
-		if tr.Account.Key == to.Key && tr.Line.Amount > 0 {
-			credits++
-		}
-	}
-	if credits != 1 {
-		t.Fatalf("the beneficiary was credited %d times", credits)
+	s.advance("48h")
+	if n := s.sessionCredits("bank-b", to, sid); n != 1 {
+		t.Fatalf("the beneficiary was credited %d times", n)
 	}
 
-	tsq := s.ctl("GET", "/nip/transfers/"+sid, nil)
-	if tsq["status"] != "success" || tsq["response_code"] != "00" {
+	tsq := s.ctl("GET", "/nip/sessions/"+sid, nil)
+	if tsq["status"] != "00" || tsq["outcome"] != "credited" || tsq["amount_minor"] != float64(150000) {
 		t.Fatalf("status query: %v", tsq)
 	}
-	missing, err := s.ctlTry("GET", "/nip/transfers/"+strings.Repeat("1", 30), nil)
-	if err == nil || missing["response_code"] != "25" {
-		t.Fatalf("unknown session: %v %v", missing, err)
+	if _, err := s.ctlTry("GET", "/nip/sessions/"+strings.Repeat("1", 30), nil); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("unknown session: %v", err)
 	}
 
 	pos := s.position("bank-a")["position_minor"].(float64)
 	s.setCap("bank-a", int64(pos)+100000)
-	over, err := s.ctlTry("POST", "/transfers", map[string]any{"from": from.Key, "to": to.Key, "amount": "1500"})
+	over, err := s.payTry("bank-a", from, "bank-b", to, "1500", nil)
 	if err == nil || over["response_code"] != "61" {
 		t.Fatalf("over the cap: %v %v", over, err)
 	}
-	if tsq := s.ctl("GET", "/nip/transfers/"+fmt.Sprint(over["session_id"]), nil); tsq["status"] != "failed" || tsq["response_code"] != "61" {
-		t.Fatalf("status of the rejected transfer: %v", tsq)
-	}
 	s.advance("72h")
 	s.setCap("bank-a", int64(s.position("bank-a")["position_minor"].(float64))+150000)
-	if _, err := s.ctlTry("POST", "/transfers", map[string]any{"from": from.Key, "to": to.Key, "amount": "1500"}); err != nil {
+	if _, err := s.payTry("bank-a", from, "bank-b", to, "1500", nil); err != nil {
 		t.Fatalf("after the session settled: %v", err)
 	}
 
 	seen := map[string]bool{}
-	ps := s.ctl("GET", "/personas", nil)["data"].([]any)
-	for _, p := range ps {
-		bvn := fmt.Sprint(p.(map[string]any)["bvn"])
+	for _, id := range []string{"adaeze", "tunde", "ngozi", "chidi"} {
+		bvn := s.persona(id).BVN
 		if len(bvn) != 11 || !strings.HasPrefix(bvn, "229") || seen[bvn] {
-			t.Fatalf("bvn %q", bvn)
+			t.Fatalf("%s has BVN %q", id, bvn)
 		}
 		seen[bvn] = true
 	}
@@ -161,25 +138,21 @@ func TestNetDebitPositionCountsAllTransfers(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newStack(t)
-	w := s.app.World()
-	from, to := w.AccountsAt("adaeze", "bank-a")[0], w.AccountsAt("ngozi", "bank-b")[0]
+	from, to := s.persona("adaeze").Accounts[0], s.persona("ngozi").Accounts[0]
 	before := s.position("bank-a")["open_outward_minor"].(float64)
-	now, _ := time.Parse(time.RFC3339, fmt.Sprint(s.ctl("GET", "/clock", nil)["business_time"]))
-	if _, err := w.Transfer(now, world.TransferRequest{From: from.Key, To: to.Key, Amount: 700000}); err != nil {
-		t.Fatal(err)
-	}
+	s.pay("bank-a", from, "bank-b", to, "7000")
 	if got := s.position("bank-a")["open_outward_minor"].(float64); got != before+700000 {
-		t.Fatalf("a transfer that did not come through the control API moved the open outward flow from %v to %v", before, got)
+		t.Fatalf("a transfer moved the open outward flow from %v to %v", before, got)
 	}
 	s.setCap("bank-a", 1)
-	if _, err := s.ctlTry("POST", "/transfers", map[string]any{"from": from.Key, "to": to.Key, "amount": "1"}); err == nil || !strings.Contains(err.Error(), "net_debit_cap_exceeded") {
-		t.Fatalf("the cap ignored a transfer made outside the control API: %v", err)
+	if _, err := s.payTry("bank-a", from, "bank-b", to, "1", nil); err == nil || !strings.Contains(err.Error(), "net_debit_cap_exceeded") {
+		t.Fatalf("the cap let a transfer through: %v", err)
 	}
 	row := s.position("bank-a")
 	if row["cap_source"] != "configured" || row["collateral_minor"] != nil {
 		t.Fatalf("a cap that was set and collateral that was not: %v", row)
 	}
-	if def := s.position("bank-b"); def["cap_source"] != "simulator_default" || def["collateral_minor"] != nil {
+	if def := s.position("bank-b"); def["cap_source"] != "default" || def["collateral_minor"] != nil {
 		t.Fatalf("the default cap: %v", def)
 	}
 	s.ctl("POST", "/banks/bank-a/net-debit-cap", map[string]string{"cap": "9000000", "collateral": "9500000"})
@@ -201,25 +174,21 @@ func TestEveryTransferPathIsIdempotent(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newStack(t)
-	w := s.app.World()
-	from, own, other := w.AccountsAt("adaeze", "bank-a")[0], w.AccountsAt("adaeze", "bank-a")[1], w.AccountsAt("tunde", "bank-a")[0]
+	adaeze := s.persona("adaeze")
+	from, own, other := adaeze.Accounts[0], adaeze.Accounts[1], s.persona("tunde").Accounts[0]
 	debits := func() int {
 		n := 0
-		ls, err := w.Statement(from.Key, s.app.Clock().Now().Add(24*time.Hour))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, l := range ls {
-			if l.Amount == -123400 {
+		for _, l := range s.ctl("GET", "/banks/bank-a/accounts/"+from+"/statement?limit=1000", nil)["data"].([]any) {
+			if l.(map[string]any)["amount_minor"] == float64(-123400) {
 				n++
 			}
 		}
 		return n
 	}
-	send := func(key string, body map[string]any) (map[string]any, *http.Response, error) {
-		return s.ctlWith("POST", "/transfers", body, map[string]string{"Idempotency-Key": key})
+	send := func(key string, body map[string]string) (map[string]any, *http.Response, error) {
+		return s.ctlWith("POST", "/banks/bank-a/transfers", body, map[string]string{"Idempotency-Key": key})
 	}
-	body := map[string]any{"from": from.Key, "to": other.Key, "amount": "1234"}
+	body := map[string]string{"from": from, "to": other, "amount": "1234"}
 	first, _, err := send("intra-1", body)
 	if err != nil {
 		t.Fatal(err)
@@ -231,13 +200,13 @@ func TestEveryTransferPathIsIdempotent(t *testing.T) {
 	if n := debits(); n != 1 {
 		t.Fatalf("the sender was debited %d times", n)
 	}
-	if _, _, err := send("intra-1", map[string]any{"from": from.Key, "to": other.Key, "amount": "1235"}); err == nil || !strings.Contains(err.Error(), "idempotency_key_reused") {
+	if _, _, err := send("intra-1", map[string]string{"from": from, "to": other, "amount": "1235"}); err == nil || !strings.Contains(err.Error(), "idempotency_key_reused") {
 		t.Fatalf("key reused for another transfer: %v", err)
 	}
 	if _, _, err := send(strings.Repeat("k", 256), body); err == nil || !strings.Contains(err.Error(), "HTTP 400") {
 		t.Fatalf("a key of 256 characters: %v", err)
 	}
-	broke := map[string]any{"from": from.Key, "to": own.Key, "amount": "999999999"}
+	broke := map[string]string{"from": from, "to": own, "amount": "999999999"}
 	_, _, err1 := send("broke-1", broke)
 	_, resp, err2 := send("broke-1", broke)
 	if err1 == nil || err2 == nil || resp.Header.Get("Idempotent-Replayed") != "true" {
@@ -250,28 +219,20 @@ func TestStatusQueryReportsReversal(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newStack(t)
-	acct := s.app.World().AccountsAt("adaeze", "bank-a")[0]
-	s.ctl("POST", "/scenarios/debit_then_reversal", map[string]any{"account_id": acct.Key})
-	now, _ := time.Parse(time.RFC3339, fmt.Sprint(s.ctl("GET", "/clock", nil)["business_time"]))
-	sid := ""
-	ls, err := s.app.World().Statement(acct.Key, now.Add(3*time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, l := range ls {
-		if l.Channel == "nip" && l.SessionID != "" && l.Amount == -2500000 && !l.At.Before(now) {
-			sid = l.SessionID
-		}
-	}
-	if sid == "" {
-		t.Fatal("the scenario made no transfer")
-	}
-	if tsq := s.ctl("GET", "/nip/transfers/"+sid, nil); tsq["status"] != "success" {
-		t.Fatalf("before the reversal: %v", tsq)
+	from, to := s.persona("adaeze").Accounts[0], s.persona("ngozi").Accounts[0]
+	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "bank-b", "outcome": "failed", "count": 1})
+	sent, _ := s.payTry("bank-a", from, "bank-b", to, "25000", nil)
+	sid := fmt.Sprint(sent["session_id"])
+	if tsq := s.ctl("GET", "/nip/sessions/"+sid, nil); tsq["status"] == "00" {
+		t.Fatalf("a timed-out transfer: %v then %v", sent, tsq)
 	}
 	s.advance("3h")
-	if tsq := s.ctl("GET", "/nip/transfers/"+sid, nil); tsq["status"] != "reversed" || tsq["reversed_at"] == nil {
+	tsq := s.ctl("GET", "/nip/sessions/"+sid, nil)
+	if tsq["outcome"] != "reversed" || tsq["resolved_at"] == nil {
 		t.Fatalf("after the reversal: %v", tsq)
+	}
+	if n := s.sessionCredits("bank-b", to, sid); n != 0 {
+		t.Fatalf("the beneficiary was credited %d times", n)
 	}
 }
 

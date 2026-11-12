@@ -34,9 +34,9 @@ func errorMessage(out map[string]any) string {
 }
 
 func TestScenarioFiles(t *testing.T) {
-	s := newStackAllPersonas(t)
+	s := newStack(t)
 	files, err := filepath.Glob("../examples/scenarios/*.yaml")
-	if err != nil || len(files) < 2 {
+	if err != nil || len(files) == 0 {
 		t.Fatalf("example files: %v %v", files, err)
 	}
 	for _, f := range files {
@@ -55,17 +55,23 @@ func TestScenarioFiles(t *testing.T) {
 	}
 	s.syncNow()
 
-	if people, _ := s.ctl("GET", "/personas", nil)["data"].([]any); len(people) != 20 {
-		t.Fatalf("%d personas", len(people))
+	from, to := s.persona("tunde").Accounts[0], s.persona("chidi").Accounts[0]
+	pay := "name: pay\nsteps:\n  - transfer:\n      from_bank: bank-a\n      from: \"" + from + "\"\n      to_bank: bank-b\n      to: \"" + to + "\"\n      amount: \"5000\"\n"
+	status, out := s.runScenarioFile([]byte(pay), "application/yaml", "")
+	if steps, _ := out["steps"].([]any); status != http.StatusOK || len(steps) != 1 || !strings.Contains(fmt.Sprint(steps[0]), "₦5,000.00 success") {
+		t.Fatalf("a transfer step: HTTP %d %v", status, out)
+	}
+	if got := s.balances(s.persona("chidi"))[to]; got != 8_500_000+500_000 {
+		t.Fatalf("chidi has %d after the transfer step", got)
 	}
 
 	if err := os.MkdirAll(s.cfg.Path("scenarios"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(s.cfg.Path("scenarios", "one.yaml"), []byte("name: one\nsteps:\n  - advance: 1h\n"), 0o644); err != nil {
+	if err := os.WriteFile(s.cfg.Path("scenarios", "one.yaml"), []byte("name: one\nsteps:\n  - suspend: bank-a\n  - resume: bank-a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	status, out := s.runScenarioFile([]byte(`{"path":"one.yaml"}`), "application/json", "")
+	status, out = s.runScenarioFile([]byte(`{"path":"one.yaml"}`), "application/json", "")
 	if status != http.StatusOK || out["scenario"] != "one" {
 		t.Fatalf("by path: %d %v", status, out)
 	}
@@ -82,19 +88,19 @@ func TestScenarioFiles(t *testing.T) {
 
 	bad := []struct{ name, file, want string }{
 		{"empty", "", "empty"},
-		{"no name", "steps:\n  - advance: 1h\n", "name is required"},
+		{"no name", "steps:\n  - suspend: bank-a\n", "name is required"},
 		{"no steps", "name: x\n", "steps is empty"},
-		{"unknown field", "name: x\nsteps:\n  - advance: 1h\n    speed: 3\n", `line 4: unknown field "speed"`},
+		{"unknown field", "name: x\nsteps:\n  - suspend: bank-a\n    speed: 3\n", `line 4: unknown field "speed"`},
+		{"advance is gone", "name: x\nsteps:\n  - advance: 1h\n", `line 3: unknown field "advance"`},
 		{"not yaml", "name: [x\n", "not valid YAML"},
-		{"no action", "name: x\nsteps:\n  - count: 2\n", "step 1: use one of"},
-		{"two actions", "name: x\nsteps:\n  - advance: 1h\n    suspend: bank-a\n", "step 1: use only one"},
-		{"unknown scenario", "name: x\nsteps:\n  - advance: 1h\n  - run: nope\n", `step 2: unknown scenario "nope"`},
-		{"bad duration", "name: x\nsteps:\n  - advance: soon\n", "step 1: advance must look like"},
+		{"no action", "name: x\nsteps:\n  - connection: con_1\n", "step 1: use one of"},
+		{"two actions", "name: x\nsteps:\n  - resume: bank-a\n    suspend: bank-a\n", "step 1: use only one"},
+		{"unknown scenario", "name: x\nsteps:\n  - suspend: bank-a\n  - run: nope\n", `step 2: unknown scenario "nope"`},
 		{"unknown bank", "name: x\nsteps:\n  - suspend: bank-z\n", `unknown bank "bank-z"`},
-		{"unknown persona", "name: x\nsteps:\n  - run: late_reversal\n    persona: nobody\n", `unknown persona "nobody"`},
-		{"bad amount", "name: x\nsteps:\n  - transfer:\n      from: a\n      to: b\n      amount: lots\n", "step 1: amount"},
-		{"missing transfer field", "name: x\nsteps:\n  - transfer:\n      from: a\n", "transfer needs from, to and amount"},
-		{"stray field", "name: x\nsteps:\n  - advance: 1h\n    account: a\n", "only go with run"},
+		{"unknown from bank", "name: x\nsteps:\n  - transfer:\n      from_bank: bank-z\n      from: a\n      to: b\n      amount: \"5\"\n", `step 1: unknown bank "bank-z"`},
+		{"bad amount", "name: x\nsteps:\n  - transfer:\n      from_bank: bank-a\n      from: a\n      to: b\n      amount: lots\n", "step 1: amount"},
+		{"missing transfer field", "name: x\nsteps:\n  - transfer:\n      from: a\n", "transfer needs from_bank, from, to and amount"},
+		{"stray field", "name: x\nsteps:\n  - suspend: bank-a\n    connection: con_1\n", "connection only goes with run"},
 	}
 	for _, c := range bad {
 		status, out := s.runScenarioFile([]byte(c.file), "application/yaml", "")
@@ -103,8 +109,8 @@ func TestScenarioFiles(t *testing.T) {
 		}
 	}
 
-	status, out = s.runScenarioFile([]byte("name: x\nsteps:\n  - advance: 1h\n  - run: late_reversal\n    account: nobody@bank-a\n"), "application/yaml", "")
-	if status != http.StatusBadRequest || !strings.Contains(errorMessage(out), "step 2") || !strings.Contains(errorMessage(out), "Steps 1 to 1 already ran") {
+	status, out = s.runScenarioFile([]byte("name: x\nsteps:\n  - suspend: bank-b\n  - transfer:\n      from_bank: bank-a\n      from: \"0000000000\"\n      to: \""+from+"\"\n      amount: \"5\"\n"), "application/yaml", "")
+	if status != http.StatusBadRequest || !strings.HasPrefix(errorMessage(out), "step 2 (transfer) failed: ") || !strings.HasSuffix(errorMessage(out), " Step 1 already ran.") {
 		t.Errorf("failing step: HTTP %d %q", status, errorMessage(out))
 	}
 

@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   summary: The API partner apps such as Balance use to get a bank feed from Beerus Connect.
   description: |
-    Beerus Connect is the aggregator in the Beerus simulator. Partner apps reach bank data only through this API. Beerus is a simulator: no real money or real bank data moves through it.
+    Beerus Connect is the aggregator in Beerus. Partner apps reach bank data only through this API. Beerus is a copy of Nigeria's banking infrastructure for building and learning: no real money or real bank data moves through it.
 
     ## Flow
 

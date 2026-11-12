@@ -16,7 +16,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 )
 
@@ -56,6 +55,7 @@ func TestRealAggregator(t *testing.T) {
 	}
 	s := newBankStack(t)
 	db := s.bankDB("bank-a")
+	s.spend(s.persona("adaeze"), 3)
 	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
 	id := fmt.Sprint(accountAt(t, conn, "current")["id"])
 
@@ -68,8 +68,8 @@ func TestRealAggregator(t *testing.T) {
 	}
 
 	st, _ := s.syncAll(id, "", 500)
-	if len(st.lines) < 10 {
-		t.Fatalf("only %d lines synced over the bank API", len(st.lines))
+	if len(st.lines) != 13 {
+		t.Fatalf("%d lines synced over the bank API, want a deposit and 3 transfers of 4 lines", len(st.lines))
 	}
 	var used int
 	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM ob_consents WHERE id = $1 AND last_used_at IS NOT NULL`, consentID).Scan(&used); err != nil || used != 1 {
@@ -207,42 +207,6 @@ func mustSigningKey(t *testing.T, s *Stack) *ecdsa.PrivateKey {
 		t.Fatal(err)
 	}
 	return k
-}
-
-func TestUnstableIDsAreFingerprinted(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	no := false
-	s := newBankStackWith(t, func(cfg *config.Config) { cfg.Bank("bank-b").StableIDs = &no })
-	conn := s.connect("ngozi", "bank-b", s.today().AddDays(-20))
-	id := fmt.Sprint(conn.Accounts[0]["id"])
-	st, _ := s.syncAll(id, "", 500)
-	if len(st.lines) < 5 {
-		t.Fatalf("only %d lines", len(st.lines))
-	}
-	first := map[string]bool{}
-	for k := range st.lines {
-		first[k] = true
-	}
-	s.advance("50h")
-	st, _ = s.syncMore(id, st, 500)
-	for k := range first {
-		if _, ok := st.lines[k]; !ok {
-			t.Fatalf("line %s changed identity when the bank rotated its ids", k)
-		}
-	}
-	seen := map[string]bool{}
-	for _, l := range st.lines {
-		if l["status"] != "posted" {
-			continue
-		}
-		key := fmt.Sprint(l["value_date"], "|", l["amount_minor"], "|", l["description_raw"], "|", l["balance_after_minor"])
-		if seen[key] {
-			t.Fatalf("line appears twice: %s", key)
-		}
-		seen[key] = true
-	}
 }
 
 func TestConsentEventsAreSignedWithTheEventKey(t *testing.T) {

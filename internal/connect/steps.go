@@ -11,7 +11,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
@@ -72,13 +71,16 @@ func (a *App) initLifecycle(unready map[string]bool) []*config.Bank {
 	}
 	var resume []*config.Bank
 	for _, b := range a.cfg.Banks {
-		st := newStatus(b, a.worldOnly || a.ledgerFor(b.ID) != nil)
+		st := newStatus(b, a.ledgerFor(b.ID) != nil)
 		a.status[b.ID] = st
-		a.alignSuspensionLocked(b)
-		if a.worldOnly || b.Closed() {
+		r := findResource(&stored, setup.KindBank, b.ID)
+		if r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
+			st.Phase = r.Phase
 			continue
 		}
-		r := findResource(&stored, setup.KindBank, b.ID)
+		if b.Closed() {
+			continue
+		}
 		if !unready[b.ID] && (r == nil || (r.Phase != PhaseProvisioning && r.Phase != PhaseRepairing)) {
 			continue
 		}
@@ -114,6 +116,7 @@ func (a *App) recordPhase(id, phase string) {
 		if phase == PhaseActive || phase == PhaseSuspended {
 			changed = changed || r.ObservedGeneration != r.Generation || r.Attempts != 0 || r.NextAttemptAt != nil
 			r.ObservedGeneration, r.Attempts, r.NextAttemptAt = r.Generation, 0, nil
+			changed = clearCondition(r, setup.ConditionDegraded) || changed
 		}
 		return changed
 	})
@@ -160,16 +163,17 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 }
 
 func (a *App) reconcileBanks() {
-	if a.worldOnly {
-		return
-	}
 	a.checkDrift()
 	now := a.clock.Real()
+	stored, err := a.ctl.status()
+	if err != nil {
+		a.log.Error("read control.json", "err", err)
+	}
 	a.lifeMu.Lock()
 	pending := []*config.Bank{}
 	for _, b := range a.cfg.Banks {
 		st := a.status[b.ID]
-		if st == nil || (st.Phase != PhaseProvisioning && st.Phase != PhaseRepairing) {
+		if st == nil || (st.Phase != PhaseProvisioning && st.Phase != PhaseRepairing && !a.needsRepairLocked(st, stored)) {
 			continue
 		}
 		if st.NextAttemptAt != nil && now.Before(*st.NextAttemptAt) {
@@ -181,7 +185,19 @@ func (a *App) reconcileBanks() {
 	for _, b := range pending {
 		a.provision(b)
 	}
+	a.reconcileChanges()
 	a.advanceFinalizers(finalizerLists)
+}
+
+func (a *App) needsRepairLocked(st *BankStatus, stored setup.Status) bool {
+	if st.Phase != PhaseClosing && st.Phase != PhaseTerminating {
+		return false
+	}
+	r := findResource(&stored, setup.KindBank, st.ID)
+	if r == nil || nextFinalizer(*r) == setup.FinalizerPurgeOwned || slices.Contains(r.Done, setup.FinalizerPurgeOwned) {
+		return false
+	}
+	return slices.ContainsFunc(st.Steps, func(s BankStep) bool { return !s.Done })
 }
 
 func (a *App) provision(b *config.Bank) {
@@ -191,12 +207,6 @@ func (a *App) provision(b *config.Bank) {
 	ok := a.step(st, setup.StepAllocate, func() error {
 		return a.claimBank(b)
 	}) && a.step(st, setup.StepDirectory, func() error {
-		a.mu.Lock()
-		err := a.world.AddInstitution(world.Institution{ID: b.ID, Name: b.Name, Type: b.Type, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, HistoryDays: b.HistoryDays, StableIDs: b.Stable(), Style: b.Style()})
-		a.mu.Unlock()
-		if err != nil {
-			return err
-		}
 		return a.registerMember(b)
 	}) && a.step(st, setup.StepDatabase, func() error {
 		a.mu.Lock()
@@ -204,7 +214,7 @@ func (a *App) provision(b *config.Bank) {
 		a.mu.Unlock()
 		if ls == nil {
 			var err error
-			if ls, err = openLedgerSource(context.Background(), a.cfg, a.ctl, b, a.world); err != nil {
+			if ls, err = openLedgerSource(context.Background(), a.cfg, a.ctl, b); err != nil {
 				return err
 			}
 			a.mu.Lock()
@@ -218,29 +228,35 @@ func (a *App) provision(b *config.Bank) {
 	}) && a.step(st, setup.StepCBN, func() error {
 		return a.cbnMember(b)
 	}) && a.step(st, setup.StepSite, func() error {
+		if b.Closed() {
+			return nil
+		}
 		if err := a.startBankSite(b); err != nil {
 			return err
 		}
 		return a.probeSite(b)
 	}) && a.step(st, setup.StepAPI, func() error {
+		if b.Closed() {
+			return nil
+		}
 		return a.checkBankAPI(b)
 	})
-	if !ok {
+	a.lifeMu.Lock()
+	leaving := st.Phase == PhaseClosing || st.Phase == PhaseTerminating
+	a.lifeMu.Unlock()
+	if !ok || leaving {
 		return
 	}
 	phase := runningPhase(b)
+	a.recordPhase(b.ID, phase)
 	a.lifeMu.Lock()
 	st.Phase, st.Reason, st.Attempts, st.NextAttemptAt = phase, "", 0, nil
 	a.lifeMu.Unlock()
-	a.recordPhase(b.ID, phase)
-	a.mu.Lock()
-	a.alignSuspensionLocked(b)
-	a.mu.Unlock()
 }
 
 func (a *App) bankCerts(b *config.Bank) error {
 	c := config.Config{Dir: a.cfg.Dir, Banks: []*config.Bank{b}}
-	if err := c.EnsureBankCertificates(nil, time.Time{}); err != nil {
+	if err := c.EnsureBankCertificates(nil, a.clock.Real()); err != nil {
 		return fmt.Errorf("issue certificates for %s: %w", b.ID, err)
 	}
 	return a.ctl.Claim(setup.KindBank, b.ID, setup.Owned{Kind: ownedDir, Name: "banks/" + b.ID})
@@ -267,11 +283,10 @@ func (a *App) probeSite(b *config.Bank) error {
 	a.lifeMu.Lock()
 	serving := a.serving
 	a.lifeMu.Unlock()
-	if !serving || a.role == RoleSim {
+	if !serving || a.role == RoleCore {
 		return nil
 	}
-	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get(a.siteProbeURL(b))
+	resp, err := a.probeHTTP.Get(a.siteProbeURL(b))
 	if err != nil {
 		return err
 	}
@@ -287,7 +302,7 @@ func (a *App) checkBankAPI(b *config.Bank) error {
 	serving := a.serving
 	site := a.sites[b.ID]
 	a.lifeMu.Unlock()
-	if !serving || a.role == RoleSim {
+	if !serving || a.role == RoleCore {
 		return nil
 	}
 	a.obMu.Lock()
@@ -388,8 +403,10 @@ func (a *App) probe(b *config.Bank) (string, []string) {
 	if err := ls.Ping(ctx); err != nil {
 		return "its database cannot be reached: " + err.Error(), rebuild
 	}
-	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get(a.siteProbeURL(b))
+	if b.Closed() {
+		return "", nil
+	}
+	resp, err := a.probeHTTP.Get(a.siteProbeURL(b))
 	if err == nil {
 		resp.Body.Close()
 		return "", nil

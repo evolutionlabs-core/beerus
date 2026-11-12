@@ -3,12 +3,11 @@ package connect
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 func TestVaultSealsEachTokenWithItsOwnKey(t *testing.T) {
@@ -51,27 +50,41 @@ func TestVaultSealsEachTokenWithItsOwnKey(t *testing.T) {
 	}
 }
 
-func TestFingerprintIgnoresBankIDs(t *testing.T) {
-	d, _ := clock.ParseDate("2026-10-01")
-	mk := func(prefix string) []world.Presented {
-		return []world.Presented{
-			{Key: prefix + "1", Amount: -5000, ValueDate: d, Narration: "STAMP DUTY", BalanceAfter: 95000, Seq: 1},
-			{Key: prefix + "2", Amount: -5000, ValueDate: d, Narration: "STAMP DUTY", BalanceAfter: 90000, Seq: 2},
-			{Key: prefix + "3", Pending: true, Amount: -700, ValueDate: d, Narration: "POS", Seq: 3},
-			{Key: prefix + "4", Pending: true, Amount: -700, ValueDate: d, Narration: "POS", Seq: 4},
-		}
+func TestVaultKeyIsCreatedOnlyWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vault.key")
+	if _, err := loadVault(path); err != nil {
+		t.Fatal(err)
 	}
-	a, b := mk("x"), mk("y")
-	fingerprint(a)
-	fingerprint(b)
-	ids := map[string]bool{}
-	for i := range a {
-		if a[i].Key != b[i].Key {
-			t.Fatalf("line %d changed identity", i)
-		}
-		ids[a[i].Key] = true
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("key file: %v %v", info, err)
 	}
-	if len(ids) != 4 {
-		t.Fatalf("identical lines collided: %d distinct", len(ids))
+	leftovers, _ := filepath.Glob(filepath.Join(dir, "*.tmp"))
+	if len(leftovers) != 0 {
+		t.Fatalf("temp files left behind: %v", leftovers)
+	}
+
+	bad := filepath.Join(dir, "bad.key")
+	if err := os.WriteFile(bad, []byte("not hex\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadVault(bad); err == nil || err.Error() != "the vault key is malformed" {
+		t.Fatalf("malformed key: %v", err)
+	}
+	if raw, _ := os.ReadFile(bad); string(raw) != "not hex\n" {
+		t.Fatalf("a malformed key was overwritten: %q", raw)
+	}
+
+	unreadable := filepath.Join(dir, "dir.key")
+	if err := os.Mkdir(unreadable, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = loadVault(unreadable)
+	if err == nil || !strings.HasPrefix(err.Error(), "read vault key: ") {
+		t.Fatalf("unreadable key: %v", err)
+	}
+	if info, err := os.Stat(unreadable); err != nil || !info.IsDir() {
+		t.Fatal("an unreadable key was replaced")
 	}
 }

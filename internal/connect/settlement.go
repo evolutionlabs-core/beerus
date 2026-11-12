@@ -2,11 +2,11 @@ package connect
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
@@ -15,16 +15,14 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
-	cbnID          = "cbn"
-	cbnIssuance    = "ISSUANCE"
-	cbnCurrency    = "CURRENCY_IN_CIRCULATION"
-	outsideMember  = "OUTSIDE"
-	outsideFunding = 10 * bank.GenesisSettlement
+	cbnID       = "cbn"
+	cbnIssuance = "ISSUANCE"
+	cbnCurrency = "CURRENCY_IN_CIRCULATION"
 )
 
 var reservedIDs = map[string]bool{cbnID: true, "nibss": true}
@@ -81,7 +79,6 @@ type rtgs struct {
 	l       *ledger.Ledger
 	genesis time.Time
 	members map[string]bool
-	through time.Time
 }
 
 func openRTGS(ctx context.Context, cfg *config.Config, ctl *ctlStore, genesis time.Time) (*rtgs, error) {
@@ -116,7 +113,7 @@ func (r *rtgs) keepSchedule() error {
 		return err
 	}
 	if kept != r.cfg.Sessions() {
-		return fmt.Errorf("%w: the CBN has settled with %d sessions a day, so nip_sessions must stay %d", errSessions, kept, kept)
+		return fmt.Errorf("%w: the CBN has settled with %s a day, so nip_sessions must stay %d", errSessions, plural(kept, "session", "sessions"), kept)
 	}
 	return nil
 }
@@ -127,7 +124,6 @@ func (r *rtgs) setup() error {
 	}
 	r.l = ledger.New(r.st.Pool, nil)
 	r.members = map[string]bool{}
-	r.through = time.Time{}
 	for _, acc := range []ledger.Account{
 		{Code: cbnIssuance, Name: "Issuance", Kind: ledger.Asset},
 		{Code: cbnCurrency, Name: "Currency in circulation", Kind: ledger.Liability},
@@ -136,7 +132,7 @@ func (r *rtgs) setup() error {
 			return err
 		}
 	}
-	return r.member(outsideMember, outsideFunding, 0)
+	return nil
 }
 
 func (r *rtgs) member(id string, settlement, vault int64) error {
@@ -158,39 +154,6 @@ func (r *rtgs) member(id string, settlement, vault int64) error {
 	}
 	r.members[id] = true
 	return nil
-}
-
-func lastPosted(ctx context.Context, l *ledger.Ledger, kind string, floor time.Time) (time.Time, error) {
-	var t sql.NullTime
-	if err := l.Pool().QueryRow(ctx, `SELECT max(posted_at) FROM journal_entries WHERE kind = $1`, kind).Scan(&t); err != nil {
-		return time.Time{}, err
-	}
-	if !t.Valid || t.Time.Before(floor) {
-		return floor, nil
-	}
-	return t.Time, nil
-}
-
-func (r *rtgs) settledThrough() (time.Time, error) {
-	if r.through.IsZero() {
-		t, err := lastPosted(r.ctx, r.l, "session", r.genesis)
-		if err != nil {
-			return t, err
-		}
-		r.through = t
-	}
-	return r.through, nil
-}
-
-func (s *ledgerSource) settledThrough(floor time.Time) (time.Time, error) {
-	if s.settled.IsZero() {
-		t, err := lastPosted(s.ctx, s.b.L, "settlement", floor)
-		if err != nil {
-			return t, err
-		}
-		s.settled = t
-	}
-	return s.settled, nil
 }
 
 func (r *rtgs) Balance(member string) (int64, error) {
@@ -255,16 +218,17 @@ func (r *rtgs) Close() {
 	r.st.Close()
 }
 
+const rtgsRetry = 10 * time.Second
+
 func (a *App) ensureRTGS() error {
 	a.mu.Lock()
-	if a.rtgs != nil || a.worldOnly || a.rtgsOpening || len(a.cfg.Banks) == 0 || a.clock.Real().Sub(a.rtgsTried) < 10*time.Second {
+	if a.rtgs != nil || a.rtgsOpening || len(a.cfg.Banks) == 0 || a.clock.Real().Sub(a.rtgsTried) < rtgsRetry {
 		a.mu.Unlock()
 		return nil
 	}
 	a.rtgsTried, a.rtgsOpening = a.clock.Real(), true
-	genesis := a.world.Config().Genesis.Start()
 	a.mu.Unlock()
-	r, err := openRTGS(context.Background(), a.cfg, a.ctl, genesis)
+	r, err := openRTGS(context.Background(), a.cfg, a.ctl, a.cfg.Start)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.rtgsOpening = false
@@ -283,184 +247,171 @@ type position struct {
 	outward, inward int64
 }
 
-func nipAmounts(v world.Presented) (int64, int64, error) {
-	return bank.NIPAmounts(bank.FeedLine{Key: v.Key, Pending: v.Pending, Amount: v.Amount, Channel: v.Channel, Category: v.Category})
+func (p position) netDebit() int64 {
+	return max(p.outward-p.inward, 0)
 }
 
-func (a *App) accountsByBank() map[string][]world.Account {
-	out := map[string][]world.Account{}
-	for _, acc := range a.world.Accounts() {
-		out[acc.Institution] = append(out[acc.Institution], acc)
+func (a *App) openPosition(sw *nibss.Store, code string) (position, error) {
+	now := a.clock.Now()
+	list, err := sw.Open(context.Background())
+	if err != nil {
+		return position{}, err
 	}
-	return out
-}
-
-func (a *App) openPositionLocked(bankID string, after, now time.Time) (position, error) {
-	sched := a.schedule()
-	since := sched.prev(after)
-	var open position
-	for _, acc := range a.world.Accounts() {
-		if acc.Institution != bankID {
+	var p position
+	for _, x := range list {
+		if x.Status == nibss.SessionOK && x.ResolvedAt != nil && x.ResolvedAt.After(now) {
 			continue
 		}
-		vs, err := a.world.Versions(acc.Key, since, now)
-		if err != nil {
-			return open, err
-		}
-		for _, v := range vs {
-			o, i, err := nipAmounts(v)
-			if err != nil {
-				return open, err
+		var ok bool
+		switch code {
+		case x.FromCode:
+			if p.outward, ok = addMinor(p.outward, x.Amount); !ok {
+				return position{}, fmt.Errorf("add open outward sessions of %s: the total is too large", code)
 			}
-			if (o != 0 || i != 0) && sched.next(v.BookedAt.Add(-time.Nanosecond)).After(after) {
-				open.outward += o
-				open.inward += i
+		case x.ToCode:
+			if p.inward, ok = addMinor(p.inward, x.Amount); !ok {
+				return position{}, fmt.Errorf("add open inward sessions of %s: the total is too large", code)
 			}
 		}
 	}
-	return open, nil
+	return p, nil
 }
 
-func (a *App) settleLocked(now time.Time) error {
+func addMinor(a, b int64) (int64, bool) {
+	if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
+		return 0, false
+	}
+	return a + b, true
+}
+
+func (a *App) settle(now time.Time, adhoc bool) (int, error) {
+	a.gate.RLock()
+	defer a.gate.RUnlock()
+	return a.settleGated(now, adhoc)
+}
+
+func (a *App) settleGated(now time.Time, adhoc bool) (int, error) {
+	a.mu.Lock()
 	for a.settling {
 		a.settleDone.Wait()
 	}
-	if a.rtgs == nil || len(a.cfg.Banks) == 0 {
-		return nil
+	r := a.rtgs
+	if r == nil || len(a.cfg.Banks) == 0 {
+		a.mu.Unlock()
+		return 0, nil
 	}
 	a.settling = true
-	defer func() {
-		a.settling = false
-		a.settleDone.Broadcast()
-	}()
-	r := a.rtgs
 	ledgers := slices.Clone(a.ledgers)
 	banks := make([]string, 0, len(a.cfg.Banks))
 	for _, b := range a.cfg.Banks {
 		banks = append(banks, b.ID)
 	}
 	sched := a.schedule()
-	genesis := a.world.Config().Genesis.Start()
 	a.mu.Unlock()
-	from, err := r.settledThrough()
-	for _, l := range ledgers {
-		if err != nil {
-			break
-		}
-		var t time.Time
-		if t, err = l.settledThrough(genesis); err == nil && t.Before(from) {
-			from = t
-		}
+	defer func() {
+		a.mu.Lock()
+		a.settling = false
+		a.settleDone.Broadcast()
+		a.mu.Unlock()
+	}()
+	sw := a.nibssStore()
+	if sw == nil {
+		return 0, nil
 	}
-	if err == nil {
-		for _, id := range banks {
-			if err = r.member(id, bank.GenesisSettlement, bank.GenesisVault); err != nil {
-				break
-			}
-		}
-	}
-	a.mu.Lock()
-	if err != nil {
-		return err
-	}
-	last := time.Time{}
-	for c := sched.next(from); !c.After(now); c = sched.next(c) {
-		last = c
-	}
-	if last.IsZero() {
-		return nil
-	}
-	sessions, err := a.sessionPositions(sched, banks, from, last)
-	if err != nil {
-		return err
-	}
-	a.mu.Unlock()
-	err = settleSessions(r, ledgers, sched, sessions)
-	a.mu.Lock()
-	if err != nil {
-		return err
-	}
-	r.through = last
-	for _, l := range ledgers {
-		l.settled = last
-	}
-	return nil
-}
-
-func (a *App) sessionPositions(sched schedule, banks []string, from, last time.Time) (map[time.Time]map[string]*position, error) {
-	sessions := map[time.Time]map[string]*position{}
-	accounts := a.accountsByBank()
+	ctx := context.Background()
 	for _, id := range banks {
-		for _, acc := range accounts[id] {
-			vs, err := a.world.Versions(acc.Key, from, last)
-			if err != nil {
-				return nil, err
-			}
-			for _, v := range vs {
-				out, in, err := nipAmounts(v)
-				if err != nil {
-					return nil, err
-				}
-				if out == 0 && in == 0 {
-					continue
-				}
-				c := sched.next(v.BookedAt.Add(-time.Nanosecond))
-				if sessions[c] == nil {
-					sessions[c] = map[string]*position{}
-				}
-				p := sessions[c][id]
-				if p == nil {
-					p = &position{}
-					sessions[c][id] = p
-				}
-				p.outward += out
-				p.inward += in
-			}
+		if err := r.member(id, bank.GenesisSettlement, bank.GenesisVault); err != nil {
+			return 0, err
 		}
 	}
-	return sessions, nil
+	todo, err := sw.Unposted(ctx)
+	if err != nil {
+		return 0, err
+	}
+	upTo := now
+	if !adhoc {
+		upTo = sched.prev(now)
+	}
+	list, err := sw.Unsettled(ctx, upTo)
+	if err != nil {
+		return 0, err
+	}
+	groups := map[time.Time][]nibss.Session{}
+	for _, x := range list {
+		c := upTo
+		if !adhoc {
+			c = sched.next(x.ResolvedAt.Add(-time.Nanosecond))
+		}
+		groups[c] = append(groups[c], x)
+	}
+	for _, c := range slices.SortedFunc(maps.Keys(groups), func(x, y time.Time) int { return x.Compare(y) }) {
+		ids := make([]string, 0, len(groups[c]))
+		for _, x := range groups[c] {
+			ids = append(ids, x.ID)
+		}
+		key := sched.key(c)
+		if adhoc {
+			key = "adhoc:" + c.In(clock.Lagos).Format(time.RFC3339Nano) + ":" + ids[0]
+		}
+		if err := sw.MarkSettled(ctx, ids, key, c); err != nil {
+			return 0, err
+		}
+		todo = append(todo, nibss.Settlement{Key: key, CutoffAt: c, Sessions: groups[c]})
+	}
+	for _, x := range todo {
+		if err := postSettlement(r, ledgers, x); err != nil {
+			return 0, err
+		}
+		if err := sw.MarkPosted(ctx, x.Key, x.CutoffAt); err != nil {
+			return 0, err
+		}
+	}
+	return len(todo), nil
 }
 
-func settleSessions(r *rtgs, ledgers []*ledgerSource, sched schedule, sessions map[time.Time]map[string]*position) error {
-	cutoffs := make([]time.Time, 0, len(sessions))
-	for c := range sessions {
-		cutoffs = append(cutoffs, c)
+func postSettlement(r *rtgs, ledgers []*ledgerSource, x nibss.Settlement) error {
+	byCode := map[string]*ledgerSource{}
+	for _, l := range ledgers {
+		byCode[l.inst.NIPCode] = l
 	}
-	sort.Slice(cutoffs, func(i, j int) bool { return cutoffs[i].Before(cutoffs[j]) })
-	for _, c := range cutoffs {
-		key := sched.key(c)
-		ps := sessions[c]
-		if c.After(r.through) {
-			if err := r.settle(key, c, ps); err != nil {
-				return err
-			}
+	nets := map[string]*position{}
+	side := func(l *ledgerSource) *position {
+		p := nets[l.inst.ID]
+		if p == nil {
+			p = &position{}
+			nets[l.inst.ID] = p
 		}
-		for _, l := range ledgers {
-			p := ps[l.inst.ID]
-			if p == nil || !c.After(l.settled) {
-				continue
-			}
-			l.mu.Lock()
-			_, err := l.b.Settle(l.ctx, key, p.outward, p.inward, c)
-			l.mu.Unlock()
-			if err != nil {
-				return fmt.Errorf("settling %s at %s: %w", key, l.inst.ID, err)
-			}
+		return p
+	}
+	for _, s := range x.Sessions {
+		from, to := byCode[s.FromCode], byCode[s.ToCode]
+		if from == nil || to == nil {
+			return fmt.Errorf("settle %s: session %s is between %s and %s, and one of them has no open books", x.Key, s.ID, s.FromCode, s.ToCode)
 		}
+		side(from).outward += s.Amount
+		side(to).inward += s.Amount
+	}
+	for _, l := range ledgers {
+		p := nets[l.inst.ID]
+		if p == nil {
+			continue
+		}
+		if _, err := l.Bank().Settle(l.ctx, x.Key, p.outward, p.inward, x.CutoffAt); err != nil {
+			return fmt.Errorf("settle %s at %s: %w", x.Key, l.inst.ID, err)
+		}
+	}
+	if err := r.settle(x.Key, x.CutoffAt, nets); err != nil {
+		return fmt.Errorf("settle %s at the CBN: %w", x.Key, err)
 	}
 	return nil
 }
 
-func (r *rtgs) settle(key string, cutoff time.Time, ps map[string]*position) error {
-	members := make([]string, 0, len(ps))
-	for id := range ps {
-		members = append(members, id)
-	}
-	sort.Strings(members)
+func (r *rtgs) settle(key string, at time.Time, nets map[string]*position) error {
+	members := slices.Sorted(maps.Keys(nets))
 	lines := []ledger.Line{}
 	var total int64
 	for _, id := range members {
-		net := ps[id].inward - ps[id].outward
+		net := nets[id].inward - nets[id].outward
 		if net == 0 {
 			continue
 		}
@@ -468,97 +419,168 @@ func (r *rtgs) settle(key string, cutoff time.Time, ps map[string]*position) err
 		lines = append(lines, ledger.Line{Account: settlementAccount(id), Amount: -net, Narration: "NIP session " + key})
 	}
 	if total != 0 {
-		lines = append(lines, ledger.Line{Account: settlementAccount(outsideMember), Amount: total, Narration: "NIP session " + key})
+		return fmt.Errorf("the session nets to %d, not zero", total)
 	}
 	if len(lines) < 2 {
 		return nil
 	}
-	_, err := r.l.Post(r.ctx, ledger.Entry{Key: "session:" + key, Kind: "session", PostingDate: clock.DateOf(cutoff), PostedAt: cutoff, Narration: "NIP settlement session " + key, Lines: lines, AllowOverdraft: true})
+	_, err := r.l.Post(r.ctx, ledger.Entry{Key: "session:" + key, Kind: "session", PostingDate: clock.DateOf(at), PostedAt: at, Narration: "NIP settlement session " + key, Lines: lines, AllowOverdraft: true})
 	return err
 }
 
+func (a *App) SettleNow() (int, error) {
+	return a.settle(a.clock.Now(), true)
+}
+
 type SettlementCheck struct {
-	SettledThrough time.Time `json:"settled_through"`
-	Sessions       int       `json:"sessions"`
-	Problems       []string  `json:"problems"`
+	Sessions int      `json:"sessions"`
+	Problems []string `json:"problems"`
 }
 
 func (a *App) CheckSettlement() (SettlementCheck, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	out := SettlementCheck{Problems: []string{}}
-	if a.rtgs == nil {
-		return out, nil
-	}
 	now := a.clock.Now()
-	for _, l := range a.ledgers {
-		if err := l.Sync(now); err != nil {
-			return out, err
-		}
-	}
-	if err := a.settleLocked(now); err != nil {
+	if _, err := a.settle(now, false); err != nil {
 		return out, err
 	}
-	last := a.rtgs.through
-	out.SettledThrough = last
-	if err := a.rtgs.l.Pool().QueryRow(a.rtgs.ctx, `SELECT count(*) FROM journal_entries WHERE kind = 'session'`).Scan(&out.Sessions); err != nil {
+	a.mu.Lock()
+	ledgers := slices.Clone(a.ledgers)
+	a.mu.Unlock()
+	books, err := a.settlementBooks()
+	if err != nil {
 		return out, err
 	}
-	c, err := a.rtgs.l.Verify(a.rtgs.ctx)
+	ctx, r := books.ctx, books.r
+	if err := r.l.Pool().QueryRow(ctx, `SELECT count(*) FROM journal_entries WHERE kind = 'session'`).Scan(&out.Sessions); err != nil {
+		return out, fmt.Errorf("count CBN sessions: %w", err)
+	}
+	c, err := r.l.Verify(ctx)
 	if err != nil {
 		return out, err
 	}
 	if c.TrialBalance != 0 || len(c.UnbalancedEntries) > 0 {
 		out.Problems = append(out.Problems, fmt.Sprintf("the CBN's books do not balance: %d", c.TrialBalance))
 	}
-	accounts := a.accountsByBank()
-	genesis := a.world.Config().Genesis.Start()
-	for _, l := range a.ledgers {
-		open, err := a.openPositionLocked(l.inst.ID, last, now)
+	for _, l := range ledgers {
+		problems, err := books.check(l)
 		if err != nil {
 			return out, err
 		}
-		var worldNet int64
-		for _, acc := range accounts[l.inst.ID] {
-			vs, err := a.world.Versions(acc.Key, genesis.Add(-time.Nanosecond), now)
-			if err != nil {
-				return out, err
-			}
-			for _, v := range vs {
-				if !v.Pending && (v.Channel == "nip" || (v.Channel == "reversal" && v.Category == "")) {
-					worldNet += v.Amount
-				}
-			}
+		out.Problems = append(out.Problems, problems...)
+	}
+	return out, nil
+}
+
+func (r *rtgs) sessionNets() (map[string]map[string]int64, error) {
+	rows, err := r.l.Pool().Query(r.ctx, `SELECT substr(e.idempotency_key, length('session:') + 1), substr(a.code, length('SETTLEMENT/') + 1), sum(-jl.amount)
+		FROM journal_lines jl JOIN journal_entries e ON e.id = jl.entry_id JOIN gl_accounts a ON a.id = jl.account_id
+		WHERE e.kind = 'session' AND a.code LIKE 'SETTLEMENT/%' GROUP BY 1, 2`)
+	if err != nil {
+		return nil, fmt.Errorf("read CBN sessions: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]map[string]int64{}
+	for rows.Next() {
+		var key, member string
+		var net int64
+		if err := rows.Scan(&key, &member, &net); err != nil {
+			return nil, fmt.Errorf("read CBN sessions: %w", err)
 		}
-		owe, err := l.b.L.Balance(l.ctx, bank.NIPOutward)
-		if err != nil {
-			return out, err
+		if out[member] == nil {
+			out[member] = map[string]int64{}
 		}
-		due, err := l.b.L.Balance(l.ctx, bank.NIPInward)
-		if err != nil {
-			return out, err
+		out[member][key] = net
+	}
+	return out, rows.Err()
+}
+
+type settlementBooks struct {
+	r         *rtgs
+	ctx       context.Context
+	nibssNets map[string]map[string]int64
+	cbnNets   map[string]map[string]int64
+	open      []nibss.Session
+}
+
+func (a *App) settlementBooks() (settlementBooks, error) {
+	a.mu.Lock()
+	r := a.rtgs
+	a.mu.Unlock()
+	sw := a.nibssStore()
+	if r == nil || sw == nil {
+		return settlementBooks{}, errors.New("the CBN ledger or NIBSS is not open yet; try again soon")
+	}
+	ctx := context.Background()
+	nibssNets, err := sw.SettledNets(ctx)
+	if err != nil {
+		return settlementBooks{}, err
+	}
+	cbnNets, err := r.sessionNets()
+	if err != nil {
+		return settlementBooks{}, err
+	}
+	open, err := sw.Open(ctx)
+	if err != nil {
+		return settlementBooks{}, err
+	}
+	return settlementBooks{r: r, ctx: ctx, nibssNets: nibssNets, cbnNets: cbnNets, open: open}, nil
+}
+
+func (s settlementBooks) check(l *ledgerSource) ([]string, error) {
+	var out []string
+	ctx := s.ctx
+	code, id := l.inst.NIPCode, l.inst.ID
+	b := l.Bank()
+	posted, err := b.Settlements(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys := map[string]bool{}
+	for k := range s.nibssNets[code] {
+		keys[k] = true
+	}
+	for k := range posted {
+		keys[k] = true
+	}
+	for k := range s.cbnNets[id] {
+		keys[k] = true
+	}
+	for _, k := range slices.Sorted(maps.Keys(keys)) {
+		n, p, m := s.nibssNets[code][k], posted[k], s.cbnNets[id][k]
+		if n != p || n != m {
+			out = append(out, fmt.Sprintf("session %s at %s: NIBSS nets %d, the bank posted %d and the CBN moved %d", k, id, n, p, m))
 		}
-		if owe != open.outward || due != open.inward {
-			out.Problems = append(out.Problems, fmt.Sprintf("%s has NIP payable %d and receivable %d, but the unsettled transfers come to %d and %d", l.inst.ID, owe, due, open.outward, open.inward))
+	}
+	var want position
+	for _, x := range s.open {
+		if x.FromCode == code {
+			want.outward += x.Amount
 		}
-		var settledNet int64
-		if err := l.b.L.Pool().QueryRow(l.ctx, `SELECT coalesce(sum(jl.amount), 0) FROM journal_lines jl JOIN journal_entries e ON e.id = jl.entry_id JOIN gl_accounts a ON a.id = jl.account_id WHERE e.kind = 'settlement' AND a.code = $1`, bank.Settlement).Scan(&settledNet); err != nil {
-			return out, err
+		if x.ToCode == code && (x.Status == nibss.SessionOK || x.Outcome == nibss.OutcomeCredited) {
+			want.inward += x.Amount
 		}
-		if booked := settledNet + due - owe; booked != worldNet {
-			out.Problems = append(out.Problems, fmt.Sprintf("%s's customers moved %d through NIP, but its books settled and owe %d", l.inst.ID, worldNet, booked))
-		}
-		held, err := l.b.L.Balance(l.ctx, bank.Settlement)
-		if err != nil {
-			return out, err
-		}
-		rtgsBal, err := a.rtgs.Balance(l.inst.ID)
-		if err != nil {
-			return out, err
-		}
-		if held != rtgsBal {
-			out.Problems = append(out.Problems, fmt.Sprintf("%s's books show %d at the CBN, but the CBN shows %d", l.inst.ID, held, rtgsBal))
-		}
+	}
+	owe, err := b.L.Balance(ctx, bank.NIPOutward)
+	if err != nil {
+		return nil, err
+	}
+	due, err := b.L.Balance(ctx, bank.NIPInward)
+	if err != nil {
+		return nil, err
+	}
+	if owe != want.outward || due != want.inward {
+		out = append(out, fmt.Sprintf("%s has NIP payable %d and receivable %d, but its open NIBSS sessions come to %d and %d", id, owe, due, want.outward, want.inward))
+	}
+	held, err := b.L.Balance(ctx, bank.Settlement)
+	if err != nil {
+		return nil, err
+	}
+	rtgsBal, err := s.r.Balance(id)
+	if err != nil {
+		return nil, err
+	}
+	if held != rtgsBal {
+		out = append(out, fmt.Sprintf("%s's books show %d at the CBN, but the CBN shows %d", id, held, rtgsBal))
 	}
 	return out, nil
 }

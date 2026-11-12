@@ -15,7 +15,7 @@ func TestDefaultSpecLeavesCodesAndLegalFieldsOut(t *testing.T) {
 		Kind:       KindSetup,
 		Metadata:   Metadata{Name: "beerus"},
 		Spec: Body{
-			Start: "2026-11-04T08:00:00+01:00",
+			Start: "2026-11-04T00:00:00+01:00",
 			NIP:   NIP{Sessions: 4, TSQAfter: "2m", TSQAttempts: 3},
 			Banks: []Bank{
 				{ID: "bank-a", Name: "Bank A", Type: "commercial"},
@@ -43,6 +43,7 @@ func TestDefaultSpecReturnsAFreshCopy(t *testing.T) {
 func TestDefaultSpecMatchesTheFixtureApartFromPinnedFields(t *testing.T) {
 	got := DefaultSpec("beerus", clock.Date{Y: 2026, M: time.November, D: 4})
 	fixture := clearPos(parseFixture(t, "default.yaml"))
+	fixture.Spec.Start = got.Spec.Start
 	fixture.Spec.Connect = ConnectLegal{}
 	fixture.Spec.Holidays = Holidays{}
 	for i := range fixture.Spec.Banks {
@@ -53,11 +54,11 @@ func TestDefaultSpecMatchesTheFixtureApartFromPinnedFields(t *testing.T) {
 	}
 }
 
-func TestDefaultSpecStartsAtEightInLagos(t *testing.T) {
+func TestDefaultSpecStartsAtMidnightInLagos(t *testing.T) {
 	cases := map[clock.Date]string{
-		{Y: 2028, M: time.February, D: 29}: "2028-02-29T08:00:00+01:00",
-		{Y: 2026, M: time.December, D: 31}: "2026-12-31T08:00:00+01:00",
-		{Y: 2399, M: time.January, D: 1}:   "2399-01-01T08:00:00+01:00",
+		{Y: 2028, M: time.February, D: 29}: "2028-02-29T00:00:00+01:00",
+		{Y: 2026, M: time.December, D: 31}: "2026-12-31T00:00:00+01:00",
+		{Y: 2399, M: time.January, D: 1}:   "2399-01-01T00:00:00+01:00",
 	}
 	for today, want := range cases {
 		if got := DefaultSpec("lagos-dev", today).Spec.Start; got != want {

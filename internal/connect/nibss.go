@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,7 +11,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const nibssRetry = 10 * time.Second
@@ -40,7 +40,7 @@ func openNIBSS(ctx context.Context, cfg *config.Config, ctl *ctlStore) (*nibss.S
 
 func (a *App) nibssStore() *nibss.Store {
 	a.mu.Lock()
-	if a.nibss != nil || a.worldOnly || a.nibssOpening || a.clock.Real().Sub(a.nibssTried) < nibssRetry {
+	if a.nibss != nil || a.role == RoleBank || a.nibssOpening || a.clock.Real().Sub(a.nibssTried) < nibssRetry {
 		s := a.nibss
 		a.mu.Unlock()
 		return s
@@ -97,6 +97,42 @@ func (a *App) syncDirectory(s *nibss.Store) error {
 	return a.refreshDirectory()
 }
 
+func nibssSnapshot(cfg *config.Config, id string) string {
+	return config.DatabaseName(cfg.Dir, setup.SystemNIBSS) + "_snap_" + snapID(id)
+}
+
+func (a *App) snapshotNIBSS(sw *nibss.Store, id string) error {
+	if sw == nil {
+		return errors.New("the NIBSS directory is not open, so a snapshot would miss its NIP sessions; try again soon")
+	}
+	name := nibssSnapshot(a.cfg, id)
+	if err := a.ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: ownedSnapshot, Name: name}); err != nil {
+		return err
+	}
+	if err := sw.Snapshot(context.Background(), a.cfg.DatabaseURL, name); err != nil {
+		return fmt.Errorf("snapshot NIBSS: %w", err)
+	}
+	return nil
+}
+
+func (a *App) restoreNIBSS(sw *nibss.Store, id string) error {
+	if sw == nil {
+		return errors.New("the NIBSS directory is not open, so its NIP sessions cannot be restored; try again soon")
+	}
+	if err := sw.Restore(context.Background(), a.cfg.DatabaseURL, nibssSnapshot(a.cfg, id)); err != nil {
+		return fmt.Errorf("restore NIBSS: %w", err)
+	}
+	return nil
+}
+
+func (a *App) dropNIBSSSnapshot(id string) error {
+	name := nibssSnapshot(a.cfg, id)
+	if err := store.DropDatabases(context.Background(), a.cfg.DatabaseURL, []string{name}); err != nil {
+		return fmt.Errorf("drop the NIBSS snapshot %s: %w", name, err)
+	}
+	return a.ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name})
+}
+
 func (a *App) dropNIBSS() error {
 	a.mu.Lock()
 	s := a.nibss
@@ -133,8 +169,10 @@ func (a *App) registerMember(b *config.Bank) error {
 	if err := s.Register(ctx, memberOf(b)); err != nil {
 		return fmt.Errorf("register %s with NIBSS: %w", b.ID, err)
 	}
-	if err := s.SetStatus(ctx, b.ID, memberStatus(b)); err != nil {
-		return fmt.Errorf("set NIBSS status of %s: %w", b.ID, err)
+	if in, err := s.Institution(ctx, b.NIPCode); err != nil || in.Status != nibss.StatusTerminating {
+		if err := s.SetStatus(ctx, b.ID, memberStatus(b)); err != nil {
+			return fmt.Errorf("set NIBSS status of %s: %w", b.ID, err)
+		}
 	}
 	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
 		r := findResource(st, setup.KindBank, b.ID)
@@ -157,7 +195,7 @@ func (a *App) attachMember(ls *ledgerSource) {
 	s := a.nibss
 	a.mu.Unlock()
 	if s != nil && ls != nil {
-		s.Attach(ls.inst.ID, ls.Bank())
+		s.Attach(ls.inst.ID, member{a, ls})
 	}
 }
 
@@ -174,6 +212,24 @@ func (a *App) setMemberStatus(id, status string) error {
 	return a.refreshDirectory()
 }
 
+func (a *App) stopRouting(r setup.Resource) (*setup.Condition, error) {
+	sw := a.nibssStore()
+	if sw == nil {
+		return nil, errors.New("NIBSS is not open, so routing to the bank cannot be stopped; try again soon")
+	}
+	if err := a.setMemberStatus(r.ID, nibss.StatusTerminating); err != nil {
+		return nil, err
+	}
+	in, err := sw.Institution(context.Background(), r.Allocated.NIPCode)
+	if err != nil {
+		return nil, fmt.Errorf("read back the NIBSS status of %s: %w", r.ID, err)
+	}
+	if in.Status != nibss.StatusTerminating {
+		return nil, fmt.Errorf("NIBSS shows %s as %s, not %s", r.ID, in.Status, nibss.StatusTerminating)
+	}
+	return nil, nil
+}
+
 func (a *App) removeMember(id string) error {
 	a.mu.Lock()
 	s := a.nibss
@@ -183,10 +239,27 @@ func (a *App) removeMember(id string) error {
 	}
 	s.Attach(id, nil)
 	ctx := context.Background()
+	list, err := s.Directory(ctx)
+	if err != nil {
+		return fmt.Errorf("read the NIBSS directory: %w", err)
+	}
+	cur := ""
+	for _, in := range list {
+		if in.ID == id {
+			cur = in.Status
+		}
+	}
 	for _, status := range []string{nibss.StatusTerminating, nibss.StatusRemoved} {
+		if cur == nibss.StatusRemoved || cur == "" {
+			break
+		}
+		if cur == status {
+			continue
+		}
 		if err := s.SetStatus(ctx, id, status); err != nil {
 			return fmt.Errorf("set NIBSS status of %s to %s: %w", id, status, err)
 		}
+		cur = status
 	}
 	return a.refreshDirectory()
 }
@@ -215,16 +288,5 @@ func (a *App) refreshDirectory() error {
 }
 
 func (a *App) directoryLocked() *nip.Directory {
-	members := a.members
-	if a.worldOnly || a.role == RoleBank || a.nibss == nil {
-		members = nil
-		for _, b := range a.cfg.Banks {
-			members = append(members, nip.Participant{Code: b.NIPCode, Name: b.Name, BankID: b.ID})
-		}
-	}
-	outside := []nip.Participant{}
-	for _, o := range world.CounterpartyBanks() {
-		outside = append(outside, nip.Participant{Code: o.NIPCode, Name: o.Name})
-	}
-	return nip.NewDirectory(members, outside)
+	return nip.NewDirectory(a.members, nil)
 }

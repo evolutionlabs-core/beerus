@@ -2,6 +2,7 @@ package setup
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,8 @@ func TestValidateRules(t *testing.T) {
 		{"cbn as a bank id", func(s *Spec) { s.Spec.Banks[1].ID = "cbn" }, []string{"banks[cbn].id cbn is reserved for the CBN. Choose another id."}},
 		{"nibss as a bank id", func(s *Spec) { s.Spec.Banks[1].ID = "nibss" }, []string{"banks[nibss].id nibss is reserved for the NIBSS. Choose another id."}},
 		{"no bank name", func(s *Spec) { s.Spec.Banks[0].Name = "" }, []string{"banks[bank-a].name is required. Add the bank's name."}},
+		{"41 character bank name", func(s *Spec) { s.Spec.Banks[0].Name = strings.Repeat("x", 41) }, []string{"banks[bank-a].name has 41 characters. Use 1 to 40."}},
+		{"40 character bank name", func(s *Spec) { s.Spec.Banks[0].Name = strings.Repeat("é", 40) }, nil},
 		{"same name in another case", func(s *Spec) { s.Spec.Banks[1].Name = "BANK A" }, []string{`banks[bank-b].name "BANK A" is already used by bank-a. Give each bank its own name.`}},
 		{"no type", func(s *Spec) { s.Spec.Banks[0].Type = "" }, []string{"banks[bank-a].type is required. Use commercial, digital or microfinance."}},
 		{"short nip code", func(s *Spec) { s.Spec.Banks[0].NIPCode = "99901" }, []string{`banks[bank-a].nip_code "99901" is not valid. Use 6 digits, or leave it out to have one allocated.`}},
@@ -81,14 +84,15 @@ func TestValidateRules(t *testing.T) {
 		{"negative consent months", func(s *Spec) { s.Spec.Banks[0].OpenBanking.ConsentMonths = -1 }, []string{"banks[bank-a].open_banking.consent_months -1 must be more than zero. Leave it out for the default."}},
 		{"no money choice", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{To: "bank-a"} }, []string{"banks[bank-b].on_remove.money is required. Use transfer, payout or leave."}},
 		{"bad money choice", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: "burn"} }, []string{`banks[bank-b].on_remove.money "burn" is not valid. Use transfer, payout or leave.`}},
-		{"transfer without target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyTransfer} }, []string{"banks[bank-b].on_remove.to is required when money moves. Name the bank that receives it."}},
-		{"payout without target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyPayout} }, []string{"banks[bank-b].on_remove.to is required when money moves. Name the bank that receives it."}},
-		{"leave with target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, To: "bank-a"} }, []string{"banks[bank-b].on_remove.to is set but no money moves. Remove to, or choose transfer or payout."}},
+		{"transfer without target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyTransfer} }, []string{"banks[bank-b].on_remove.to is required when money is transferred. Name the bank that receives it."}},
+		{"payout without target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyPayout} }, nil},
+		{"payout with target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyPayout, To: "bank-a"} }, []string{"banks[bank-b].on_remove.to is set but no money is transferred. Payout is cash and needs no bank. Remove to, or choose transfer."}},
+		{"leave with target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, To: "bank-a"} }, []string{"banks[bank-b].on_remove.to is set but no money is transferred. Payout is cash and needs no bank. Remove to, or choose transfer."}},
 		{"leave with a customer moving", func(s *Spec) {
 			s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, Customers: map[string]string{"cus_1": MoneyTransfer}}
-		}, []string{"banks[bank-b].on_remove.to is required when money moves. Name the bank that receives it."}},
+		}, []string{"banks[bank-b].on_remove.to is required when money is transferred. Name the bank that receives it."}},
 		{"leave with a customer moving and target", func(s *Spec) {
-			s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, To: "bank-a", Customers: map[string]string{"cus_1": MoneyPayout}}
+			s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, To: "bank-a", Customers: map[string]string{"cus_1": MoneyTransfer}}
 		}, nil},
 		{"bad customer choices sorted", func(s *Spec) {
 			s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyLeave, Customers: map[string]string{"cus_b": "keep", "cus_a": "gift"}}

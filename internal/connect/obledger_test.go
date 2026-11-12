@@ -3,20 +3,13 @@ package connect
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 func TestConsentLedgerPages(t *testing.T) {
-	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
-	app, err := New(cfg, Options{WorldOnly: true, Logger: slog.New(slog.DiscardHandler)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := newTestApp(t, Options{})
 	for i := 1; i <= 25; i++ {
 		bank := "bank-a"
 		if i%5 == 0 {
@@ -69,11 +62,7 @@ func TestConsentLedgerPages(t *testing.T) {
 }
 
 func TestEventClientIsSharedPerDestination(t *testing.T) {
-	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
-	app, err := New(cfg, Options{WorldOnly: true, Logger: slog.New(slog.DiscardHandler)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := newTestApp(t, Options{})
 	a, err := app.eventClient("https://widget-a.localhost")
 	if err != nil {
 		t.Fatal(err)

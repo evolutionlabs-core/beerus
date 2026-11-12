@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -24,55 +25,25 @@ type PartnerRequest struct {
 
 var errPartnerBusy = invalid("another partner change is running; try again")
 
-func (a *App) AddPartner(req PartnerRequest) (key string, err error) {
-	if !a.partnerMu.TryLock() {
-		return "", errPartnerBusy
-	}
-	defer a.partnerMu.Unlock()
+func (a *App) AddPartner(req PartnerRequest) (string, error) {
 	o := config.PartnerOptions{ID: req.ID, Name: req.Name, LegalName: req.LegalName, Purpose: req.Purpose, RedirectURIs: req.RedirectURIs, WebhookURL: req.WebhookURL}
 	if err := o.Check(); err != nil {
 		return "", invalid("%s", err.Error())
 	}
-	st, err := a.ctl.status()
-	if err != nil {
-		return "", err
-	}
-	if a.partnerOf(o.ID) != nil || findResource(&st, setup.KindPartner, o.ID) != nil {
-		return "", invalid("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
-	}
-	sp := setup.Partner{ID: o.ID, Name: orDefault(o.Name, o.ID), LegalName: o.LegalName, Purpose: o.Purpose, RedirectURIs: o.RedirectURIs, WebhookURL: o.WebhookURL}
-	dir := a.cfg.Path("partners", o.ID)
-	defer func() {
-		if err != nil {
-			_ = os.RemoveAll(dir)
+	err := a.applyEdit(func(sp *setup.Spec) error {
+		if _, ok := partnerIn(*sp, o.ID); ok {
+			return invalid("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
 		}
-	}()
-	key, err = writeAPIKey(a.cfg.Dir, o.ID)
+		sp.Spec.Partners = append(sp.Spec.Partners, setup.Partner{ID: o.ID, Name: orDefault(o.Name, o.ID), LegalName: o.LegalName, Purpose: o.Purpose, RedirectURIs: o.RedirectURIs, WebhookURL: o.WebhookURL})
+		return nil
+	}, ApplyOptions{})
 	if err != nil {
 		return "", err
 	}
-	p := runtimePartner(sp, setup.PartnerKeys{CertCN: o.ID, APIKeySHA256: config.HashKey(key)}, setup.PartnerLocal{})
-	if err := a.issuePartnerCert(p); err != nil {
-		return "", err
-	}
-	err = a.ctl.update(func(st *setup.Status) (bool, error) {
-		if findResource(st, setup.KindPartner, o.ID) != nil {
-			return false, invalid("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
-		}
-		st.Applied.Spec.Partners = append(st.Applied.Spec.Partners, sp)
-		r := ensureResource(st, setup.KindPartner, o.ID)
-		r.Generation++
-		r.Phase = setup.PhaseActive
-		r.Partner = &setup.PartnerKeys{CertCN: p.CertCN, APIKeySHA256: p.APIKeySHA256, CertSHA256: p.CertSHA256}
-		r.Owned = []setup.Owned{{Kind: ownedDir, Name: "partners/" + o.ID}}
-		return true, resum(st)
-	})
+	key, err := config.ReadSecret(a.cfg.Path("partners", o.ID, partnerKeyFile))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read the API key of %s: %w", o.ID, err)
 	}
-	a.pmu.Lock()
-	a.cfg.Partners = append(slices.Clone(a.cfg.Partners), p)
-	a.pmu.Unlock()
 	return key, nil
 }
 
@@ -119,27 +90,19 @@ func (a *App) RotatePartner(id string) (key string, err error) {
 	return key, nil
 }
 
-func (a *App) RemovePartner(id string) error {
-	if !a.partnerMu.TryLock() {
-		return errPartnerBusy
-	}
-	defer a.partnerMu.Unlock()
-	if a.partnerOf(id) == nil {
-		return errNotFound
-	}
-	err := a.ctl.update(func(st *setup.Status) (bool, error) {
-		st.Applied.Spec.Partners = slices.DeleteFunc(st.Applied.Spec.Partners, func(p setup.Partner) bool { return p.ID == id })
-		st.Resources = slices.DeleteFunc(st.Resources, func(r setup.Resource) bool { return r.Kind == setup.KindPartner && r.ID == id })
-		return true, resum(st)
-	})
+func (a *App) RemovePartner(id string) (bool, error) {
+	err := a.applyEdit(func(sp *setup.Spec) error {
+		i := slices.IndexFunc(sp.Spec.Partners, func(p setup.Partner) bool { return p.ID == id })
+		if i < 0 {
+			return errNotFound
+		}
+		sp.Spec.Partners = slices.Delete(sp.Spec.Partners, i, i+1)
+		return nil
+	}, ApplyOptions{Prune: true})
 	if err != nil {
-		return err
+		return false, err
 	}
-	a.replacePartner(id, nil)
-	if err := os.RemoveAll(a.cfg.Path("partners", id)); err != nil {
-		return fmt.Errorf("remove partners/%s: %w", id, err)
-	}
-	return nil
+	return a.waitGone(setup.KindPartner, id)
 }
 
 func readFiles(dir string) (map[string][]byte, error) {
@@ -162,15 +125,24 @@ func readFiles(dir string) (map[string][]byte, error) {
 }
 
 func writeFiles(dir string, files map[string][]byte) error {
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("restore %s: %w", dir, err)
-	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("restore %s: %w", dir, err)
 	}
 	for name, raw := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
+		if err := pki.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
 			return fmt.Errorf("restore %s: %w", name, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("list %s: %w", dir, err)
+	}
+	for _, e := range entries {
+		if _, keep := files[e.Name()]; keep {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+			return fmt.Errorf("remove %s: %w", e.Name(), err)
 		}
 	}
 	return nil
@@ -193,7 +165,7 @@ func (a *App) replacePartner(id string, p *config.Partner) {
 
 func (a *App) issuePartnerCert(p *config.Partner) error {
 	c := config.Config{Dir: a.cfg.Dir, Connect: a.cfg.Connect, Partners: []*config.Partner{p}}
-	if err := c.EnsureCertificates(); err != nil {
+	if err := c.EnsureCertificates(a.clock.Real()); err != nil {
 		return fmt.Errorf("issue certificate for %s: %w", p.ID, err)
 	}
 	return nil
@@ -209,6 +181,9 @@ func resum(st *setup.Status) error {
 }
 
 func (a *App) partnerError(w http.ResponseWriter, r *http.Request, err error) {
+	if a.writeApplyError(w, r, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, ErrBankInvalid):
 		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
@@ -244,8 +219,13 @@ func (a *App) ctlRotatePartner(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlRemovePartner(w http.ResponseWriter, r *http.Request) {
-	if err := a.RemovePartner(r.PathValue("id")); err != nil {
+	gone, err := a.RemovePartner(r.PathValue("id"))
+	if err != nil {
 		a.partnerError(w, r, err)
+		return
+	}
+	if !gone {
+		writeJSON(w, http.StatusAccepted, map[string]string{"id": r.PathValue("id"), "status": "terminating"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": r.PathValue("id"), "status": "removed"})

@@ -85,7 +85,12 @@ type consentChoice struct {
 }
 
 func (a *bankSite) consentPage(w http.ResponseWriter, s *bankSession, status int, req *openbanking.Request, errMsg string) {
-	mine, _ := a.ob.Data().Accounts(s.Persona)
+	mine, err := a.ob.Data().Accounts(s.Customer)
+	if err != nil {
+		a.log.Error("consent page", "bank", a.bank.ID, "err", err)
+		http.Error(w, "Something went wrong at the bank. Try again soon.", http.StatusInternalServerError)
+		return
+	}
 	choices := []consentChoice{}
 	for _, m := range mine {
 		choices = append(choices, consentChoice{ID: m.ID, Name: m.Name, Type: m.Type, Checked: true})
@@ -132,7 +137,7 @@ func (a *bankSite) obConsentSubmit(w http.ResponseWriter, r *http.Request) {
 	var loc string
 	var err error
 	if r.PostForm.Get("action") == "approve" {
-		loc, err = a.ob.Approve(r.Context(), uri, s.Persona, r.PostForm["account"], r.PostForm.Get("analytics") == "yes")
+		loc, err = a.ob.Approve(r.Context(), uri, s.Customer, r.PostForm["account"], r.PostForm.Get("analytics") == "yes")
 	} else {
 		loc, err = a.ob.Reject(r.Context(), uri)
 	}

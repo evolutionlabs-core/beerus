@@ -40,7 +40,7 @@ func (o *obClient) assertion() string {
 	if err != nil {
 		o.t.Fatal(err)
 	}
-	jwt, err := openbanking.Sign(key, "connect-1", map[string]any{"iss": o.s.cfg.Connect.RegistryID, "sub": o.s.cfg.Connect.RegistryID, "aud": o.issuer, "jti": fmt.Sprint(time.Now().UnixNano()), "exp": time.Now().Add(time.Minute).Unix()})
+	jwt, err := openbanking.Sign(key, "connect-1", map[string]any{"iss": o.s.cfg.Connect.RegistryID, "sub": o.s.cfg.Connect.RegistryID, "aud": o.issuer, "jti": fmt.Sprint(time.Now().UnixNano()), "exp": o.s.realNow().Add(time.Minute).Unix()})
 	if err != nil {
 		o.t.Fatal(err)
 	}
@@ -160,6 +160,10 @@ func TestOpenBanking(t *testing.T) {
 		t.Fatalf("consent screen lists %d accounts", len(accounts))
 	}
 	shared, hidden := accounts[0][1], accounts[1][1]
+	chidi := s.persona("chidi")
+	for range 2 {
+		s.pay(p.Bank, shared, chidi.Bank, chidi.Accounts[0], "10000")
+	}
 	b.post("/authorize/consent", url.Values{"action": {"approve"}, "account": {shared}})
 	cb, err := url.Parse(b.next)
 	if err != nil || !strings.HasPrefix(b.next, redirect+"?") || cb.Query().Get("state") != "st-1" || cb.Query().Get("iss") != o.issuer || cb.Query().Get("code") == "" {

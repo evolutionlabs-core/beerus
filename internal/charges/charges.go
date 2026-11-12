@@ -1,9 +1,10 @@
 package charges
 
 import (
-	"time"
+	"fmt"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 )
 
 const (
@@ -13,76 +14,127 @@ const (
 	CategoryLevy  = "levy"
 )
 
-type Band struct {
-	UpTo int64
-	Fee  int64
+type nipRule struct {
+	from  clock.Date
+	bands []countrypack.Band
 }
 
-type FeeRule struct {
-	From  clock.Date
-	Bands []Band
+type levyRule struct {
+	from      clock.Date
+	threshold int64
+	amount    int64
 }
 
-var NIPFeeRules = []FeeRule{
-	{From: clock.Date{Y: 2020, M: time.January, D: 1}, Bands: []Band{{UpTo: 500000, Fee: 1000}, {UpTo: 5000000, Fee: 2500}, {UpTo: -1, Fee: 5000}}},
+type Schedule struct {
+	nip                 []nipRule
+	stamp               []levyRule
+	emtl                []levyRule
+	vatRateBasisPoints  int64
+	smsAlertFee         int64
+	smsMonthlyCap       int64
+	maintenancePerMille int64
 }
 
-var (
-	VATRateBasisPoints  int64 = 750
-	StampDutyFrom             = clock.Date{Y: 2026, M: time.January, D: 1}
-	StampDutyThreshold  int64 = 1000000
-	StampDutyAmount     int64 = 5000
-	EMTLThreshold       int64 = 1000000
-	EMTLAmount          int64 = 5000
-	SMSAlertFee         int64 = 400
-	SMSMonthlyCap       int64 = 50000
-	MaintenancePerMille int64 = 1
-)
+func New(f countrypack.Fees) (*Schedule, error) {
+	s := &Schedule{
+		vatRateBasisPoints:  f.VATRateBasisPoints.Value,
+		smsAlertFee:         f.SMSAlertFee.Value,
+		smsMonthlyCap:       f.SMSMonthlyCap.Value,
+		maintenancePerMille: f.MaintenancePerMille.Value,
+	}
+	for _, r := range f.NIP {
+		from, err := clock.ParseDate(r.From)
+		if err != nil {
+			return nil, fmt.Errorf("parse nip rule date: %w", err)
+		}
+		s.nip = append(s.nip, nipRule{from: from, bands: r.Bands})
+	}
+	var err error
+	if s.stamp, err = levyRules(f.StampDuty); err != nil {
+		return nil, fmt.Errorf("parse stamp duty: %w", err)
+	}
+	if s.emtl, err = levyRules(f.EMTL); err != nil {
+		return nil, fmt.Errorf("parse emtl: %w", err)
+	}
+	return s, nil
+}
 
-func rule(d clock.Date) FeeRule {
-	r := NIPFeeRules[0]
-	for _, x := range NIPFeeRules {
-		if !d.Before(x.From) {
+func levyRules(in []countrypack.Levy) ([]levyRule, error) {
+	out := []levyRule{}
+	for _, l := range in {
+		from, err := clock.ParseDate(l.From)
+		if err != nil {
+			return nil, fmt.Errorf("parse rule date: %w", err)
+		}
+		out = append(out, levyRule{from: from, threshold: l.Threshold, amount: l.Amount})
+	}
+	return out, nil
+}
+
+func pick[T any](rules []T, d clock.Date, from func(T) clock.Date) T {
+	r := rules[0]
+	for _, x := range rules {
+		if !d.Before(from(x)) {
 			r = x
 		}
 	}
 	return r
 }
 
-func NIPFeeOn(amount int64, d clock.Date) int64 {
-	for _, b := range rule(d).Bands {
-		if b.UpTo < 0 || amount <= b.UpTo {
+func levyOn(rules []levyRule, amount int64, d clock.Date) int64 {
+	r := pick(rules, d, func(x levyRule) clock.Date { return x.from })
+	if r.amount == 0 || amount < r.threshold {
+		return 0
+	}
+	return r.amount
+}
+
+func (s *Schedule) VATRateBasisPoints() int64 {
+	return s.vatRateBasisPoints
+}
+
+func (s *Schedule) SMSAlertFee() int64 {
+	return s.smsAlertFee
+}
+
+func (s *Schedule) SMSMonthlyCap() int64 {
+	return s.smsMonthlyCap
+}
+
+func (s *Schedule) MaintenancePerMille() int64 {
+	return s.maintenancePerMille
+}
+
+func (s *Schedule) NIPFeeOn(amount int64, d clock.Date) int64 {
+	bands := pick(s.nip, d, func(x nipRule) clock.Date { return x.from }).bands
+	for i, b := range bands {
+		if i == len(bands)-1 || amount <= b.UpTo {
 			return b.Fee
 		}
 	}
 	return 0
 }
 
-func NIPFee(amount int64) int64 {
-	return NIPFeeOn(amount, clock.Date{Y: 2026, M: time.January, D: 1})
-}
-
-func VAT(base int64) int64 {
-	num := base * VATRateBasisPoints
-	q, r := num/10000, num%10000
-	if r > 5000 || (r == 5000 && q%2 == 1) {
-		q++
+func (s *Schedule) VAT(base int64) int64 {
+	rate := s.vatRateBasisPoints
+	q, r := base/10000, base%10000
+	res := q*rate + r*rate/10000
+	rem := r * rate % 10000
+	if rem > 5000 || (rem == 5000 && res%2 == 1) {
+		res++
 	}
-	return q
+	return res
 }
 
-func StampDuty(amount int64, d clock.Date, exempt bool) int64 {
-	if exempt || amount < StampDutyThreshold || d.Before(StampDutyFrom) {
+func (s *Schedule) StampDuty(amount int64, d clock.Date, exempt bool) int64 {
+	if exempt {
 		return 0
 	}
-	return StampDutyAmount
+	return levyOn(s.stamp, amount, d)
 }
 
-func EMTL(amount int64, d clock.Date) int64 {
-	if amount < EMTLThreshold || !d.Before(StampDutyFrom) {
-		return 0
-	}
-	return EMTLAmount
+func (s *Schedule) EMTL(amount int64, d clock.Date) int64 {
+	return levyOn(s.emtl, amount, d)
 }
 
 type Transfer struct {
@@ -95,7 +147,7 @@ func (t Transfer) Total() int64 {
 	return t.Fee + t.VAT + t.StampDuty
 }
 
-func ForTransfer(amount int64, d clock.Date, stampExempt bool) Transfer {
-	fee := NIPFeeOn(amount, d)
-	return Transfer{Fee: fee, VAT: VAT(fee), StampDuty: StampDuty(amount, d, stampExempt)}
+func (s *Schedule) ForTransfer(amount int64, d clock.Date, stampExempt bool) Transfer {
+	fee := s.NIPFeeOn(amount, d)
+	return Transfer{Fee: fee, VAT: s.VAT(fee), StampDuty: s.StampDuty(amount, d, stampExempt)}
 }

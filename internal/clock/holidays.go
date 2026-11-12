@@ -66,10 +66,6 @@ func newRules() (*Calendar, error) {
 	return c, nil
 }
 
-func CalendarVersion() string {
-	return rules.pack.Version
-}
-
 func NewCalendar(add, remove []Date) *Calendar {
 	c := &Calendar{pack: rules.pack, declared: rules.declared, add: map[Date]bool{}, remove: map[Date]bool{}}
 	for _, d := range add {

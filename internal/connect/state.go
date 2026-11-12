@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +12,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/world"
+	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 type LinkSession struct {
@@ -27,7 +28,7 @@ type LinkSession struct {
 	TokenExpires  time.Time     `json:"token_expires"`
 	TokenUsed     bool          `json:"token_used"`
 	Institution   string        `json:"institution"`
-	PersonaID     string        `json:"persona_id"`
+	CustomerID    string        `json:"customer_id"`
 	Accounts      []string      `json:"accounts"`
 	Analytics     bool          `json:"analytics"`
 	CodeHash      string        `json:"code_hash"`
@@ -60,7 +61,7 @@ type Connection struct {
 	PartnerID        string      `json:"partner_id"`
 	WorkspaceID      string      `json:"workspace_id"`
 	Institution      string      `json:"institution"`
-	PersonaID        string      `json:"persona_id"`
+	CustomerID       string      `json:"customer_id"`
 	Status           string      `json:"status"`
 	StatusBeforeDown string      `json:"status_before_down"`
 	StartDate        clock.Date  `json:"start_date"`
@@ -80,7 +81,7 @@ type Connection struct {
 type AccountRec struct {
 	ID           string     `json:"id"`
 	PartnerID    string     `json:"partner_id"`
-	WorldKey     string     `json:"world_key"`
+	Key          string     `json:"key"`
 	ConnectionID string     `json:"connection_id"`
 	From         clock.Date `json:"from"`
 	Cut          bool       `json:"cut"`
@@ -178,7 +179,7 @@ type AccessEvent struct {
 	ConnectionID string    `json:"connection_id"`
 	PartnerID    string    `json:"partner_id"`
 	AccountID    string    `json:"account_id"`
-	WorldKey     string    `json:"world_key"`
+	Key          string    `json:"key"`
 	At           time.Time `json:"at"`
 }
 
@@ -216,13 +217,13 @@ type PendingRevoke struct {
 
 type State struct {
 	Revokes        []PendingRevoke            `json:"revokes,omitempty"`
+	SettleNow      []string                   `json:"settle_now,omitempty"`
 	Registry       map[string]*RegistryClient `json:"registry"`
 	ConsentLedger  []ConsentRecord            `json:"consent_ledger"`
 	Access         []AccessEvent              `json:"access"`
 	WorldID        string                     `json:"world_id"`
-	Calendar       string                     `json:"calendar,omitempty"`
-	Clock          clock.State                `json:"clock"`
-	World          world.Overrides            `json:"world"`
+	LegacyClock    *legacyClock               `json:"clock,omitempty"`
+	Faults         []*Fault                   `json:"faults"`
 	LinkSessions   map[string]*LinkSession    `json:"link_sessions"`
 	WidgetSessions map[string]*WidgetSession  `json:"widget_sessions"`
 	Connections    map[string]*Connection     `json:"connections"`
@@ -248,7 +249,7 @@ func newState() *State {
 		Idem:           map[string]*IdemRec{},
 		Registry:       map[string]*RegistryClient{},
 		Vault:          map[string]*VaultEntry{},
-		NIP:            &NIPState{Failures: map[string]*NIPFailure{}},
+		NIP:            &NIPState{},
 	}
 }
 
@@ -283,7 +284,6 @@ func (s *State) fill() {
 	if s.NIP == nil {
 		s.NIP = &NIPState{}
 	}
-	s.NIP.fill()
 	for _, a := range s.Accounts {
 		if len(a.Grants) == 0 && a.ConnectionID != "" && !a.Removed {
 			a.Grants = []string{a.ConnectionID}
@@ -297,6 +297,10 @@ func (s *State) fill() {
 			f.Gone = map[string]bool{}
 		}
 	}
+}
+
+type legacyClock struct {
+	AnchorBusiness time.Time `json:"anchor_business"`
 }
 
 func loadState(path string) (*State, error) {
@@ -318,16 +322,12 @@ func loadState(path string) (*State, error) {
 func saveJSON(path string, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return err
+		return fmt.Errorf("encode %s: %w", path, err)
 	}
-	tmp := path + ".tmp"
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+		return fmt.Errorf("create directory for %s: %w", path, err)
 	}
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return pki.WriteFile(path, b, 0o600)
 }
 
 var idEncoding = base32.NewEncoding("0123456789abcdefghjkmnpqrstvwxyz").WithPadding(base32.NoPadding)

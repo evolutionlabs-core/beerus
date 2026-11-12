@@ -37,11 +37,45 @@ var permittedIPs = []*net.IPNet{
 }
 
 func newKey() (*ecdsa.PrivateKey, error) {
-	return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generate key: %w", err)
+	}
+	return key, nil
 }
 
 func serial() (*big.Int, error) {
-	return rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	sn, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	if err != nil {
+		return nil, fmt.Errorf("generate serial: %w", err)
+	}
+	return sn, nil
+}
+
+func WriteFile(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file for %s: %w", path, err)
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return fmt.Errorf("set mode on %s: %w", tmp.Name(), err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return fmt.Errorf("write %s: %w", tmp.Name(), err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return fmt.Errorf("close %s: %w", tmp.Name(), err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		os.Remove(tmp.Name())
+		return fmt.Errorf("rename to %s: %w", path, err)
+	}
+	return nil
 }
 
 func NewAuthority(commonName string, lifetime time.Duration) (*Authority, error) {
@@ -56,7 +90,7 @@ func NewAuthority(commonName string, lifetime time.Duration) (*Authority, error)
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:                sn,
-		Subject:                     pkix.Name{CommonName: commonName, Organization: []string{"Beerus Simulator"}},
+		Subject:                     pkix.Name{CommonName: commonName, Organization: []string{"Beerus"}},
 		NotBefore:                   now.Add(-time.Minute),
 		NotAfter:                    now.Add(lifetime),
 		IsCA:                        true,
@@ -69,11 +103,11 @@ func NewAuthority(commonName string, lifetime time.Duration) (*Authority, error)
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create authority certificate: %w", err)
 	}
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse authority certificate: %w", err)
 	}
 	return &Authority{Cert: cert, Key: key, PEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})}, nil
 }
@@ -85,11 +119,11 @@ func (a *Authority) issue(tmpl *x509.Certificate) (*Leaf, error) {
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, a.Cert, &key.PublicKey, a.Key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create leaf certificate: %w", err)
 	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal leaf key: %w", err)
 	}
 	return &Leaf{
 		CertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
@@ -105,7 +139,7 @@ func (a *Authority) IssueServer(names []string, lifetime time.Duration) (*Leaf, 
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: sn,
-		Subject:      pkix.Name{CommonName: names[0], Organization: []string{"Beerus Simulator"}},
+		Subject:      pkix.Name{CommonName: names[0], Organization: []string{"Beerus"}},
 		NotBefore:    now.Add(-time.Minute),
 		NotAfter:     now.Add(lifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -124,7 +158,7 @@ func (a *Authority) IssueClient(commonName, role string, lifetime time.Duration)
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: sn,
-		Subject:      pkix.Name{CommonName: commonName, Organization: []string{"Beerus Simulator"}, OrganizationalUnit: []string{role}},
+		Subject:      pkix.Name{CommonName: commonName, Organization: []string{"Beerus"}, OrganizationalUnit: []string{role}},
 		NotBefore:    now.Add(-time.Minute),
 		NotAfter:     now.Add(lifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -141,7 +175,7 @@ func (a *Authority) IssueSigner(commonName, purpose string, lifetime time.Durati
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: sn,
-		Subject:      pkix.Name{CommonName: commonName, Organization: []string{"Beerus Simulator"}, OrganizationalUnit: []string{purpose}},
+		Subject:      pkix.Name{CommonName: commonName, Organization: []string{"Beerus"}, OrganizationalUnit: []string{purpose}},
 		NotBefore:    now.Add(-time.Minute),
 		NotAfter:     now.Add(lifetime),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -152,30 +186,30 @@ func (a *Authority) IssueSigner(commonName, purpose string, lifetime time.Durati
 func (a *Authority) Save(dir, name string) error {
 	keyDER, err := x509.MarshalPKCS8PrivateKey(a.Key)
 	if err != nil {
+		return fmt.Errorf("marshal authority key: %w", err)
+	}
+	if err := WriteFile(filepath.Join(dir, name+".crt"), a.PEM, 0o644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, name+".crt"), a.PEM, 0o644); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, name+".key"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600)
+	return WriteFile(filepath.Join(dir, name+".key"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600)
 }
 
 func LoadAuthority(dir, name string) (*Authority, error) {
 	certPEM, err := os.ReadFile(filepath.Join(dir, name+".crt"))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read authority certificate: %w", err)
 	}
 	keyPEM, err := os.ReadFile(filepath.Join(dir, name+".key"))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read authority key: %w", err)
 	}
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load authority key pair %s: %w", name, err)
 	}
 	cert, err := x509.ParseCertificate(pair.Certificate[0])
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse authority certificate %s: %w", name, err)
 	}
 	signer, ok := pair.PrivateKey.(crypto.Signer)
 	if !ok {
@@ -185,10 +219,10 @@ func LoadAuthority(dir, name string) (*Authority, error) {
 }
 
 func (l *Leaf) Save(dir, name string) error {
-	if err := os.WriteFile(filepath.Join(dir, name+".crt"), l.CertPEM, 0o644); err != nil {
+	if err := WriteFile(filepath.Join(dir, name+".crt"), l.CertPEM, 0o644); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, name+".key"), l.KeyPEM, 0o600)
+	return WriteFile(filepath.Join(dir, name+".key"), l.KeyPEM, 0o600)
 }
 
 func LoadPool(paths ...string) (*x509.CertPool, error) {
@@ -196,7 +230,7 @@ func LoadPool(paths ...string) (*x509.CertPool, error) {
 	for _, p := range paths {
 		b, err := os.ReadFile(p)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read certificates: %w", err)
 		}
 		if !pool.AppendCertsFromPEM(b) {
 			return nil, fmt.Errorf("pki: no certificates in %s", p)
@@ -230,7 +264,7 @@ func NeedsRenewal(certPath string, at time.Time) bool {
 func FileThumbprint(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read certificate: %w", err)
 	}
 	block, _ := pem.Decode(b)
 	if block == nil {
@@ -238,7 +272,7 @@ func FileThumbprint(path string) (string, error) {
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("parse certificate %s: %w", path, err)
 	}
 	return Thumbprint(cert), nil
 }

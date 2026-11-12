@@ -85,13 +85,22 @@ func txnID(partner, accountKey, lineKey string, pending bool) string {
 	return world.ID("txn", partner, accountKey, lineKey)
 }
 
+func acctKey(bank, nuban string) string {
+	return bank + ":" + nuban
+}
+
+func splitKey(key string) (string, string) {
+	bank, nuban, _ := strings.Cut(key, ":")
+	return bank, nuban
+}
+
 func AccountID(partner, institution, nuban string) string {
 	return world.ID("acc", partner, institution, nuban)
 }
 
-func toTxn(partner string, acct *AccountRec, p world.Presented) Txn {
+func toTxn(partner string, acct *AccountRec, p bankLine) Txn {
 	t := Txn{
-		ID:             txnID(partner, acct.WorldKey, p.Key, p.Pending),
+		ID:             txnID(partner, acct.Key, p.Key, p.Pending),
 		AccountID:      acct.ID,
 		Sequence:       p.Seq,
 		AmountMinor:    p.Amount,
@@ -111,17 +120,13 @@ func toTxn(partner string, acct *AccountRec, p world.Presented) Txn {
 		bal := p.BalanceAfter
 		t.BalanceAfterMinor = &bal
 		if p.HadPending {
-			id := txnID(partner, acct.WorldKey, p.Key, true)
+			id := txnID(partner, acct.Key, p.Key, true)
 			t.PendingTransactionID = &id
 		}
 	}
 	if p.Counterparty != nil {
-		t.Counterparty = &Counterparty{
-			Name:          strp(p.Counterparty.Name),
-			AccountNumber: strp(p.Counterparty.AccountNumber),
-			BankCode:      strp(p.Counterparty.BankCode),
-			BankName:      strp(p.Counterparty.BankName),
-		}
+		cp := *p.Counterparty
+		t.Counterparty = &cp
 	}
 	return t
 }
@@ -167,51 +172,39 @@ func (r fetchResult) changed() bool {
 }
 
 type pulled struct {
-	lines     []world.Presented
+	lines     []bankLine
 	ledger    int64
 	available int64
 	from      clock.Date
 	windowed  bool
 }
 
-func (a *App) pullWorld(acct *AccountRec, at time.Time) (pulled, error) {
-	src := a.src(acct.WorldKey)
-	lines, err := src.Fetch(acct.WorldKey, at, acct.From)
+func (a *App) fetchAccount(c *Connection, acct *AccountRec, at time.Time) (fetchResult, error) {
+	a.mu.Lock()
+	if a.st.Connections[c.ID] != c || a.st.Accounts[acct.ID] != acct {
+		a.mu.Unlock()
+		return fetchResult{}, errStale
+	}
+	plan, err := a.bankPullPlanLocked(c, acct)
+	a.mu.Unlock()
 	if err != nil {
-		return pulled{}, err
+		return fetchResult{}, err
 	}
-	ledger, err := src.LedgerAt(acct.WorldKey, at)
+	in, err := a.pullBank(plan)
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if err != nil {
-		return pulled{}, err
+		return fetchResult{}, err
 	}
-	pend, err := src.PendingAt(acct.WorldKey, at)
-	if err != nil {
-		return pulled{}, err
+	if a.st.Connections[c.ID] != c || a.st.Accounts[acct.ID] != acct || c.ConsentID != plan.consent || c.Status == "revoked" || acct.Removed {
+		return fetchResult{}, errStale
 	}
-	p := pulled{lines: lines, ledger: ledger, available: ledger, from: acct.From}
-	if pend < 0 {
-		p.available = ledger + pend
-	}
-	return p, nil
+	return a.applyPullLocked(c, acct, in, at), nil
 }
 
-func (a *App) fetchAccount(c *Connection, acct *AccountRec, at time.Time) (fetchResult, error) {
+func (a *App) applyPullLocked(c *Connection, acct *AccountRec, in pulled, at time.Time) fetchResult {
 	var res fetchResult
 	partner := c.PartnerID
-	var in pulled
-	var err error
-	if a.live() {
-		consent := c.ConsentID
-		in, err = a.pullBank(c, acct, at)
-		if err == nil && (a.st.Connections[c.ID] != c || a.st.Accounts[acct.ID] != acct || c.ConsentID != consent || c.Status == "revoked" || acct.Removed) {
-			err = errStale
-		}
-	} else {
-		in, err = a.pullWorld(acct, at)
-	}
-	if err != nil {
-		return res, err
-	}
 	feed := a.st.Feeds[acct.ID]
 	if feed == nil {
 		feed = &Feed{Lines: map[string]Txn{}, Gone: map[string]bool{}}
@@ -270,7 +263,7 @@ func (a *App) fetchAccount(c *Connection, acct *AccountRec, at time.Time) (fetch
 	acct.Available = in.available
 	acct.AsAt = at
 	a.dirty()
-	return res, nil
+	return res
 }
 
 type cursor struct {

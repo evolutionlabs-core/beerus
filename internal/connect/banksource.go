@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +16,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 type ledgerSource struct {
@@ -23,24 +23,23 @@ type ledgerSource struct {
 	ctx     context.Context
 	st      *store.Store
 	b       *bank.Bank
-	w       *world.World
-	inst    world.Institution
-	marks   map[string]time.Time
+	inst    bank.Profile
+	start   time.Time
 	cfg     *config.Config
 	ctl     *ctlStore
 	settled time.Time
 }
 
-func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, b *config.Bank, w *world.World) (*ledgerSource, error) {
-	inst, ok := w.Institution(b.ID)
-	if !ok {
-		return nil, fmt.Errorf("bank %q is not in the world", b.ID)
-	}
+func profileOf(b *config.Bank) bank.Profile {
+	return bank.Profile{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode}
+}
+
+func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, b *config.Bank) (*ledgerSource, error) {
 	st, err := store.Open(ctx, cfg.DatabaseURL, b.Database, openbanking.Migrate)
 	if err != nil {
 		return nil, err
 	}
-	s := &ledgerSource{ctx: ctx, st: st, w: w, inst: inst, cfg: cfg, ctl: ctl, marks: map[string]time.Time{}}
+	s := &ledgerSource{ctx: ctx, st: st, inst: profileOf(b), start: cfg.Start, cfg: cfg, ctl: ctl}
 	if err := s.setup(); err != nil {
 		st.Close()
 		return nil, err
@@ -49,23 +48,13 @@ func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, b 
 }
 
 func (s *ledgerSource) setup() error {
-	s.b = bank.New(ledger.New(s.st.Pool, nil), bank.Profile{ID: s.inst.ID, Name: s.inst.Name, NIPCode: s.inst.NIPCode, NUBANCode: s.inst.NUBANCode})
+	s.b = bank.New(ledger.New(s.st.Pool, nil), s.inst, s.cfg.Fees())
 	if err := s.b.Setup(s.ctx); err != nil {
 		return err
 	}
-	start := s.w.Config().Genesis.Start()
-	if err := s.b.Genesis(s.ctx, bank.GenesisSettlement, bank.GenesisVault, start.Add(-time.Hour)); err != nil {
+	if err := s.b.Genesis(s.ctx, bank.GenesisSettlement, bank.GenesisVault, s.start.Add(-time.Hour)); err != nil {
 		return err
 	}
-	for _, acc := range s.w.Accounts() {
-		if acc.Institution != s.inst.ID {
-			continue
-		}
-		if err := s.b.EnsureCustomer(s.ctx, acc.NUBAN, acc.Name, acc.Type, acc.Owner, acc.Opening, start.Add(-time.Second)); err != nil {
-			return err
-		}
-	}
-	s.marks = map[string]time.Time{}
 	s.settled = time.Time{}
 	return nil
 }
@@ -75,121 +64,25 @@ func (s *ledgerSource) Institution() string {
 }
 
 func (s *ledgerSource) Bank() *bank.Bank {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.b
 }
 
-func (s *ledgerSource) account(key string) (world.Account, error) {
-	acc, ok := s.w.Account(key)
-	if !ok || acc.Institution != s.inst.ID {
-		return world.Account{}, world.ErrUnknownAccount
-	}
-	return acc, nil
+func (s *ledgerSource) Fetch(nuban string, at time.Time, from clock.Date) ([]bank.FeedLine, error) {
+	return s.Bank().Feed(s.ctx, nuban, at, from)
 }
 
-func (s *ledgerSource) Sync(at time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, acc := range s.w.Accounts() {
-		if acc.Institution != s.inst.ID {
-			continue
-		}
-		if err := s.syncAccount(acc, at); err != nil {
-			return err
-		}
-	}
-	return nil
+func (s *ledgerSource) LedgerAt(nuban string, at time.Time) (int64, error) {
+	return s.Bank().BalanceAt(s.ctx, nuban, at)
 }
 
-func (s *ledgerSource) syncAccount(acc world.Account, at time.Time) error {
-	mark, ok := s.marks[acc.Key]
-	if !ok {
-		if !acc.OpenedAt.IsZero() {
-			if err := s.b.EnsureCustomer(s.ctx, acc.NUBAN, acc.Name, acc.Type, acc.Owner, acc.Opening, acc.OpenedAt); err != nil {
-				return err
-			}
-		}
-		wm, err := s.b.Watermark(s.ctx, acc.NUBAN)
-		if err != nil {
-			return err
-		}
-		mark = wm
-		if mark.IsZero() {
-			mark = s.w.Config().Genesis.Start().Add(-time.Nanosecond)
-		}
-		s.marks[acc.Key] = mark
-	}
-	if at.Before(mark) {
-		return nil
-	}
-	vs, err := s.w.Versions(acc.Key, mark.Add(-time.Nanosecond), at)
-	if err != nil {
-		return err
-	}
-	for _, v := range vs {
-		l := bank.FeedLine{Key: v.Key, NUBAN: acc.NUBAN, Pending: v.Pending, Amount: v.Amount, At: v.At, BookedAt: v.BookedAt, ValueDate: v.ValueDate, Narration: v.Narration, SessionID: v.SessionID, BankRef: v.BankRef, Channel: v.Channel, Category: v.Category}
-		if v.Counterparty != nil {
-			l.Counterparty = &bank.Counterparty{Name: v.Counterparty.Name, AccountNumber: v.Counterparty.AccountNumber, BankCode: v.Counterparty.BankCode, BankName: v.Counterparty.BankName}
-		}
-		if err := s.b.RecordLine(s.ctx, l); err != nil {
-			return fmt.Errorf("posting %s: %w", v.Key, err)
-		}
-	}
-	if err := s.b.SetWatermark(s.ctx, acc.NUBAN, at); err != nil {
-		return err
-	}
-	s.marks[acc.Key] = at
-	return nil
+func (s *ledgerSource) EndOfDay(nuban string, d clock.Date) (int64, error) {
+	return s.LedgerAt(nuban, d.End().Add(-time.Nanosecond))
 }
 
-func (s *ledgerSource) ready(key string, at time.Time) (world.Account, error) {
-	acc, err := s.account(key)
-	if err != nil {
-		return acc, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return acc, s.syncAccount(acc, at)
-}
-
-func (s *ledgerSource) Fetch(account string, at time.Time, from clock.Date) ([]world.Presented, error) {
-	acc, err := s.ready(account, at)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.b.Feed(s.ctx, acc.NUBAN, at, from)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]world.Presented, 0, len(rows))
-	for _, r := range rows {
-		p := world.Presented{Key: r.Key, Pending: r.Pending, HadPending: r.HadPending, Amount: r.Amount, At: r.At, BookedAt: r.BookedAt, ValueDate: r.ValueDate, Narration: r.Narration, SessionID: r.SessionID, BankRef: r.BankRef, Channel: r.Channel, BalanceAfter: r.BalanceAfter, Seq: r.Seq}
-		if r.Counterparty != nil {
-			p.Counterparty = &world.Counterparty{Name: r.Counterparty.Name, AccountNumber: r.Counterparty.AccountNumber, BankCode: r.Counterparty.BankCode, BankName: r.Counterparty.BankName}
-		}
-		out = append(out, p)
-	}
-	s.w.Decorate(account, out, at)
-	return out, nil
-}
-
-func (s *ledgerSource) LedgerAt(account string, at time.Time) (int64, error) {
-	acc, err := s.ready(account, at)
-	if err != nil {
-		return 0, err
-	}
-	return s.b.BalanceAt(s.ctx, acc.NUBAN, at)
-}
-
-func (s *ledgerSource) PendingAt(account string, at time.Time) (int64, error) {
-	acc, err := s.ready(account, at)
-	if err != nil {
-		return 0, err
-	}
-	return s.b.PendingAt(s.ctx, acc.NUBAN, at)
-}
-
-func (s *ledgerSource) EndOfDay(account string, d clock.Date) (int64, error) {
-	return s.LedgerAt(account, d.End().Add(-time.Nanosecond))
+func (s *ledgerSource) Account(nuban string) (ledger.Account, error) {
+	return s.Bank().L.Account(s.ctx, bank.CustomerAccount(nuban))
 }
 
 func snapID(id string) string {
@@ -228,21 +121,20 @@ func (s *ledgerSource) HasSnapshot(id string) (bool, error) {
 	return s.st.HasSnapshot(s.ctx, snapID(id))
 }
 
-func (s *ledgerSource) Keep(w *world.World) error {
+func (s *ledgerSource) Restore(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.w = w
-	return s.reopen()
-}
-
-func (s *ledgerSource) Restore(id string, w *world.World) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	serial, err := s.b.NUBANSerial(s.ctx)
+	if err != nil {
+		return err
+	}
 	if err := s.st.Restore(s.ctx, snapID(id)); err != nil {
 		return err
 	}
-	s.w = w
-	return s.reopen()
+	if err := s.reopen(); err != nil {
+		return err
+	}
+	return s.b.RaiseNUBANSerial(s.ctx, serial)
 }
 
 func (s *ledgerSource) Release() {
@@ -265,8 +157,7 @@ func (s *ledgerSource) Reconnect() error {
 }
 
 func (s *ledgerSource) reopen() error {
-	s.b = bank.New(ledger.New(s.st.Pool, nil), bank.Profile{ID: s.inst.ID, Name: s.inst.Name, NIPCode: s.inst.NIPCode, NUBANCode: s.inst.NUBANCode})
-	s.marks = map[string]time.Time{}
+	s.b = bank.New(ledger.New(s.st.Pool, nil), s.inst, s.cfg.Fees())
 	s.settled = time.Time{}
 	return nil
 }
@@ -296,60 +187,27 @@ func (s *ledgerSource) Close() {
 }
 
 func (s *ledgerSource) Drop() error {
+	name := s.st.Name()
 	if err := s.st.Drop(context.Background()); err != nil {
 		return err
 	}
-	return s.ctl.forget(setup.KindBank, s.inst.ID)
+	return s.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
 }
 
-type BankCheck struct {
-	Ledger       ledger.Check
-	Mismatches   []string
-	ChargeMonths map[string]int
-}
-
-func (a *App) VerifyBank() (BankCheck, error) {
+func (a *App) VerifyBank() (ledger.Check, error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := BankCheck{ChargeMonths: map[string]int{}}
-	now := a.clock.Now()
-	for _, l := range a.ledgers {
-		if err := l.Sync(now); err != nil {
-			return out, err
-		}
-		c, err := l.b.L.Verify(l.ctx)
+	ledgers := slices.Clone(a.ledgers)
+	a.mu.Unlock()
+	var out ledger.Check
+	for _, l := range ledgers {
+		c, err := l.Bank().L.Verify(l.ctx)
 		if err != nil {
-			return out, err
+			return out, fmt.Errorf("verify the books of %s: %w", l.inst.ID, err)
 		}
-		out.Ledger.TrialBalance += c.TrialBalance
-		out.Ledger.BalanceMismatch = append(out.Ledger.BalanceMismatch, c.BalanceMismatch...)
-		out.Ledger.EventMismatch = append(out.Ledger.EventMismatch, c.EventMismatch...)
-		out.Ledger.UnbalancedEntries = append(out.Ledger.UnbalancedEntries, c.UnbalancedEntries...)
-		for _, acc := range a.world.Accounts() {
-			if acc.Institution != l.inst.ID {
-				continue
-			}
-			feed, err := l.b.BalanceAt(l.ctx, acc.NUBAN, now)
-			if err != nil {
-				return out, err
-			}
-			book, err := l.b.L.Balance(l.ctx, bank.CustomerAccount(acc.NUBAN))
-			if err != nil {
-				return out, err
-			}
-			if feed != book {
-				out.Mismatches = append(out.Mismatches, fmt.Sprintf("%s feed %d ledger %d", acc.NUBAN, feed, book))
-			}
-			rows, err := l.b.Feed(l.ctx, acc.NUBAN, now, a.world.Config().Genesis)
-			if err != nil {
-				return out, err
-			}
-			for _, r := range rows {
-				if !r.Pending && strings.HasPrefix(strings.ToUpper(r.Narration), "SMS ALERT CHARGES") {
-					out.ChargeMonths[acc.NUBAN+" "+r.BookedAt.In(clock.Lagos).Format("2006-01")]++
-				}
-			}
-		}
+		out.TrialBalance += c.TrialBalance
+		out.BalanceMismatch = append(out.BalanceMismatch, c.BalanceMismatch...)
+		out.EventMismatch = append(out.EventMismatch, c.EventMismatch...)
+		out.UnbalancedEntries = append(out.UnbalancedEntries, c.UnbalancedEntries...)
 	}
 	return out, nil
 }

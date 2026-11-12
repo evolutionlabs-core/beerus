@@ -170,12 +170,11 @@ func (a *App) listWebhookKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) effectiveStart(start clock.Date, institution string) (clock.Date, bool) {
-	inst, _ := a.world.Institution(institution)
-	today := a.clock.Today()
-	min := today.AddDays(-inst.HistoryDays)
-	genesis := a.world.Config().Genesis.AddDays(1)
-	if genesis.After(min) {
-		min = genesis
+	min := clock.DateOf(a.cfg.Start)
+	if b := a.cfg.Bank(institution); b != nil {
+		if d := a.clock.Today().AddDays(-b.HistoryDays); d.After(min) {
+			min = d
+		}
 	}
 	if start.Before(min) {
 		return min, true
@@ -194,38 +193,87 @@ func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.mu.Lock()
+	ex, ok := a.beginExchangeLocked(w, r, p, body.Code, body.LinkSessionID)
+	a.mu.Unlock()
+	if !ok {
+		return
+	}
+	for _, rec := range ex.auth.accounts {
+		a.mu.Lock()
+		a.announceAccountLocked(ex.conn, ex.auth, rec)
+		a.mu.Unlock()
+		a.firstSync(ex.conn, rec, ex.auth.at)
+	}
+	a.mu.Lock()
+	a.finishAuthoriseLocked(ex.conn, ex.auth)
+	out := a.connectionJSON(ex.conn)
+	b := a.cfg.Bank(ex.conn.Institution)
+	a.mu.Unlock()
+	if b != nil && ex.oldConsent != "" && ex.oldConsent != ex.consent {
+		a.revokeOrQueue(b, ex.oldConsent)
+	}
+	writeJSON(w, ex.status, out)
+}
+
+type exchangeGrant struct {
+	conn       *Connection
+	status     int
+	oldConsent string
+	consent    string
+	auth       authorisation
+}
+
+func (a *App) announceAccountLocked(c *Connection, auth authorisation, rec *AccountRec) {
+	if !auth.old[rec.ID] {
+		a.emit(c.PartnerID, "account.added", map[string]any{"connection_id": c.ID, "account_id": rec.ID})
+	}
+}
+
+func (a *App) firstSync(c *Connection, rec *AccountRec, at time.Time) {
+	_, err := a.fetchAccount(c, rec, at)
+	if err == nil {
+		return
+	}
+	a.mu.Lock()
 	defer a.mu.Unlock()
-	ls := a.st.LinkSessions[body.LinkSessionID]
+	if a.st.Connections[c.ID] == c && a.bankFailedLocked(c, err) {
+		return
+	}
+	a.log.Warn("first sync after linking failed", "connection", c.ID, "account", rec.ID, "err", err)
+}
+
+func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *config.Partner, code, linkSessionID string) (exchangeGrant, bool) {
+	ls := a.st.LinkSessions[linkSessionID]
 	if ls == nil {
 		writeError(w, r, http.StatusNotFound, "invalid_code", "The code or link session is unknown.")
-		return
+		return exchangeGrant{}, false
 	}
 	if ls.PartnerID != p.ID {
 		writeError(w, r, http.StatusForbidden, "link_session_mismatch", "The link session belongs to another partner.")
-		return
+		return exchangeGrant{}, false
 	}
-	h := hashSecret(body.Code)
+	h := hashSecret(code)
 	if ls.CodeHash != h {
 		for _, other := range a.st.LinkSessions {
 			if other.CodeHash == h {
 				writeError(w, r, http.StatusForbidden, "link_session_mismatch", "The code belongs to another link session.")
-				return
+				return exchangeGrant{}, false
 			}
 		}
 		writeError(w, r, http.StatusNotFound, "invalid_code", "The code is unknown.")
-		return
+		return exchangeGrant{}, false
 	}
 	if ls.CodeUsed || ls.Status == "exchanged" {
 		writeError(w, r, http.StatusNotFound, "invalid_code", "The code was already used.")
-		return
+		return exchangeGrant{}, false
 	}
 	if a.clock.Real().After(ls.CodeExpires) {
 		writeError(w, r, http.StatusNotFound, "invalid_code", "The code has expired.")
-		return
+		return exchangeGrant{}, false
 	}
 	if ls.Status != "authorised" {
 		writeError(w, r, http.StatusConflict, "link_session_expired", "The link session is not authorised.")
-		return
+		return exchangeGrant{}, false
 	}
 	ls.CodeUsed = true
 	ls.Status = "exchanged"
@@ -235,75 +283,71 @@ func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
 		c = a.st.Connections[ls.ConnectionID]
 		if c == nil {
 			writeError(w, r, http.StatusNotFound, "not_found", "The connection no longer exists.")
-			return
+			return exchangeGrant{}, false
 		}
 		if c.Status == "revoked" {
 			ls.Status = "expired"
 			a.dirty()
 			writeError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
-			return
+			return exchangeGrant{}, false
 		}
 		status = http.StatusOK
 	} else {
-		c = &Connection{ID: newID("con"), PartnerID: p.ID, WorkspaceID: ls.WorkspaceID, Institution: ls.Institution, PersonaID: ls.PersonaID, StartDate: ls.StartDate, CreatedAt: a.clock.Now()}
+		c = &Connection{ID: newID("con"), PartnerID: p.ID, WorkspaceID: ls.WorkspaceID, Institution: ls.Institution, CustomerID: ls.CustomerID, StartDate: ls.StartDate, CreatedAt: a.clock.Now()}
 		a.st.Connections[c.ID] = c
 		ls.ConnectionID = c.ID
 	}
 	oldConsent := c.ConsentID
-	if a.live() {
-		if err := a.vaultMove(linkVaultPrefix+ls.ID, c.ID); err != nil {
-			a.dirty()
-			writeError(w, r, http.StatusInternalServerError, "internal_error", "The bank tokens could not be stored.")
-			return
-		}
+	if err := a.vaultMove(linkVaultPrefix+ls.ID, c.ID); err != nil {
+		a.dirty()
+		writeError(w, r, http.StatusInternalServerError, "internal_error", "The bank tokens could not be stored.")
+		return exchangeGrant{}, false
 	}
-	a.authorise(c, ls)
-	if b := a.cfg.Bank(c.Institution); a.live() && b != nil && oldConsent != "" && oldConsent != c.ConsentID {
-		a.revokeOrQueue(b, oldConsent)
-	}
-	writeJSON(w, status, a.connectionJSON(c))
+	auth := a.authoriseLocked(c, ls)
+	return exchangeGrant{conn: c, status: status, oldConsent: oldConsent, consent: c.ConsentID, auth: auth}, true
 }
 
-func (a *App) authorise(c *Connection, ls *LinkSession) {
+type authorisation struct {
+	at       time.Time
+	accounts []*AccountRec
+	old      map[string]bool
+	next     []string
+	earliest *clock.Date
+}
+
+func (a *App) authoriseLocked(c *Connection, ls *LinkSession) authorisation {
 	now := a.clock.Now()
 	eff, _ := a.effectiveStart(c.StartDate, c.Institution)
 	c.ConsentID = newID("cns")
 	c.AuthorisedAt = now
 	c.ExpiresAt = now.AddDate(1, 0, 0)
-	if a.live() && ls.BankConsentID != "" {
+	if ls.BankConsentID != "" {
 		c.ConsentID, c.ExpiresAt = ls.BankConsentID, ls.ConsentEnds
 		if !ls.BankFrom.IsZero() && ls.BankFrom.After(eff) {
 			eff = ls.BankFrom
 		}
 	}
-	c.PersonaID = ls.PersonaID
+	c.CustomerID = ls.CustomerID
 	old := map[string]bool{}
 	for _, id := range c.AccountIDs {
 		old[id] = true
 	}
-	inst, _ := a.world.Institution(c.Institution)
-	next := []string{}
-	var earliest *clock.Date
+	auth := authorisation{at: now, old: old, next: []string{}}
 	for _, key := range ls.Accounts {
-		wa, ok := a.world.Account(key)
-		if !ok {
-			continue
-		}
-		id := AccountID(c.PartnerID, inst.ID, wa.NUBAN)
-		next = append(next, id)
+		bankID, nuban := splitKey(key)
+		id := AccountID(c.PartnerID, bankID, nuban)
+		auth.next = append(auth.next, id)
 		rec := a.st.Accounts[id]
 		if rec == nil {
-			rec = &AccountRec{ID: id, PartnerID: c.PartnerID, WorldKey: key, From: eff}
+			rec = &AccountRec{ID: id, PartnerID: c.PartnerID, Key: key, From: eff}
 			a.st.Accounts[id] = rec
 		} else if eff.Before(rec.From) {
 			rec.From = eff
 		}
-		if a.live() {
-			rec.NUBAN = wa.NUBAN
-			for _, ba := range ls.BankAccounts {
-				if ba.ID == wa.NUBAN {
-					rec.Name, rec.Type, rec.Currency = ba.Name, ba.Type, ba.Currency
-				}
+		rec.NUBAN = nuban
+		for _, ba := range ls.BankAccounts {
+			if ba.ID == nuban {
+				rec.Name, rec.Type, rec.Currency = ba.Name, ba.Type, ba.Currency
 			}
 		}
 		rec.Cut = rec.From != c.StartDate
@@ -313,23 +357,22 @@ func (a *App) authorise(c *Connection, ls *LinkSession) {
 			rec.Grants = append(rec.Grants, c.ID)
 		}
 		rec.Removed = false
-		if earliest == nil || rec.From.Before(*earliest) {
+		if auth.earliest == nil || rec.From.Before(*auth.earliest) {
 			f := rec.From
-			earliest = &f
+			auth.earliest = &f
 		}
-		if !old[id] {
-			a.emit(c.PartnerID, "account.added", map[string]any{"connection_id": c.ID, "account_id": id})
-		}
-		if _, err := a.fetchAccount(c, rec, now); err != nil && !a.bankFailed(c, err) {
-			a.log.Warn("first sync after linking failed", "connection", c.ID, "account", id, "err", err)
-		}
+		auth.accounts = append(auth.accounts, rec)
 	}
+	return auth
+}
+
+func (a *App) finishAuthoriseLocked(c *Connection, auth authorisation) {
 	c.EffectiveStart = nil
-	if earliest != nil && *earliest != c.StartDate {
-		c.EffectiveStart = earliest
+	if auth.earliest != nil && *auth.earliest != c.StartDate {
+		c.EffectiveStart = auth.earliest
 	}
-	for id := range old {
-		if slices.Contains(next, id) {
+	for id := range auth.old {
+		if slices.Contains(auth.next, id) {
 			continue
 		}
 		if rec := a.st.Accounts[id]; rec != nil {
@@ -341,7 +384,7 @@ func (a *App) authorise(c *Connection, ls *LinkSession) {
 		}
 		a.emit(c.PartnerID, "account.removed", map[string]any{"connection_id": c.ID, "account_id": id})
 	}
-	c.AccountIDs = next
+	c.AccountIDs = auth.next
 	c.SyncDueReal = a.clock.Real().Add(time.Second)
 	if c.Status == "" {
 		c.Status = "syncing"
@@ -353,7 +396,6 @@ func (a *App) authorise(c *Connection, ls *LinkSession) {
 }
 
 func (a *App) connectionJSON(c *Connection) map[string]any {
-	inst, _ := a.world.Institution(c.Institution)
 	var eff any
 	if c.EffectiveStart != nil {
 		eff = c.EffectiveStart.String()
@@ -365,7 +407,7 @@ func (a *App) connectionJSON(c *Connection) map[string]any {
 	return map[string]any{
 		"id":                   c.ID,
 		"status":               c.Status,
-		"institution":          map[string]string{"id": inst.ID, "name": inst.Name},
+		"institution":          a.institutionJSON(c.Institution),
 		"workspace_id":         c.WorkspaceID,
 		"start_date":           c.StartDate.String(),
 		"effective_start_date": eff,
@@ -395,49 +437,44 @@ func (a *App) getConnection(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	c := a.connectionFor(w, r)
 	if c == nil {
+		a.mu.Unlock()
 		return
 	}
-	if c.Status != "revoked" {
-		if a.live() {
-			if err := a.revokeAtBank(c); err != nil {
-				w.Header().Set("Retry-After", "60")
-				if isDown(err) {
-					writeError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached to revoke the consent.")
-				} else {
-					writeError(w, r, http.StatusBadGateway, "bank_error", "The bank did not accept the revocation.")
-				}
-				return
-			}
-		} else if a.world.Down(c.Institution, a.clock.Now()) {
-			w.Header().Set("Retry-After", "60")
+	revoked := c.Status == "revoked"
+	a.mu.Unlock()
+	if revoked {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := a.revokeConnectionAtBank(c.ID); err != nil {
+		w.Header().Set("Retry-After", "60")
+		if isDown(err) {
 			writeError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached to revoke the consent.")
-			return
+		} else {
+			writeError(w, r, http.StatusBadGateway, "bank_error", "The bank did not accept the revocation.")
 		}
+		return
+	}
+	a.mu.Lock()
+	if a.st.Connections[c.ID] == c {
 		a.setStatus(c, "revoked", "connection_revoked")
 	}
+	a.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *App) revokeAtBank(c *Connection) error {
-	b := a.cfg.Bank(c.Institution)
-	if b != nil && c.ConsentID != "" {
-		if err := a.bankRevoke(b, c.ConsentID); err != nil {
-			return err
-		}
+func (a *App) institutionJSON(id string) map[string]string {
+	name := ""
+	if b := a.cfg.Bank(id); b != nil {
+		name = b.Name
 	}
-	a.vaultDrop(c.ID)
-	return nil
+	return map[string]string{"id": id, "name": name}
 }
 
 func (a *App) accountJSON(rec *AccountRec, connID string) map[string]any {
-	wa, _ := a.world.Account(rec.WorldKey)
-	if rec.NUBAN != "" && rec.Name != "" {
-		wa.NUBAN, wa.Name, wa.Type, wa.Currency = rec.NUBAN, rec.Name, rec.Type, rec.Currency
-	}
-	inst, _ := a.world.Institution(wa.Institution)
+	bankID, _ := splitKey(rec.Key)
 	asAt := rec.AsAt
 	if asAt.IsZero() {
 		asAt = a.clock.Now()
@@ -445,14 +482,14 @@ func (a *App) accountJSON(rec *AccountRec, connID string) map[string]any {
 	return map[string]any{
 		"id":             rec.ID,
 		"connection_id":  connID,
-		"institution":    map[string]string{"id": inst.ID, "name": inst.Name},
-		"name":           wa.Name,
-		"account_number": wa.NUBAN,
-		"type":           wa.Type,
-		"currency":       wa.Currency,
+		"institution":    a.institutionJSON(bankID),
+		"name":           rec.Name,
+		"account_number": rec.NUBAN,
+		"type":           rec.Type,
+		"currency":       rec.Currency,
 		"balances": map[string]any{
-			"current":   map[string]any{"amount_minor": rec.Ledger, "currency": wa.Currency},
-			"available": map[string]any{"amount_minor": rec.Available, "currency": wa.Currency},
+			"current":   map[string]any{"amount_minor": rec.Ledger, "currency": rec.Currency},
+			"available": map[string]any{"amount_minor": rec.Available, "currency": rec.Currency},
 			"as_at":     ts(asAt),
 		},
 	}
@@ -480,7 +517,11 @@ func (a *App) reauth(w http.ResponseWriter, r *http.Request) {
 		RedirectURI string `json:"redirect_uri"`
 		State       string `json:"state"`
 	}
-	raw, _ := io.ReadAll(r.Body)
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body could not be read.")
+		return
+	}
 	if len(raw) > 0 {
 		r.Body = io.NopCloser(bytes.NewReader(raw))
 		if err := decodeBody(r, &body); err != nil {
@@ -560,47 +601,67 @@ func (a *App) getAccount(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *App) getBalance(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+type balanceQuery struct {
+	rec  *AccountRec
+	conn *Connection
+	pull bankPull
+	date clock.Date
+}
+
+func (a *App) balanceQueryLocked(w http.ResponseWriter, r *http.Request) (balanceQuery, bool) {
 	rec, conn := a.accountFor(w, r)
 	if rec == nil {
-		return
+		return balanceQuery{}, false
 	}
 	d, err := clock.ParseDate(r.URL.Query().Get("as_of"))
 	if err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "as_of must be a date in YYYY-MM-DD form.")
-		return
+		return balanceQuery{}, false
 	}
 	min := rec.From.AddDays(-1)
 	max := a.clock.Today().AddDays(-1)
 	if d.Before(min) || d.After(max) {
 		writeError(w, r, http.StatusUnprocessableEntity, "as_of_out_of_range", "as_of must be between "+min.String()+" and "+max.String()+", the day before the first date Connect holds and the last completed business day.")
-		return
+		return balanceQuery{}, false
 	}
-	var bal int64
-	if a.live() {
-		bal, err = a.bankBalanceOn(conn, rec, d)
-		if err != nil && a.bankFailed(conn, err) {
-			a.connUnavailable(w, r, conn)
-			return
-		}
-	} else {
-		bal, err = a.src(rec.WorldKey).EndOfDay(rec.WorldKey, d)
-	}
+	pull, err := a.bankPullPlanLocked(conn, rec)
 	if err != nil {
-		writeError(w, r, http.StatusInternalServerError, "internal_error", "Something went wrong.")
+		a.balanceFailedLocked(w, r, conn, err)
+		return balanceQuery{}, false
+	}
+	return balanceQuery{rec: rec, conn: conn, pull: pull, date: d}, true
+}
+
+func (a *App) balanceFailedLocked(w http.ResponseWriter, r *http.Request, conn *Connection, err error) {
+	if a.st.Connections[conn.ID] == conn && a.bankFailedLocked(conn, err) {
+		a.connUnavailable(w, r, conn)
 		return
 	}
-	wa, _ := a.world.Account(rec.WorldKey)
+	writeError(w, r, http.StatusInternalServerError, "internal_error", "Something went wrong.")
+}
+
+func (a *App) getBalance(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	q, ok := a.balanceQueryLocked(w, r)
+	a.mu.Unlock()
+	if !ok {
+		return
+	}
+	bal, err := a.bankBalanceOn(q.pull, q.date)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err != nil {
+		a.balanceFailedLocked(w, r, q.conn, err)
+		return
+	}
 	var eff any
-	if rec.Cut {
-		eff = rec.From.String()
+	if q.rec.Cut {
+		eff = q.rec.From.String()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"account_id":           rec.ID,
-		"as_of":                d.String(),
-		"ledger_balance":       map[string]any{"amount_minor": bal, "currency": wa.Currency},
+		"account_id":           q.rec.ID,
+		"as_of":                q.date.String(),
+		"ledger_balance":       map[string]any{"amount_minor": bal, "currency": q.rec.Currency},
 		"effective_start_date": eff,
 	})
 }

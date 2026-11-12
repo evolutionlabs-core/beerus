@@ -3,6 +3,8 @@ package setup
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/evolutionlabs-core/beerus/internal/nibss"
 )
 
 const (
@@ -23,6 +25,11 @@ const (
 	MoneyTransfer = "transfer"
 	MoneyPayout   = "payout"
 	MoneyLeave    = "leave"
+
+	OutcomePaidOut     = "paid_out"
+	OutcomeTransferred = "transferred"
+	OutcomeClaim       = "claim"
+	OutcomeLeft        = "left"
 
 	PhaseProvisioning = "provisioning"
 	PhaseActive       = "active"
@@ -187,12 +194,32 @@ type PartnerLocal struct {
 }
 
 type Status struct {
-	Version       int        `json:"version"`
-	Setup         string     `json:"setup"`
-	SetupKey      uint64     `json:"setup_key,string"`
-	Applied       Spec       `json:"applied"`
-	AppliedSHA256 string     `json:"applied_sha256"`
-	Resources     []Resource `json:"resources"`
+	Version       int                 `json:"version"`
+	Setup         string              `json:"setup"`
+	SetupKey      uint64              `json:"setup_key,string"`
+	Applied       Spec                `json:"applied"`
+	AppliedSHA256 string              `json:"applied_sha256"`
+	Resources     []Resource          `json:"resources"`
+	Tombstones    []nibss.Institution `json:"tombstones,omitempty"`
+	Closures      []Closure           `json:"closures,omitempty"`
+}
+
+type ClosureLine struct {
+	Customer    string `json:"customer"`
+	Name        string `json:"name"`
+	NUBAN       string `json:"nuban"`
+	Outcome     string `json:"outcome"`
+	AmountMinor int64  `json:"amount_minor"`
+	ToBank      string `json:"to_bank,omitempty"`
+	ToBankName  string `json:"to_bank_name,omitempty"`
+	ToNUBAN     string `json:"to_nuban,omitempty"`
+}
+
+type Closure struct {
+	Bank     string        `json:"bank"`
+	Name     string        `json:"name"`
+	ClosedAt time.Time     `json:"closed_at"`
+	Lines    []ClosureLine `json:"lines"`
 }
 
 type Resource struct {

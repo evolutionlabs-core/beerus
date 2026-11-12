@@ -2,6 +2,7 @@ package nibss
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -34,7 +35,7 @@ func TestNormaliseName(t *testing.T) {
 	}
 	for _, bad := range []string{"", "   ", "..'", "-"} {
 		_, err := normaliseName(bad)
-		wantErr(t, err, `name "`+bad+`" has no letters`)
+		wantBadDetails(t, err, `name "`+bad+`" has no letters`)
 	}
 }
 
@@ -67,7 +68,7 @@ func TestNormalisePhone(t *testing.T) {
 	}
 	for _, c := range bad {
 		_, err := normalisePhone(c.in, "234", "0")
-		wantErr(t, err, c.want)
+		wantBadDetails(t, err, c.want)
 	}
 }
 
@@ -137,13 +138,13 @@ func TestEnrolBVNRejectsBadInput(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
 	_, err := s.EnrolBVN(ctx, "Adaeze Okafor", "08031234567", clock.Date{Y: 2023, M: 2, D: 29})
-	wantErr(t, err, "date of birth 2023-02-29 is not a real date")
+	wantBadDetails(t, err, "date of birth 2023-02-29 is not a real date")
 	_, err = s.EnrolBVN(ctx, "Adaeze Okafor", "08031234567", clock.Date{})
-	wantErr(t, err, "date of birth 0000-00-00 is not a real date")
+	wantBadDetails(t, err, "date of birth 0000-00-00 is not a real date")
 	_, err = s.EnrolBVN(ctx, " ", "08031234567", adaezeDOB)
-	wantErr(t, err, `name " " has no letters`)
+	wantBadDetails(t, err, `name " " has no letters`)
 	_, err = s.EnrolBVN(ctx, "Adaeze Okafor", "phone", adaezeDOB)
-	wantErr(t, err, `phone "phone" may hold only digits, spaces, dashes, brackets and a leading +`)
+	wantBadDetails(t, err, `phone "phone" may hold only digits, spaces, dashes, brackets and a leading +`)
 	if got, err := s.EnrolBVN(ctx, "Adaeze Okafor", "08031234567", clock.Date{Y: 2024, M: 2, D: 29}); err != nil || got != "22900000013" {
 		t.Errorf("leap-day birth: %s, %v", got, err)
 	}
@@ -190,4 +191,12 @@ func TestEnrolBVNConcurrent(t *testing.T) {
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM bvns`).Scan(&rows); err != nil || rows != 1 {
 		t.Fatalf("%d bvn rows, %v; want 1", rows, err)
 	}
+}
+
+func wantBadDetails(t *testing.T, err error, msg string) {
+	t.Helper()
+	if !errors.Is(err, ErrBadDetails) {
+		t.Fatalf("got error %v, want it to wrap ErrBadDetails", err)
+	}
+	wantErr(t, err, ErrBadDetails.Error()+": "+msg)
 }

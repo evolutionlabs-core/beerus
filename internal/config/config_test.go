@@ -3,11 +3,21 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func finish(c Config) (*Config, error) {
-	c.Seed, c.Genesis, c.Dir = 7, "2024-01-01", "x"
+	c.Dir, c.TSQAfter, c.TSQAttempts = "x", 2*time.Minute, 3
 	return &c, c.Finish()
+}
+
+func TestStatusQueriesNeedAWaitAndTries(t *testing.T) {
+	for _, c := range []Config{{Dir: "x", TSQAttempts: 3}, {Dir: "x", TSQAfter: time.Minute}} {
+		err := c.Finish()
+		if err == nil || !strings.Contains(err.Error(), "nip status queries need a wait and a number of tries") {
+			t.Errorf("%s and %d: %v", c.TSQAfter, c.TSQAttempts, err)
+		}
+	}
 }
 
 func TestNIPSessionsAreValidated(t *testing.T) {

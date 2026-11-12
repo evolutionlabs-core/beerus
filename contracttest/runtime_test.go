@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,9 +55,13 @@ type run struct {
 	stop func()
 }
 
+var runOrigins sync.Map
+
 func runOnce(t *testing.T, cfg *config.Config) run {
 	t.Helper()
-	app, err := connect.New(cfg, connect.Options{})
+	started, _ := runOrigins.LoadOrStore(cfg.Dir, time.Now())
+	origin := started.(time.Time)
+	app, err := connect.New(cfg, connect.Options{Real: func() time.Time { return stackBase().Add(time.Since(origin)) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +100,6 @@ func TestRestartResumesProvisioning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shortHistory(cfg)
 	first := runOnce(t, cfg)
 	first.stop()
 	t.Cleanup(func() {
@@ -120,7 +124,6 @@ func TestRestartResumesProvisioning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shortHistory(again)
 	second := runOnce(t, again)
 	defer second.stop()
 	checkProvisioned(t, storedBank(t, cfg.Dir, "bank-b"))
@@ -140,7 +143,6 @@ func TestResetDropsEveryDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shortHistory(cfg)
 	runOnce(t, cfg).stop()
 	if err := os.WriteFile(cfg.Path("running"), []byte("now"), 0o600); err != nil {
 		t.Fatal(err)

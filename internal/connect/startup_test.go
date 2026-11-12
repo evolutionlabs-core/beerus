@@ -2,6 +2,7 @@ package connect
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 	if len(errs) > 0 {
 		t.Fatal(errs)
 	}
-	if spec.Spec.Start != "2026-11-03T08:00:00+01:00" || len(spec.Spec.Banks) != 2 {
+	if spec.Spec.Start != "2026-11-03T00:00:00+01:00" || len(spec.Spec.Banks) != 2 {
 		t.Fatalf("setup.yaml: %+v", spec.Spec)
 	}
 	want := []struct {
@@ -67,10 +68,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 			t.Errorf("%s history %d", b.ID, b.HistoryDays)
 		}
 	}
-	if cfg.Genesis != "2024-10-04" {
-		t.Errorf("genesis %s, want start − 760 days", cfg.Genesis)
-	}
-	if !cfg.Start.Equal(time.Date(2026, 11, 3, 8, 0, 0, 0, clock.Lagos)) {
+	if !cfg.Start.Equal(time.Date(2026, 11, 3, 0, 0, 0, 0, clock.Lagos)) {
 		t.Errorf("start %v", cfg.Start)
 	}
 	st, err := setup.LoadStatus(cfg.Dir)
@@ -128,14 +126,42 @@ func TestInitRefusesABadSpec(t *testing.T) {
 	}
 }
 
-func TestClockStartsAtStart(t *testing.T) {
+func TestStateFromAFutureClockIsRefused(t *testing.T) {
 	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
-	app, err := New(cfg, Options{WorldOnly: true, Real: func() time.Time { return time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC) }})
-	if err != nil {
+	future := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
+	if err := os.WriteFile(cfg.Path("stub-state.json"), []byte(`{"clock":{"anchor_business":"`+future+`","pace":0}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := app.Clock().Now(); !got.Equal(cfg.Start) {
-		t.Fatalf("business time %v, want %v", got, cfg.Start)
+	if _, err := New(cfg, Options{Logger: slog.New(slog.DiscardHandler)}); !errors.Is(err, ErrFutureWorld) {
+		t.Fatalf("New with a state ahead of real time: %v", err)
+	}
+	past := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	if err := os.WriteFile(cfg.Path("stub-state.json"), []byte(`{"clock":{"anchor_business":"`+past+`","pace":0}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app, err := New(cfg, Options{Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatalf("New with an old frozen clock: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := app.DropBankDatabases(); err != nil {
+			t.Errorf("drop databases: %v", err)
+		}
+	})
+	if err := app.Save(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(cfg.Path("stub-state.json"))
+	if err != nil || strings.Contains(string(raw), `"clock"`) {
+		t.Fatalf("saved state still holds a clock: %v %s", err, raw)
+	}
+}
+
+func TestClockIsReal(t *testing.T) {
+	real := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	app := newTestApp(t, Options{Real: func() time.Time { return real }})
+	if got := app.Clock().Now(); !got.Equal(real) || got.Location() != clock.Lagos {
+		t.Fatalf("business time %v, want %v in Lagos", got, real)
 	}
 	if app.setupKey == 0 || app.setupKey != app.ctl.setupKey() {
 		t.Fatalf("setup key %d", app.setupKey)

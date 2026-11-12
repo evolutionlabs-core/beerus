@@ -1,8 +1,10 @@
 package connect
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"html/template"
 	"net"
 	"net/http"
@@ -13,15 +15,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const bankCookie = "beerus_bank"
 
 type bankSession struct {
-	Persona    string
+	Customer   string
+	Name       string
 	CSRF       string
 	Verified   bool
 	OTP        string
@@ -31,10 +34,16 @@ type bankSession struct {
 	Fresh      string
 }
 
+type bankFailures struct {
+	Count int
+	First time.Time
+}
+
 type bankAuth struct {
 	mu       sync.Mutex
 	sessions map[string]*bankSession
-	failures map[string]int
+	failures map[string]bankFailures
+	swept    time.Time
 	locked   map[string]time.Time
 }
 
@@ -53,7 +62,7 @@ func (app *App) BankHandler(id string) http.Handler {
 	if b == nil || !have {
 		return nil
 	}
-	a := &bankSite{App: app, bank: b, ob: app.openBanking(id), auth: &bankAuth{sessions: map[string]*bankSession{}, failures: map[string]int{}, locked: map[string]time.Time{}}}
+	a := &bankSite{App: app, bank: b, ob: app.openBanking(id), auth: &bankAuth{sessions: map[string]*bankSession{}, failures: map[string]bankFailures{}, locked: map[string]time.Time{}}}
 	mux := http.NewServeMux()
 	mux.Handle("GET /assets/", assetHandler())
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/accounts", http.StatusSeeOther) })
@@ -115,28 +124,55 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 	})
 }
 
-func (a *bankSite) bankInst() world.Institution {
-	inst, _ := a.world.Institution(a.bank.ID)
-	return inst
-}
-
 func (a *bankSite) bankRender(w http.ResponseWriter, name string, status int, s *bankSession, data roomPage) {
-	inst := a.bankInst()
-	data["Bank"] = inst
+	data["Bank"] = a.bank
 	data["Now"] = a.clock.Now()
 	if s != nil && s.Verified {
-		if p, ok := a.world.Persona(s.Persona); ok {
-			data["User"] = p.Name
-		}
+		data["User"] = s.Name
 		data["CSRF"] = s.CSRF
 	}
 	if _, ok := data["Title"]; !ok {
-		data["Title"] = inst.Name
+		data["Title"] = a.bank.Name
 	}
 	setPageHeaders(w)
 	w.WriteHeader(status)
 	if err := bankPages.ExecuteTemplate(w, name, data); err != nil {
 		a.log.Error("render", "page", name, "err", err)
+	}
+}
+
+func (a *bankSite) bankFail(w http.ResponseWriter, r *http.Request, err error) {
+	a.log.Error("online banking", "bank", a.bank.ID, "path", r.URL.Path, "err", err)
+	http.Error(w, "Something went wrong at the bank. Try again soon.", http.StatusInternalServerError)
+}
+
+func (a *bankSite) book() (book, error) {
+	bk, ok := a.bookOf(a.bank.ID)
+	if !ok {
+		return book{}, fmt.Errorf("the books of %s are not open", a.bank.Name)
+	}
+	return bk, nil
+}
+
+func (ba *bankAuth) sweepLocked(real time.Time) {
+	if real.Sub(ba.swept) < time.Minute {
+		return
+	}
+	ba.swept = real
+	for k, f := range ba.failures {
+		if real.Sub(f.First) > bankLockout {
+			delete(ba.failures, k)
+		}
+	}
+	for k, until := range ba.locked {
+		if !real.Before(until) {
+			delete(ba.locked, k)
+		}
+	}
+	for k, s := range ba.sessions {
+		if real.After(s.Expires) {
+			delete(ba.sessions, k)
+		}
 	}
 }
 
@@ -182,36 +218,56 @@ func (a *bankSite) obLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := strings.TrimSpace(r.PostForm.Get("username"))
+	if !bank.ValidUsername(user) {
+		a.bankRender(w, "bank_login", http.StatusUnauthorized, nil, roomPage{"Title": "Sign in", "Error": "The username or password is wrong."})
+		return
+	}
 	ba := a.auth
 	real := a.clock.Real()
 	ba.mu.Lock()
+	ba.sweepLocked(real)
 	until := ba.locked[user]
+	full := len(ba.failures)+len(ba.locked) >= maxTrackedLogins
 	ba.mu.Unlock()
+	if full {
+		a.bankRender(w, "bank_login", http.StatusTooManyRequests, nil, roomPage{"Title": "Sign in", "Error": fmt.Sprintf("Too many sign-in attempts are being tracked (%d). Try again in 15 minutes.", maxTrackedLogins)})
+		return
+	}
 	if real.Before(until) {
 		a.bankRender(w, "bank_login", http.StatusTooManyRequests, nil, roomPage{"Title": "Sign in", "Error": "Too many attempts. Try again in 15 minutes."})
 		return
 	}
-	p, ok := a.world.PersonaByUsername(user)
-	good := ok && subtle.ConstantTimeCompare([]byte(p.Password), []byte(r.PostForm.Get("password"))) == 1
-	if good && len(a.world.AccountsAt(p.ID, a.bank.ID)) == 0 {
-		a.bankRender(w, "bank_login", http.StatusUnprocessableEntity, nil, roomPage{"Title": "Sign in", "Error": p.Name + " has no accounts at " + a.bankInst().Name + "."})
+	bk, err := a.book()
+	if err != nil {
+		a.bankFail(w, r, err)
 		return
 	}
-	if !good {
+	c, err := bk.ls.Bank().Authenticate(r.Context(), user, r.PostForm.Get("password"))
+	if errors.Is(err, bank.ErrBadLogin) {
 		ba.mu.Lock()
-		ba.failures[user]++
-		if ba.failures[user] >= maxAttempts {
-			ba.locked[user] = real.Add(15 * time.Minute)
-			ba.failures[user] = 0
+		f := ba.failures[user]
+		if f.Count == 0 {
+			f.First = real
+		}
+		f.Count++
+		if f.Count >= maxAttempts {
+			ba.locked[user] = real.Add(bankLockout)
+			delete(ba.failures, user)
+		} else {
+			ba.failures[user] = f
 		}
 		ba.mu.Unlock()
 		a.bankRender(w, "bank_login", http.StatusUnauthorized, nil, roomPage{"Title": "Sign in", "Error": "The username or password is wrong."})
 		return
 	}
+	if err != nil {
+		a.bankFail(w, r, err)
+		return
+	}
 	raw := newSecret("bs_", 20)
-	s := &bankSession{Persona: p.ID, CSRF: newSecret("", 16), OTP: otp(), OTPExpires: real.Add(otpLife), Expires: real.Add(30 * time.Minute)}
+	s := &bankSession{Customer: c.ID, Name: c.Name, CSRF: newSecret("", 16), OTP: otp(), OTPExpires: real.Add(otpLife), Expires: real.Add(30 * time.Minute)}
 	ba.mu.Lock()
-	ba.failures[user] = 0
+	delete(ba.failures, user)
 	ba.sessions[hashSecret(raw)] = s
 	ba.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: bankCookie, Value: raw, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 1800})
@@ -274,22 +330,37 @@ func (a *bankSite) obLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-func (a *bankSite) myAccounts(persona string) []acctView {
-	now := a.clock.Now()
-	out := []acctView{}
-	for _, acc := range a.world.AccountsAt(persona, a.bank.ID) {
-		out = append(out, a.acctView(acc, now))
+func (a *bankSite) myAccounts(ctx context.Context, customer string) (book, []acctView, error) {
+	bk, err := a.book()
+	if err != nil {
+		return book{}, nil, err
 	}
-	return out
+	accts, err := bk.ls.Bank().CustomerAccounts(ctx, customer)
+	if err != nil {
+		return book{}, nil, err
+	}
+	out := []acctView{}
+	for _, acc := range accts {
+		v, err := bk.acctView(ctx, acc)
+		if err != nil {
+			return book{}, nil, err
+		}
+		out = append(out, v)
+	}
+	return bk, out, nil
 }
 
-func (a *bankSite) myAccount(persona, nuban string) (world.Account, bool) {
-	for _, acc := range a.world.AccountsAt(persona, a.bank.ID) {
-		if acc.NUBAN == nuban {
-			return acc, true
+func (a *bankSite) myAccount(ctx context.Context, customer, nuban string) (book, acctView, bool, error) {
+	bk, accts, err := a.myAccounts(ctx, customer)
+	if err != nil {
+		return book{}, acctView{}, false, err
+	}
+	for _, v := range accts {
+		if v.NUBAN == nuban {
+			return bk, v, true, nil
 		}
 	}
-	return world.Account{}, false
+	return bk, acctView{}, false, nil
 }
 
 func (a *bankSite) obAccounts(w http.ResponseWriter, r *http.Request) {
@@ -297,9 +368,11 @@ func (a *bankSite) obAccounts(w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	accts := a.myAccounts(s.Persona)
+	_, accts, err := a.myAccounts(r.Context(), s.Customer)
+	if err != nil {
+		a.bankFail(w, r, err)
+		return
+	}
 	var total int64
 	for _, v := range accts {
 		total += v.Available
@@ -307,40 +380,46 @@ func (a *bankSite) obAccounts(w http.ResponseWriter, r *http.Request) {
 	a.bankRender(w, "bank_accounts", http.StatusOK, s, roomPage{"Title": "Accounts", "Nav": "accounts", "Accounts": accts, "Total": total})
 }
 
+func bankHref(l bank.FeedLine) string {
+	return "/accounts/" + l.NUBAN + "/tx/" + url.PathEscape(l.Key)
+}
+
+type bankLineView struct {
+	bank.FeedLine
+	Description string
+	Href        string
+}
+
 func (a *bankSite) obStatement(w http.ResponseWriter, r *http.Request) {
 	s := a.bankUser(w, r)
 	if s == nil {
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	acc, ok := a.myAccount(s.Persona, r.PathValue("nuban"))
+	ctx := r.Context()
+	bk, acc, ok, err := a.myAccount(ctx, s.Customer, r.PathValue("nuban"))
+	if err != nil {
+		a.bankFail(w, r, err)
+		return
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	now := a.clock.Now()
-	ls, _ := a.statement(acc.Key, now)
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
+	cursor := r.URL.Query().Get("cursor")
+	ls, next, err := bk.ls.Bank().Recent(ctx, acc.NUBAN, 30, cursor)
+	if errors.Is(err, bank.ErrBadCursor) {
+		http.NotFound(w, r)
+		return
 	}
-	const size = 30
-	end := len(ls) - (page-1)*size
-	if end < 0 {
-		end = 0
+	if err != nil {
+		a.bankFail(w, r, err)
+		return
 	}
-	start := max(end-size, 0)
-	lines := []lineView{}
-	for i := end - 1; i >= start; i-- {
-		lv := a.lineView(acc, ls[i])
-		lv.Href = "/accounts/" + acc.NUBAN + "/tx/" + url.PathEscape(ls[i].Key)
-		if ls[i].Pending {
-			lv.Href += "?pending=1"
-		}
-		lines = append(lines, lv)
+	lines := []bankLineView{}
+	for _, l := range ls {
+		lines = append(lines, bankLineView{FeedLine: l, Description: Normalise(l.Narration), Href: bankHref(l)})
 	}
-	a.bankRender(w, "bank_statement", http.StatusOK, s, roomPage{"Title": acc.Name, "Nav": "accounts", "A": a.acctView(acc, now), "Lines": lines, "Page": page, "Older": start > 0, "Newer": page > 1})
+	a.bankRender(w, "bank_statement", http.StatusOK, s, roomPage{"Title": acc.Name, "Nav": "accounts", "A": acc, "Lines": lines, "Next": next, "First": cursor != "", "Transfer": transferOutcome(r.URL.Query().Get("transfer"))})
 }
 
 func (a *bankSite) obTx(w http.ResponseWriter, r *http.Request) {
@@ -348,51 +427,53 @@ func (a *bankSite) obTx(w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	acc, ok := a.myAccount(s.Persona, r.PathValue("nuban"))
+	ctx := r.Context()
+	bk, acc, ok, err := a.myAccount(ctx, s.Customer, r.PathValue("nuban"))
+	if err != nil {
+		a.bankFail(w, r, err)
+		return
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	l, ok := a.line(acc.Key, r.PathValue("key"), r.URL.Query().Get("pending") == "1", a.clock.Now())
-	if !ok {
+	l, err := bk.ls.Bank().Line(ctx, acc.NUBAN, r.PathValue("key"))
+	if errors.Is(err, bank.ErrUnknownLine) {
 		http.NotFound(w, r)
 		return
 	}
-	related := []lineView{}
+	if err != nil {
+		a.bankFail(w, r, err)
+		return
+	}
+	related := []bankLineView{}
 	if l.SessionID != "" {
-		ls, _ := a.statement(acc.Key, a.clock.Now())
+		ls, err := bk.ls.Bank().SessionLines(ctx, l.SessionID)
+		if err != nil {
+			a.bankFail(w, r, err)
+			return
+		}
 		for _, x := range ls {
-			if x.SessionID == l.SessionID && x.Key != l.Key {
-				lv := a.lineView(acc, x)
-				lv.Href = "/accounts/" + acc.NUBAN + "/tx/" + url.PathEscape(x.Key)
-				related = append(related, lv)
+			if x.NUBAN == acc.NUBAN && x.Key != l.Key {
+				related = append(related, bankLineView{FeedLine: x, Description: Normalise(x.Narration), Href: bankHref(x)})
 			}
 		}
 	}
-	a.bankRender(w, "bank_tx", http.StatusOK, s, roomPage{"Title": Normalise(l.Narration), "Nav": "accounts", "A": a.acctView(acc, a.clock.Now()), "L": a.lineView(acc, l), "Related": related, "Done": r.URL.Query().Get("done") == "1"})
+	a.bankRender(w, "bank_tx", http.StatusOK, s, roomPage{"Title": Normalise(l.Narration), "Nav": "accounts", "A": acc, "L": bankLineView{FeedLine: l, Description: Normalise(l.Narration)}, "Related": related})
 }
 
-type payee struct {
-	Key, Label string
-}
-
-func (a *bankSite) transferPage(s *bankSession, data roomPage) roomPage {
+func (a *bankSite) transferPage(ctx context.Context, s *bankSession, data roomPage) (roomPage, error) {
+	_, accts, err := a.myAccounts(ctx, s.Customer)
+	if err != nil {
+		return nil, err
+	}
 	data["Title"] = "Send money"
 	data["Nav"] = "transfer"
-	data["Accounts"] = a.myAccounts(s.Persona)
-	own := []payee{}
-	if p, ok := a.world.Persona(s.Persona); ok {
-		for _, k := range p.Accounts {
-			acc, _ := a.world.Account(k)
-			inst, _ := a.world.Institution(acc.Institution)
-			own = append(own, payee{Key: acc.Key, Label: inst.Name + " " + strings.Title(acc.Type) + " · " + acc.NUBAN})
-		}
-	}
-	data["Own"] = own
-	data["Banks"] = []string{"Bank A", "Bank B", "Bank C", "Bank D Microfinance"}
-	return data
+	data["Accounts"] = accts
+	a.mu.Lock()
+	data["Banks"] = a.openInstitutions()
+	a.mu.Unlock()
+	return data, nil
 }
 
 func (a *bankSite) obTransferForm(w http.ResponseWriter, r *http.Request) {
@@ -400,42 +481,63 @@ func (a *bankSite) obTransferForm(w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.bankRender(w, "bank_transfer", http.StatusOK, s, a.transferPage(s, roomPage{"From": r.URL.Query().Get("from")}))
+	data, err := a.transferPage(r.Context(), s, roomPage{"Form": url.Values{"from": {r.URL.Query().Get("from")}, "bank": {a.bank.ID}}})
+	if err != nil {
+		a.bankFail(w, r, err)
+		return
+	}
+	a.bankRender(w, "bank_transfer", http.StatusOK, s, data)
 }
 
-func (a *bankSite) obTransferRequest(s *bankSession, f url.Values) (world.TransferRequest, error) {
-	acc, ok := a.myAccount(s.Persona, f.Get("from"))
+func (a *bankSite) obTransferRequest(ctx context.Context, s *bankSession, f url.Values) (TransferRequest, error) {
+	_, acc, ok, err := a.myAccount(ctx, s.Customer, f.Get("from"))
+	if err != nil {
+		return TransferRequest{}, err
+	}
 	if !ok {
-		return world.TransferRequest{}, errors.New("Choose one of your accounts to pay from.")
+		return TransferRequest{}, errChooseAccount
 	}
 	amount, err := parseNaira(f.Get("amount"))
 	if err != nil {
-		return world.TransferRequest{}, errors.New("Enter an amount in naira, like 25000 or 2500.50.")
+		return TransferRequest{}, errBadAmount
 	}
-	req := world.TransferRequest{From: acc.Key, Amount: amount, Narration: strings.TrimSpace(f.Get("narration"))}
+	req := TransferRequest{FromBank: a.bank.ID, From: acc.NUBAN, Amount: amount, Narration: strings.TrimSpace(f.Get("narration"))}
 	if f.Get("mode") == "own" {
-		req.To = f.Get("own")
+		req.ToBank, req.To = a.bank.ID, f.Get("own")
 		if req.To == "" {
-			return req, errors.New("Choose which of your accounts to pay into.")
+			return req, errChooseOwn
 		}
-	} else {
-		req.To = strings.TrimSpace(f.Get("number"))
-		req.ToBank = f.Get("bank")
-		req.ToName = strings.TrimSpace(f.Get("name"))
-		if len(req.To) != 10 {
-			return req, errors.New("Enter a 10-digit account number.")
-		}
-		if to, err := a.world.FindAccount(req.To); err == nil {
-			inst, _ := a.world.Institution(to.Institution)
-			if !strings.EqualFold(inst.Name, req.ToBank) {
-				return req, errors.New("That account number is not at " + req.ToBank + ".")
-			}
-			req.To = to.Key
-		}
+		return req, nil
+	}
+	req.ToBank, req.To = f.Get("bank"), strings.TrimSpace(f.Get("number"))
+	if len(req.To) != 10 {
+		return req, errTenDigits
 	}
 	return req, nil
+}
+
+var (
+	errChooseAccount = errors.New("choose one of your accounts to pay from")
+	errChooseOwn     = errors.New("choose which of your accounts to pay into")
+	errTenDigits     = errors.New("enter a 10-digit account number")
+)
+
+func userFixable(err error) bool {
+	var te *transferError
+	return errors.As(err, &te) || errors.Is(err, errBadAmount) || errors.Is(err, errChooseAccount) || errors.Is(err, errChooseOwn) || errors.Is(err, errTenDigits)
+}
+
+func (a *bankSite) transferFailed(w http.ResponseWriter, r *http.Request, s *bankSession, err error) {
+	if !userFixable(err) {
+		a.bankFail(w, r, err)
+		return
+	}
+	data, perr := a.transferPage(r.Context(), s, roomPage{"Error": sentence(err.Error()), "Form": r.PostForm})
+	if perr != nil {
+		a.bankFail(w, r, perr)
+		return
+	}
+	a.bankRender(w, "bank_transfer", http.StatusUnprocessableEntity, s, data)
 }
 
 func (a *bankSite) obTransferReview(w http.ResponseWriter, r *http.Request) {
@@ -443,22 +545,22 @@ func (a *bankSite) obTransferReview(w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	req, err := a.obTransferRequest(s, r.PostForm)
-	var q world.TransferResult
+	req, err := a.obTransferRequest(r.Context(), s, r.PostForm)
+	var q TransferResult
 	if err == nil {
-		q, err = a.world.Quote(a.clock.Now(), req)
+		q, err = a.Quote(req)
 	}
 	if err != nil {
-		msg := transferMessage(err)
-		if errors.Is(err, world.ErrInsufficientFunds) {
-			msg = "There isn't enough available money for this transfer and its charges."
-		}
-		a.bankRender(w, "bank_transfer", http.StatusUnprocessableEntity, s, a.transferPage(s, roomPage{"Error": msg, "From": r.PostForm.Get("from"), "Form": r.PostForm}))
+		a.transferFailed(w, r, s, err)
 		return
 	}
-	a.bankRender(w, "bank_review", http.StatusOK, s, roomPage{"Title": "Review transfer", "Nav": "transfer", "Q": q, "Form": r.PostForm})
+	a.mu.Lock()
+	to := q.ToBank
+	if b := a.bankLocked(q.ToBank); b != nil {
+		to = b.Name
+	}
+	a.mu.Unlock()
+	a.bankRender(w, "bank_review", http.StatusOK, s, roomPage{"Title": "Review transfer", "Nav": "transfer", "Q": q, "ToBank": to, "Form": r.PostForm})
 }
 
 func (a *bankSite) obTransferConfirm(w http.ResponseWriter, r *http.Request) {
@@ -466,30 +568,19 @@ func (a *bankSite) obTransferConfirm(w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		return
 	}
-	a.mu.Lock()
-	req, err := a.obTransferRequest(s, r.PostForm)
-	var res world.TransferResult
+	req, err := a.obTransferRequest(r.Context(), s, r.PostForm)
+	var res TransferResult
 	if err == nil && a.role == RoleBank {
-		a.mu.Unlock()
 		res, err = a.remoteTransfer(req)
-		a.mu.Lock()
 	} else if err == nil {
-		res, err = a.world.Transfer(a.clock.Now(), req)
+		res, err = a.Transfer(req)
 	}
 	if err != nil {
-		msg := transferMessage(err)
-		if errors.Is(err, world.ErrInsufficientFunds) {
-			msg = "There isn't enough available money for this transfer and its charges."
-		}
-		a.bankRender(w, "bank_transfer", http.StatusUnprocessableEntity, s, a.transferPage(s, roomPage{"Error": msg, "From": r.PostForm.Get("from"), "Form": r.PostForm}))
-		a.mu.Unlock()
+		a.transferFailed(w, r, s, err)
 		return
 	}
-	a.dirty()
-	a.mu.Unlock()
 	a.SyncAll()
-	from, _ := a.world.Account(res.From)
-	http.Redirect(w, r, "/accounts/"+from.NUBAN+"/tx/"+url.PathEscape(res.LineKey)+"?done=1", http.StatusSeeOther)
+	http.Redirect(w, r, "/accounts/"+res.From+"?transfer="+url.QueryEscape(res.Status), http.StatusSeeOther)
 }
 
 type appRow struct {
@@ -504,20 +595,40 @@ type accessRow struct {
 	At               time.Time
 }
 
+const (
+	historyPageSize = 25
+	maxHistoryPages = 1000
+)
+
 func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 	s := a.bankUser(w, r)
 	if s == nil {
 		return
 	}
-	consents, _ := a.ob.Consents(r.Context(), s.Persona)
-	access, _ := a.ob.AccessHistory(r.Context(), s.Persona, 25)
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	mine := map[string]string{}
+	page, ok := pageParam(w, r, "access history", maxHistoryPages)
+	if !ok {
+		return
+	}
+	need := page*historyPageSize + 1
+	ctx := r.Context()
+	consents, err := a.ob.Consents(ctx, s.Customer)
+	if err != nil {
+		a.bankFail(w, r, err)
+		return
+	}
+	access, err := a.ob.AccessHistory(ctx, s.Customer, need)
+	if err != nil {
+		a.bankFail(w, r, err)
+		return
+	}
+	_, accts, err := a.myAccounts(ctx, s.Customer)
+	if err != nil {
+		a.bankFail(w, r, err)
+		return
+	}
 	byNUBAN := map[string]string{}
-	for _, acc := range a.world.AccountsAt(s.Persona, a.bank.ID) {
-		mine[acc.Key] = strings.Title(acc.Type) + " · " + acc.NUBAN
-		byNUBAN[acc.NUBAN] = mine[acc.Key]
+	for _, acc := range accts {
+		byNUBAN[acc.NUBAN] = strings.Title(acc.Type) + " · " + acc.NUBAN
 	}
 	rows := []appRow{}
 	for _, c := range consents {
@@ -545,41 +656,8 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, row)
 	}
-	for _, c := range a.st.Connections {
-		if a.live() || c.PersonaID != s.Persona || c.Institution != a.bank.ID {
-			continue
-		}
-		row := appRow{ID: c.ID, Partner: c.PartnerID, Status: c.Status, Since: c.AuthorisedAt, Until: c.ExpiresAt}
-		if p := a.partnerOf(c.PartnerID); p != nil {
-			row.Partner = p.Name
-		}
-		for _, id := range c.AccountIDs {
-			if rec := a.st.Accounts[id]; rec != nil {
-				row.Accounts = append(row.Accounts, mine[rec.WorldKey])
-			}
-		}
-		for i := len(a.st.Access) - 1; i >= 0; i-- {
-			if a.st.Access[i].ConnectionID == c.ID {
-				row.LastAccess = a.st.Access[i].At
-				break
-			}
-		}
-		rows = append(rows, row)
-	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Since.After(rows[j].Since) })
 	history := []accessRow{}
-	for i := len(a.st.Access) - 1; i >= 0 && len(history) < 25; i-- {
-		e := a.st.Access[i]
-		label, ok := mine[e.WorldKey]
-		if !ok {
-			continue
-		}
-		name := e.PartnerID
-		if p := a.partnerOf(e.PartnerID); p != nil {
-			name = p.Name
-		}
-		history = append(history, accessRow{Partner: name, Account: label, At: e.At})
-	}
 	names := map[string]string{}
 	for _, c := range consents {
 		names[c.ID] = c.PartnerName
@@ -591,10 +669,19 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 		history = append(history, accessRow{Partner: names[e.ConsentID], Account: byNUBAN[e.Account], At: e.At})
 	}
 	sort.SliceStable(history, func(i, j int) bool { return history[i].At.After(history[j].At) })
-	if len(history) > 25 {
-		history = history[:25]
+	if len(history) < need {
+		if _, ok := pageParam(w, r, "access history", pagesOf(len(history), historyPageSize)); !ok {
+			return
+		}
 	}
-	a.bankRender(w, "bank_apps", http.StatusOK, s, roomPage{"Title": "Connected apps", "Nav": "apps", "Apps": rows, "History": history, "Revoked": r.URL.Query().Get("revoked") == "1", "Via": a.cfg.Connect.BrandName})
+	start := min((page-1)*historyPageSize, len(history))
+	end := min(page*historyPageSize, len(history))
+	older := len(history) > end
+	history = history[start:end]
+	a.mu.Lock()
+	via := a.cfg.Connect.BrandName
+	a.mu.Unlock()
+	a.bankRender(w, "bank_apps", http.StatusOK, s, roomPage{"Title": "Connected apps", "Nav": "apps", "Apps": rows, "History": history, "Page": page, "Older": older, "Newer": page > 1, "Revoked": r.URL.Query().Get("revoked") == "1", "Via": via})
 }
 
 func (a *bankSite) obRevoke(w http.ResponseWriter, r *http.Request) {
@@ -602,26 +689,11 @@ func (a *bankSite) obRevoke(w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		return
 	}
-	id := r.PathValue("id")
-	if strings.HasPrefix(id, "obc_") {
-		if err := a.ob.Revoke(r.Context(), id, s.Persona, "bank"); err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		a.flushEvents()
-		http.Redirect(w, r, "/apps?revoked=1", http.StatusSeeOther)
-		return
-	}
-	a.mu.Lock()
-	c := a.st.Connections[id]
-	owned := c != nil && c.PersonaID == s.Persona && c.Institution == a.bank.ID
-	a.mu.Unlock()
-	if !owned {
+	if err := a.ob.Revoke(r.Context(), r.PathValue("id"), s.Customer, "bank"); err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	_ = a.RevokeAtBank(id)
-	a.poke()
+	a.flushEvents()
 	http.Redirect(w, r, "/apps?revoked=1", http.StatusSeeOther)
 }
 

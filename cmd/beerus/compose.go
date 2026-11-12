@@ -22,7 +22,7 @@ x-beerus: &beerus
     BEERUS_DIR: /state
     BEERUS_BIND: 0.0.0.0
     BEERUS_DATABASE_URL: postgres://postgres:beerus@postgres:5432/postgres?sslmode=disable
-    BEERUS_CORE_URL: http://sim:{{.ControlPort}}
+    BEERUS_CORE_URL: http://core:{{.ControlPort}}
     BEERUS_PARTNER_PORT: "{{.PartnerPort}}"
     BEERUS_WIDGET_PORT: "{{.WidgetPort}}"
     BEERUS_CONTROL_PORT: "{{.ControlPort}}"
@@ -85,9 +85,9 @@ services:
       timeout: 3s
       retries: 30
 {{end}}
-  sim:
+  core:
     <<: *beerus
-    command: ["run", "--participant", "sim"]
+    command: ["run", "--participant", "core"]
     ports:
       - "127.0.0.1:{{.PartnerPort}}:{{.PartnerPort}}"
       - "127.0.0.1:{{.WidgetPort}}:{{.WidgetPort}}"

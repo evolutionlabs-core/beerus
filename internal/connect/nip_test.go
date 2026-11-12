@@ -1,15 +1,12 @@
 package connect
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 type stallWriter struct {
@@ -27,37 +24,26 @@ func (w *stallWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func newTestApp(t *testing.T) *App {
-	t.Helper()
-	cfg := initTestConfig(t, clock.DateOf(time.Now()))
-	a, err := New(cfg, Options{WorldOnly: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return a
-}
-
 func TestResponsesAreWrittenWithoutTheLock(t *testing.T) {
-	a := newTestApp(t)
-	w := a.world
-	from, to := w.AccountsAt("adaeze", "bank-a")[0], w.AccountsAt("ngozi", "bank-b")[0]
-	transfer := fmt.Sprintf(`{"from":%q,"to":%q,"amount":"10"}`, from.Key, to.Key)
-	enquiry := "/?bank_code=999002&account_number=" + to.NUBAN
+	a := newTestApp(t, Options{})
+	from := funded(t, a, "bank-a", "Ada Obi", "50000")
+	to := funded(t, a, "bank-b", "Ngozi Eze", "")
+	transfer := `{"from":"` + from + `","to_bank":"bank-b","to":"` + to + `","amount":"10"}`
 	for name, c := range map[string]struct {
 		handler http.HandlerFunc
-		method  string
 		target  string
 		body    string
 	}{
-		"positions":    {a.ctlNIPPositions, "GET", "/", ""},
-		"participants": {a.ctlNIPParticipants, "GET", "/", ""},
-		"enquiry":      {a.ctlNameEnquiry, "GET", enquiry, ""},
-		"status":       {a.ctlNIPStatus, "GET", "/", ""},
-		"transfer":     {a.ctlTransfer, "POST", "/", transfer},
-		"replay":       {a.ctlTransfer, "POST", "/", transfer},
+		"transfer":     {a.ctlBankTransfer, "/", transfer},
+		"replay":       {a.ctlBankTransfer, "/", transfer},
+		"positions":    {a.ctlNIPPositions, "/", ""},
+		"participants": {a.ctlNIPParticipants, "/", ""},
+		"enquiry":      {a.ctlNameEnquiry, "/?bank_code=999002&account_number=0000000017", ""},
+		"settlement":   {a.ctlNIPSettlement, "/", ""},
 	} {
 		sw := &stallWriter{header: http.Header{}, reached: make(chan struct{}), release: make(chan struct{})}
-		r := httptest.NewRequest(c.method, c.target, strings.NewReader(c.body))
+		r := httptest.NewRequest("POST", c.target, strings.NewReader(c.body))
+		r.SetPathValue("id", "bank-a")
 		r.Header.Set("Idempotency-Key", "lock-test")
 		done := make(chan struct{})
 		go func() {
@@ -75,16 +61,5 @@ func TestResponsesAreWrittenWithoutTheLock(t *testing.T) {
 		a.mu.Unlock()
 		close(sw.release)
 		<-done
-	}
-}
-
-func TestOldNIPRecordsAreDropped(t *testing.T) {
-	a := newTestApp(t)
-	now := time.Now()
-	a.st.NIP.Failures["old"] = &NIPFailure{SessionID: "old", CreatedReal: now.Add(-nipRetention - time.Minute)}
-	a.st.NIP.Failures["recent"] = &NIPFailure{SessionID: "recent", CreatedReal: now.Add(-nipRetention + time.Minute)}
-	a.pruneNIPLocked(now)
-	if a.st.NIP.Failures["old"] != nil || a.st.NIP.Failures["recent"] == nil {
-		t.Fatalf("failures after pruning: %v", a.st.NIP.Failures)
 	}
 }

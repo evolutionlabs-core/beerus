@@ -5,7 +5,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
@@ -32,19 +31,17 @@ func TestNIPSettlement(t *testing.T) {
 	}
 	s := newBankStack(t)
 	first := checkSettled(t, s.app)
-	if first.Sessions == 0 || s.app.Clock().Now().Sub(first.SettledThrough) > 4*24*time.Hour {
-		t.Fatalf("settlement after start-up: %+v", first)
+	if first.Sessions != 0 {
+		t.Fatalf("a new setup has %d settlement sessions", first.Sessions)
 	}
-	w := s.app.World()
-	from, to := w.AccountsAt("adaeze", "bank-a")[0], w.AccountsAt("ngozi", "bank-b")[0]
-	s.ctl("POST", "/transfers", map[string]any{"from": from.Key, "to": to.Key, "amount": "1500"})
+	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "1500")
 	s.advance("72h")
 	later := checkSettled(t, s.app)
-	if later.Sessions <= first.Sessions || !later.SettledThrough.After(first.SettledThrough) {
+	if later.Sessions == 0 {
 		t.Fatalf("settlement did not move on: %+v then %+v", first, later)
 	}
-	if c, err := s.app.VerifyBank(); err != nil || !c.Ledger.OK() || len(c.Mismatches) > 0 {
-		t.Fatalf("bank ledgers: %v %v %v", err, c.Ledger, c.Mismatches)
+	if c, err := s.app.VerifyBank(); err != nil || !c.OK() {
+		t.Fatalf("bank ledgers: %v %v", err, c)
 	}
 	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "settled"})
 	s.advance("48h")
@@ -52,34 +49,6 @@ func TestNIPSettlement(t *testing.T) {
 	s.ctl("POST", "/snapshots/"+snap["id"].(string)+"/restore", nil)
 	if c := checkSettled(t, s.app); c.Sessions != later.Sessions {
 		t.Fatalf("after restore: %d sessions, want %d", c.Sessions, later.Sessions)
-	}
-}
-
-func TestScenariosSettle(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	s := newBankStack(t)
-	w := s.app.World()
-	ran := 0
-	for _, name := range []string{"debit_then_reversal", "late_reversal", "fee_vat_levy_lines", "identical_same_day_fees", "pending_amount_change", "own_account_transfer_across_banks"} {
-		for _, inst := range []string{"bank-a", "bank-b"} {
-			if name == "own_account_transfer_across_banks" && inst == "bank-b" {
-				continue
-			}
-			acc := w.AccountsAt("adaeze", inst)[0]
-			if _, err := s.ctlTry("POST", "/scenarios/"+name, map[string]any{"account_id": acc.Key}); err != nil {
-				t.Fatalf("%s on %s: %v", name, inst, err)
-			}
-			ran++
-		}
-	}
-	checkSettled(t, s.app)
-	s.advance("72h")
-	checkSettled(t, s.app)
-	s.advance("240h")
-	if c := checkSettled(t, s.app); ran == 0 || c.Sessions == 0 {
-		t.Fatalf("ran %d scenarios, %d sessions", ran, c.Sessions)
 	}
 }
 
@@ -119,7 +88,7 @@ func TestSettlementCheckDoesNotTrustTheBooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(c.Problems, ";"), "customers moved") {
+	if !strings.Contains(strings.Join(c.Problems, ";"), "but its open NIBSS sessions come to") {
 		t.Fatalf("problems: %v", c.Problems)
 	}
 }
@@ -147,4 +116,36 @@ func TestSettlementRunsAlongsideTheApp(t *testing.T) {
 	}
 	wg.Wait()
 	checkSettled(t, s.app)
+	from, to := s.persona("adaeze").Accounts[0], s.persona("ngozi").Accounts[0]
+	stop := make(chan struct{})
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if _, err := s.app.Transfer(connect.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 100}); err != nil {
+					t.Errorf("transfer: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	snap, err := s.app.TakeSnapshot("while paying")
+	close(stop)
+	wg.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.app.RestoreSnapshot(snap.ID); err != nil {
+		t.Fatal(err)
+	}
+	checkSettled(t, s.app)
+	if c, err := s.app.VerifyBank(); err != nil || !c.OK() {
+		t.Fatalf("bank ledgers after restore: %v %v", err, c)
+	}
 }

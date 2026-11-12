@@ -1,9 +1,11 @@
 package connect
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -86,7 +88,7 @@ func TestFailedRevokesAreQueuedAndRetried(t *testing.T) {
 		cfg:   &config.Config{Banks: []*config.Bank{{ID: "bank-a", Port: 7001, APIPort: 7011}}},
 		st:    newState(),
 		log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		clock: clock.New(clock.State{Pace: 1}, func() time.Time { return now }),
+		clock: clock.New(func() time.Time { return now }),
 		obHTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 			calls++
 			code := http.StatusServiceUnavailable
@@ -97,8 +99,6 @@ func TestFailedRevokesAreQueuedAndRetried(t *testing.T) {
 		})},
 	}
 	b := a.cfg.Bank("bank-a")
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.revokeOrQueue(b, "obc_1")
 	if len(a.st.Revokes) != 1 || a.st.Revokes[0].Attempts != 1 {
 		t.Fatalf("queue after a failed revoke: %+v", a.st.Revokes)
@@ -139,5 +139,20 @@ func TestConsentLedgerIgnoresRepeatedSourceEvents(t *testing.T) {
 	}
 	if got[2].Status != string(openbanking.Authorised) || got[1].Status != string(openbanking.Revoked) || got[2].SourceSeq != 1 || got[1].SourceSeq != 2 {
 		t.Fatalf("ledger order %+v", got)
+	}
+}
+
+func TestBankAnswerOverTheLimitFailsClearly(t *testing.T) {
+	big := bytes.Repeat([]byte(" "), bankBodyLimit+1)
+	a := &App{
+		cfg: &config.Config{Banks: []*config.Bank{{ID: "bank-a", Port: 7001, APIPort: 7011}}},
+		obHTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(big)), Header: http.Header{}}, nil
+		})},
+	}
+	var out map[string]any
+	err := a.bankCall(a.cfg.Bank("bank-a"), http.MethodGet, "/discover", nil, "", &out)
+	if err == nil || !strings.Contains(err.Error(), "larger than the 16777216 byte limit") {
+		t.Fatalf("an oversized bank answer: %v", err)
 	}
 }

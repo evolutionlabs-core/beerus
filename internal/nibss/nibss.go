@@ -29,6 +29,7 @@ var (
 	ErrNoRecord       = errors.New("25 no record")
 
 	ErrUnknownInstitution = errors.New("not in the NIBSS directory")
+	ErrBadDetails         = errors.New("invalid BVN details")
 )
 
 type Institution struct {
@@ -78,9 +79,14 @@ type Switch interface {
 	Begin(ctx context.Context, s Session) (Session, error)
 	Resolve(ctx context.Context, id, status, outcome string, at time.Time) error
 	TSQ(ctx context.Context, id string, next time.Time) (Session, error)
+	Session(ctx context.Context, id string) (Session, error)
 	Due(ctx context.Context, at time.Time) ([]Session, error)
 	Unsettled(ctx context.Context, upTo time.Time) ([]Session, error)
-	MarkSettled(ctx context.Context, ids []string, session string) error
+	MarkSettled(ctx context.Context, ids []string, session string, cutoff time.Time) error
+	Unposted(ctx context.Context) ([]Settlement, error)
+	MarkPosted(ctx context.Context, session string, at time.Time) error
+	Open(ctx context.Context) ([]Session, error)
+	SettledNets(ctx context.Context) (map[string]map[string]int64, error)
 	RecordConsent(ctx context.Context, e ConsentEvent) error
 	ConsentLedger(ctx context.Context, bank string, limit int, cursor string) ([]ConsentEvent, string, error)
 }

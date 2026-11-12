@@ -873,6 +873,21 @@ func TestBuildAllocation(t *testing.T) {
 	})
 }
 
+func TestBuildRejectsAStartAfterToday(t *testing.T) {
+	desired := spec()
+	desired.Spec.Start = "2026-11-06T00:00:00+01:00"
+	dir := []nibss.Institution{member("bank-a", "Bank A", "999001", "901"), member("bank-b", "Bank B", "999002", "902")}
+	p := Build(desired, Status{}, dir, today)
+	want := "start 2026-11-06T00:00:00+01:00 is after today, 2026-11-05. Beerus runs on real time; use today or an earlier date."
+	if len(p.Errors) != 1 || p.Errors[0].Error() != want || !errors.Is(p.Errors[0], ErrFutureStart) {
+		t.Fatalf("errors = %v, want %q", p.Errors, want)
+	}
+	desired.Spec.Start = "2026-11-05T23:59:00+01:00"
+	if p := Build(desired, Status{}, dir, today); len(p.Errors) > 0 {
+		t.Fatalf("a start later today: %v", p.Errors)
+	}
+}
+
 func TestBuildFirstApply(t *testing.T) {
 	desired := spec()
 	desired.Spec.Banks[1].NIPCode, desired.Spec.Banks[1].NUBANCode = "", ""

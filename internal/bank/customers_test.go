@@ -160,7 +160,7 @@ func TestNUBANsAndCustomerIDsAreNeverReused(t *testing.T) {
 		t.Fatal("a customer row was deleted")
 	}
 	first := mustAccount(t, a.Bank, "open:1", c1.ID)
-	if _, err := a.OpenCustomer(ctx, world.NUBAN("901", 2), "Legacy", "current", "legacy", 3); err != nil {
+	if _, err := a.L.OpenAccount(ctx, ledger.Account{Code: bank.CustomerAccount(world.NUBAN("901", 2)), Name: "Legacy", Kind: ledger.Liability, Customer: true, NUBAN: world.NUBAN("901", 2), Product: "current", Owner: "legacy", KYCTier: 3}); err != nil {
 		t.Fatal(err)
 	}
 	second := mustAccount(t, a.Bank, "open:2", c1.ID)
@@ -223,7 +223,7 @@ func TestReverseNIPPostsEachLineAgainstTheSession(t *testing.T) {
 	from := a.custs[0]
 	before := bal(t, a.Bank, bank.CustomerAccount(from))
 	sid := "999001260302100000000000000042"
-	sent, _, err := a.SendNIP(ctx, bank.NIPSend{Key: sid, From: from, Amount: 10000000, SessionID: sid, Beneficiary: "CHIDI OKAFOR", BankName: "BANK B", At: t0.Add(time.Hour)})
+	sent, _, err := a.SendNIP(ctx, bank.NIPSend{Key: sid, From: from, Amount: 10000000, SessionID: sid, To: bank.Counterparty{Name: "CHIDI OKAFOR", BankName: "BANK B"}, At: t0.Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +285,7 @@ func TestNoChargesSendsThePrincipalOnly(t *testing.T) {
 	from := a.custs[0]
 	before := bal(t, a.Bank, bank.CustomerAccount(from))
 	sid := "999001260302100000000000000050"
-	_, c, err := a.SendNIP(ctx, bank.NIPSend{Key: "close:bank-a:" + from, From: from, Amount: 2000000, SessionID: sid, Beneficiary: "X", BankName: "BANK B", At: t0.Add(time.Hour), NoCharges: true})
+	_, c, err := a.SendNIP(ctx, bank.NIPSend{Key: "close:bank-a:" + from, From: from, Amount: 2000000, SessionID: sid, To: bank.Counterparty{Name: "X", BankName: "BANK B"}, At: t0.Add(time.Hour), NoCharges: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,10 +305,10 @@ func TestClosureReceiptSkipsEMTL(t *testing.T) {
 	ctx := context.Background()
 	a := newBank(t, "bank-a", "999001", "901", 2)
 	at := time.Date(2025, 6, 2, 10, 0, 0, 0, clock.Lagos)
-	if _, err := a.ReceiveNIP(ctx, "999002250602100000000000000001", a.custs[0], 2000000, "X", "BANK B", false, at); err != nil {
+	if _, err := a.ReceiveNIP(ctx, "999002250602100000000000000001", a.custs[0], 2000000, bank.Counterparty{Name: "X", BankName: "BANK B"}, "", false, at); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.ReceiveNIP(ctx, "999002250602100000000000000002", a.custs[1], 2000000, "X", "BANK B", true, at); err != nil {
+	if _, err := a.ReceiveNIP(ctx, "999002250602100000000000000002", a.custs[1], 2000000, bank.Counterparty{Name: "X", BankName: "BANK B"}, "", true, at); err != nil {
 		t.Fatal(err)
 	}
 	if got := bal(t, a.Bank, bank.CustomerAccount(a.custs[0])); got != 50000000+2000000-5000 {

@@ -37,7 +37,6 @@ type Config struct {
 	Data          Data
 	Ledger        Ledger
 	LedgerOutbox  bool
-	StableIDs     bool
 	Now           func() time.Time
 	Biz           func() time.Time
 	CodeLife      time.Duration
@@ -285,7 +284,6 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		"authorization_response_iss_parameter_supported":   true,
 		"scopes_supported":                                 Scopes,
 		"history_days":                                     s.cfg.HistoryDays,
-		"stable_ids":                                       s.cfg.StableIDs,
 	})
 }
 

@@ -194,6 +194,24 @@ func (s *Store) Resolve(ctx context.Context, id, status, outcome string, at time
 	})
 }
 
+func (s *Store) RevokeCredit(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE nip_sessions SET outcome = $2 WHERE session_id = $1 AND status = $3 AND outcome = $4`, id, OutcomeFailed, SessionPending, OutcomeCredited)
+	if err != nil {
+		return fmt.Errorf("revoke credit of session %s: %w", id, err)
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+	x, err := s.Session(ctx, id)
+	if err != nil {
+		return err
+	}
+	if x.Outcome != OutcomeFailed {
+		return fmt.Errorf("session %s is %s/%s, so its credit cannot be revoked: %w", id, x.Status, x.Outcome, errTransition)
+	}
+	return nil
+}
+
 func (s *Store) TSQ(ctx context.Context, id string, next time.Time) (Session, error) {
 	if next.IsZero() {
 		return Session{}, fmt.Errorf("session %s needs the next status query time", id)
@@ -210,6 +228,17 @@ RETURNING `+sessionCols, id, next))
 	}
 	if err != nil {
 		return Session{}, fmt.Errorf("query session %s: %w", id, err)
+	}
+	return x, nil
+}
+
+func (s *Store) Session(ctx context.Context, id string) (Session, error) {
+	x, err := scanSession(s.pool.QueryRow(ctx, `SELECT `+sessionCols+` FROM nip_sessions WHERE session_id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Session{}, fmt.Errorf("session %s: %w", id, ErrNoRecord)
+	}
+	if err != nil {
+		return Session{}, fmt.Errorf("look up session %s: %w", id, err)
 	}
 	return x, nil
 }
@@ -248,7 +277,7 @@ func (s *Store) sessions(ctx context.Context, what, sql string, args ...any) ([]
 	return out, nil
 }
 
-func (s *Store) MarkSettled(ctx context.Context, ids []string, session string) error {
+func (s *Store) MarkSettled(ctx context.Context, ids []string, session string, cutoff time.Time) error {
 	if session == "" {
 		return errors.New("mark settled needs a settlement session")
 	}
@@ -290,9 +319,97 @@ func (s *Store) MarkSettled(ctx context.Context, ids []string, session string) e
 		case other > 0:
 			return fmt.Errorf("%d of %d sessions are already settled in another session", other, len(want))
 		}
+		if _, err := tx.Exec(ctx, `INSERT INTO settlement_sessions (session_key, cutoff_at) VALUES ($1, $2) ON CONFLICT (session_key) DO NOTHING`, session, cutoff); err != nil {
+			return fmt.Errorf("record settlement session %s: %w", session, err)
+		}
 		if _, err := tx.Exec(ctx, `UPDATE nip_sessions SET settlement_session = $2 WHERE session_id = ANY($1) AND settlement_session = ''`, want, session); err != nil {
 			return fmt.Errorf("mark sessions settled: %w", err)
 		}
 		return nil
 	})
+}
+
+type Settlement struct {
+	Key      string
+	CutoffAt time.Time
+	Sessions []Session
+}
+
+func (s *Store) Unposted(ctx context.Context) ([]Settlement, error) {
+	rows, err := s.pool.Query(ctx, `SELECT session_key, cutoff_at FROM settlement_sessions WHERE posted_at IS NULL ORDER BY cutoff_at, session_key`)
+	if err != nil {
+		return nil, fmt.Errorf("list unposted settlement sessions: %w", err)
+	}
+	out := []Settlement{}
+	for rows.Next() {
+		var x Settlement
+		if err := rows.Scan(&x.Key, &x.CutoffAt); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("read unposted settlement session: %w", err)
+		}
+		out = append(out, x)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list unposted settlement sessions: %w", err)
+	}
+	for i := range out {
+		list, err := s.sessions(ctx, "sessions in settlement "+out[i].Key, `SELECT `+sessionCols+` FROM nip_sessions WHERE settlement_session = $1 ORDER BY resolved_at, session_id`, out[i].Key)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Sessions = list
+	}
+	return out, nil
+}
+
+func (s *Store) MarkPosted(ctx context.Context, session string, at time.Time) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE settlement_sessions SET posted_at = coalesce(posted_at, $2) WHERE session_key = $1`, session, at)
+	if err != nil {
+		return fmt.Errorf("mark settlement %s posted: %w", session, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("settlement session %s: %w", session, ErrNoRecord)
+	}
+	return nil
+}
+
+func (s *Store) ClosureSent(ctx context.Context, fromCode string) ([]Session, error) {
+	return s.sessions(ctx, "closure sessions", `SELECT `+sessionCols+` FROM nip_sessions WHERE from_code = $1 AND closure AND status IN ('00', 'pending') ORDER BY created_at, session_id`, fromCode)
+}
+
+func (s *Store) Open(ctx context.Context) ([]Session, error) {
+	return s.sessions(ctx, "open sessions", `
+SELECT `+sessionCols+` FROM nip_sessions
+WHERE status = 'pending' OR (status = '00' AND settlement_session = '')
+ORDER BY created_at, session_id`)
+}
+
+func (s *Store) SettledNets(ctx context.Context) (map[string]map[string]int64, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT code, settlement_session, sum(net)::bigint FROM (
+    SELECT to_code AS code, settlement_session, amount_minor AS net FROM nip_sessions WHERE settlement_session <> ''
+    UNION ALL
+    SELECT from_code, settlement_session, -amount_minor FROM nip_sessions WHERE settlement_session <> ''
+) t GROUP BY 1, 2`)
+	if err != nil {
+		return nil, fmt.Errorf("read settled nets: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]map[string]int64{}
+	for rows.Next() {
+		var code, key string
+		var net int64
+		if err := rows.Scan(&code, &key, &net); err != nil {
+			return nil, fmt.Errorf("read settled nets: %w", err)
+		}
+		if out[code] == nil {
+			out[code] = map[string]int64{}
+		}
+		out[code][key] = net
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read settled nets: %w", err)
+	}
+	return out, nil
 }

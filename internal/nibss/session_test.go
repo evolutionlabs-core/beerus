@@ -261,18 +261,18 @@ func TestSettlement(t *testing.T) {
 	if err != nil || len(un) != 2 || un[0].ID != "u1" || un[1].ID != "u2" {
 		t.Fatalf("unsettled at cutoff: %+v, %v", un, err)
 	}
-	if err := s.MarkSettled(ctx, []string{"u2", "u1", "u1"}, "c1"); err != nil {
+	if err := s.MarkSettled(ctx, []string{"u2", "u1", "u1"}, "c1", t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkSettled(ctx, []string{"u1"}, "c1"); err != nil {
+	if err := s.MarkSettled(ctx, []string{"u1"}, "c1", t0); err != nil {
 		t.Fatalf("repeat mark: %v", err)
 	}
-	wantErr(t, s.MarkSettled(ctx, []string{"u1", "u3"}, "c2"), "1 of 2 sessions are already settled in another session")
-	wantErr(t, s.MarkSettled(ctx, []string{"u3", "u4"}, "c2"), "1 of 2 sessions to settle are not 00")
-	err = s.MarkSettled(ctx, []string{"u3", "x1", "x2"}, "c2")
+	wantErr(t, s.MarkSettled(ctx, []string{"u1", "u3"}, "c2", t0), "1 of 2 sessions are already settled in another session")
+	wantErr(t, s.MarkSettled(ctx, []string{"u3", "u4"}, "c2", t0), "1 of 2 sessions to settle are not 00")
+	err = s.MarkSettled(ctx, []string{"u3", "x1", "x2"}, "c2", t0)
 	wantErr(t, err, "2 of 3 sessions to settle do not exist: 25 no record")
-	wantErr(t, s.MarkSettled(ctx, nil, "c2"), "mark settled needs at least one session id")
-	wantErr(t, s.MarkSettled(ctx, []string{"u3"}, ""), "mark settled needs a settlement session")
+	wantErr(t, s.MarkSettled(ctx, nil, "c2", t0), "mark settled needs at least one session id")
+	wantErr(t, s.MarkSettled(ctx, []string{"u3"}, "", t0), "mark settled needs a settlement session")
 	un, _ = s.Unsettled(ctx, t0.Add(24*time.Hour))
 	if len(un) != 1 || un[0].ID != "u3" {
 		t.Fatalf("after settling: %+v", un)

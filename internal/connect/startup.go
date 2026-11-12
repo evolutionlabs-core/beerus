@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -21,9 +22,6 @@ const (
 	LocalFile   = "local.yaml"
 	oldSpecFile = "beerus.yaml"
 	statusFile  = "control.json"
-
-	generatorSeed        int64 = 20261028
-	generatorGenesisDays       = 760
 
 	defaultDatabaseURL  = "postgres:///postgres"
 	defaultConnectHost  = "connect.localhost"
@@ -42,6 +40,8 @@ const (
 
 	stepDone = "done"
 )
+
+var ErrFutureWorld = errors.New("This setup was moved ahead of real time by an older Beerus. Run beerus reset, then beerus up.")
 
 var ErrOldSetup = errors.New("This setup was made by an older Beerus. Run beerus reset, then beerus up.")
 
@@ -73,7 +73,6 @@ func Initialized(dir string) (bool, error) {
 func DefaultLocal() setup.Local {
 	return setup.Local{
 		DatabaseURL: defaultDatabaseURL,
-		Pace:        1,
 		Connect: setup.LocalConnect{
 			Host:         defaultConnectHost,
 			PartnerPort:  defaultPartnerPort,
@@ -84,6 +83,18 @@ func DefaultLocal() setup.Local {
 			RefreshEvery: defaultRefreshEvery,
 		},
 	}
+}
+
+func FreshLocal(dir string) (setup.Local, error) {
+	var local setup.Local
+	found, err := readYAML(filepath.Join(dir, LocalFile), &local)
+	if err != nil {
+		return setup.Local{}, err
+	}
+	if !found {
+		return DefaultLocal(), nil
+	}
+	return local, nil
 }
 
 func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) error {
@@ -134,7 +145,7 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	if cfg, err = buildConfig(dir, st, local); err != nil {
 		return err
 	}
-	if err := config.Prepare(cfg); err != nil {
+	if err := config.Prepare(cfg, time.Now()); err != nil {
 		return err
 	}
 	recordCertPrints(cfg, &st)
@@ -291,15 +302,23 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 	if err != nil {
 		return nil, fmt.Errorf("start %q: %w", spec.Start, err)
 	}
+	def := setup.DefaultSpec(st.Applied.Metadata.Name, clock.DateOf(start)).Spec
+	tsqAfter, err := time.ParseDuration(orDefault(spec.NIP.TSQAfter, def.NIP.TSQAfter))
+	if err != nil {
+		return nil, fmt.Errorf("nip.tsq_after %q: %w", spec.NIP.TSQAfter, err)
+	}
+	tsqAttempts := spec.NIP.TSQAttempts
+	if tsqAttempts == 0 {
+		tsqAttempts = def.NIP.TSQAttempts
+	}
 	ln := local.Connect
 	c := &config.Config{
 		Dir:         dir,
 		DatabaseURL: local.DatabaseURL,
-		Pace:        local.Pace,
 		Start:       start,
-		Seed:        generatorSeed,
-		Genesis:     clock.DateOf(start).AddDays(-generatorGenesisDays).String(),
 		NIPSessions: spec.NIP.Sessions,
+		TSQAfter:    tsqAfter,
+		TSQAttempts: tsqAttempts,
 		Ports:       config.Ports{APIOffset: local.Ports.APIOffset, Window: local.Ports.Window},
 		Connect: config.Connect{
 			Host:         orDefault(ln.Host, defaultConnectHost),
@@ -347,6 +366,9 @@ func runtimeBank(b setup.Bank, r setup.Resource) *config.Bank {
 		state = setup.StateClosed
 	case setup.PhaseClosing, setup.PhaseTerminating:
 		state = setup.StateSuspended
+		if slices.Contains(r.Done, setup.FinalizerDecideMoney) {
+			state = setup.StateClosed
+		}
 	}
 	if state == setup.StateActive {
 		state = ""

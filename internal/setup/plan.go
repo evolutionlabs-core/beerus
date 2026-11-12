@@ -3,6 +3,7 @@ package setup
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 var (
 	ErrSetupMismatch = errors.New("setup mismatch")
 	ErrBeingRemoved  = errors.New("being removed")
+	ErrFutureStart   = errors.New("start is in the future")
 )
 
 const (
@@ -66,12 +68,13 @@ type planner struct {
 func Build(desired Spec, st Status, dir []nibss.Institution, today clock.Date) Plan {
 	pack, err := countrypack.Nigeria()
 	if err != nil {
-		return Plan{Setup: desired.Metadata.Name, Errors: []error{fmt.Errorf("load simulator code ranges: %w", err)}}
+		return Plan{Setup: desired.Metadata.Name, Errors: []error{fmt.Errorf("load code ranges: %w", err)}}
 	}
 	p := newPlanner(desired, st, dir, today)
 	c := pack.SimulatorCodes
 	p.nipCodes = codeRange{field: fieldNIPCode, first: c.NIP.First, last: c.NIP.Last}
 	p.nubanCodes = codeRange{field: fieldNUBANCode, first: c.NUBAN.First, last: c.NUBAN.Last}
+	p.checkStart()
 	var actions []Action
 	if a, ok := p.setupAction(); ok {
 		actions = append(actions, a)
@@ -90,6 +93,13 @@ func Build(desired Spec, st Status, dir []nibss.Institution, today clock.Date) P
 		return Plan{Setup: desired.Metadata.Name, Errors: p.errs}
 	}
 	return Plan{Setup: desired.Metadata.Name, Actions: actions}
+}
+
+func (p *planner) checkStart() {
+	start, err := time.Parse(time.RFC3339, p.desired.Spec.Start)
+	if err == nil && clock.DateOf(start).After(p.today) {
+		p.fail("start", ErrFutureStart, "start %s is after today, %s. Beerus runs on real time; use today or an earlier date.", p.desired.Spec.Start, p.today)
+	}
 }
 
 func newPlanner(desired Spec, st Status, dir []nibss.Institution, today clock.Date) *planner {
@@ -532,6 +542,9 @@ func (p *planner) bankRemovals() []Action {
 		b := ordered[i]
 		r, hasRes := p.resource(KindBank, b.ID)
 		if hasRes && r.Phase == PhaseTerminating {
+			if !slices.Contains(r.Done, FinalizerDecideMoney) {
+				p.checkTarget(b.ID, b.OnRemove, "on_remove of removed bank "+b.ID)
+			}
 			continue
 		}
 		p.checkTarget(b.ID, b.OnRemove, "on_remove of removed bank "+b.ID)
