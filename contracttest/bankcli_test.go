@@ -120,9 +120,14 @@ func (c *cli) fails(args ...string) string {
 
 func (c *cli) json(args ...string) map[string]any {
 	c.t.Helper()
+	return c.printedJSON(append(args, "--json")...)
+}
+
+func (c *cli) printedJSON(args ...string) map[string]any {
+	c.t.Helper()
 	out := map[string]any{}
-	if err := json.Unmarshal([]byte(c.ok(append(args, "--json")...)), &out); err != nil {
-		c.t.Fatalf("beerus %v --json is not JSON: %v", args, err)
+	if err := json.Unmarshal([]byte(c.ok(args...)), &out); err != nil {
+		c.t.Fatalf("beerus %v is not JSON: %v", args, err)
 	}
 	return out
 }
@@ -219,13 +224,13 @@ func TestBankCLI(t *testing.T) {
 	if lines := c.json("statement", a1, "--bank", "bank-a")["data"].([]any); len(lines) != 9 {
 		t.Errorf("a quote posted to the statement: %d lines, want 9", len(lines))
 	}
-	if help := c.ok("transfer", "--help"); !strings.HasPrefix(help, "Usage:\n  beerus transfer --from NUBAN --to NUBAN --amount NAIRA") || !strings.Contains(help, "[--dry-run]") || strings.Contains(help, "beerus customer") {
+	if help := c.ok("transfer", "--help"); !strings.HasPrefix(help, "Usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [options]\n") || !strings.Contains(help, "\n  --dry-run ") || strings.Contains(help, "beerus customer") {
 		t.Errorf("transfer --help: %q", help)
 	}
-	if help := c.ok("bank", "close", "-h"); strings.Count(help, "\n  beerus bank ") != 5 {
+	if help := c.ok("bank", "close", "-h"); !strings.HasPrefix(help, "Usage: beerus bank close <id> [options]\n") || !strings.Contains(help, "\n  --yes ") || strings.Contains(help, "beerus bank create") {
 		t.Errorf("bank close -h: %q", help)
 	}
-	if got := c.fails("bogus"); got != "beerus: unknown command \"bogus\"\nRun beerus help to list the commands." {
+	if got := c.fails("bogus"); got != "beerus: unknown command \"bogus\". Run beerus help." {
 		t.Errorf("unknown command: %q", got)
 	}
 	if out, _, code := c.run("bogus", "--help"); code != 1 || out != "" {

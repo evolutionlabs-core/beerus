@@ -110,7 +110,7 @@ func TestReauthSendsSyncAvailable(t *testing.T) {
 	conn := s.connect("tunde", "bank-a", s.today().AddDays(-30))
 	id := fmt.Sprint(conn.Accounts[0]["id"])
 	st, _ := s.syncAll(id, "", 500)
-	s.restoreSnapshot()
+	s.advance("366d")
 	s.spend(s.persona("tunde"), 2)
 	s.advance("72h")
 	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", nil), 201)
