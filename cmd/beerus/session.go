@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	sessionEnv    = "BEERUS_SESSION"
-	noBankMessage = "No bank selected. Run beerus use <bank> or add --bank."
+	sessionEnv     = "BEERUS_SESSION"
+	noBankMessage  = "No bank selected. Run beerus use <bank> or add --bank."
+	noBanksMessage = "there are no banks yet. Add one first with beerus bank create --name NAME"
 )
 
 const zshEnv = `[[ -r "${BEERUS_USER_ZDOTDIR:-$HOME}/.zshenv" ]] && source "${BEERUS_USER_ZDOTDIR:-$HOME}/.zshenv"
@@ -92,9 +93,25 @@ func resolveBank(flagValue string) (string, error) {
 		return "", err
 	}
 	if id == "" {
-		return "", errors.New(noBankMessage)
+		return "", noBankError()
 	}
 	return id, nil
+}
+
+func noBankError() error {
+	c, err := newCtl()
+	if err != nil {
+		return errors.New(noBankMessage)
+	}
+	out, err := c.do("GET", "/banks", nil)
+	if err != nil {
+		return errors.New(noBankMessage)
+	}
+	banks, err := decodeList[connect.BankStatus](out)
+	if err == nil && len(banks) == 0 {
+		return errors.New(noBanksMessage)
+	}
+	return errors.New(noBankMessage)
 }
 
 func cmdUse(args []string) error {
@@ -134,6 +151,9 @@ func bankStatus(c *ctl, id string) (connect.BankStatus, error) {
 	banks, err := decodeList[connect.BankStatus](out)
 	if err != nil {
 		return connect.BankStatus{}, err
+	}
+	if len(banks) == 0 {
+		return connect.BankStatus{}, errors.New(noBanksMessage)
 	}
 	ids := make([]string, 0, len(banks))
 	for _, b := range banks {

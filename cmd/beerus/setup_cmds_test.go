@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -74,7 +75,7 @@ func initDir(t *testing.T, local setup.Local, spec setup.Spec) string {
 }
 
 func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
-	spec := setup.DefaultSpec(defaultSetupName, clock.DateOf(time.Now()))
+	spec := banktest.Spec(defaultSetupName, clock.DateOf(time.Now()))
 	dir := initDir(t, freeLocal(t), spec)
 	file := filepath.Join(dir, "copy.yaml")
 
@@ -208,7 +209,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	local := freeLocal(t)
 	local.DatabaseURL = url
 	today := clock.DateOf(time.Now())
-	spec := setup.DefaultSpec("cli", today)
+	spec := banktest.Spec("cli", today)
 	dir := initDir(t, local, spec)
 	withC := spec
 	withC.Spec.Banks = append(append([]setup.Bank(nil), spec.Spec.Banks...), setup.Bank{ID: "bank-c", Name: "Bank C", Type: "digital", SettlesThrough: "bank-a"})

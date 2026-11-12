@@ -52,42 +52,6 @@ services:
       timeout: 3s
       retries: 30
 
-  bank-a:
-    <<: *beerus
-    command: ["run", "--participant", "bank-a"]
-    ports:
-      - "127.0.0.1:7445:7445"
-    networks:
-      default:
-        aliases:
-          - bank-a.localhost
-    depends_on:
-      cbn:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "beerus", "health", "http://bank-a.localhost:7445/health"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
-  bank-b:
-    <<: *beerus
-    command: ["run", "--participant", "bank-b"]
-    ports:
-      - "127.0.0.1:7446:7446"
-    networks:
-      default:
-        aliases:
-          - bank-b.localhost
-    depends_on:
-      cbn:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "beerus", "health", "http://bank-b.localhost:7446/health"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
   core:
     <<: *beerus
     command: ["run", "--participant", "core"]
@@ -99,11 +63,6 @@ services:
       default:
         aliases:
           - connect.localhost
-    depends_on:
-      bank-a:
-        condition: service_healthy
-      bank-b:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "beerus", "health", "--token-file", "/state/control-token", "http://127.0.0.1:7480/health"]
       interval: 2s

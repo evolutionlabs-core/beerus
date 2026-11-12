@@ -549,9 +549,6 @@ func (p *planner) bankRemovals() []Action {
 		}
 		p.checkTarget(b.ID, b.OnRemove, "on_remove of removed bank "+b.ID)
 		a := Action{Op: OpRemove, Kind: KindBank, ID: b.ID, Destructive: true, Fields: p.moneyFields(b.OnRemove), Impact: ownedImpact(r)}
-		if len(p.desired.Spec.Banks) == 0 {
-			a.Blockers = append(a.Blockers, fmt.Sprintf("%s is the last bank. Keep at least one bank in the file.", b.ID))
-		}
 		for _, s := range p.desired.Spec.Banks {
 			if s.SettlesThrough == b.ID {
 				a.Blockers = append(a.Blockers, fmt.Sprintf("%s settles through %s and is not leaving. Remove %s too, or keep %s.", s.ID, b.ID, s.ID, b.ID))

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -20,7 +21,7 @@ func TestOldDirIsRefused(t *testing.T) {
 	}
 	for name, err := range map[string]error{
 		"load":  func() error { _, err := LoadConfig(dir); return err }(),
-		"init":  Init(dir, setup.DefaultSpec("beerus", clock.Date{Y: 2026, M: 11, D: 3}), DefaultLocal(), clock.Date{Y: 2026, M: 11, D: 3}),
+		"init":  Init(dir, banktest.Spec("beerus", clock.Date{Y: 2026, M: 11, D: 3}), DefaultLocal(), clock.Date{Y: 2026, M: 11, D: 3}),
 		"check": func() error { _, err := Initialized(dir); return err }(),
 	} {
 		if !errors.Is(err, ErrOldSetup) || !strings.Contains(err.Error(), "This setup was made by an older Beerus. Run beerus reset, then beerus up.") {
@@ -90,7 +91,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 			t.Errorf("no %s system resource", id)
 		}
 	}
-	if err := Init(cfg.Dir, setup.DefaultSpec("beerus", today), DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "already holds") {
+	if err := Init(cfg.Dir, banktest.Spec("beerus", today), DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "already holds") {
 		t.Fatalf("second init: %v", err)
 	}
 }
@@ -115,7 +116,7 @@ func TestDatabaseURLFromEnvIsNeverWritten(t *testing.T) {
 
 func TestInitRefusesABadSpec(t *testing.T) {
 	today := clock.Date{Y: 2026, M: 11, D: 3}
-	spec := setup.DefaultSpec("beerus", today)
+	spec := banktest.Spec("beerus", today)
 	spec.Spec.Banks[1].ID = "cbn"
 	dir := t.TempDir()
 	if err := Init(dir, spec, DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "reserved for the CBN") {

@@ -39,8 +39,11 @@ func TestComposeFollowsTheSetup(t *testing.T) {
 	if string(out) != string(committed) {
 		t.Fatal("compose.yaml is not what `beerus compose` writes for a new setup; regenerate it")
 	}
-	c.Banks = append(c.Banks, &config.Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", Port: 7460, APIPort: 7470})
-	c.Banks[0].State = "closed"
+	c.Banks = append(c.Banks,
+		&config.Bank{ID: "bank-a", Name: "Bank A", Type: "commercial", Port: 7445, APIPort: 7455, State: "closed"},
+		&config.Bank{ID: "bank-b", Name: "Bank B", Type: "digital", Port: 7446, APIPort: 7456},
+		&config.Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", Port: 7460, APIPort: 7470},
+	)
 	c.Connect.Host = "connect.example.localhost"
 	c.Partners = append(c.Partners, &config.Partner{ID: "ledger", Name: "Ledger", LegalName: "Ledger Ltd", Purpose: "to reconcile", RedirectURIs: []string{"https://ledger.localhost/cb"}})
 	out, err = renderCompose(c)

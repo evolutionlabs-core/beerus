@@ -445,7 +445,11 @@ func (a *App) CheckSettlement() (SettlementCheck, error) {
 	}
 	a.mu.Lock()
 	ledgers := slices.Clone(a.ledgers)
+	unopened := a.rtgs == nil && len(a.cfg.Banks) == 0
 	a.mu.Unlock()
+	if unopened {
+		return out, nil
+	}
 	books, err := a.settlementBooks()
 	if err != nil {
 		return out, err

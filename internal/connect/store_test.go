@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -181,7 +182,7 @@ func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
-	if err := Init(dir, setup.DefaultSpec("beerus", today), local, today); err != nil {
+	if err := Init(dir, banktest.Spec("beerus", today), local, today); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadConfig(dir)

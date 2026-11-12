@@ -96,10 +96,12 @@ services:
       default:
         aliases:
           - {{.ConnectHost}}
+{{- if .Banks}}
     depends_on:
 {{- range .Banks}}
       {{.ID}}:
         condition: service_healthy
+{{- end}}
 {{- end}}
     healthcheck:
       test: ["CMD", "beerus", "health", "--token-file", "/state/control-token", "http://127.0.0.1:{{.ControlPort}}/health"]
@@ -125,9 +127,6 @@ func renderCompose(c *config.Config) ([]byte, error) {
 		if !b.Closed() {
 			d.Banks = append(d.Banks, b)
 		}
-	}
-	if len(d.Banks) == 0 {
-		return nil, fmt.Errorf("%s has no open banks to run", c.Dir)
 	}
 	if d.HealthPort <= 0 {
 		return nil, fmt.Errorf("%s has no connect.health_port; set it to the port the cbn container listens on", c.Path(connect.LocalFile))

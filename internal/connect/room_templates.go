@@ -173,7 +173,7 @@ const roomTemplates = `
 {{template "room_foot" .}}{{end}}
 
 {{define "banks"}}{{template "room_head" .}}
-<div class="mb-7 flex flex-wrap items-end justify-between gap-4"><div><h1 class="text-[24px]">Banks</h1><p class="mt-1.5 text-[13.5px] text-muted">Every bank in this setup, with its own ledger and online banking.</p></div>{{if .CanCreate}}<a href="/ui/banks/new" class="btn btn-primary btn-sm">New bank</a>{{end}}</div>
+<div class="mb-7 flex flex-wrap items-end justify-between gap-4"><div><h1 class="text-[24px]">Banks</h1><p class="mt-1.5 text-[13.5px] text-muted">Every bank in this setup, with its own ledger and online banking.</p></div><a href="/ui/banks/new" class="btn btn-primary btn-sm">New bank</a></div>
 {{range .Warnings}}<p class="mb-3 rounded-[10px] border border-warn/30 bg-warn/10 px-4 py-3 text-[13px] text-warn" role="alert">{{.}}</p>{{end}}
 <nav class="mb-4 flex flex-wrap gap-1.5" aria-label="Filter banks by state">{{range .Filters}}<a href="/ui/banks{{if .State}}?state={{.State}}{{end}}" class="flex h-8 items-center gap-2 rounded-lg border px-3 text-[13px] {{if .On}}border-line-strong bg-raised text-ink{{else}}border-transparent text-muted hover:bg-raised hover:text-ink{{end}}" {{if .On}}aria-current="page"{{end}}>{{.Label}}<span class="num text-faint">{{.Count}}</span></a>{{end}}</nav>
 <section class="rounded-2xl border border-line bg-panel">

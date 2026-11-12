@@ -563,11 +563,11 @@ func TestBuildRemoval(t *testing.T) {
 			},
 		},
 		{
-			name:    "last bank blocks (C18)",
+			name:    "removing every bank is allowed",
 			desired: func(s *Spec) { s.Spec.Banks = nil },
 			want: []Action{
-				{Op: OpRemove, Kind: KindBank, ID: "bank-b", Destructive: true, Impact: &Impact{Databases: []string{"beerus_x_bank_b"}}, Blockers: []string{"bank-b is the last bank. Keep at least one bank in the file."}},
-				{Op: OpRemove, Kind: KindBank, ID: "bank-a", Destructive: true, Impact: &Impact{Databases: []string{"beerus_x_bank_a"}}, Blockers: []string{"bank-a is the last bank. Keep at least one bank in the file."}},
+				{Op: OpRemove, Kind: KindBank, ID: "bank-b", Destructive: true, Impact: &Impact{Databases: []string{"beerus_x_bank_b"}}},
+				{Op: OpRemove, Kind: KindBank, ID: "bank-a", Destructive: true, Impact: &Impact{Databases: []string{"beerus_x_bank_a"}}},
 			},
 		},
 		{
