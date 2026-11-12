@@ -408,7 +408,7 @@ func cmdBankList(args []string) error {
 func cmdBankCreate(args []string) error {
 	fs := flag.NewFlagSet("bank create", flag.ContinueOnError)
 	name := fs.String("name", "", "bank name")
-	typ := fs.String("type", "commercial", "commercial, digital or microfinance")
+	typ := fs.String("type", "commercial", "bank type: commercial, digital or microfinance")
 	id := fs.String("id", "", "bank ID, derived from the name when empty")
 	nip := fs.String("nip-code", "", "6-digit NIP institution `code`, assigned when empty")
 	nuban := fs.String("nuban-code", "", "3-digit NUBAN bank `code`, assigned when empty")

@@ -169,7 +169,7 @@ func cmdCustomer(args []string) error {
 	case "create":
 		name := f.fs.String("name", "", "customer's full name")
 		phone := f.fs.String("phone", "", "phone number")
-		dob := f.fs.String("dob", "", "date of birth as YYYY-MM-DD")
+		dob := f.fs.String("dob", "", "`date` of birth, as YYYY-MM-DD")
 		user := f.fs.String("username", "", "online banking username")
 		pwIn := f.fs.Bool("password-stdin", false, "read the online banking password from stdin")
 		if _, err := f.parse("customer create", args, 1); err != nil {
@@ -236,7 +236,7 @@ func cmdAccount(args []string) error {
 	f := newFlags("account", true)
 	switch args[0] {
 	case "open":
-		cust := f.fs.String("customer", "", "customer ID")
+		cust := f.fs.String("customer", "", "customer `ID`")
 		typ := f.fs.String("type", "", "account type: current or savings")
 		if _, err := f.parse("account open", args, 1); err != nil {
 			return err
@@ -435,13 +435,14 @@ func cmdCash(kind string, args []string) error {
 }
 
 func cmdTransfer(args []string) error {
-	f := newFlags("transfer", true)
+	f := newFlags("transfer", false)
+	f.fs.StringVar(f.bank, "bank", "", "")
 	f.fs.StringVar(f.bank, "from-bank", "", "bank `ID` of the paying account; the session bank when empty")
 	from := f.fs.String("from", "", "`NUBAN` of the account to pay from")
 	toBank := f.fs.String("to-bank", "", "bank `ID` of the receiving account; the paying bank when empty")
 	to := f.fs.String("to", "", "`NUBAN` of the account to pay into")
 	amount := f.fs.String("amount", "", "amount in `naira`, such as 25000 or 2500.50")
-	narration := f.fs.String("narration", "", "text shown on the transfer")
+	narration := f.fs.String("narration", "", "`text` shown on the transfer")
 	dry := f.fs.Bool("dry-run", false, "show the fee, VAT, stamp duty and total debit without sending")
 	if _, err := f.parse("transfer", args, 0); err != nil {
 		return err
@@ -546,7 +547,7 @@ func cmdFault(args []string) error {
 			f.fs.StringVar(&dur, "for", "", "`duration` of the fault, such as 1h; the bank stays down until cleared when left out")
 		} else {
 			f.fs.StringVar(&outcome, "outcome", "", "what really happened to a timed-out transfer: credited, failed or unknown")
-			f.fs.IntVar(&count, "count", 0, "how many transfers time out; the next one when left out")
+			f.fs.IntVar(&count, "count", 0, "`number` of transfers that time out; the next one when left out")
 		}
 		if _, err := f.parse("fault "+args[0], args, 1); err != nil {
 			return err

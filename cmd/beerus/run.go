@@ -47,8 +47,8 @@ func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	participant := fs.String("participant", "", "what to run: cbn, core or a bank ID")
-	bind := fs.String("bind", envOr("BEERUS_BIND", "127.0.0.1"), "address to listen on")
-	core := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "control URL of the core participant, for banks")
+	bind := fs.String("bind", envOr("BEERUS_BIND", "127.0.0.1"), "`address` to listen on")
+	core := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "`URL` of the core participant's control API, for banks")
 	if _, err := parseAfter("run", fs, args, 0); err != nil {
 		return err
 	}

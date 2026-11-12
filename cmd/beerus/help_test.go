@@ -78,7 +78,22 @@ Options:
   --nip-code CODE          6-digit NIP institution code, assigned when empty
   --nuban-code CODE        3-digit NUBAN bank code, assigned when empty
   --settles-through BANK   Bank that a microfinance bank settles through
-  --type TYPE              Commercial, digital or microfinance (default commercial)
+  --type TYPE              Bank type: commercial, digital or microfinance (default commercial)
+`
+
+const wantTransferHelp = `Usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [options]
+
+Send money between accounts over NIP.
+
+Options:
+  --amount NAIRA     Amount in naira, such as 25000 or 2500.50
+  --dry-run          Show the fee, VAT, stamp duty and total debit without sending
+  --from NUBAN       NUBAN of the account to pay from
+  --from-bank ID     Bank ID of the paying account; the session bank when empty
+  --json             Print the API response as JSON
+  --narration TEXT   Text shown on the transfer
+  --to NUBAN         NUBAN of the account to pay into
+  --to-bank ID       Bank ID of the receiving account; the paying bank when empty
 `
 
 func helpOf(t *testing.T, args ...string) string {
@@ -104,6 +119,7 @@ func TestHelp(t *testing.T) {
 		{[]string{"bank", "create", "--help"}, wantBankCreateHelp, false},
 		{[]string{"bank", "create", "-h"}, wantBankCreateHelp, false},
 		{[]string{"help", "bank", "create"}, wantBankCreateHelp, false},
+		{[]string{"transfer", "--help"}, wantTransferHelp, false},
 		{[]string{"nope"}, `unknown command "nope". Run beerus help.`, true},
 		{[]string{"clock"}, `unknown command "clock". Run beerus help.`, true},
 		{[]string{"scenarios"}, `unknown command "scenarios". Run beerus help.`, true},

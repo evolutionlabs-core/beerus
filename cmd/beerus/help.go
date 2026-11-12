@@ -243,6 +243,9 @@ type row struct {
 func flagRows(fs *flag.FlagSet) []row {
 	var rows []row
 	fs.VisitAll(func(f *flag.Flag) {
+		if f.Usage == "" {
+			return
+		}
 		dash := "--"
 		if len(f.Name) == 1 {
 			dash = "-"
