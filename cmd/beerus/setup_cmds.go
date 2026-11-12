@@ -41,7 +41,8 @@ const (
 	opFinish     = "finish"
 	yamlIndent   = 2
 	notRunning   = "Beerus is not running. Start it with beerus up."
-	upHint       = "Banks are empty. Create a customer with beerus customer create."
+	upHint       = "No customers yet. Create one with beerus customer create."
+	upNoBanks    = "No banks yet. Add the first one with beerus bank create --name NAME."
 )
 
 var errNotRunning = errors.New(notRunning)
@@ -272,6 +273,18 @@ func specRequest(dir, file string) (applyRequest, error) {
 		return applyRequest{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	return applyRequest{File: path, Spec: string(raw)}, nil
+}
+
+func readSpec(path string) (setup.Spec, error) {
+	req, err := specRequest("", path)
+	if err != nil {
+		return setup.Spec{}, err
+	}
+	spec, errs := setup.Parse(req.File, []byte(req.Spec))
+	if len(errs) > 0 {
+		return setup.Spec{}, errors.Join(errs...)
+	}
+	return spec, nil
 }
 
 func (e *cli) plan(c *ctl, req applyRequest) ([]byte, planReply, error) {
@@ -1131,6 +1144,7 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 		return err
 	}
 	fresh := !ok
+	noBanks := true
 	switch {
 	case fresh && *file == "":
 		if _, err := initState([]string{"--dir", *dir}); err != nil {
@@ -1138,6 +1152,7 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 		}
 	case fresh:
 		spec, _ := setup.Parse(req.File, []byte(req.Spec))
+		noBanks = len(spec.Spec.Banks) == 0
 		local, err := connect.FreshLocal(*dir)
 		if err != nil {
 			return err
@@ -1193,6 +1208,8 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 			<-served
 			return errors.Join(err, serveErr)
 		}
+	} else if noBanks {
+		fmt.Fprintln(e.out, "\n"+upNoBanks)
 	} else {
 		fmt.Fprintln(e.out, "\n"+upHint)
 	}

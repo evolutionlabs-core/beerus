@@ -684,7 +684,7 @@ func (a *App) roomBanks(w http.ResponseWriter, r *http.Request) {
 			filters = append(filters, bankFilter{State: p, Label: strings.ToUpper(p[:1]) + p[1:], Count: counts[p], On: state == p})
 		}
 	}
-	a.roomRender(w, r, "banks", http.StatusOK, "banks", roomPage{"Title": "Banks", "Rows": shown, "State": state, "Filters": filters, "CanCreate": len(a.cfg.Banks) > 0, "Warnings": a.BankWarnings()})
+	a.roomRender(w, r, "banks", http.StatusOK, "banks", roomPage{"Title": "Banks", "Rows": shown, "State": state, "Filters": filters, "Warnings": a.BankWarnings()})
 }
 
 var bankPhases = []string{PhaseActive, PhaseSuspended, PhaseProvisioning, PhaseRepairing, PhaseClosed}

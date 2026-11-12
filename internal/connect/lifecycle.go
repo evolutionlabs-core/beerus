@@ -285,6 +285,16 @@ func (a *App) stopBankSites(ctx context.Context) {
 	}
 }
 
+const NoBanksMessage = "there are no banks yet. Add one first with beerus bank create --name NAME"
+
+func (a *App) noSuchBank(w http.ResponseWriter, r *http.Request) {
+	if len(a.bankList()) == 0 {
+		writeError(w, r, http.StatusNotFound, "not_found", NoBanksMessage)
+		return
+	}
+	writeError(w, r, http.StatusNotFound, "not_found", "No such bank.")
+}
+
 func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
 	if a.writeApplyError(w, r, err) {
 		return
@@ -293,7 +303,7 @@ func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ErrBankInvalid):
 		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
 	case errors.Is(err, errNotFound):
-		writeError(w, r, http.StatusNotFound, "not_found", "No such bank.")
+		a.noSuchBank(w, r)
 	default:
 		a.log.Error("bank lifecycle", "err", err)
 		writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())

@@ -32,6 +32,7 @@ import (
 	"github.com/pb33f/libopenapi"
 	validator "github.com/pb33f/libopenapi-validator"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
@@ -202,14 +203,14 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}
-	ports := stackPorts(t, len(setup.DefaultSpec("contract", clock.Date{Y: 2026, M: 1, D: 15}).Spec.Banks))
+	ports := stackPorts(t, len(banktest.Spec("contract", clock.Date{Y: 2026, M: 1, D: 15}).Spec.Banks))
 	local := connect.DefaultLocal()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort = ports[0], ports[1], ports[2], ports[3]
 	today := clock.DateOf(stackBase())
-	spec := setup.DefaultSpec("contract", today)
+	spec := banktest.Spec("contract", today)
 	spec.Spec.Partners = []setup.Partner{{
 		ID:           "balance",
 		Name:         "Balance",

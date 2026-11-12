@@ -84,12 +84,36 @@ jobs:
       - name: Start the stack
         run: |
           mkdir -p "$RUNNER_TEMP/beerus-state"
+          cat > "$RUNNER_TEMP/beerus-state/setup.yaml" <<EOF
+          apiVersion: beerus.dev/v1
+          kind: Setup
+          metadata:
+            name: beerus
+          spec:
+            start: "$(TZ=Africa/Lagos date +%Y-%m-%dT%H:%M:%S+01:00)"
+            nip:
+              sessions: 4
+              tsq_after: 2m
+              tsq_attempts: 3
+            banks:
+              - id: bank-a
+                name: Bank A
+                type: commercial
+              - id: bank-b
+                name: Bank B
+                type: digital
+          EOF
+          go build -o "$RUNNER_TEMP/beerus" ./cmd/beerus
+          "$RUNNER_TEMP/beerus" init --dir "$RUNNER_TEMP/render" -f "$RUNNER_TEMP/beerus-state/setup.yaml"
+          "$RUNNER_TEMP/beerus" compose --dir "$RUNNER_TEMP/render" > compose.ci.yaml
           {
+            echo "COMPOSE_FILE=compose.ci.yaml"
             echo "BEERUS_STATE=$RUNNER_TEMP/beerus-state"
             echo "BEERUS_UID=$(id -u)"
             echo "BEERUS_GID=$(id -g)"
+            echo "BEERUS_SETUP_FILE=/state/setup.yaml"
           } >> "$GITHUB_ENV"
-          BEERUS_STATE="$RUNNER_TEMP/beerus-state" BEERUS_UID="$(id -u)" BEERUS_GID="$(id -g)" docker compose up -d --build --wait --wait-timeout 300
+          COMPOSE_FILE=compose.ci.yaml BEERUS_STATE="$RUNNER_TEMP/beerus-state" BEERUS_UID="$(id -u)" BEERUS_GID="$(id -g)" BEERUS_SETUP_FILE=/state/setup.yaml docker compose up -d --build --wait --wait-timeout 300
       - name: Done test against the containers
         env:
           BEERUS_CONTRACT_DIR: ${{ runner.temp }}/beerus-state

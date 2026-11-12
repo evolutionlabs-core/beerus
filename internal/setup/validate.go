@@ -164,10 +164,6 @@ func (c *specChecker) dates(path string, list []string) map[string]bool {
 
 func (c *specChecker) banks() {
 	banks := c.s.Spec.Banks
-	if len(banks) == 0 {
-		c.add("banks", "banks is empty. Add at least one bank")
-		return
-	}
 	ids := make([]string, len(banks))
 	byID := map[string]Bank{}
 	for i, b := range banks {

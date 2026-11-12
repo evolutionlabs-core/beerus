@@ -18,6 +18,9 @@ func TestValidateDefaultSpecIsClean(t *testing.T) {
 	if errs := Validate(DefaultSpec("beerus", clock.Date{Y: 2026, M: time.November, D: 4})); len(errs) > 0 {
 		t.Fatal(errStrings(errs))
 	}
+	if banks := DefaultSpec("beerus", clock.Date{Y: 2026, M: time.November, D: 4}).Spec.Banks; len(banks) != 0 {
+		t.Fatalf("a new setup has %d banks", len(banks))
+	}
 	if errs := Validate(validSpec(t)); len(errs) > 0 {
 		t.Fatal(errStrings(errs))
 	}
@@ -47,7 +50,7 @@ func TestValidateRules(t *testing.T) {
 			s.Spec.Holidays.Add = []string{"2026-12-28"}
 			s.Spec.Holidays.Remove = []string{"2026-12-28"}
 		}, []string{"holidays.remove 2026-12-28 is also in holidays.add. Keep it in one list."}},
-		{"no banks", func(s *Spec) { s.Spec.Banks = nil }, []string{"banks is empty. Add at least one bank."}},
+		{"no banks", func(s *Spec) { s.Spec.Banks = nil }, nil},
 		{"no bank id", func(s *Spec) { s.Spec.Banks[1].ID = "" }, []string{"banks[1].id is required. Use 2 to 31 lowercase letters, digits or hyphens, starting with a letter."}},
 		{"bad bank id", func(s *Spec) { s.Spec.Banks[1].ID = "Bank_B" }, []string{`banks[Bank_B].id "Bank_B" is not valid. Use 2 to 31 lowercase letters, digits or hyphens, starting with a letter.`}},
 		{"cbn as a bank id", func(s *Spec) { s.Spec.Banks[1].ID = "cbn" }, []string{"banks[cbn].id cbn is reserved for the CBN. Choose another id."}},

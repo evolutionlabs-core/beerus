@@ -92,9 +92,28 @@ func resolveBank(flagValue string) (string, error) {
 		return "", err
 	}
 	if id == "" {
-		return "", errors.New(noBankMessage)
+		return "", noBankError()
 	}
 	return id, nil
+}
+
+func noBankError() error {
+	c, err := newCtl()
+	if err != nil {
+		return err
+	}
+	out, err := c.do("GET", "/banks", nil)
+	if err != nil {
+		return err
+	}
+	banks, err := decodeList[connect.BankStatus](out)
+	if err != nil {
+		return err
+	}
+	if len(banks) == 0 {
+		return errors.New(connect.NoBanksMessage)
+	}
+	return errors.New(noBankMessage)
 }
 
 func cmdUse(args []string) error {
@@ -134,6 +153,9 @@ func bankStatus(c *ctl, id string) (connect.BankStatus, error) {
 	banks, err := decodeList[connect.BankStatus](out)
 	if err != nil {
 		return connect.BankStatus{}, err
+	}
+	if len(banks) == 0 {
+		return connect.BankStatus{}, errors.New(connect.NoBanksMessage)
 	}
 	ids := make([]string, 0, len(banks))
 	for _, b := range banks {

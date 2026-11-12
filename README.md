@@ -37,22 +37,40 @@ go build -o beerus ./cmd/beerus
 ./beerus up
 ```
 
-3. Open a second terminal and use the other commands.
+3. Open a second terminal and add your first bank. A new Beerus has no banks:
+
+```
+./beerus bank create --name "Bank A" --type commercial
+```
+
+4. Use the other commands.
 
 `beerus up` creates the state directory on the first run, starts every participant and stays in the foreground. Press Ctrl+C to stop it. It prints the ports and the control room link; `beerus info` prints them again. The state directory is `.beerus` in the current directory. Set `BEERUS_DIR` to use another one, and set it the same way in every terminal.
 
 `beerus help` lists every command, and `beerus <command> --help` shows one command's usage.
 
-`beerus compose > compose.yaml` prints a Docker Compose file if you prefer containers.
+`beerus compose` prints a Docker Compose file if you prefer containers. It has one service for each bank in the setup, so a new setup gives a stack with no banks. To start containers with banks, write a setup file, render the compose file from it, and give the file to the cbn container through the state folder:
+
+```
+beerus init --dir render -f my-setup.yaml
+beerus compose --dir render > compose.yaml
+mkdir state && cp my-setup.yaml state/setup.yaml
+BEERUS_STATE=$PWD/state BEERUS_UID=$(id -u) BEERUS_GID=$(id -g) BEERUS_SETUP_FILE=/state/setup.yaml docker compose up -d --build --wait
+```
+
+`BEERUS_SETUP_FILE` is read once, when the state is first made. A file that is missing or invalid stops the cbn container with the reason.
 
 ## Setup file
 
-The setup lives in `.beerus/setup.yaml`. It lists the banks and partners, and the NIP session settings. A new setup has two banks, `bank-a` and `bank-b`.
+The setup lives in `.beerus/setup.yaml`. It lists the banks and partners, and the NIP session settings. A new setup has no banks and no partners. You add your own; the example below has two.
 
 ```
 apiVersion: beerus.dev/v1
 kind: Setup
+metadata:
+  name: beerus
 spec:
+  start: "2026-11-04T08:00:00+01:00"
   nip:
     sessions: 4
     tsq_after: 2m
@@ -79,13 +97,14 @@ beerus up -f my-setup.yaml
 - `up -f` starts from that file. On a new directory it creates the setup from the file.
 - `beerus get banks`, `beerus describe bank <id>`, `beerus export` and `beerus verify` show what is running.
 
-You can also add banks and partners one at a time:
+You can also add banks and partners one at a time. After the first `beerus up` there are no banks, so add the first one:
 
 ```
-beerus bank create --name "Bank C" --type microfinance
+beerus bank create --name "Bank A" --type commercial
+beerus bank create --name "Bank B" --type microfinance
 beerus partner add myapp --redirect-uri http://localhost:3000/callback --webhook-url http://localhost:3000/webhooks
-beerus bank suspend bank-c
-beerus bank resume bank-c
+beerus bank suspend bank-b
+beerus bank resume bank-b
 ```
 
 ## Customers, accounts and cash

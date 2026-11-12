@@ -29,7 +29,7 @@ const defaultSetupName = "beerus"
 const usage = `Beerus is a copy of Nigeria's banking infrastructure: banks, NIBSS, the CBN and open banking, all in one binary.
 
 Usage:
-  beerus init [--dir .beerus] [--partner-port 7443] [--widget-port 7444] [--control-port 7480] [--health-port 7490]
+  beerus init [-f file] [--dir .beerus] [--partner-port 7443] [--widget-port 7444] [--control-port 7480] [--health-port 7490]
   beerus up [-f file] [--prune] [--dir .beerus]
   beerus apply [-f file] [--prune] [--money transfer|payout|leave --to BANK --customer ID=CHOICE] [--settle-now] [--wait 5m] [--json]
   beerus diff [-f file] [--json]
@@ -205,6 +205,7 @@ func cmdInit(args []string) error {
 func initState(args []string) (*config.Config, error) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
+	file := fs.String("f", "", "setup file to start from")
 	flagged := connect.DefaultLocal().Connect
 	fs.IntVar(&flagged.PartnerPort, "partner-port", flagged.PartnerPort, "partner API port; banks take the next free ports")
 	fs.IntVar(&flagged.WidgetPort, "widget-port", flagged.WidgetPort, "widget port")
@@ -228,7 +229,13 @@ func initState(args []string) (*config.Config, error) {
 		}
 	})
 	today := clock.DateOf(time.Now())
-	if err := connect.Init(*dir, setup.DefaultSpec(defaultSetupName, today), local, today); err != nil {
+	spec := setup.DefaultSpec(defaultSetupName, today)
+	if *file != "" {
+		if spec, err = readSpec(*file); err != nil {
+			return nil, err
+		}
+	}
+	if err := connect.Init(*dir, spec, local, today); err != nil {
 		return nil, err
 	}
 	c, err := connect.LoadConfig(*dir)
