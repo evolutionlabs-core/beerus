@@ -30,9 +30,9 @@ func TestRevokedConnectionCannotBeReauthorised(t *testing.T) {
 			t.Fatalf("connection %s came back as %v", id, c.JSON["status"])
 		}
 	}
-	s.ctl("POST", "/scenarios/token_refresh_failed", map[string]any{"connection_id": conn.ConnectionID})
+	s.restoreSnapshot()
 	if c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); c.JSON["status"] != "revoked" {
-		t.Fatalf("a scenario moved a revoked connection to %v", c.JSON["status"])
+		t.Fatalf("a restore moved a revoked connection to %v", c.JSON["status"])
 	}
 	if !testingExternal() {
 		a := s.call("GET", "/v1/accounts/"+fmt.Sprint(conn.Accounts[0]["id"]), nil)
@@ -110,7 +110,7 @@ func TestReauthSendsSyncAvailable(t *testing.T) {
 	conn := s.connect("tunde", "bank-a", s.today().AddDays(-30))
 	id := fmt.Sprint(conn.Accounts[0]["id"])
 	st, _ := s.syncAll(id, "", 500)
-	s.ctl("POST", "/scenarios/token_refresh_failed", map[string]any{"connection_id": conn.ConnectionID})
+	s.restoreSnapshot()
 	s.spend(s.persona("tunde"), 2)
 	s.advance("72h")
 	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", nil), 201)

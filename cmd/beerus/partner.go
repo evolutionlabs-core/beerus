@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"net/url"
@@ -24,29 +23,43 @@ func (m *multi) Set(v string) error {
 	return nil
 }
 
-const partnerUsage = "usage: beerus partner add <id> --redirect-uri URL [--webhook-url URL] | list | rotate-key <id> | remove <id>"
-
 func cmdPartner(args []string) error {
 	if len(args) == 0 {
-		return errors.New(partnerUsage)
+		return usageError("partner")
 	}
 	sub, rest := args[0], args[1:]
-	fs := flag.NewFlagSet("partner "+sub, flag.ExitOnError)
+	switch sub {
+	case "add", "list", "rotate-key", "remove":
+	default:
+		return usageError("partner")
+	}
+	path := "partner " + sub
+	fs := flag.NewFlagSet(path, flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	var redirects multi
-	fs.Var(&redirects, "redirect-uri", "where the widget sends the browser back to (repeatable)")
-	hook := fs.String("webhook-url", "", "where webhooks are sent")
-	name := fs.String("name", "", "app name shown on the consent screen")
-	legal := fs.String("legal-name", "", "legal name shown on the consent screen")
-	purpose := fs.String("purpose", "", "purpose shown on the consent screen")
-	id := ""
-	if sub != "list" {
-		if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
-			return errors.New(partnerUsage)
-		}
-		id, rest = rest[0], rest[1:]
+	hook := new(string)
+	name := new(string)
+	legal := new(string)
+	purpose := new(string)
+	if sub == "add" {
+		fs.Var(&redirects, "redirect-uri", "`URL` where the widget sends the browser back to (repeatable)")
+		fs.StringVar(hook, "webhook-url", "", "`URL` where webhooks are sent")
+		fs.StringVar(name, "name", "", "app name shown on the consent screen")
+		fs.StringVar(legal, "legal-name", "", "legal `name` shown on the consent screen")
+		fs.StringVar(purpose, "purpose", "", "purpose shown on the consent screen")
 	}
-	fs.Parse(rest)
+	positional := 1
+	if sub == "list" {
+		positional = 0
+	}
+	pos, err := parseAfter(path, fs, rest, positional)
+	if err != nil {
+		return err
+	}
+	id := ""
+	if positional == 1 {
+		id = pos[0]
+	}
 	c, err := connect.LoadConfig(*dir)
 	if err != nil {
 		return err
@@ -90,7 +103,7 @@ func cmdPartner(args []string) error {
 		fmt.Printf("Removed %s. Its key and certificate no longer work.\n", id)
 		return nil
 	}
-	return errors.New(partnerUsage)
+	return usageError("partner")
 }
 
 func printCredentials(dir, id, key string) error {

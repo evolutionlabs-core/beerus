@@ -28,11 +28,6 @@ func (a *App) ControlHandler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "world_id": a.WorldID(), "business_time": ts(a.clock.Now())})
 	})
 	mux.HandleFunc("GET /clock", a.ctlClock)
-	mux.HandleFunc("GET /scenarios", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"data": scenarios})
-	})
-	mux.HandleFunc("POST /scenarios/run", a.ctlScenarioRun)
-	mux.HandleFunc("POST /scenarios/{name}", a.ctlScenario)
 	mux.HandleFunc("GET /nip/name-enquiry", a.ctlNameEnquiry)
 	mux.HandleFunc("GET /nip/participants", a.ctlNIPParticipants)
 	mux.HandleFunc("GET /nip/positions", a.ctlNIPPositions)
@@ -157,60 +152,6 @@ func (a *App) WorldID() string {
 
 func (a *App) ctlClock(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"business_time": ts(a.clock.Now()), "business_date": a.clock.Today().String(), "world_id": a.WorldID()})
-}
-
-type scenario struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
-var scenarios = []scenario{
-	{"consent_revoked_mid_sync", "The customer revokes consent at the bank"},
-	{"token_refresh_failed", "Connect can no longer refresh the bank token, so the connection needs reauthorisation"},
-}
-
-type scenarioParams struct {
-	ConnectionID string `json:"connection_id"`
-}
-
-func (a *App) runScenario(name string, in scenarioParams) (string, error) {
-	var err error
-	switch name {
-	case "consent_revoked_mid_sync":
-		err = a.ForceStatus(in.ConnectionID, "syncing", "")
-		if err == nil {
-			err = a.RevokeAtBank(in.ConnectionID)
-		}
-	case "token_refresh_failed":
-		err = a.ForceStatus(in.ConnectionID, "reauth_required", "reauth_required")
-	default:
-		return "", fmt.Errorf("unknown scenario %q; run beerus scenarios to list them", name)
-	}
-	if errors.Is(err, errNotFound) {
-		return "", errors.New("connection_id must name an existing connection")
-	}
-	if err != nil {
-		return "", fmt.Errorf("run scenario %s: %w", name, err)
-	}
-	a.poke()
-	return "connection " + in.ConnectionID + " updated", nil
-}
-
-func (a *App) ctlScenario(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	var body scenarioParams
-	if r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object.")
-			return
-		}
-	}
-	result, err := a.runScenario(name, body)
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"scenario": name, "result": result})
 }
 
 func parseNaira(s string) (int64, error) {

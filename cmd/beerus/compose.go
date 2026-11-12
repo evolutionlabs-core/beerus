@@ -140,9 +140,11 @@ func renderCompose(c *config.Config) ([]byte, error) {
 }
 
 func cmdCompose(args []string) error {
-	fs := flag.NewFlagSet("compose", flag.ExitOnError)
+	fs := flag.NewFlagSet("compose", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	fs.Parse(args)
+	if _, err := parseAfter("compose", fs, args, 0); err != nil {
+		return err
+	}
 	c, err := connect.LoadConfig(*dir)
 	if err != nil {
 		return err

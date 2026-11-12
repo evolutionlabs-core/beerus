@@ -44,19 +44,21 @@ func envNumber(key string, positive bool) (int64, error) {
 }
 
 func cmdRun(args []string) error {
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	participant := fs.String("participant", "", "cbn, core or a bank ID")
+	participant := fs.String("participant", "", "what to run: cbn, core or a bank ID")
 	bind := fs.String("bind", envOr("BEERUS_BIND", "127.0.0.1"), "address to listen on")
 	core := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "control URL of the core participant, for banks")
-	fs.Parse(args)
+	if _, err := parseAfter("run", fs, args, 0); err != nil {
+		return err
+	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	connect.SetBind(*bind)
 	switch *participant {
 	case "":
-		return errors.New("usage: beerus run --participant cbn|core|<bank-id>")
+		return usageError("run")
 	case "cbn":
 		return runCBN(ctx, *dir, *bind, log)
 	case "core":
@@ -164,11 +166,13 @@ func initFromEnv(dir string) error {
 }
 
 func cmdHealth(args []string) error {
-	fs := flag.NewFlagSet("health", flag.ExitOnError)
-	token := fs.String("token-file", "", "file with a bearer token")
-	fs.Parse(args)
+	fs := flag.NewFlagSet("health", flag.ContinueOnError)
+	token := fs.String("token-file", "", "`file` with a bearer token")
+	if err := parseFlags("health", fs, args); err != nil {
+		return err
+	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: beerus health <url> [--token-file FILE]")
+		return usageError("health")
 	}
 	req, err := http.NewRequest(http.MethodGet, fs.Arg(0), nil)
 	if err != nil {

@@ -28,7 +28,6 @@ type cmdFlags struct {
 
 func newFlags(name string, withBank bool) *cmdFlags {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 	f := &cmdFlags{fs: fs, bank: new(string), asJSON: fs.Bool("json", false, "print the API response as JSON")}
 	if withBank {
 		fs.StringVar(f.bank, "bank", "", "bank ID; the session bank when empty")
@@ -36,25 +35,8 @@ func newFlags(name string, withBank bool) *cmdFlags {
 	return f
 }
 
-func (f *cmdFlags) parse(args []string, positional int, usage string) ([]string, error) {
-	if len(args) < positional {
-		return nil, errors.New(usage)
-	}
-	for _, a := range args[:positional] {
-		if strings.HasPrefix(a, "-") {
-			return nil, fmt.Errorf("%q should be a value, not a flag; %s", a, usage)
-		}
-	}
-	if err := f.fs.Parse(args[positional:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return nil, errors.New(usage)
-		}
-		return nil, fmt.Errorf("%w; %s", err, usage)
-	}
-	if f.fs.NArg() > 0 {
-		return nil, fmt.Errorf("unexpected argument %q; %s", f.fs.Arg(0), usage)
-	}
-	return args[:positional], nil
+func (f *cmdFlags) parse(path string, args []string, positional int) ([]string, error) {
+	return parseAfter(path, f.fs, args, positional)
 }
 
 func (f *cmdFlags) dial() (string, *ctl, error) {
@@ -139,19 +121,6 @@ func newTable() *tabwriter.Writer {
 	return tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 }
 
-func flagsAfter(fs *flag.FlagSet, args []string, positional int) ([]string, error) {
-	if len(args) < positional {
-		return nil, errors.New("missing argument")
-	}
-	if err := fs.Parse(args[positional:]); err != nil {
-		return nil, err
-	}
-	if fs.NArg() > 0 {
-		return nil, fmt.Errorf("unexpected argument %q", fs.Arg(0))
-	}
-	return args[:positional], nil
-}
-
 func bankPath(bank string, parts ...string) string {
 	p := "/banks/" + url.PathEscape(bank)
 	for _, s := range parts {
@@ -191,42 +160,23 @@ func listQuery(limit, cursor string, more url.Values) string {
 	return "?" + q.Encode()
 }
 
-func cmdBanking(cmd string, args []string) error {
-	switch cmd {
-	case "customer":
-		return cmdCustomer(args)
-	case "account":
-		return cmdAccount(args)
-	case "customers", "accounts", "statement":
-		return cmdList(cmd, args)
-	case "deposit", "withdraw":
-		return cmdCash(cmd, args)
-	case "transfer":
-		return cmdTransfer(args)
-	case "fault":
-		return cmdFault(args)
-	}
-	return cmdNip(args)
-}
-
 func cmdCustomer(args []string) error {
-	const usage = "usage: beerus customer create --name N --phone P --dob YYYY-MM-DD [--username U --password-stdin] | close <id>"
 	if len(args) == 0 {
-		return errors.New(usage)
+		return usageError("customer")
 	}
 	f := newFlags("customer", true)
 	switch args[0] {
 	case "create":
-		name := f.fs.String("name", "", "full name")
+		name := f.fs.String("name", "", "customer's full name")
 		phone := f.fs.String("phone", "", "phone number")
-		dob := f.fs.String("dob", "", "date of birth, YYYY-MM-DD")
+		dob := f.fs.String("dob", "", "date of birth as YYYY-MM-DD")
 		user := f.fs.String("username", "", "online banking username")
 		pwIn := f.fs.Bool("password-stdin", false, "read the online banking password from stdin")
-		if _, err := f.parse(args, 1, usage); err != nil {
+		if _, err := f.parse("customer create", args, 1); err != nil {
 			return err
 		}
 		if *name == "" || *phone == "" || *dob == "" {
-			return fmt.Errorf("--name, --phone and --dob are required; %s", usage)
+			return fmt.Errorf("--name, --phone and --dob are required; %w", usageError("customer create"))
 		}
 		id, err := resolveBank(*f.bank)
 		if err != nil {
@@ -259,7 +209,7 @@ func cmdCustomer(args []string) error {
 			return nil
 		})
 	case "close":
-		pos, err := f.parse(args, 2, usage)
+		pos, err := f.parse("customer close", args, 2)
 		if err != nil {
 			return err
 		}
@@ -276,24 +226,23 @@ func cmdCustomer(args []string) error {
 			return printBusinessTime(c)
 		})
 	}
-	return errors.New(usage)
+	return usageError("customer")
 }
 
 func cmdAccount(args []string) error {
-	const usage = "usage: beerus account open --customer ID [--type current|savings] | close <nuban>"
 	if len(args) == 0 {
-		return errors.New(usage)
+		return usageError("account")
 	}
 	f := newFlags("account", true)
 	switch args[0] {
 	case "open":
 		cust := f.fs.String("customer", "", "customer ID")
-		typ := f.fs.String("type", "", "current or savings")
-		if _, err := f.parse(args, 1, usage); err != nil {
+		typ := f.fs.String("type", "", "account type: current or savings")
+		if _, err := f.parse("account open", args, 1); err != nil {
 			return err
 		}
 		if *cust == "" || *typ == "" {
-			return fmt.Errorf("--customer and --type are required; %s", usage)
+			return fmt.Errorf("--customer and --type are required; %w", usageError("account open"))
 		}
 		id, c, err := f.dial()
 		if err != nil {
@@ -312,7 +261,7 @@ func cmdAccount(args []string) error {
 			return printBusinessTime(c)
 		})
 	case "close":
-		pos, err := f.parse(args, 2, usage)
+		pos, err := f.parse("account close", args, 2)
 		if err != nil {
 			return err
 		}
@@ -329,27 +278,24 @@ func cmdAccount(args []string) error {
 			return printBusinessTime(c)
 		})
 	}
-	return errors.New(usage)
+	return usageError("account")
 }
 
 func cmdList(what string, args []string) error {
-	usage := "usage: beerus " + what + " [--limit N] [--cursor C]"
 	positional := 0
 	f := newFlags(what, true)
-	limit := f.fs.String("limit", "", "page size")
-	cursor := f.fs.String("cursor", "", "next_cursor from the last page")
+	limit := f.fs.String("limit", "", "page size, a `number` from 1 to 1000")
+	cursor := f.fs.String("cursor", "", "the next_cursor from the last page")
 	var cust, from, to *string
 	switch what {
 	case "accounts":
-		cust = f.fs.String("customer", "", "only this customer's accounts")
-		usage = "usage: beerus accounts [--customer ID] [--limit N] [--cursor C]"
+		cust = f.fs.String("customer", "", "only this customer's accounts, by customer ID")
 	case "statement":
 		positional = 1
-		from = f.fs.String("from", "", "first date, YYYY-MM-DD")
-		to = f.fs.String("to", "", "last date, YYYY-MM-DD")
-		usage = "usage: beerus statement <nuban> [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--limit N] [--cursor C]"
+		from = f.fs.String("from", "", "first `date`, as YYYY-MM-DD")
+		to = f.fs.String("to", "", "last `date`, as YYYY-MM-DD")
 	}
-	pos, err := f.parse(args, positional, usage)
+	pos, err := f.parse(what, args, positional)
 	if err != nil {
 		return err
 	}
@@ -452,15 +398,14 @@ func printStatement(c *ctl, out map[string]any, nuban string) error {
 }
 
 func cmdCash(kind string, args []string) error {
-	usage := "usage: beerus " + kind + " <nuban> --amount NAIRA"
 	f := newFlags(kind, true)
-	amount := f.fs.String("amount", "", "amount in naira, such as 5000 or 5000.50")
-	pos, err := f.parse(args, 1, usage)
+	amount := f.fs.String("amount", "", "amount in `naira`, such as 5000 or 5000.50")
+	pos, err := f.parse(kind, args, 1)
 	if err != nil {
 		return err
 	}
 	if *amount == "" {
-		return fmt.Errorf("--amount is required; %s", usage)
+		return fmt.Errorf("--amount is required; %w", usageError(kind))
 	}
 	id, c, err := f.dial()
 	if err != nil {
@@ -490,20 +435,19 @@ func cmdCash(kind string, args []string) error {
 }
 
 func cmdTransfer(args []string) error {
-	const usage = "usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT] [--dry-run]"
 	f := newFlags("transfer", true)
-	f.fs.StringVar(f.bank, "from-bank", "", "bank of the paying account; the session bank when empty")
-	from := f.fs.String("from", "", "account number to pay from")
-	toBank := f.fs.String("to-bank", "", "bank of the receiving account; the paying bank when empty")
-	to := f.fs.String("to", "", "account number to pay into")
-	amount := f.fs.String("amount", "", "amount in naira, such as 25000 or 2500.50")
-	narration := f.fs.String("narration", "", "narration")
+	f.fs.StringVar(f.bank, "from-bank", "", "bank `ID` of the paying account; the session bank when empty")
+	from := f.fs.String("from", "", "`NUBAN` of the account to pay from")
+	toBank := f.fs.String("to-bank", "", "bank `ID` of the receiving account; the paying bank when empty")
+	to := f.fs.String("to", "", "`NUBAN` of the account to pay into")
+	amount := f.fs.String("amount", "", "amount in `naira`, such as 25000 or 2500.50")
+	narration := f.fs.String("narration", "", "text shown on the transfer")
 	dry := f.fs.Bool("dry-run", false, "show the fee, VAT, stamp duty and total debit without sending")
-	if _, err := f.parse(args, 0, usage); err != nil {
+	if _, err := f.parse("transfer", args, 0); err != nil {
 		return err
 	}
 	if *from == "" || *to == "" || *amount == "" {
-		return fmt.Errorf("--from, --to and --amount are required; %s", usage)
+		return fmt.Errorf("--from, --to and --amount are required; %w", usageError("transfer"))
 	}
 	id, c, err := f.dial()
 	if err != nil {
@@ -590,27 +534,31 @@ func describeFault(f connect.Fault) string {
 }
 
 func cmdFault(args []string) error {
-	const usage = "usage: beerus fault down [--bank ID] [--for 1h] | timeout [--bank ID] --outcome credited|failed|unknown [--count N] | list [--bank ID] | clear [--bank ID]"
 	if len(args) == 0 {
-		return errors.New(usage)
+		return usageError("fault")
 	}
 	f := newFlags("fault", true)
 	switch args[0] {
 	case "down", "timeout":
-		dur := f.fs.String("for", "", "how long a down fault lasts, such as 1h")
-		outcome := f.fs.String("outcome", "", "what really happened to a timed-out transfer")
-		count := f.fs.Int("count", 0, "how many transfers time out")
-		if _, err := f.parse(args, 1, usage); err != nil {
+		var dur, outcome string
+		var count int
+		if args[0] == "down" {
+			f.fs.StringVar(&dur, "for", "", "`duration` of the fault, such as 1h; the bank stays down until cleared when left out")
+		} else {
+			f.fs.StringVar(&outcome, "outcome", "", "what really happened to a timed-out transfer: credited, failed or unknown")
+			f.fs.IntVar(&count, "count", 0, "how many transfers time out; the next one when left out")
+		}
+		if _, err := f.parse("fault "+args[0], args, 1); err != nil {
 			return err
 		}
 		id, c, err := f.dial()
 		if err != nil {
 			return err
 		}
-		body := map[string]any{"kind": args[0], "bank": id, "for": *dur, "outcome": *outcome}
+		body := map[string]any{"kind": args[0], "bank": id, "for": dur, "outcome": outcome}
 		f.fs.Visit(func(fl *flag.Flag) {
 			if fl.Name == "count" {
-				body["count"] = *count
+				body["count"] = count
 			}
 		})
 		out, err := c.do("POST", "/faults", body)
@@ -626,7 +574,7 @@ func cmdFault(args []string) error {
 			return printBusinessTime(c)
 		})
 	case "list":
-		if _, err := f.parse(args, 1, usage); err != nil {
+		if _, err := f.parse("fault list", args, 1); err != nil {
 			return err
 		}
 		c, err := newCtl()
@@ -664,7 +612,7 @@ func cmdFault(args []string) error {
 			return printBusinessTime(c)
 		})
 	case "clear":
-		if _, err := f.parse(args, 1, usage); err != nil {
+		if _, err := f.parse("fault clear", args, 1); err != nil {
 			return err
 		}
 		c, err := newCtl()
@@ -690,18 +638,17 @@ func cmdFault(args []string) error {
 			return printBusinessTime(c)
 		})
 	}
-	return errors.New(usage)
+	return usageError("fault")
 }
 
 func cmdNip(args []string) error {
-	const usage = "usage: beerus nip status <session_id> | settle-now | name-enquiry <bank_code> <nuban> | participants | positions | settlement"
 	if len(args) == 0 {
-		return errors.New(usage)
+		return usageError("nip")
 	}
 	f := newFlags("nip", false)
 	switch args[0] {
 	case "status":
-		pos, err := f.parse(args, 2, usage)
+		pos, err := f.parse("nip status", args, 2)
 		if err != nil {
 			return err
 		}
@@ -730,7 +677,7 @@ func cmdNip(args []string) error {
 			return nil
 		})
 	case "settle-now":
-		if _, err := f.parse(args, 1, usage); err != nil {
+		if _, err := f.parse("nip settle-now", args, 1); err != nil {
 			return err
 		}
 		c, err := newCtl()
@@ -761,7 +708,7 @@ func cmdNip(args []string) error {
 		if args[0] == "name-enquiry" {
 			positional = 3
 		}
-		pos, err := f.parse(args, positional, usage)
+		pos, err := f.parse("nip "+args[0], args, positional)
 		if err != nil {
 			return err
 		}
@@ -780,7 +727,7 @@ func cmdNip(args []string) error {
 		pretty(out)
 		return nil
 	}
-	return errors.New(usage)
+	return usageError("nip")
 }
 
 func printSession(s nibss.Session, wasPending bool) {

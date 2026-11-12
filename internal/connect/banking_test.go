@@ -183,12 +183,4 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatalf("the failed credit left session %+v, %v", x, err)
 	}
 
-	f, err := parseScenarioFile([]byte("name: pay\nsteps:\n  - transfer:\n      from_bank: bank-a\n      from: \"" + from + "\"\n      to_bank: bank-b\n      to: \"" + to + "\"\n      amount: \"2500\"\n      narration: Cake\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	tr := f.Steps[0].Transfer
-	if tr == nil || tr.FromBank != "bank-a" || tr.From != from || tr.ToBank != "bank-b" || tr.To != to || tr.Amount != "2500" || tr.Narration != "Cake" {
-		t.Fatalf("the transfer step decoded as %+v", tr)
-	}
 }

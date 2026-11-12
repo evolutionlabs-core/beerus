@@ -206,13 +206,8 @@ func TestStory(t *testing.T) {
 	if got := c.ok("get", "banks"); !regexp.MustCompile(`^ID +NAME +PHASE +READY +GEN +MESSAGE\nbank-a +Bank A +active +yes +1 *\nbank-b +Bank B +active +yes +1 *\nbank-c +Bank C +active +yes +1 *\n$`).MatchString(got) {
 		t.Errorf("get banks after up: %q", got)
 	}
-	if got := c.ok("clock"); !regexp.MustCompile(`^\{\n  "business_date": "\d{4}-\d\d-\d\d",\n  "business_time": "\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?\+01:00",\n  "world_id": "wld_\w+"\n\}\n$`).MatchString(got) {
+	if got := c.fails("clock"); got != "beerus: unknown command \"clock\". Run beerus help." {
 		t.Errorf("clock: %q", got)
-	}
-	for _, args := range [][]string{{"advance", "1h"}, {"pace", "0"}} {
-		if got := c.fails(append([]string{"clock"}, args...)...); got != "beerus: usage: beerus clock" {
-			t.Errorf("clock %s: %q", args[0], got)
-		}
 	}
 
 	t.Setenv("BEERUS_CONTRACT_DIR", dir)

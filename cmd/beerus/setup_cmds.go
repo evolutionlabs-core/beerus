@@ -83,32 +83,14 @@ func newCLI() *cli {
 	return &cli{in: bufio.NewReader(os.Stdin), out: os.Stdout, errOut: os.Stderr, tty: err == nil && fi.Mode()&os.ModeCharDevice != 0}
 }
 
-func runSetup(run func(*cli, []string) error, args []string) int {
-	e := newCLI()
-	return e.finish(run(e, args))
-}
-
 func (e *cli) finish(err error) int {
-	if err == nil {
-		return 0
-	}
-	code := 1
-	var se *statusError
-	if errors.As(err, &se) {
-		code = se.code
-		if se.err == nil {
-			return code
-		}
-	}
-	fmt.Fprintln(e.errOut, "beerus:", err)
-	return code
+	return report(e.out, e.errOut, err)
 }
 
 func (e *cli) flagset(name string) (*flag.FlagSet, *string, *bool) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	asJSON := fs.Bool("json", false, "print the API response as is")
+	asJSON := fs.Bool("json", false, "print the API response as JSON")
 	return fs, dir, asJSON
 }
 
@@ -219,9 +201,9 @@ type moneyFlags struct {
 }
 
 func (m *moneyFlags) register(fs *flag.FlagSet) {
-	fs.StringVar(&m.money, "money", "", "what happens to customers' money when a bank goes: transfer, payout or leave")
-	fs.StringVar(&m.to, "to", "", "bank that receives transferred money")
-	fs.Var(&m.customers, "customer", "choice for one customer, such as cus_1=payout (repeatable)")
+	fs.StringVar(&m.money, "money", "", "`choice` for customers' money: transfer, payout or leave")
+	fs.StringVar(&m.to, "to", "", "`bank` that receives transferred money")
+	fs.Var(&m.customers, "customer", "choice for one customer as `ID=CHOICE`, such as cus_1=payout (repeatable)")
 }
 
 func (m moneyFlags) removal() (*setup.Removal, error) {
@@ -594,17 +576,14 @@ func checkWait(wait time.Duration) error {
 
 func cmdApply(e *cli, args []string) error {
 	fs, dir, asJSON := e.flagset("apply")
-	file := fs.String("f", "", "setup file; defaults to setup.yaml in the state directory")
+	file := fs.String("f", "", "setup `FILE`; defaults to setup.yaml in the state directory")
 	prune := fs.Bool("prune", false, "remove banks and partners that are not in the file")
 	settle := fs.Bool("settle-now", false, "run an extra NIP settlement session for banks that are closing or being removed")
 	wait := fs.Duration("wait", defaultWait, "how long to wait for the changes to finish; 0 does not wait")
 	var mf moneyFlags
 	mf.register(fs)
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("%w; usage: beerus apply [-f file] [--prune] [--money transfer|payout|leave --to BANK --customer ID=CHOICE] [--settle-now] [--wait 5m] [--json]", err)
-	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	if _, err := parseAfter("apply", fs, args, 0); err != nil {
+		return err
 	}
 	if err := checkWait(*wait); err != nil {
 		return err
@@ -655,12 +634,9 @@ func offlinePlan(dir string, req applyRequest) ([]byte, planReply, error) {
 
 func cmdDiff(e *cli, args []string) error {
 	fs, dir, asJSON := e.flagset("diff")
-	file := fs.String("f", "", "setup file; defaults to setup.yaml in the state directory")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("%w; usage: beerus diff [-f file] [--json]", err)
-	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	file := fs.String("f", "", "setup `FILE`; defaults to setup.yaml in the state directory")
+	if _, err := parseAfter("diff", fs, args, 0); err != nil {
+		return err
 	}
 	if _, err := loadApplied(*dir); err != nil {
 		return err
@@ -727,16 +703,15 @@ func kindOf(word string) (string, error) {
 
 func cmdGet(e *cli, args []string) error {
 	fs, dir, asJSON := e.flagset("get")
-	limit := fs.String("limit", "", "page size")
-	cursor := fs.String("cursor", "", "next_cursor from the last page")
-	const usage = "usage: beerus get banks|partners [--limit N] [--cursor C] [--json]"
-	pos, err := flagsAfter(fs, args, 1)
+	limit := fs.String("limit", "", "page size, a `number` from 1 to 1000")
+	cursor := fs.String("cursor", "", "the next_cursor from the last page")
+	pos, err := parseAfter("get", fs, args, 1)
 	if err != nil {
-		return fmt.Errorf("%w; %s", err, usage)
+		return err
 	}
 	kind, err := kindOf(pos[0])
 	if err != nil {
-		return fmt.Errorf("%w; %s", err, usage)
+		return fmt.Errorf("%w; %w", err, usageError("get"))
 	}
 	st, err := loadApplied(*dir)
 	if err != nil {
@@ -885,14 +860,13 @@ func (e *cli) describeText(r setup.Resource, st setup.Status) error {
 
 func cmdDescribe(e *cli, args []string) error {
 	fs, dir, asJSON := e.flagset("describe")
-	const usage = "usage: beerus describe bank|partner <id> [--json]"
-	pos, err := flagsAfter(fs, args, 2)
+	pos, err := parseAfter("describe", fs, args, 2)
 	if err != nil {
-		return fmt.Errorf("%w; %s", err, usage)
+		return err
 	}
 	kind, err := kindOf(pos[0])
 	if err != nil {
-		return fmt.Errorf("%w; %s", err, usage)
+		return fmt.Errorf("%w; %w", err, usageError("describe"))
 	}
 	st, err := loadApplied(*dir)
 	if err != nil {
@@ -935,12 +909,9 @@ func cmdDescribe(e *cli, args []string) error {
 
 func cmdExport(e *cli, args []string) error {
 	fs, dir, asJSON := e.flagset("export")
-	out := fs.String("o", "", "write the setup to this file instead of printing it")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("%w; usage: beerus export [-o file] [--json]", err)
-	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	out := fs.String("o", "", "write the setup to this `FILE` instead of printing it")
+	if _, err := parseAfter("export", fs, args, 0); err != nil {
+		return err
 	}
 	if *out != "" && *asJSON {
 		return errors.New("--json and -o cannot be used together")
@@ -973,11 +944,8 @@ func cmdExport(e *cli, args []string) error {
 
 func cmdVerify(e *cli, args []string) error {
 	fs, dir, asJSON := e.flagset("verify")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("%w; usage: beerus verify [--json]", err)
-	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	if _, err := parseAfter("verify", fs, args, 0); err != nil {
+		return err
 	}
 	st, err := loadApplied(*dir)
 	if err != nil {
@@ -1013,10 +981,9 @@ func cmdBankEnd(e *cli, args []string) error {
 	wait := fs.Duration("wait", defaultWait, "how long to wait for the bank to finish; 0 does not wait")
 	var mf moneyFlags
 	mf.register(fs)
-	usage := fmt.Sprintf("usage: beerus bank %s <id> [--money transfer|payout|leave --to BANK --customer ID=CHOICE] [--settle-now] [--wait 5m] [--yes] [--json]", verb)
-	pos, err := flagsAfter(fs, args[1:], 1)
+	pos, err := parseAfter("bank "+verb, fs, args[1:], 1)
 	if err != nil {
-		return fmt.Errorf("%w; %s", err, usage)
+		return err
 	}
 	id := pos[0]
 	if err := checkWait(*wait); err != nil {
@@ -1119,15 +1086,11 @@ func cmdUp(args []string) error {
 
 func runUp(ctx context.Context, e *cli, args []string) error {
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	file := fs.String("f", "", "setup file to start from or apply")
+	file := fs.String("f", "", "setup `FILE` to start from or apply")
 	prune := fs.Bool("prune", false, "remove banks and partners that are not in the file")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("%w; usage: beerus up [-f file] [--prune] [--dir .beerus]", err)
-	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	if _, err := parseAfter("up", fs, args, 0); err != nil {
+		return err
 	}
 	var req applyRequest
 	if *file != "" {
