@@ -120,9 +120,14 @@ func (c *cli) fails(args ...string) string {
 
 func (c *cli) json(args ...string) map[string]any {
 	c.t.Helper()
+	return c.printedJSON(append(args, "--json")...)
+}
+
+func (c *cli) printedJSON(args ...string) map[string]any {
+	c.t.Helper()
 	out := map[string]any{}
-	if err := json.Unmarshal([]byte(c.ok(append(args, "--json")...)), &out); err != nil {
-		c.t.Fatalf("beerus %v --json is not JSON: %v", args, err)
+	if err := json.Unmarshal([]byte(c.ok(args...)), &out); err != nil {
+		c.t.Fatalf("beerus %v is not JSON: %v", args, err)
 	}
 	return out
 }
@@ -219,13 +224,13 @@ func TestBankCLI(t *testing.T) {
 	if lines := c.json("statement", a1, "--bank", "bank-a")["data"].([]any); len(lines) != 9 {
 		t.Errorf("a quote posted to the statement: %d lines, want 9", len(lines))
 	}
-	if help := c.ok("transfer", "--help"); !strings.HasPrefix(help, "Usage:\n  beerus transfer --from NUBAN --to NUBAN --amount NAIRA") || !strings.Contains(help, "[--dry-run]") || strings.Contains(help, "beerus customer") {
+	if help := c.ok("transfer", "--help"); !strings.HasPrefix(help, "Usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [options]\n") || !strings.Contains(help, "\n  --dry-run ") || strings.Contains(help, "beerus customer") {
 		t.Errorf("transfer --help: %q", help)
 	}
-	if help := c.ok("bank", "close", "-h"); strings.Count(help, "\n  beerus bank ") != 5 {
+	if help := c.ok("bank", "close", "-h"); !strings.HasPrefix(help, "Usage: beerus bank close <id> [options]\n") || !strings.Contains(help, "\n  --yes ") || strings.Contains(help, "beerus bank create") {
 		t.Errorf("bank close -h: %q", help)
 	}
-	if got := c.fails("bogus"); got != "beerus: unknown command \"bogus\"\nRun beerus help to list the commands." {
+	if got := c.fails("bogus"); got != "beerus: unknown command \"bogus\". Run beerus help." {
 		t.Errorf("unknown command: %q", got)
 	}
 	if out, _, code := c.run("bogus", "--help"); code != 1 || out != "" {
@@ -280,27 +285,27 @@ func TestBankCLI(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"deposit", a1, "--bank", "bank-a"}, "beerus: --amount is required; usage: beerus deposit <nuban> --amount NAIRA"},
+		{[]string{"deposit", a1, "--bank", "bank-a"}, "beerus: --amount is required; usage: beerus deposit <nuban> --amount NAIRA [options]"},
 		{[]string{"deposit", a1, "--bank", "bank-a", "--amount", "ten"}, `beerus: Amount "ten" must look like 25000 or 25000.50 (naira).`},
 		{[]string{"deposit", a1, "--bank", "bank-a", "--amount", "1.234"}, `beerus: Amount "1.234" must look like 25000 or 25000.50 (naira).`},
 		{[]string{"deposit", a1, "--bank", "bank-a", "--amount", "0"}, `beerus: Amount "0" must be a positive naira amount.`},
-		{[]string{"deposit", "--amount", "5"}, `beerus: "--amount" should be a value, not a flag; usage: beerus deposit <nuban> --amount NAIRA`},
-		{[]string{"deposit"}, "beerus: usage: beerus deposit <nuban> --amount NAIRA"},
+		{[]string{"deposit", "--amount", "5"}, `beerus: "--amount" should be a value, not a flag; usage: beerus deposit <nuban> --amount NAIRA [options]`},
+		{[]string{"deposit"}, "beerus: usage: beerus deposit <nuban> --amount NAIRA [options]"},
 		{[]string{"deposit", "0000000000", "--bank", "bank-a", "--amount", "5"}, "beerus: No such account."},
 		{[]string{"deposit", a1, "--bank", "bank-z", "--amount", "5"}, "beerus: No such bank."},
 		{[]string{"withdraw", a2, "--bank", "bank-a", "--amount", "999999"}, "beerus: The account does not have enough money."},
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", a1, "--amount", "5"}, "beerus: The from and to accounts are the same."},
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", "9999999999", "--to-bank", "bank-b", "--amount", "5"}, "beerus: That is not a valid account at Bank B, so nothing was debited."},
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-z", "--amount", "5"}, `beerus: Find bank "bank-z": not in the NIBSS directory.`},
-		{[]string{"transfer", "--bank", "bank-a", "--from", a1}, "beerus: --from, --to and --amount are required; usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT] [--dry-run]"},
-		{[]string{"transfer", "--bogus"}, "beerus: flag provided but not defined: -bogus; usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [--from-bank ID] [--to-bank ID] [--narration TEXT] [--dry-run]"},
-		{[]string{"customer", "create", "--bank", "bank-a", "--name", "X"}, "beerus: --name, --phone and --dob are required; usage: beerus customer create --name N --phone P --dob YYYY-MM-DD [--username U --password-stdin] | close <id>"},
+		{[]string{"transfer", "--bank", "bank-a", "--from", a1}, "beerus: --from, --to and --amount are required; usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [options]"},
+		{[]string{"transfer", "--bogus"}, "beerus: flag provided but not defined: -bogus; usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [options]"},
+		{[]string{"customer", "create", "--bank", "bank-a", "--name", "X"}, "beerus: --name, --phone and --dob are required; usage: beerus customer create --name NAME --phone PHONE --dob YYYY-MM-DD [options]"},
 		{[]string{"customer", "create", "--bank", "bank-a", "--name", "X", "--phone", "08031234567", "--dob", "soon"}, `beerus: Dob "soon" must be a date like 1990-04-21.`},
 		{[]string{"customer", "close", adaID, "--bank", "bank-a"}, "beerus: Customer has open accounts: customer " + adaID + " still has 2 open accounts; close them first."},
 		{[]string{"customer", "close", "cus_none", "--bank", "bank-a"}, "beerus: No such customer."},
-		{[]string{"account", "open", "--bank", "bank-a", "--customer", adaID}, "beerus: --customer and --type are required; usage: beerus account open --customer ID [--type current|savings] | close <nuban>"},
+		{[]string{"account", "open", "--bank", "bank-a", "--customer", adaID}, "beerus: --customer and --type are required; usage: beerus account open --customer ID --type current|savings [options]"},
 		{[]string{"account", "close", a1, "--bank", "bank-a"}, "beerus: Account balance is not zero: account " + a1 + " holds ₦1,957.25; move it out by transfer or cash first."},
-		{[]string{"account"}, "beerus: usage: beerus account open --customer ID [--type current|savings] | close <nuban>"},
+		{[]string{"account"}, "beerus: usage: beerus account open|close"},
 		{[]string{"accounts", "--bank", "bank-a", "--limit", "0"}, "beerus: Limit must be a number from 1 to 1000."},
 		{[]string{"accounts", "--bank", "bank-a", "--cursor", "junk"}, "beerus: That cursor is not valid. Use next_cursor from the last page."},
 		{[]string{"statement", a1, "--bank", "bank-a", "--from", "tomorrow"}, `beerus: From "tomorrow" must be a date like 2026-03-01.`},
@@ -308,9 +313,9 @@ func TestBankCLI(t *testing.T) {
 		{[]string{"fault", "down", "--bank", "bank-b", "--for", "soon"}, `beerus: for "soon" is not a duration above zero, such as 1h`},
 		{[]string{"fault", "down", "--bank", "bank-z"}, "beerus: No such bank."},
 		{[]string{"fault", "clear", "--bank", "bank-z"}, `beerus: No bank "bank-z".`},
-		{[]string{"fault", "sideways"}, "beerus: usage: beerus fault down [--bank ID] [--for 1h] | timeout [--bank ID] --outcome credited|failed|unknown [--count N] | list [--bank ID] | clear [--bank ID]"},
+		{[]string{"fault", "sideways"}, "beerus: usage: beerus fault down|timeout|list|clear"},
 		{[]string{"nip", "status", "000000000000"}, "beerus: No NIP session has that ID."},
-		{[]string{"nip", "status"}, "beerus: usage: beerus nip status <session_id> | settle-now | name-enquiry <bank_code> <nuban> | participants | positions | settlement"},
+		{[]string{"nip", "status"}, "beerus: usage: beerus nip status <session_id> [options]"},
 		{[]string{"use"}, "beerus: usage: beerus use <bank>"},
 		{[]string{"use", "bank-z"}, `beerus: bank "bank-z" is not in this setup; the banks are bank-a, bank-b`},
 	}

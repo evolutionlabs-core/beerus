@@ -206,13 +206,8 @@ func TestStory(t *testing.T) {
 	if got := c.ok("get", "banks"); !regexp.MustCompile(`^ID +NAME +PHASE +READY +GEN +MESSAGE\nbank-a +Bank A +active +yes +1 *\nbank-b +Bank B +active +yes +1 *\nbank-c +Bank C +active +yes +1 *\n$`).MatchString(got) {
 		t.Errorf("get banks after up: %q", got)
 	}
-	if got := c.ok("clock"); !regexp.MustCompile(`^\{\n  "business_date": "\d{4}-\d\d-\d\d",\n  "business_time": "\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?\+01:00",\n  "world_id": "wld_\w+"\n\}\n$`).MatchString(got) {
+	if got := c.fails("clock"); got != "beerus: unknown command \"clock\". Run beerus help." {
 		t.Errorf("clock: %q", got)
-	}
-	for _, args := range [][]string{{"advance", "1h"}, {"pace", "0"}} {
-		if got := c.fails(append([]string{"clock"}, args...)...); got != "beerus: usage: beerus clock" {
-			t.Errorf("clock %s: %q", args[0], got)
-		}
 	}
 
 	t.Setenv("BEERUS_CONTRACT_DIR", dir)
@@ -290,7 +285,7 @@ func TestStory(t *testing.T) {
 	s.people["adaeze@bank-b"] = persona{ID: "adaeze", Bank: "bank-b", Name: "Adaeze Okafor", Username: "adaeze", Password: "beerus-test-adaeze", Customer: adaB, BVN: bvn, Accounts: []string{nubAdaB}}
 	conn := s.connect("adaeze", "bank-b", s.today().AddDays(-3))
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
-	snapshot := fmt.Sprint(c.json("snapshot", "take", "before-removal")["id"])
+	snapshot := fmt.Sprint(c.printedJSON("snapshot", "take", "before-removal")["id"])
 
 	sh.expect("beerus transfer --from "+nubA+" --to "+nubChidi+" --to-bank bank-b --amount 2000", `Sending ₦2,000\.00 to Chidi Okafor at Bank B\.\nSession \d+: success at `+hm+` WAT\nTotal debit ₦2,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦487,957\.00\.\n`)
 	sh.expect("beerus fault timeout --bank bank-b --outcome credited", `Fault flt_\w+ on bank-b: the next transfer times out \(outcome credited\)\.\n`+at)

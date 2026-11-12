@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -19,14 +18,14 @@ func cmdReset(args []string, out io.Writer) error {
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		name, args = args[0], args[1:]
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags("reset", fs, args); err != nil {
 		return err
 	}
 	if name == "" && fs.NArg() > 0 {
 		name = fs.Arg(0)
 	}
 	if name == "" {
-		return errors.New("usage: beerus reset <setup-name> [--dir .beerus] [--json]")
+		return usageError("reset")
 	}
 	t, err := connect.FindResetTarget(*dir)
 	if err != nil {

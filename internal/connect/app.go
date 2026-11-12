@@ -713,14 +713,3 @@ func (a *App) RevokeAtBank(connID string) error {
 	a.flushEvents()
 	return nil
 }
-
-func (a *App) ForceStatus(connID, status, code string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	c, ok := a.st.Connections[connID]
-	if !ok {
-		return errNotFound
-	}
-	a.setStatus(c, status, code)
-	return nil
-}

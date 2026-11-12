@@ -14,10 +14,16 @@ import (
 
 const trustName = "Beerus CBN Trust Anchor"
 
-func cmdTrust(args []string, add bool) error {
-	fs := flag.NewFlagSet("trust", flag.ExitOnError)
+func cmdTrust(add bool, args []string) error {
+	path := "untrust"
+	if add {
+		path = "trust"
+	}
+	fs := flag.NewFlagSet(path, flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	fs.Parse(args)
+	if _, err := parseAfter(path, fs, args, 0); err != nil {
+		return err
+	}
 	c, err := connect.LoadConfig(*dir)
 	if err != nil {
 		return err

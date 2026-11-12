@@ -1,5 +1,0 @@
-name: bank-b-suspension
-description: Bank B is suspended and then resumed, so partners see a short outage.
-steps:
-  - suspend: bank-b
-  - resume: bank-b

@@ -117,10 +117,11 @@ func noBankError() error {
 }
 
 func cmdUse(args []string) error {
-	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
-		return errors.New("usage: beerus use <bank>")
+	pos, err := noFlags("use", args, 1)
+	if err != nil {
+		return err
 	}
-	id := args[0]
+	id := pos[0]
 	c, err := newCtl()
 	if err != nil {
 		return err
