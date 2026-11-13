@@ -795,7 +795,7 @@ func (a *App) roomPurgeBank(w http.ResponseWriter, r *http.Request) {
 			msg = strings.ToUpper(msg[:1]) + msg[1:] + "."
 		}
 	}
-	imp, err := a.PurgeImpact(id)
+	imp, err := a.PurgeImpact(r.Context(), id)
 	if err != nil && !errors.Is(err, errNotFound) {
 		a.roomFail(w, r, err)
 		return

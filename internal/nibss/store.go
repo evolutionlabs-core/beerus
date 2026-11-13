@@ -240,22 +240,3 @@ func (s *Store) SetStatus(ctx context.Context, id, status string) error {
 		return nil
 	})
 }
-
-func (s *Store) Retire(ctx context.Context, code, retiredID string) error {
-	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		in, err := institution(ctx, tx, code, "FOR UPDATE")
-		if err != nil {
-			return err
-		}
-		if in.Status != StatusRemoved {
-			return fmt.Errorf("institution %s is %s, so its id cannot be retired: %w", in.ID, in.Status, errTransition)
-		}
-		if in.ID == retiredID {
-			return nil
-		}
-		if _, err := tx.Exec(ctx, `UPDATE institutions SET id = $2, updated_at = now() WHERE nip_code = $1`, code, retiredID); err != nil {
-			return fmt.Errorf("retire id of institution %s: %w", in.ID, err)
-		}
-		return nil
-	})
-}

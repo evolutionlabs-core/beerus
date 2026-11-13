@@ -73,17 +73,6 @@ func TestRegisterRefusals(t *testing.T) {
 	if err := s.Register(ctx, member("bank-y", "Gone Bank", "999032", "932")); err != nil {
 		t.Fatalf("a removed bank's name is free again: %v", err)
 	}
-	for range 2 {
-		if err := s.Retire(ctx, "999009", "bank-gone-999009"); err != nil {
-			t.Fatalf("retire: %v", err)
-		}
-	}
-	if err := s.Register(ctx, member("bank-gone", "Gone Again", "999033", "933")); err != nil {
-		t.Fatalf("a retired id is free again: %v", err)
-	}
-	if err := s.Retire(ctx, "999033", "bank-gone-999033"); err == nil {
-		t.Fatal("an active bank must not be retired")
-	}
 	suspended := member("bank-x", "X", "999031", "931")
 	suspended.Status = StatusSuspended
 	wantErr(t, s.Register(ctx, suspended), "bank bank-x registers as active, not suspended; use SetStatus to change it")

@@ -28,11 +28,10 @@ const (
 )
 
 type Profile struct {
-	ID         string
-	Name       string
-	NIPCode    string
-	NUBANCode  string
-	CBNAccount string
+	ID        string
+	Name      string
+	NIPCode   string
+	NUBANCode string
 }
 
 type Bank struct {

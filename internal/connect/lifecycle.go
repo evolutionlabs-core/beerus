@@ -186,6 +186,9 @@ func (a *App) freeID(ctx context.Context, slug string) (string, error) {
 	for _, in := range removed {
 		taken[in.ID] = true
 	}
+	for _, b := range a.bankList() {
+		taken[b.ID] = true
+	}
 	id := slug
 	for n := 2; taken[id]; n++ {
 		id = fmt.Sprintf("%s-%d", slug, n)

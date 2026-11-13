@@ -38,12 +38,12 @@ func (a *App) wantsSettleNow(r setup.Resource) bool {
 	return slices.Contains(a.st.SettleNow, resourceKey(r))
 }
 
-func (a *App) settleInflight(_ context.Context, r setup.Resource) (*setup.Condition, error) {
-	return a.settleWait(r)
+func (a *App) settleInflight(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
+	return a.settleWait(ctx, r)
 }
 
-func (a *App) settleMoves(_ context.Context, r setup.Resource) (*setup.Condition, error) {
-	cond, err := a.settleWait(r)
+func (a *App) settleMoves(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
+	cond, err := a.settleWait(ctx, r)
 	if cond != nil || err != nil {
 		return cond, err
 	}
@@ -67,25 +67,24 @@ func (a *App) settleMoves(_ context.Context, r setup.Resource) (*setup.Condition
 	return nil, nil
 }
 
-func (a *App) settleWait(r setup.Resource) (*setup.Condition, error) {
+func (a *App) settleWait(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	if a.wantsSettleNow(r) {
 		if _, err := a.settleGated(a.clock.Now(), true); err != nil {
 			return nil, fmt.Errorf("run the extra settlement session: %w", err)
 		}
 	}
-	msg, err := a.inflightWith(r.Allocated.NIPCode, r.ID)
+	msg, err := a.inflightWith(ctx, r.Allocated.NIPCode, r.ID)
 	if err != nil || msg == "" {
 		return nil, err
 	}
 	return a.blocked(setup.ReasonSettlementPending, "%s", msg), nil
 }
 
-func (a *App) inflightWith(code, id string) (string, error) {
+func (a *App) inflightWith(ctx context.Context, code, id string) (string, error) {
 	sw := a.nibssStore()
 	if sw == nil {
 		return "", errors.New("NIBSS is not open, so open NIP sessions cannot be checked; try again soon")
 	}
-	ctx := context.Background()
 	open, err := sw.Open(ctx)
 	if err != nil {
 		return "", fmt.Errorf("check open NIP sessions: %w", err)

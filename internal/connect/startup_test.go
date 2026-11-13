@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -145,7 +146,7 @@ func TestStateFromAFutureClockIsRefused(t *testing.T) {
 		t.Fatalf("New with an old frozen clock: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := app.DropBankDatabases(); err != nil {
+		if err := app.DropBankDatabases(context.WithoutCancel(t.Context())); err != nil {
 			t.Errorf("drop databases: %v", err)
 		}
 	})

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -26,7 +25,7 @@ type PurgeImpact struct {
 	Blockers    []string   `json:"blockers"`
 }
 
-func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
+func (a *App) PurgeImpact(ctx context.Context, id string) (PurgeImpact, error) {
 	st, ok := a.bankStatus(id)
 	banks := a.bankList()
 	b := findBank(banks, id)
@@ -43,7 +42,7 @@ func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
 			out.Blockers = append(out.Blockers, other.Name+" settles through this bank; purge it first")
 		}
 	}
-	waiting, err := a.inflightWith(b.NIPCode, id)
+	waiting, err := a.inflightWith(ctx, b.NIPCode, id)
 	if err != nil {
 		return PurgeImpact{}, err
 	}
@@ -92,7 +91,7 @@ func (a *App) PurgeBank(id string, settleNow bool) (setup.Resource, error) {
 
 func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
-	waiting, err := a.inflightWith(r.Allocated.NIPCode, id)
+	waiting, err := a.inflightWith(ctx, r.Allocated.NIPCode, id)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +115,7 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	var errs []error
 	switch {
 	case ls != nil:
-		errs = append(errs, ls.Drop())
+		errs = append(errs, ls.Drop(ctx))
 	case r.Allocated.Database != "":
 		errs = append(errs, store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{r.Allocated.Database}))
 	}
@@ -127,15 +126,9 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	delete(a.obs, id)
 	a.obMu.Unlock()
 	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.removeMember(ctx, id))
-	a.dropBankRows(id, retiredID(r))
+	a.dropBankRows(id)
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("purge %s: %w", id, err)
-	}
-	if err := a.retireMember(ctx, r); err != nil {
-		return nil, err
-	}
-	if err := a.retireConsents(ctx, r); err != nil {
-		return nil, err
 	}
 	tomb, err := a.readBackPurge(ctx, r)
 	if err != nil {
@@ -145,11 +138,6 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 		st.Applied.Spec.Banks = slices.DeleteFunc(st.Applied.Spec.Banks, func(x setup.Bank) bool { return x.ID == id })
 		st.Resources = slices.DeleteFunc(st.Resources, func(x setup.Resource) bool { return x.Kind == setup.KindBank && x.ID == id })
 		keepTombstone(st, tomb)
-		for i := range st.Closures {
-			if st.Closures[i].Bank == id {
-				st.Closures[i].Bank = retiredID(r)
-			}
-		}
 		return true, resum(st)
 	}); err != nil {
 		return nil, err
@@ -165,16 +153,14 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	return nil, nil
 }
 
-func (a *App) dropBankRows(id, retired string) {
+func (a *App) dropBankRows(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for cid, c := range a.st.Connections {
 		if c.Institution == id {
 			a.vaultDrop(cid)
-			c.Institution = retired
 		}
 	}
-	a.retireAccounts(id, retired)
 	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *Fault) bool { return f.Bank == id })
 	for lid, l := range a.st.LinkSessions {
 		if l.Institution == id {
@@ -182,89 +168,7 @@ func (a *App) dropBankRows(id, retired string) {
 		}
 	}
 	a.st.Revokes = slices.DeleteFunc(a.st.Revokes, func(p PendingRevoke) bool { return p.Bank == id })
-	a.regMu.Lock()
-	for i := range a.st.ConsentLedger {
-		if a.st.ConsentLedger[i].Bank == id {
-			a.st.ConsentLedger[i].Bank = retired
-		}
-	}
-	a.regMu.Unlock()
 	a.dirty()
-}
-
-func (a *App) retireAccounts(id, retired string) {
-	prefix := id + ":"
-	moved := map[string]string{}
-	for oldID, rec := range a.st.Accounts {
-		if strings.HasPrefix(rec.Key, prefix) {
-			moved[oldID] = AccountID(rec.PartnerID, retired, strings.TrimPrefix(rec.Key, prefix))
-		}
-	}
-	for oldID, newID := range moved {
-		rec := a.st.Accounts[oldID]
-		delete(a.st.Accounts, oldID)
-		rec.ID = newID
-		rec.Key = acctKey(retired, strings.TrimPrefix(rec.Key, prefix))
-		a.st.Accounts[newID] = rec
-		if f, ok := a.st.Feeds[oldID]; ok {
-			delete(a.st.Feeds, oldID)
-			for key, line := range f.Lines {
-				line.AccountID = newID
-				f.Lines[key] = line
-			}
-			for i := range f.Log {
-				f.Log[i].Txn.AccountID = newID
-			}
-			a.st.Feeds[newID] = f
-		}
-	}
-	for _, ref := range a.st.Refreshes {
-		if newID, ok := moved[ref.AccountID]; ok {
-			ref.AccountID = newID
-		}
-	}
-	for _, c := range a.st.Connections {
-		for i, accID := range c.AccountIDs {
-			if newID, ok := moved[accID]; ok {
-				c.AccountIDs[i] = newID
-			}
-		}
-	}
-	for i := range a.st.Access {
-		ev := &a.st.Access[i]
-		if newID, ok := moved[ev.AccountID]; ok {
-			ev.AccountID = newID
-		}
-		if strings.HasPrefix(ev.Key, prefix) {
-			ev.Key = acctKey(retired, strings.TrimPrefix(ev.Key, prefix))
-		}
-	}
-}
-
-func (a *App) retireMember(ctx context.Context, r setup.Resource) error {
-	sw := a.nibssStore()
-	if sw == nil {
-		return errors.New("NIBSS is not open, so the id of the removed bank cannot be retired; try again soon")
-	}
-	if err := sw.Retire(ctx, r.Allocated.NIPCode, retiredID(r)); err != nil {
-		return fmt.Errorf("retire the NIBSS id of %s: %w", r.ID, err)
-	}
-	return nil
-}
-
-func (a *App) retireConsents(ctx context.Context, r setup.Resource) error {
-	sw := a.nibssStore()
-	if sw == nil {
-		return errors.New("NIBSS is not open, so the consent history of the removed bank cannot be kept; try again soon")
-	}
-	if err := sw.RetireConsents(ctx, r.ID, retiredID(r)); err != nil {
-		return fmt.Errorf("retire the NIBSS consent history of %s: %w", r.ID, err)
-	}
-	return nil
-}
-
-func retiredID(r setup.Resource) string {
-	return r.ID + "-" + r.Allocated.NIPCode
 }
 
 func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nibss.Institution, error) {
@@ -363,7 +267,7 @@ func (a *App) dropPartnerRows(id string) {
 }
 
 func (a *App) ctlPurgeImpact(w http.ResponseWriter, r *http.Request) {
-	imp, err := a.PurgeImpact(r.PathValue("id"))
+	imp, err := a.PurgeImpact(r.Context(), r.PathValue("id"))
 	if err != nil {
 		a.bankError(w, r, err)
 		return

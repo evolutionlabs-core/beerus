@@ -211,7 +211,7 @@ func newTestApp(t *testing.T, o Options) *App {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := a.DropBankDatabases(); err != nil {
+		if err := a.DropBankDatabases(context.WithoutCancel(t.Context())); err != nil {
 			t.Errorf("drop databases: %v", err)
 		}
 	})

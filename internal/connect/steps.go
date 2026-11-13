@@ -321,7 +321,7 @@ func (a *App) cbnMember(b *config.Bank) error {
 	if r == nil {
 		return errors.New("the CBN ledger is not open yet")
 	}
-	if err := r.member(cbnKey(b.CBNAccount, b.ID), bank.GenesisSettlement, bank.GenesisVault); err != nil {
+	if err := r.member(b.ID, bank.GenesisSettlement, bank.GenesisVault); err != nil {
 		return fmt.Errorf("open the CBN settlement account of %s: %w", b.ID, err)
 	}
 	return nil

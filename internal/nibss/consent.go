@@ -73,17 +73,3 @@ ORDER BY seq DESC LIMIT $3`, bank, before, limit+1)
 	out = out[:limit]
 	return out, strconv.FormatInt(out[limit-1].Seq, 10), nil
 }
-
-func (s *Store) RetireConsents(ctx context.Context, bank, retired string) error {
-	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		for _, id := range []string{bank, retired} {
-			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('consent_ledger:' || $1))`, id); err != nil {
-				return fmt.Errorf("lock consent ledger for %s: %w", id, err)
-			}
-		}
-		if _, err := tx.Exec(ctx, `UPDATE consent_ledger SET bank = $2 WHERE bank = $1`, bank, retired); err != nil {
-			return fmt.Errorf("retire consent ledger of %s: %w", bank, err)
-		}
-		return nil
-	})
-}

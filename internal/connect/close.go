@@ -593,11 +593,6 @@ func (a *App) Closure(id string) (setup.Closure, error) {
 			return c, nil
 		}
 	}
-	if findResource(&st, setup.KindBank, id) == nil {
-		if c, ok := st.PurgedClosure(id); ok {
-			return c, nil
-		}
-	}
 	return setup.Closure{}, errNotFound
 }
 

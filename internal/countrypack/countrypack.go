@@ -57,14 +57,6 @@ func (t CodeTier) NUBAN(n int) string {
 	return fmt.Sprintf("%s%0*d", t.NUBANPrefix, t.NUBANDigits, n)
 }
 
-func (t CodeTier) NUBANKey(n int) string {
-	code := t.NUBAN(n)
-	if len(code) == 5 {
-		return "9" + code
-	}
-	return fmt.Sprintf("%06s", code)
-}
-
 type BankCodes struct {
 	Categories map[string][]CodeTier `yaml:",inline"`
 	Source     string                `yaml:"source"`

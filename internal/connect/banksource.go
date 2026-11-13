@@ -31,7 +31,7 @@ type ledgerSource struct {
 }
 
 func profileOf(b *config.Bank) bank.Profile {
-	return bank.Profile{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, CBNAccount: b.CBNAccount}
+	return bank.Profile{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode}
 }
 
 func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, b *config.Bank) (*ledgerSource, error) {
@@ -162,10 +162,10 @@ func (s *ledgerSource) reopen() error {
 	return nil
 }
 
-func (a *App) DropBankDatabases() error {
+func (a *App) DropBankDatabases(ctx context.Context) error {
 	var errs []error
 	for _, l := range a.ledgers {
-		if err := l.Drop(); err != nil {
+		if err := l.Drop(ctx); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -186,9 +186,9 @@ func (s *ledgerSource) Close() {
 	s.st.Close()
 }
 
-func (s *ledgerSource) Drop() error {
+func (s *ledgerSource) Drop(ctx context.Context) error {
 	name := s.st.Name()
-	if err := s.st.Drop(context.Background()); err != nil {
+	if err := s.st.Drop(ctx); err != nil {
 		return err
 	}
 	return s.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})

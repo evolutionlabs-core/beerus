@@ -41,8 +41,8 @@ func (e planError) Error() string { return e.msg }
 func (e planError) Unwrap() error { return e.kind }
 
 type codes struct {
-	nip, nuban, nubanKey string
-	allocated            []string
+	nip, nuban string
+	allocated  []string
 }
 
 type planner struct {
@@ -230,7 +230,7 @@ func (p *planner) allocate() map[string]codes {
 	}
 	markHeld := func(in nibss.Institution) {
 		if err := markNUBAN(in.NUBANCode); err != nil {
-			p.fail("", nil, "NIBSS holds a bad NUBAN code %q for %s", in.NUBANCode, in.ID)
+			p.fail("", nil, "NIBSS holds a bad NUBAN code %q for %s: %v. Run beerus reset to start again.", in.NUBANCode, in.ID, err)
 		}
 	}
 	for _, in := range p.members {
@@ -245,7 +245,7 @@ func (p *planner) allocate() map[string]codes {
 		nip, nuban := p.appliedCodes(b)
 		usedNIP[nip] = true
 		if err := markNUBAN(nuban); err != nil {
-			p.fail("banks["+b.ID+"]", nil, "banks[%s]: held NUBAN code %q is bad", b.ID, nuban)
+			p.fail("banks["+b.ID+"]", nil, "banks[%s]: its NUBAN code %q is bad: %v. Run beerus reset to start again.", b.ID, nuban, err)
 		}
 	}
 	out := map[string]codes{}
@@ -259,7 +259,9 @@ func (p *planner) allocate() map[string]codes {
 			continue
 		}
 		usedNIP[c.nip] = true
-		usedNUBAN[c.nubanKey] = true
+		if err := markNUBAN(c.nuban); err != nil {
+			p.fail("banks["+b.ID+"]", nil, "banks[%s]: the country pack makes a bad NUBAN code %q: %v", b.ID, c.nuban, err)
+		}
 		out[b.ID] = c
 	}
 	return out
@@ -280,9 +282,13 @@ func (p *planner) nextCodes(b Bank, usedNIP, usedNUBAN map[string]bool) (codes, 
 	for _, t := range tiers {
 		for n := t.First; n <= t.Last; n++ {
 			nip, nuban := t.NIP(n), t.NUBAN(n)
-			key := t.NUBANKey(n)
-			if !usedNIP[nip] && !usedNUBAN[key] {
-				return codes{nip: nip, nuban: nuban, nubanKey: key, allocated: []string{fieldNIPCode, fieldNUBANCode}}, true
+			normal, err := world.NormaliseBankCode(nuban)
+			if err != nil {
+				p.fail("banks["+b.ID+"]", nil, "banks[%s]: the country pack makes a bad NUBAN code %q: %v", b.ID, nuban, err)
+				return codes{}, false
+			}
+			if !usedNIP[nip] && !usedNUBAN[normal] {
+				return codes{nip: nip, nuban: nuban, allocated: []string{fieldNIPCode, fieldNUBANCode}}, true
 			}
 		}
 		total += t.Last - t.First + 1

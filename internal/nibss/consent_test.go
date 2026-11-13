@@ -83,27 +83,3 @@ func TestConsentLedgerRejectsBadInput(t *testing.T) {
 		t.Fatalf("unknown consent status: %v", err)
 	}
 }
-
-func TestRetireConsentsRekeysAndAllowsAFreshHistory(t *testing.T) {
-	ctx := t.Context()
-	s := testStore(t)
-	if err := s.RecordConsent(ctx, consent("bank-a", "c1", 5, t0)); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		if err := s.RetireConsents(ctx, "bank-a", "bank-a-000001"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := s.RecordConsent(ctx, consent("bank-a", "c2", 1, t0)); err != nil {
-		t.Fatal(err)
-	}
-	old, _, err := s.ConsentLedger(ctx, "bank-a-000001", 10, "")
-	if err != nil || len(old) != 1 || old[0].ConsentID != "c1" {
-		t.Fatalf("retired history: %+v %v", old, err)
-	}
-	fresh, _, err := s.ConsentLedger(ctx, "bank-a", 10, "")
-	if err != nil || len(fresh) != 1 || fresh[0].ConsentID != "c2" {
-		t.Fatalf("fresh history: %+v %v", fresh, err)
-	}
-}

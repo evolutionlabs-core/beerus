@@ -249,12 +249,11 @@ type Resource struct {
 }
 
 type Allocation struct {
-	NIPCode    string `json:"nip_code,omitempty"`
-	NUBANCode  string `json:"nuban_code,omitempty"`
-	CBNAccount string `json:"cbn_account,omitempty"`
-	Database   string `json:"database,omitempty"`
-	Port       int    `json:"port,omitempty"`
-	APIPort    int    `json:"api_port,omitempty"`
+	NIPCode   string `json:"nip_code,omitempty"`
+	NUBANCode string `json:"nuban_code,omitempty"`
+	Database  string `json:"database,omitempty"`
+	Port      int    `json:"port,omitempty"`
+	APIPort   int    `json:"api_port,omitempty"`
 }
 
 type Owned struct {

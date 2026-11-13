@@ -464,7 +464,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	if j := d(cmdDescribe, "", false, "bank", "bank-b", "--json"); j.code != 0 || json.Unmarshal([]byte(j.out), &kept) != nil || len(kept.Lines) != 1 || kept.Lines[0].ToNUBAN != adaNUBAN || kept.Lines[0].AmountMinor != 500_000 || kept.Lines[0].Outcome != setup.OutcomeTransferred {
 		t.Fatalf("describe --json after the purge: %+v %+v", j, kept)
 	}
-	if tombs := mustStatus(t, dir).Tombstones; len(tombs) != 1 || tombs[0].ID != "bank-b-"+tombs[0].NIPCode || tombs[0].Status != "removed" {
+	if tombs := mustStatus(t, dir).Tombstones; len(tombs) != 1 || tombs[0].ID != "bank-b" || tombs[0].Status != "removed" {
 		t.Fatalf("tombstones cached after the purge: %+v", tombs)
 	}
 	if kept, err := os.ReadFile(filepath.Join(dir, connect.SpecFile)); err != nil || strings.Contains(string(kept), "bank-b") || !strings.Contains(string(kept), "id: bank-a") || !strings.Contains(string(kept), "id: bank-c") {

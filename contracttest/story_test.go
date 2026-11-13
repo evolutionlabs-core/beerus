@@ -276,7 +276,7 @@ func TestStory(t *testing.T) {
 	sh.expect("beerus transfer --from "+nubA+" --to "+nubTunde+" --to-bank bank-c --amount 4000", `Sending ₦4,000\.00 to Tunde Motors at Bank C\.\nSession \d+: success at `+hm+` WAT\nTotal debit ₦4,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦489,967\.75\.\n`)
 	dropBank(t, dir, "bank-c")
 	out1, err1, code1 := c.run("apply", "--prune", "--money", "transfer", "--to", "bank-a", "--settle-now", "--wait", "60s")
-	wantPlanC := "Setup story\n\n  - bank bank-c      remove   DESTRUCTIVE\n        stop routing; settle 1 open transfer (net ₦4,000.00);\n        transfer ₦7,000.00 for 1 customer to Bank A (on_remove); settle the moves;\n        drop 1 database. Its codes stay reserved.\n\nPlan: 1 to remove.\n"
+	wantPlanC := "Setup story\n\n  - bank bank-c      remove   DESTRUCTIVE\n        stop routing; settle 1 open transfer (net ₦4,000.00);\n        transfer ₦7,000.00 for 1 customer to Bank A (on_remove); settle the moves;\n        drop 1 database. Its ID and codes stay reserved.\n\nPlan: 1 to remove.\n"
 	if code1 != 0 || !regexp.MustCompile(`^`+quote(wantPlanC)+`Money of Bank C on `+hm+` WAT:\n  Tunde Motors +\d{10} +₦7,000\.00 +transferred to Bank A account \d{10}\n$`).MatchString(out1) || err1 != "" {
 		t.Fatalf("removing bank-c with --settle-now: exit %d, output %q, error %q", code1, out1, err1)
 	}
@@ -300,7 +300,7 @@ func TestStory(t *testing.T) {
 	}
 	settlePending := "SettlementPending: Waiting for the 00:00 NIP session to settle 2 transfers (net ₦2,300.00). Wait for it, or run beerus nip settle-now."
 	out2, err2, code2 := c.run("apply", "--prune", "--wait", "1s")
-	wantPlanB := "Setup story\n\n  - bank bank-b      remove   DESTRUCTIVE\n        stop routing; revoke 1 connection; settle 2 open transfers (net ₦2,300.00);\n        ₦8,300.00 for 2 customers needs a money decision: add on_remove or run with --money;\n        drop 1 database and 1 snapshot. Its codes stay reserved.\n\nPlan: 1 to remove.\n"
+	wantPlanB := "Setup story\n\n  - bank bank-b      remove   DESTRUCTIVE\n        stop routing; revoke 1 connection; settle 2 open transfers (net ₦2,300.00);\n        ₦8,300.00 for 2 customers needs a money decision: add on_remove or run with --money;\n        drop 1 database and 1 snapshot. Its ID and codes stay reserved.\n\nPlan: 1 to remove.\n"
 	if code2 != 3 || out2 != wantPlanB || !regexp.MustCompile(`^(bank bank-b: `+quote(settlePending)+`\n)?beerus: bank bank-b: `+quote(settlePending)+`$`).MatchString(err2) {
 		t.Fatalf("removing bank-b with --prune --wait 1s: exit %d, output %q, error %q", code2, out2, err2)
 	}
@@ -375,8 +375,8 @@ func TestStory(t *testing.T) {
 	if err := os.WriteFile(readd, []byte(fmt.Sprintf(storySpec, sink.srv.URL+"/webhooks")), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, errOut, code := c.run("diff", "-f", readd); code != 2 || !strings.Contains(got, "+ bank bank-b") {
-		t.Errorf("re-adding bank-b after its removal: exit %d, %q, %q", code, got, errOut)
+	if got := c.fails("apply", "-f", readd); !strings.Contains(got, "banks[bank-b].id bank-b belonged to a removed bank. Choose another id.") {
+		t.Errorf("re-adding bank-b after its removal: %q", got)
 	}
 	if got := c.ok("doctor"); !strings.HasSuffix(got, "Nothing is left behind.\n") {
 		t.Errorf("doctor: %q", got)

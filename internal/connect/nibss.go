@@ -97,7 +97,7 @@ func (a *App) syncDirectory(s *nibss.Store) error {
 			}
 		}
 	}
-	return a.refreshDirectory()
+	return a.refreshDirectory(ctx)
 }
 
 func nibssSnapshot(cfg *config.Config, id string) string {
@@ -190,7 +190,7 @@ func (a *App) registerMember(b *config.Bank) error {
 	}); err != nil {
 		return err
 	}
-	return a.refreshDirectory()
+	return a.refreshDirectory(ctx)
 }
 
 func (a *App) attachMember(ls *ledgerSource) {
@@ -212,7 +212,7 @@ func (a *App) setMemberStatus(ctx context.Context, id, status string) error {
 	if err := s.SetStatus(ctx, id, status); err != nil {
 		return fmt.Errorf("set NIBSS status of %s to %s: %w", id, status, err)
 	}
-	return a.refreshDirectory()
+	return a.refreshDirectory(ctx)
 }
 
 func (a *App) stopRouting(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
@@ -263,17 +263,17 @@ func (a *App) removeMember(ctx context.Context, id string) error {
 		}
 		cur = status
 	}
-	return a.refreshDirectory()
+	return a.refreshDirectory(ctx)
 }
 
-func (a *App) refreshDirectory() error {
+func (a *App) refreshDirectory(ctx context.Context) error {
 	a.mu.Lock()
 	s := a.nibss
 	a.mu.Unlock()
 	if s == nil {
 		return nil
 	}
-	list, err := s.Directory(context.Background())
+	list, err := s.Directory(ctx)
 	if err != nil {
 		return fmt.Errorf("read the NIBSS directory: %w", err)
 	}

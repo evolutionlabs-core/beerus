@@ -694,12 +694,11 @@ func admitBank(st *setup.Status, act setup.Action, ad *admission, fields map[str
 			Generation: gen,
 			Phase:      setup.PhaseProvisioning,
 			Allocated: setup.Allocation{
-				NIPCode:    fields[fieldNIPCode],
-				NUBANCode:  fields[fieldNUBANCode],
-				CBNAccount: fields[fieldNIPCode],
-				Database:   config.DatabaseName(ad.dir, act.ID),
-				Port:       ports[0],
-				APIPort:    ports[1],
+				NIPCode:   fields[fieldNIPCode],
+				NUBANCode: fields[fieldNUBANCode],
+				Database:  config.DatabaseName(ad.dir, act.ID),
+				Port:      ports[0],
+				APIPort:   ports[1],
 			},
 			Steps: map[string]string{setup.StepAllocate: stepDone},
 		}

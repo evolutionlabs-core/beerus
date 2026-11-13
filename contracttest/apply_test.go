@@ -169,8 +169,8 @@ func TestApplyFromTheSpec(t *testing.T) {
 	if got := total(home); got != held+10000 {
 		t.Fatalf("adaeze holds %d at bank-a after bank-c sent her money, want %d", got, held+10000)
 	}
-	if plan, err := post("/plan", withC, nil); err != nil || !strings.Contains(fmt.Sprint(plan["text"]), "+ bank bank-c") {
-		t.Fatalf("adding the removed bank back: %v %v", plan, err)
+	if _, err := post("/apply", withC, nil); err == nil || !strings.Contains(err.Error(), "banks[bank-c].id bank-c belonged to a removed bank. Choose another id.") {
+		t.Fatalf("adding the removed bank back: %v", err)
 	}
 
 	withP := applied()
