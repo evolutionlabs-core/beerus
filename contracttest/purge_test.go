@@ -212,9 +212,12 @@ func TestPurgeRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldCode := oldBank.Allocated.NIPCode
+	if oldBank.Allocated.CBNAccount != oldCode {
+		t.Fatalf("a bank from the init spec has CBN account %q, want %s", oldBank.Allocated.CBNAccount, oldCode)
+	}
 	s.ctl("POST", "/banks/bank-b/close", map[string]any{"money": "leave"})
 	s.waitPhase("bank-b", connect.PhaseClosed, 60*time.Second)
-	oldBalance := cbnBalance(t, s.cfg, "bank-b")
+	oldBalance := cbnBalance(t, s.cfg, oldCode)
 	snap := fmt.Sprint(s.ctl("POST", "/snapshots", map[string]string{"name": "closed"})["id"])
 	s.ctl("POST", "/banks/bank-b/purge", nil)
 	s.waitGone("bank", "bank-b")
@@ -243,7 +246,7 @@ func TestPurgeRules(t *testing.T) {
 	if got := cbnBalance(t, s.cfg, fresh.Allocated.CBNAccount); got != bank.GenesisSettlement {
 		t.Fatalf("the recreated bank has %d at the CBN, want %d", got, bank.GenesisSettlement)
 	}
-	if got := cbnBalance(t, s.cfg, "bank-b"); got != oldBalance {
+	if got := cbnBalance(t, s.cfg, oldCode); got != oldBalance {
 		t.Fatalf("the purged bank's CBN account holds %d, want %d", got, oldBalance)
 	}
 	for _, id := range []string{"bank-b", "bank-a"} {

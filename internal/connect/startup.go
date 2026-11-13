@@ -228,7 +228,7 @@ func allocateBanks(cfg *config.Config, st *setup.Status) error {
 			ID:         b.ID,
 			Generation: 1,
 			Phase:      setup.PhaseProvisioning,
-			Allocated:  setup.Allocation{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Database: config.DatabaseName(cfg.Dir, b.ID), Port: port, APIPort: api},
+			Allocated:  setup.Allocation{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, CBNAccount: b.NIPCode, Database: config.DatabaseName(cfg.Dir, b.ID), Port: port, APIPort: api},
 			Steps:      map[string]string{setup.StepAllocate: stepDone},
 		}
 		r.Owned = []setup.Owned{{Kind: ownedPort, Name: fmt.Sprint(port)}, {Kind: ownedPort, Name: fmt.Sprint(api)}}
