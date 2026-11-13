@@ -60,6 +60,7 @@ type Bank struct {
 	Type           string  `yaml:"type"`
 	NIPCode        string  `yaml:"nip_code"`
 	NUBANCode      string  `yaml:"nuban_code"`
+	CBNAccount     string  `yaml:"cbn_account,omitempty"`
 	HistoryDays    int     `yaml:"history_days"`
 	Port           int     `yaml:"port"`
 	APIPort        int     `yaml:"api_port,omitempty"`

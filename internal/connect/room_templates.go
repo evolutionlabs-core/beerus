@@ -262,7 +262,7 @@ const roomTemplates = `
 </ul>
 <h2 class="mt-6 text-[15px]">What stays</h2>
 <ul class="mt-3 list-disc space-y-1.5 pl-5 text-muted">
-<li>Its id, name, NIP code and NUBAN code stay reserved, because the other banks' history still refers to it</li>
+<li>Its NIP code and NUBAN code stay reserved, because the other banks' history still refers to it</li>
 <li>{{.Impact.Connections}} revoked Connect consent{{if ne .Impact.Connections 1}}s{{end}}, kept as history for partners</li>
 </ul>
 </section>

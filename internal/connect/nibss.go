@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
@@ -289,4 +292,30 @@ func (a *App) refreshDirectory() error {
 
 func (a *App) directoryLocked() *nip.Directory {
 	return nip.NewDirectory(a.members, nil)
+}
+
+const removedSuffix = " (removed)"
+
+func (a *App) markRemoved(ctx context.Context, lines []bank.FeedLine) error {
+	if !slices.ContainsFunc(lines, func(l bank.FeedLine) bool { return l.Counterparty != nil }) {
+		return nil
+	}
+	s := a.nibssStore()
+	if s == nil {
+		return nil
+	}
+	directory, err := s.Directory(ctx)
+	if err != nil {
+		return fmt.Errorf("read the NIBSS directory: %w", err)
+	}
+	removed := map[string]bool{}
+	for _, in := range directory {
+		removed[in.NIPCode] = in.Status == nibss.StatusRemoved
+	}
+	for _, l := range lines {
+		if cp := l.Counterparty; cp != nil && removed[cp.BankCode] && !strings.HasSuffix(cp.BankName, removedSuffix) {
+			cp.BankName += removedSuffix
+		}
+	}
+	return nil
 }

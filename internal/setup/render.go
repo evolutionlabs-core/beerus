@@ -206,7 +206,7 @@ func details(a Action) []string {
 		if len(drop) > 0 {
 			groups = append(groups, []string{"drop " + list(drop)})
 		}
-		last = "Its ID, name and codes stay reserved."
+		last = "Its codes stay reserved."
 	} else {
 		last = "Its database and history stay."
 	}

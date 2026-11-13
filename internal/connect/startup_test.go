@@ -59,7 +59,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 	want := []struct {
 		id, typ, nip, nuban string
 		port, api           int
-	}{{"bank-a", "commercial", "999001", "901", 7445, 7455}, {"bank-b", "digital", "999002", "902", 7446, 7456}}
+	}{{"bank-a", "commercial", "000001", "001", 7445, 7455}, {"bank-b", "digital", "000002", "002", 7446, 7456}}
 	for i, w := range want {
 		b := cfg.Banks[i]
 		if b.ID != w.id || b.Type != w.typ || b.NIPCode != w.nip || b.NUBANCode != w.nuban || b.Port != w.port || b.APIPort != w.api || b.Database == "" {
@@ -79,7 +79,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 	if st.SetupKey == 0 || st.Setup != "beerus" || st.AppliedSHA256 == "" {
 		t.Fatalf("status: key %d setup %q sum %q", st.SetupKey, st.Setup, st.AppliedSHA256)
 	}
-	if st.Applied.Spec.Banks[0].NIPCode != "999001" {
+	if st.Applied.Spec.Banks[0].NIPCode != "000001" {
 		t.Errorf("applied codes are not pinned: %+v", st.Applied.Spec.Banks[0])
 	}
 	r := findResource(&st, setup.KindBank, "bank-b")

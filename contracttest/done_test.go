@@ -167,7 +167,7 @@ func TestDoneStory(t *testing.T) {
 	pay, _, err := s.ctlWith("POST", "/banks/bank-b/transfers", map[string]string{"from": chidiB, "to_bank": "bank-a", "to": current, "amount": "2500", "narration": "Cake order"}, nil)
 	check(err == nil, "payment: %v", err)
 	sid := fmt.Sprint(pay["session_id"])
-	check(len(sid) == 30 && pay["response_code"] == "00" && strings.HasPrefix(sid, "999002"), "payment reply: %v", pay)
+	check(len(sid) == 30 && pay["response_code"] == "00" && strings.HasPrefix(sid, "000002"), "payment reply: %v", pay)
 	s.syncNow()
 	feedA, _ = s.syncMore(idA, feedA, 500)
 	findBySession := func(st *feedState) map[string]any {

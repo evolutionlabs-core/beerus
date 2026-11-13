@@ -37,9 +37,6 @@ func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
 		return PurgeImpact{}, err
 	}
 	out := PurgeImpact{Bank: st, Database: b.Database, Snapshots: snaps, Blockers: []string{}}
-	if len(banks) == 1 {
-		out.Blockers = append(out.Blockers, "it is the only bank left; add another bank first")
-	}
 	for _, other := range banks {
 		if other.SettlesThrough == id {
 			out.Blockers = append(out.Blockers, other.Name+" settles through this bank; purge it first")
@@ -133,6 +130,9 @@ func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("purge %s: %w", id, err)
 	}
+	if err := a.retireMember(r); err != nil {
+		return nil, err
+	}
 	tomb, err := a.readBackPurge(r)
 	if err != nil {
 		return nil, err
@@ -171,6 +171,18 @@ func (a *App) dropBankRows(id string) {
 	}
 	a.st.Revokes = slices.DeleteFunc(a.st.Revokes, func(p PendingRevoke) bool { return p.Bank == id })
 	a.dirty()
+}
+
+func (a *App) retireMember(r setup.Resource) error {
+	sw := a.nibssStore()
+	if sw == nil {
+		return errors.New("NIBSS is not open, so the id of the removed bank cannot be retired; try again soon")
+	}
+	code := r.Allocated.NIPCode
+	if err := sw.Retire(context.Background(), code, r.ID+"-"+code); err != nil {
+		return fmt.Errorf("retire the NIBSS id of %s: %w", r.ID, err)
+	}
+	return nil
 }
 
 func (a *App) readBackPurge(r setup.Resource) (nibss.Institution, error) {

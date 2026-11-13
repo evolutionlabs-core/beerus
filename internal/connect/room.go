@@ -317,6 +317,10 @@ func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 		a.roomFail(w, r, err)
 		return
 	}
+	if err := a.markRemoved(ctx, ls); err != nil {
+		a.roomFail(w, r, err)
+		return
+	}
 	lines := []lineView{}
 	for _, l := range ls {
 		lines = append(lines, newLineView(bk.bank, l))
@@ -384,12 +388,20 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 		a.roomFail(w, r, err)
 		return
 	}
+	if err := a.markRemoved(ctx, []bank.FeedLine{l}); err != nil {
+		a.roomFail(w, r, err)
+		return
+	}
 	trace := []lineView{}
 	var debit, credit, charges int64
 	if l.SessionID != "" {
 		for _, other := range a.books() {
 			ls, err := other.ls.Bank().SessionLines(ctx, l.SessionID)
 			if err != nil {
+				a.roomFail(w, r, err)
+				return
+			}
+			if err := a.markRemoved(ctx, ls); err != nil {
 				a.roomFail(w, r, err)
 				return
 			}

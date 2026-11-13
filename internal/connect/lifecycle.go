@@ -111,8 +111,6 @@ type BankRequest struct {
 	Name           string `json:"name"`
 	ID             string `json:"id"`
 	Type           string `json:"type"`
-	NIPCode        string `json:"nip_code"`
-	NUBANCode      string `json:"nuban_code"`
 	HistoryDays    int    `json:"history_days"`
 	SettlesThrough string `json:"settles_through"`
 }
@@ -174,6 +172,25 @@ func (a *App) removedBanks() ([]nibss.Institution, error) {
 	return out, nil
 }
 
+func (a *App) freeID(slug string) (string, error) {
+	if slug == "" {
+		return slug, nil
+	}
+	removed, err := a.removedBanks()
+	if err != nil {
+		return "", err
+	}
+	taken := map[string]bool{}
+	for _, in := range removed {
+		taken[in.ID] = true
+	}
+	id := slug
+	for n := 2; taken[id]; n++ {
+		id = fmt.Sprintf("%s-%d", slug, n)
+	}
+	return id, nil
+}
+
 func (a *App) CreateBank(req BankRequest) (BankStatus, error) {
 	if req.HistoryDays != 0 {
 		return BankStatus{}, invalid("history_days can no longer be set; it follows the bank type")
@@ -181,7 +198,10 @@ func (a *App) CreateBank(req BankRequest) (BankStatus, error) {
 	name := strings.TrimSpace(req.Name)
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
-		id = strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
+		var err error
+		if id, err = a.freeID(strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")); err != nil {
+			return BankStatus{}, err
+		}
 	}
 	stored, err := a.ctl.status()
 	if err != nil {
@@ -191,7 +211,7 @@ func (a *App) CreateBank(req BankRequest) (BankStatus, error) {
 		return BankStatus{}, applyFail(http.StatusConflict, codeBeingRemoved, "banks[%s] is being removed and cannot be added back until removal finishes. Wait for it.", id)
 	}
 	err = a.applyEdit(func(sp *setup.Spec) error {
-		nb := setup.Bank{ID: id, Name: name, Type: orDefault(req.Type, "commercial"), NIPCode: req.NIPCode, NUBANCode: req.NUBANCode, SettlesThrough: req.SettlesThrough}
+		nb := setup.Bank{ID: id, Name: name, Type: orDefault(req.Type, "commercial"), SettlesThrough: req.SettlesThrough}
 		if nb.SettlesThrough == "" && nb.Type == "microfinance" {
 			for _, b := range sp.Spec.Banks {
 				if b.Type == "commercial" && b.State != setup.StateClosed {
@@ -321,12 +341,20 @@ func (a *App) bankStatus(id string) (BankStatus, bool) {
 }
 
 func (a *App) ctlCreateBank(w http.ResponseWriter, r *http.Request) {
-	var req BankRequest
+	var req struct {
+		BankRequest
+		NIPCode   string `json:"nip_code"`
+		NUBANCode string `json:"nuban_code"`
+	}
 	if err := decodeBody(r, &req); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"...","type":"commercial"}.`)
 		return
 	}
-	st, err := a.CreateBank(req)
+	if req.NIPCode != "" || req.NUBANCode != "" {
+		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", "nip_code and nuban_code are assigned by Beerus; leave them out")
+		return
+	}
+	st, err := a.CreateBank(req.BankRequest)
 	if err != nil {
 		a.bankError(w, r, err)
 		return

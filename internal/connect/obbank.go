@@ -324,6 +324,9 @@ func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking
 	if err != nil {
 		return nil, err
 	}
+	if err := d.a.markRemoved(context.Background(), rows); err != nil {
+		return nil, err
+	}
 	out := []openbanking.Txn{}
 	for _, p := range rows {
 		if p.ValueDate.Before(from) || p.ValueDate.After(to) {

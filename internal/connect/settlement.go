@@ -66,6 +66,10 @@ func (a *App) schedule() schedule {
 	return schedule{per: a.cfg.Sessions(), cal: a.cfg.Calendar()}
 }
 
+func cbnKey(account, id string) string {
+	return orDefault(account, id)
+}
+
 func settlementAccount(member string) string {
 	return "SETTLEMENT/" + member
 }
@@ -315,7 +319,7 @@ func (a *App) settleGated(now time.Time, adhoc bool) (int, error) {
 	ledgers := slices.Clone(a.ledgers)
 	banks := make([]string, 0, len(a.cfg.Banks))
 	for _, b := range a.cfg.Banks {
-		banks = append(banks, b.ID)
+		banks = append(banks, cbnKey(b.CBNAccount, b.ID))
 	}
 	sched := a.schedule()
 	a.mu.Unlock()
@@ -330,8 +334,8 @@ func (a *App) settleGated(now time.Time, adhoc bool) (int, error) {
 		return 0, nil
 	}
 	ctx := context.Background()
-	for _, id := range banks {
-		if err := r.member(id, bank.GenesisSettlement, bank.GenesisVault); err != nil {
+	for _, key := range banks {
+		if err := r.member(key, bank.GenesisSettlement, bank.GenesisVault); err != nil {
 			return 0, err
 		}
 	}
@@ -387,10 +391,11 @@ func postSettlement(r *rtgs, ledgers []*ledgerSource, x nibss.Settlement) error 
 	}
 	nets := map[string]*position{}
 	side := func(l *ledgerSource) *position {
-		p := nets[l.inst.ID]
+		key := cbnKey(l.inst.CBNAccount, l.inst.ID)
+		p := nets[key]
 		if p == nil {
 			p = &position{}
-			nets[l.inst.ID] = p
+			nets[key] = p
 		}
 		return p
 	}
@@ -403,7 +408,7 @@ func postSettlement(r *rtgs, ledgers []*ledgerSource, x nibss.Settlement) error 
 		side(to).inward += s.Amount
 	}
 	for _, l := range ledgers {
-		p := nets[l.inst.ID]
+		p := nets[cbnKey(l.inst.CBNAccount, l.inst.ID)]
 		if p == nil {
 			continue
 		}
@@ -545,6 +550,7 @@ func (s settlementBooks) check(l *ledgerSource) ([]string, error) {
 	var out []string
 	ctx := s.ctx
 	code, id := l.inst.NIPCode, l.inst.ID
+	key := cbnKey(l.inst.CBNAccount, id)
 	b := l.Bank()
 	posted, err := b.Settlements(ctx)
 	if err != nil {
@@ -557,11 +563,11 @@ func (s settlementBooks) check(l *ledgerSource) ([]string, error) {
 	for k := range posted {
 		keys[k] = true
 	}
-	for k := range s.cbnNets[id] {
+	for k := range s.cbnNets[key] {
 		keys[k] = true
 	}
 	for _, k := range slices.Sorted(maps.Keys(keys)) {
-		n, p, m := s.nibssNets[code][k], posted[k], s.cbnNets[id][k]
+		n, p, m := s.nibssNets[code][k], posted[k], s.cbnNets[key][k]
 		if n != p || n != m {
 			out = append(out, fmt.Sprintf("session %s at %s: NIBSS nets %d, the bank posted %d and the CBN moved %d", k, id, n, p, m))
 		}
@@ -590,7 +596,7 @@ func (s settlementBooks) check(l *ledgerSource) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	rtgsBal, err := s.r.Balance(id)
+	rtgsBal, err := s.r.Balance(key)
 	if err != nil {
 		return nil, err
 	}

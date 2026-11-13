@@ -50,18 +50,18 @@ func TestNIPSwitch(t *testing.T) {
 	enquiry := func(code, nuban string) map[string]any {
 		return s.ctl("GET", "/nip/name-enquiry?bank_code="+code+"&account_number="+nuban, nil)
 	}
-	if ne := enquiry("999002", to); ne["response_code"] != "00" || ne["account_name"] != "Ngozi Fabrics Ventures" {
+	if ne := enquiry("000002", to); ne["response_code"] != "00" || ne["account_name"] != "Ngozi Fabrics Ventures" {
 		t.Fatalf("name enquiry: %v", ne)
 	}
 	for name, c := range map[string]struct {
 		ne   map[string]any
 		code any
 	}{
-		"unknown account": {enquiry("999002", world.NUBAN("902", 99)), "25"},
-		"bad check digit": {enquiry("999002", "0000000001"), "07"},
-		"short number":    {enquiry("999002", "123"), "07"},
+		"unknown account": {enquiry("000002", world.NUBAN("002", 99)), "25"},
+		"bad check digit": {enquiry("000002", "0000000001"), "07"},
+		"short number":    {enquiry("000002", "123"), "07"},
 		"unknown bank":    {enquiry("000111", to), nil},
-		"no such bank":    {enquiry("999003", world.NUBAN("903", 1)), nil},
+		"no such bank":    {enquiry("000003", world.NUBAN("003", 1)), nil},
 	} {
 		if c.ne["response_code"] != c.code {
 			t.Fatalf("%s: %v", name, c.ne)
@@ -71,14 +71,14 @@ func TestNIPSwitch(t *testing.T) {
 		t.Fatalf("unknown bank: %v", ne)
 	}
 	s.ctl("POST", "/banks/bank-b/suspend", nil)
-	if ne := enquiry("999002", to); ne["response_code"] != "91" {
+	if ne := enquiry("000002", to); ne["response_code"] != "91" {
 		t.Fatalf("suspended bank: %v", ne)
 	}
 	if _, err := s.payTry("bank-a", from, "bank-b", to, "100", nil); err == nil || !strings.Contains(err.Error(), `"response_code":"91"`) {
 		t.Fatalf("transfer to a suspended bank: %v", err)
 	}
 	s.ctl("POST", "/banks/bank-b/resume", nil)
-	if ne := enquiry("999002", to); ne["response_code"] != "00" {
+	if ne := enquiry("000002", to); ne["response_code"] != "00" {
 		t.Fatalf("resumed bank: %v", ne)
 	}
 
@@ -88,7 +88,7 @@ func TestNIPSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	sid := fmt.Sprint(first["session_id"])
-	if len(sid) != 30 || first["response_code"] != "00" || !strings.HasPrefix(sid, "999001") {
+	if len(sid) != 30 || first["response_code"] != "00" || !strings.HasPrefix(sid, "000001") {
 		t.Fatalf("first send: %v", first)
 	}
 	again, resp, err := s.ctlWith("POST", "/banks/bank-a/transfers", map[string]string{"from": from, "to_bank": "bank-b", "to": to, "amount": "1500"}, key)
@@ -233,17 +233,5 @@ func TestStatusQueryReportsReversal(t *testing.T) {
 	}
 	if n := s.sessionCredits("bank-b", to, sid); n != 0 {
 		t.Fatalf("the beneficiary was credited %d times", n)
-	}
-}
-
-func TestBankCodesAreComparedAsSixDigits(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	s := newStack(t)
-	for _, code := range []string{"901", "000901", "902", "123456", "1234", "12", "90a"} {
-		if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Newcomer " + code, "nuban_code": code}); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
-			t.Fatalf("nuban_code %q: %v", code, err)
-		}
 	}
 }

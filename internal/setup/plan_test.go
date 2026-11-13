@@ -3,7 +3,6 @@ package setup
 import (
 	"errors"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -279,12 +278,12 @@ func TestBuildLockedFields(t *testing.T) {
 				bank(s, "bank-b").NUBANCode = "905"
 				s.pos = map[string]Pos{"banks[bank-b].nuban_code": {File: "setup.yaml", Line: 31, Col: 19}}
 			},
-			errs: []string{"setup.yaml:31:19: banks[bank-b].nuban_code cannot change from 902 to 905. Put back 902."},
+			errs: []string{"setup.yaml:31:19: banks[bank-b].nuban_code cannot change; it is 902"},
 		},
 		{
 			name:    "nip_code",
 			desired: func(s *Spec) { bank(s, "bank-b").NIPCode = "999009" },
-			errs:    []string{"banks[bank-b].nip_code cannot change from 999002 to 999009. Put back 999002."},
+			errs:    []string{"banks[bank-b].nip_code cannot change; it is 999002"},
 		},
 		{
 			name: "nip_code against an allocated code",
@@ -292,7 +291,7 @@ func TestBuildLockedFields(t *testing.T) {
 				bank(&st.Applied, "bank-b").NIPCode = ""
 			},
 			desired: func(s *Spec) { bank(s, "bank-b").NIPCode = "999009" },
-			errs:    []string{"banks[bank-b].nip_code cannot change from 999002 to 999009. Put back 999002."},
+			errs:    []string{"banks[bank-b].nip_code cannot change; it is 999002"},
 		},
 		{
 			name:    "settles_through set later",
@@ -521,7 +520,7 @@ func TestBuildStateTransitions(t *testing.T) {
 				s.Spec.Banks = append(s.Spec.Banks, Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", State: StateSuspended})
 			},
 			want: []Action{{Op: OpCreate, Kind: KindBank, ID: "bank-c", Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{
-				{Path: "type", To: "commercial"}, {Path: "nip_code", To: "999003"}, {Path: "nuban_code", To: "903"}, {Path: "state", To: StateSuspended},
+				{Path: "type", To: "commercial"}, {Path: "nip_code", To: "000001"}, {Path: "nuban_code", To: "001"}, {Path: "state", To: StateSuspended},
 			}}},
 		},
 		{
@@ -617,10 +616,7 @@ func TestBuildRemoval(t *testing.T) {
 			status:  func(st *Status) { st.Applied.Spec.Banks = st.Applied.Spec.Banks[:1]; st.Resources = st.Resources[:1] },
 			dir:     []nibss.Institution{tombstone("bank-b", "Bank B", "999002", "902")},
 			desired: func(s *Spec) { bank(s, "bank-b").NIPCode, bank(s, "bank-b").NUBANCode = "", "" },
-			errs: []string{
-				"banks[bank-b].id bank-b belonged to a removed bank and stays reserved. Choose another id.",
-				`banks[bank-b].name "Bank B" belonged to removed bank bank-b and stays reserved. Choose another name.`,
-			},
+			errs:    []string{"banks[bank-b].id bank-b belonged to a removed bank. Choose another id."},
 		},
 		{
 			name: "partners removed before banks, in reverse",
@@ -740,141 +736,138 @@ func TestBuildOnRemoveTarget(t *testing.T) {
 	})
 }
 
+func smallPack() *countrypack.Pack {
+	return &countrypack.Pack{
+		DepositInsurance: countrypack.DepositInsurance{BankTypes: map[string]string{"commercial": "deposit_money_bank", "digital": "deposit_money_bank", "microfinance": "microfinance_bank"}},
+		BankCodes: countrypack.BankCodes{Categories: map[string][]countrypack.CodeTier{
+			"deposit_money_bank": {
+				{First: 1, Last: 2, NUBANDigits: 3, NIPPrefix: "000", NIPDigits: 3},
+				{First: 1000, Last: 1001, NUBANDigits: 6, NIPDigits: 6},
+			},
+			"microfinance_bank": {{First: 1, Last: 9, NUBANPrefix: "5", NUBANDigits: 4, NIPPrefix: "090", NIPDigits: 3}},
+		}},
+	}
+}
+
 func TestBuildAllocation(t *testing.T) {
-	newBank := func(id, name string) Bank { return Bank{ID: id, Name: name, Type: "commercial"} }
-	create := func(id, nip, nuban string, allocated ...string) Action {
-		return Action{Op: OpCreate, Kind: KindBank, ID: id, Allocated: allocated, Fields: []FieldChange{
-			{Path: "type", To: "commercial"}, {Path: "nip_code", To: nip}, {Path: "nuban_code", To: nuban},
+	newBank := func(id, typ string) Bank { return Bank{ID: id, Name: "Bank " + id, Type: typ} }
+	create := func(id, typ, nip, nuban string) Action {
+		return Action{Op: OpCreate, Kind: KindBank, ID: id, Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{
+			{Path: "type", To: typ}, {Path: "nip_code", To: nip}, {Path: "nuban_code", To: nuban},
 		}}
 	}
-	run(t, []planCase{
+	cases := []struct {
+		name    string
+		small   bool
+		dir     []nibss.Institution
+		desired func(*Spec)
+		want    []Action
+		errs    []string
+	}{
 		{
-			name:    "first free codes (D3)",
-			desired: func(s *Spec) { s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "Bank C")) },
-			want:    []Action{create("bank-c", "999003", "903", "nip_code", "nuban_code")},
+			name:    "first deposit money bank",
+			desired: func(s *Spec) { s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "commercial")) },
+			want:    []Action{create("bank-c", "commercial", "000001", "001")},
 		},
 		{
-			name: "file order, explicit codes skipped",
-			desired: func(s *Spec) {
-				d := newBank("bank-d", "Bank D")
-				d.NIPCode, d.NUBANCode = "999003", "903"
-				s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "Bank C"), d, newBank("bank-e", "Bank E"))
-			},
-			want: []Action{
-				create("bank-c", "999004", "904", "nip_code", "nuban_code"),
-				create("bank-d", "999003", "903"),
-				create("bank-e", "999005", "905", "nip_code", "nuban_code"),
-			},
+			name:    "first microfinance bank",
+			desired: func(s *Spec) { s.Spec.Banks = append(s.Spec.Banks, newBank("mfb", "microfinance")) },
+			want:    []Action{create("mfb", "microfinance", "090001", "50001")},
 		},
 		{
-			name: "tombstones, directory members and leaving banks hold their codes",
+			name: "file order, and every kind of holder is skipped",
 			dir: []nibss.Institution{
-				tombstone("old", "Old Bank", "999003", "903"),
-				member("bank-z", "Bank Z", "999004", "000904"),
+				tombstone("old", "Old Bank", "000001", "001"),
+				member("bank-z", "Bank Z", "000002", "000002"),
+				member("mfb-z", "Mfb Z", "090001", "50001"),
 			},
 			desired: func(s *Spec) {
 				dropBank(s, "bank-b")
-				s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "Bank C"))
+				s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "digital"), newBank("bank-d", "commercial"), newBank("mfb", "microfinance"))
 			},
 			want: []Action{
-				create("bank-c", "999005", "905", "nip_code", "nuban_code"),
+				create("bank-c", "digital", "000003", "003"),
+				create("bank-d", "commercial", "000004", "004"),
+				create("mfb", "microfinance", "090002", "50002"),
 				{Op: OpRemove, Kind: KindBank, ID: "bank-b", Destructive: true, Impact: &Impact{Databases: []string{"beerus_x_bank_b"}}},
 			},
 		},
 		{
-			name: "allocated codes of existing banks are not free",
-			status: func(st *Status) {
-				bank(&st.Applied, "bank-b").NIPCode, bank(&st.Applied, "bank-b").NUBANCode = "", ""
-				r := res(st, KindBank, "bank-b")
-				r.Allocated.NIPCode, r.Allocated.NUBANCode = "999003", "903"
-			},
+			name:  "the first tier runs out and the second pads to six digits",
+			small: true,
+			dir:   []nibss.Institution{tombstone("old-1", "Old 1", "000001", "001"), tombstone("old-2", "Old 2", "000002", "002")},
 			desired: func(s *Spec) {
-				bank(s, "bank-b").NIPCode, bank(s, "bank-b").NUBANCode = "", ""
-				s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "Bank C"))
+				s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "commercial"), newBank("bank-d", "commercial"))
 			},
-			want: []Action{create("bank-c", "999002", "902", "nip_code", "nuban_code")},
+			want: []Action{
+				create("bank-c", "commercial", "001000", "001000"),
+				create("bank-d", "commercial", "001001", "001001"),
+			},
 		},
 		{
-			name: "explicit code on a tombstone",
-			dir:  []nibss.Institution{tombstone("old", "Old Bank", "999003", "903")},
+			name:  "every tier used",
+			small: true,
+			dir: []nibss.Institution{
+				tombstone("old-1", "Old 1", "000001", "001"), tombstone("old-2", "Old 2", "000002", "002"),
+				tombstone("old-3", "Old 3", "001000", "001000"), tombstone("old-4", "Old 4", "001001", "001001"),
+			},
+			desired: func(s *Spec) { s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "commercial")) },
+			errs:    []string{"banks[bank-c]: no bank codes left for deposit money banks (all 4 are used)"},
+		},
+		{
+			name: "codes cannot be set on a new bank",
 			desired: func(s *Spec) {
-				c := newBank("bank-c", "Bank C")
-				c.NIPCode, c.NUBANCode = "999003", "000903"
+				c := newBank("bank-c", "commercial")
+				c.NIPCode, c.NUBANCode = "123456", "123"
 				s.Spec.Banks = append(s.Spec.Banks, c)
 			},
-			errs: []string{
-				"banks[bank-c].nip_code 999003 is already used by removed bank old. Choose another code, or leave it out to have one allocated.",
-				"banks[bank-c].nuban_code 000903 is already used by removed bank old. Choose another code, or leave it out to have one allocated.",
-			},
+			errs: []string{"banks[bank-c].nip_code is assigned by Beerus. Remove it.", "banks[bank-c].nuban_code is assigned by Beerus. Remove it."},
 		},
 		{
-			name: "explicit code of an existing bank",
+			name:    "an existing bank may repeat its codes",
+			desired: func(s *Spec) { bank(s, "bank-b").NUBANCode = "000902" },
+		},
+		{
+			name: "an existing bank cannot change its codes",
 			desired: func(s *Spec) {
-				c := newBank("bank-c", "Bank C")
-				c.NIPCode = "999001"
-				s.Spec.Banks = append(s.Spec.Banks, c)
+				bank(s, "bank-b").NIPCode, bank(s, "bank-b").NUBANCode = "999009", "905"
 			},
-			errs: []string{"banks[bank-c].nip_code 999001 is already used by bank-a. Choose another code, or leave it out to have one allocated."},
+			errs: []string{"banks[bank-b].nip_code cannot change; it is 999002", "banks[bank-b].nuban_code cannot change; it is 902"},
 		},
-		{
-			name: "explicit code of a leaving bank",
-			desired: func(s *Spec) {
-				dropBank(s, "bank-b")
-				c := newBank("bank-c", "Bank C")
-				c.NUBANCode = "902"
-				s.Spec.Banks = append(s.Spec.Banks, c)
-			},
-			errs: []string{"banks[bank-c].nuban_code 902 is already used by bank-b. Choose another code, or leave it out to have one allocated."},
-		},
-		{
-			name: "explicit code of a directory member",
-			dir:  []nibss.Institution{member("bank-z", "Bank Z", "999003", "903")},
-			desired: func(s *Spec) {
-				c := newBank("bank-c", "Bank C")
-				c.NIPCode, c.NUBANCode = "999003", "903"
-				s.Spec.Banks = append(s.Spec.Banks, c)
-			},
-			errs: []string{
-				"banks[bank-c].nip_code 999003 is already used by bank-z. Choose another code, or leave it out to have one allocated.",
-				"banks[bank-c].nuban_code 903 is already used by bank-z. Choose another code, or leave it out to have one allocated.",
-			},
-		},
-		{
-			name: "tombstone codes are never reused by allocation",
-			dir:  []nibss.Institution{tombstone("bank-c", "Bank C", "999003", "903")},
-			desired: func(s *Spec) {
-				s.Spec.Banks = append(s.Spec.Banks, newBank("bank-d", "Bank D"))
-			},
-			want: []Action{create("bank-d", "999004", "904", "nip_code", "nuban_code")},
-		},
-		{
-			name: "bad nuban code",
-			desired: func(s *Spec) {
-				c := newBank("bank-c", "Bank C")
-				c.NUBANCode = "9031"
-				s.Spec.Banks = append(s.Spec.Banks, c)
-			},
-			errs: []string{"banks[bank-c].nuban_code 9031 must have 3, 5 or 6 digits."},
-		},
-		{
-			name: "new name of a leaving bank",
-			desired: func(s *Spec) {
-				dropBank(s, "bank-b")
-				s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "bank b"))
-			},
-			errs: []string{`banks[bank-c].name "bank b" belongs to bank-b, which is being removed, and stays reserved. Choose another name.`},
-		},
-		{
-			name:    "rebrand to a tombstone name",
-			dir:     []nibss.Institution{tombstone("old", "Old Bank", "999009", "909")},
-			desired: func(s *Spec) { bank(s, "bank-a").Name = "OLD BANK" },
-			errs:    []string{`banks[bank-a].name "OLD BANK" belonged to removed bank old and stays reserved. Choose another name.`},
-		},
-	})
+	}
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			desired := spec()
+			c.desired(&desired)
+			use := pack
+			if c.small {
+				use = smallPack()
+			}
+			p := build(use, desired, status(spec()), c.dir, today)
+			got := []string{}
+			for _, err := range p.Errors {
+				got = append(got, err.Error())
+			}
+			if len(c.errs) == 0 {
+				c.errs = []string{}
+			}
+			if !reflect.DeepEqual(got, c.errs) {
+				t.Fatalf("errors = %q, want %q", got, c.errs)
+			}
+			if len(c.errs) == 0 && !reflect.DeepEqual(p.Actions, c.want) {
+				t.Fatalf("actions = %+v, want %+v", p.Actions, c.want)
+			}
+		})
+	}
 }
 
 func TestBuildRejectsAStartAfterToday(t *testing.T) {
 	desired := spec()
+	clearCodes(&desired)
 	desired.Spec.Start = "2026-11-06T00:00:00+01:00"
 	dir := []nibss.Institution{member("bank-a", "Bank A", "999001", "901"), member("bank-b", "Bank B", "999002", "902")}
 	p := Build(desired, Status{}, dir, today)
@@ -890,63 +883,16 @@ func TestBuildRejectsAStartAfterToday(t *testing.T) {
 
 func TestBuildFirstApply(t *testing.T) {
 	desired := spec()
-	desired.Spec.Banks[1].NIPCode, desired.Spec.Banks[1].NUBANCode = "", ""
+	clearCodes(&desired)
 	dir := []nibss.Institution{member("bank-a", "Bank A", "999001", "901"), member("bank-z", "Bank Z", "999002", "902")}
 	p := Build(desired, Status{}, dir, today)
 	want := []Action{
-		{Op: OpCreate, Kind: KindBank, ID: "bank-a", Fields: []FieldChange{{Path: "type", To: "commercial"}, {Path: "nip_code", To: "999001"}, {Path: "nuban_code", To: "901"}}},
-		{Op: OpCreate, Kind: KindBank, ID: "bank-b", Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{{Path: "type", To: "digital"}, {Path: "nip_code", To: "999003"}, {Path: "nuban_code", To: "903"}}},
+		{Op: OpCreate, Kind: KindBank, ID: "bank-a", Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{{Path: "type", To: "commercial"}, {Path: "nip_code", To: "000001"}, {Path: "nuban_code", To: "001"}}},
+		{Op: OpCreate, Kind: KindBank, ID: "bank-b", Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{{Path: "type", To: "digital"}, {Path: "nip_code", To: "000002"}, {Path: "nuban_code", To: "002"}}},
 		{Op: OpCreate, Kind: KindPartner, ID: "balance", Fields: []FieldChange{{Path: "name", To: "Balance"}}},
 	}
 	if len(p.Errors) > 0 || !reflect.DeepEqual(p.Actions, want) {
 		t.Fatalf("plan = %+v, errors %v", p.Actions, p.Errors)
-	}
-}
-
-func simulatorCodes(t *testing.T) countrypack.SimulatorCodes {
-	t.Helper()
-	pack, err := countrypack.Nigeria()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return pack.SimulatorCodes
-}
-
-func TestBuildAllocationRangeFull(t *testing.T) {
-	desired := spec()
-	var dir []nibss.Institution
-	for n := simulatorCodes(t).NIP.First; n <= simulatorCodes(t).NIP.Last; n++ {
-		dir = append(dir, member("m-"+strconv.Itoa(n), "M", strconv.Itoa(n), ""))
-	}
-	desired.Spec.Banks = append(desired.Spec.Banks, Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", NUBANCode: "903"})
-	desired.Spec.Banks[0].NIPCode, desired.Spec.Banks[1].NIPCode = "", ""
-	st := status(spec())
-	p := Build(desired, st, dir, today)
-	want := []string{"banks[bank-c].nip_code cannot be allocated: all 999 codes from 999001 to 999999 are taken. Set nip_code by hand, or remove a bank."}
-	var got []string
-	for _, e := range p.Errors {
-		got = append(got, e.Error())
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("errors = %q", got)
-	}
-}
-
-func TestBuildNUBANRangeFull(t *testing.T) {
-	desired := spec()
-	var dir []nibss.Institution
-	for n := simulatorCodes(t).NUBAN.First; n <= simulatorCodes(t).NUBAN.Last; n++ {
-		dir = append(dir, tombstone("old-"+strconv.Itoa(n), "Old "+strconv.Itoa(n), "", strconv.Itoa(n)))
-	}
-	desired.Spec.Banks = append(desired.Spec.Banks, Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", NIPCode: "999003"})
-	p := Build(desired, status(spec()), dir, today)
-	want := []string{"banks[bank-c].nuban_code cannot be allocated: all 99 codes from 901 to 999 are taken. Set nuban_code by hand, or remove a bank."}
-	var got []string
-	for _, e := range p.Errors {
-		got = append(got, e.Error())
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("errors = %q", got)
 	}
 }
 
@@ -956,21 +902,21 @@ func TestBuildSettlesThroughOrder(t *testing.T) {
 			name: "settler created after its bank",
 			desired: func(s *Spec) {
 				s.Spec.Banks = append(s.Spec.Banks,
-					Bank{ID: "mfb", Name: "Mfb", Type: "microfinance", NIPCode: "999004", NUBANCode: "904", SettlesThrough: "bank-c"},
-					Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", NIPCode: "999003", NUBANCode: "903"},
+					Bank{ID: "mfb", Name: "Mfb", Type: "microfinance", SettlesThrough: "bank-c"},
+					Bank{ID: "bank-c", Name: "Bank C", Type: "commercial"},
 				)
 			},
 			want: []Action{
-				{Op: OpCreate, Kind: KindBank, ID: "bank-c", Fields: []FieldChange{{Path: "type", To: "commercial"}, {Path: "nip_code", To: "999003"}, {Path: "nuban_code", To: "903"}}},
-				{Op: OpCreate, Kind: KindBank, ID: "mfb", Fields: []FieldChange{{Path: "type", To: "microfinance"}, {Path: "nip_code", To: "999004"}, {Path: "nuban_code", To: "904"}, {Path: "settles_through", To: "bank-c"}}},
+				{Op: OpCreate, Kind: KindBank, ID: "bank-c", Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{{Path: "type", To: "commercial"}, {Path: "nip_code", To: "000001"}, {Path: "nuban_code", To: "001"}}},
+				{Op: OpCreate, Kind: KindBank, ID: "mfb", Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{{Path: "type", To: "microfinance"}, {Path: "nip_code", To: "090001"}, {Path: "nuban_code", To: "50001"}, {Path: "settles_through", To: "bank-c"}}},
 			},
 		},
 		{
 			name: "loop",
 			desired: func(s *Spec) {
 				s.Spec.Banks = append(s.Spec.Banks,
-					Bank{ID: "x", Name: "X", Type: "commercial", NIPCode: "999003", NUBANCode: "903", SettlesThrough: "y"},
-					Bank{ID: "y", Name: "Y", Type: "commercial", NIPCode: "999004", NUBANCode: "904", SettlesThrough: "x"},
+					Bank{ID: "x", Name: "X", Type: "commercial", SettlesThrough: "y"},
+					Bank{ID: "y", Name: "Y", Type: "commercial", SettlesThrough: "x"},
 				)
 			},
 			errs: []string{"banks[x].settles_through forms a loop: x → y → x. Point one of them at a bank that settles directly."},
@@ -1042,5 +988,11 @@ func TestBuildIsPure(t *testing.T) {
 	b := Build(desired, st, nil, today)
 	if !reflect.DeepEqual(a, b) || !reflect.DeepEqual(st, before) {
 		t.Fatal("Build is not deterministic or changed its input")
+	}
+}
+
+func clearCodes(s *Spec) {
+	for i := range s.Spec.Banks {
+		s.Spec.Banks[i].NIPCode, s.Spec.Banks[i].NUBANCode = "", ""
 	}
 }

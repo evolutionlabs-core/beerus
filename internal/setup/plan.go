@@ -31,11 +31,6 @@ const (
 	fieldNUBANCode = "nuban_code"
 )
 
-type codeRange struct {
-	field       string
-	first, last int
-}
-
 type planError struct {
 	msg  string
 	kind error
@@ -61,8 +56,7 @@ type planner struct {
 	tombstones []nibss.Institution
 	members    []nibss.Institution
 	errs       []error
-	nipCodes   codeRange
-	nubanCodes codeRange
+	pack       *countrypack.Pack
 }
 
 func Build(desired Spec, st Status, dir []nibss.Institution, today clock.Date) Plan {
@@ -70,10 +64,12 @@ func Build(desired Spec, st Status, dir []nibss.Institution, today clock.Date) P
 	if err != nil {
 		return Plan{Setup: desired.Metadata.Name, Errors: []error{fmt.Errorf("load code ranges: %w", err)}}
 	}
+	return build(pack, desired, st, dir, today)
+}
+
+func build(pack *countrypack.Pack, desired Spec, st Status, dir []nibss.Institution, today clock.Date) Plan {
 	p := newPlanner(desired, st, dir, today)
-	c := pack.SimulatorCodes
-	p.nipCodes = codeRange{field: fieldNIPCode, first: c.NIP.First, last: c.NIP.Last}
-	p.nubanCodes = codeRange{field: fieldNUBANCode, first: c.NUBAN.First, last: c.NUBAN.Last}
+	p.pack = pack
 	p.checkStart()
 	var actions []Action
 	if a, ok := p.setupAction(); ok {
@@ -229,96 +225,68 @@ func (p *planner) appliedCodes(b Bank) (string, string) {
 }
 
 func (p *planner) allocate() map[string]codes {
-	usedNIP, usedNUBAN := map[string]string{}, map[string]string{}
-	markNUBAN := func(code, owner string) {
-		if n, err := world.NormaliseBankCode(code); err == nil && code != "" {
-			usedNUBAN[n] = owner
+	usedNIP, usedNUBAN := map[string]bool{}, map[string]bool{}
+	markNUBAN := func(code string) {
+		if n, err := world.NormaliseBankCode(code); err == nil {
+			usedNUBAN[n] = true
 		}
 	}
 	for _, in := range p.members {
-		usedNIP[in.NIPCode] = in.ID
-		markNUBAN(in.NUBANCode, in.ID)
+		usedNIP[in.NIPCode] = true
+		markNUBAN(in.NUBANCode)
 	}
 	for _, in := range p.tombstones {
-		usedNIP[in.NIPCode] = "removed bank " + in.ID
-		markNUBAN(in.NUBANCode, "removed bank "+in.ID)
+		usedNIP[in.NIPCode] = true
+		markNUBAN(in.NUBANCode)
 	}
 	for _, b := range p.st.Applied.Spec.Banks {
 		nip, nuban := p.appliedCodes(b)
-		if nip != "" {
-			usedNIP[nip] = b.ID
-		}
-		markNUBAN(nuban, b.ID)
+		usedNIP[nip] = true
+		markNUBAN(nuban)
 	}
 	out := map[string]codes{}
 	for _, b := range p.desired.Spec.Banks {
 		if _, ok := p.applied[b.ID]; ok {
 			continue
 		}
-		c := codes{nip: b.NIPCode, nuban: b.NUBANCode}
-		if c.nip != "" {
-			if owner, ok := usedNIP[c.nip]; ok && owner != b.ID {
-				p.fail("banks["+b.ID+"].nip_code", nil, "banks[%s].nip_code %s is already used by %s. Choose another code, or leave it out to have one allocated.", b.ID, c.nip, owner)
-			}
-			usedNIP[c.nip] = b.ID
-		}
-		if c.nuban != "" {
-			n, err := world.NormaliseBankCode(c.nuban)
-			if err != nil {
-				p.fail("banks["+b.ID+"].nuban_code", nil, "banks[%s].nuban_code %s must have 3, 5 or 6 digits.", b.ID, c.nuban)
-			} else if owner, ok := usedNUBAN[n]; ok && owner != b.ID {
-				p.fail("banks["+b.ID+"].nuban_code", nil, "banks[%s].nuban_code %s is already used by %s. Choose another code, or leave it out to have one allocated.", b.ID, c.nuban, owner)
-			}
-			markNUBAN(c.nuban, b.ID)
-		}
-		out[b.ID] = c
-	}
-	for _, b := range p.desired.Spec.Banks {
-		c, ok := out[b.ID]
+		p.assigned(b)
+		c, ok := p.nextCodes(b, func(nip, nuban string) bool {
+			n, _ := world.NormaliseBankCode(nuban)
+			return usedNIP[nip] || usedNUBAN[n]
+		})
 		if !ok {
 			continue
 		}
-		if c.nip == "" {
-			code, ok := p.nipCodes.next(func(s string) bool { _, used := usedNIP[s]; return used })
-			if !ok {
-				p.full(b.ID, p.nipCodes)
-			} else {
-				c.nip = code
-				c.allocated = append(c.allocated, fieldNIPCode)
-				usedNIP[code] = b.ID
-			}
-		}
-		if c.nuban == "" {
-			code, ok := p.nubanCodes.next(func(s string) bool {
-				n, _ := world.NormaliseBankCode(s)
-				_, used := usedNUBAN[n]
-				return used
-			})
-			if !ok {
-				p.full(b.ID, p.nubanCodes)
-			} else {
-				c.nuban = code
-				c.allocated = append(c.allocated, fieldNUBANCode)
-				markNUBAN(code, b.ID)
-			}
-		}
+		usedNIP[c.nip] = true
+		markNUBAN(c.nuban)
 		out[b.ID] = c
 	}
 	return out
 }
 
-func (r codeRange) next(used func(string) bool) (string, bool) {
-	for n := r.first; n <= r.last; n++ {
-		if s := strconv.Itoa(n); !used(s) {
-			return s, true
+func (p *planner) assigned(b Bank) {
+	for _, f := range []struct{ name, value string }{{fieldNIPCode, b.NIPCode}, {fieldNUBANCode, b.NUBANCode}} {
+		if f.value != "" {
+			path := "banks[" + b.ID + "]." + f.name
+			p.fail(path, nil, "%s is assigned by Beerus. Remove it.", path)
 		}
 	}
-	return "", false
 }
 
-func (p *planner) full(id string, r codeRange) {
-	path := "banks[" + id + "]." + r.field
-	p.fail(path, nil, "%s cannot be allocated: all %d codes from %d to %d are taken. Set %s by hand, or remove a bank.", path, r.last-r.first+1, r.first, r.last, r.field)
+func (p *planner) nextCodes(b Bank, used func(nip, nuban string) bool) (codes, bool) {
+	category, tiers := p.pack.CodeTiers(b.Type)
+	total := 0
+	for _, t := range tiers {
+		for n := t.First; n <= t.Last; n++ {
+			nip, nuban := t.NIP(n), t.NUBAN(n)
+			if !used(nip, nuban) {
+				return codes{nip: nip, nuban: nuban, allocated: []string{fieldNIPCode, fieldNUBANCode}}, true
+			}
+		}
+		total += t.Last - t.First + 1
+	}
+	p.fail("banks["+b.ID+"]", nil, "banks[%s]: no bank codes left for %s (all %d are used)", b.ID, strings.ReplaceAll(category, "_", " ")+"s", total)
+	return codes{}, false
 }
 
 func (p *planner) order(banks []Bank) []Bank {
@@ -374,10 +342,7 @@ func (p *planner) bankAction(b Bank, c codes) (Action, bool) {
 func (p *planner) checkReserved(b Bank, nameKept bool) {
 	for _, t := range p.tombstones {
 		if t.ID == b.ID {
-			p.fail("banks["+b.ID+"].id", nil, "banks[%s].id %s belonged to a removed bank and stays reserved. Choose another id.", b.ID, b.ID)
-		}
-		if !nameKept && strings.EqualFold(t.Name, b.Name) {
-			p.fail("banks["+b.ID+"].name", nil, "banks[%s].name %q belonged to removed bank %s and stays reserved. Choose another name.", b.ID, b.Name, t.ID)
+			p.fail("banks["+b.ID+"].id", nil, "banks[%s].id %s belonged to a removed bank. Choose another id.", b.ID, b.ID)
 		}
 	}
 	if nameKept {
@@ -385,7 +350,7 @@ func (p *planner) checkReserved(b Bank, nameKept bool) {
 	}
 	for _, a := range p.st.Applied.Spec.Banks {
 		if _, staying := p.wanted[a.ID]; !staying && strings.EqualFold(a.Name, b.Name) {
-			p.fail("banks["+b.ID+"].name", nil, "banks[%s].name %q belongs to %s, which is being removed, and stays reserved. Choose another name.", b.ID, b.Name, a.ID)
+			p.fail("banks["+b.ID+"].name", nil, "banks[%s].name %q belongs to %s, which is being removed. Choose another name, or wait until it is purged.", b.ID, b.Name, a.ID)
 		}
 	}
 }
@@ -415,10 +380,10 @@ func (p *planner) updateAction(old, b Bank, r Resource, hasRes bool) (Action, bo
 	p.locked(path("type"), old.Type, b.Type)
 	nip, nuban := p.appliedCodes(old)
 	if b.NIPCode != "" && b.NIPCode != nip {
-		p.locked(path("nip_code"), nip, b.NIPCode)
+		p.fail(path(fieldNIPCode), nil, "%s cannot change; it is %s", path(fieldNIPCode), nip)
 	}
 	if b.NUBANCode != "" && !sameNUBAN(b.NUBANCode, nuban) {
-		p.locked(path("nuban_code"), nuban, b.NUBANCode)
+		p.fail(path(fieldNUBANCode), nil, "%s cannot change; it is %s", path(fieldNUBANCode), nuban)
 	}
 	p.locked(path("settles_through"), old.SettlesThrough, b.SettlesThrough)
 	from, to := orString(old.State, StateActive), orString(b.State, StateActive)

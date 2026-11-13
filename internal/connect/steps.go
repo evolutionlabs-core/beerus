@@ -22,7 +22,7 @@ const (
 )
 
 var bankSteps = []struct{ id, name string }{
-	{setup.StepAllocate, "Allocating codes, port and database"},
+	{setup.StepAllocate, "Allocating codes"},
 	{setup.StepDirectory, "Registering with NIBSS"},
 	{setup.StepDatabase, "Creating the bank database"},
 	{setup.StepLedgerSchema, "Migrating bank ledger"},
@@ -214,7 +214,11 @@ func (a *App) provision(b *config.Bank) {
 	st := a.status[b.ID]
 	a.lifeMu.Unlock()
 	ok := a.step(st, setup.StepAllocate, func() error {
-		return a.claimBank(b)
+		if err := a.claimBank(b); err != nil {
+			return err
+		}
+		a.nameStep(st, setup.StepAllocate, "NIP "+b.NIPCode+", NUBAN "+b.NUBANCode)
+		return nil
 	}) && a.step(st, setup.StepDirectory, func() error {
 		return a.registerMember(b)
 	}) && a.step(st, setup.StepDatabase, func() error {
@@ -224,14 +228,14 @@ func (a *App) provision(b *config.Bank) {
 		if err != nil {
 			return err
 		}
-		a.nameStep(st, setup.StepLedgerSchema, n)
+		a.nameStep(st, setup.StepLedgerSchema, migrationCount(n))
 		return nil
 	}) && a.step(st, setup.StepOpenBankingSchema, func() error {
 		n, err := store.Migrate(context.Background(), a.cfg.DatabaseURL, b.Database, openbanking.Migrate)
 		if err != nil {
 			return err
 		}
-		a.nameStep(st, setup.StepOpenBankingSchema, n)
+		a.nameStep(st, setup.StepOpenBankingSchema, migrationCount(n))
 		return a.openLedger(b)
 	}) && a.step(st, setup.StepCerts, func() error {
 		return a.bankCerts(b)
@@ -264,11 +268,11 @@ func (a *App) provision(b *config.Bank) {
 	a.lifeMu.Unlock()
 }
 
-func (a *App) nameStep(st *BankStatus, id string, migrations int) {
+func (a *App) nameStep(st *BankStatus, id, detail string) {
 	i := stepIndex(id)
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
-	st.Steps[i].Name = bankSteps[i].name + " (" + migrationCount(migrations) + ")"
+	st.Steps[i].Name = bankSteps[i].name + " (" + detail + ")"
 }
 
 func migrationCount(n int) string {
@@ -317,7 +321,7 @@ func (a *App) cbnMember(b *config.Bank) error {
 	if r == nil {
 		return errors.New("the CBN ledger is not open yet")
 	}
-	if err := r.member(b.ID, bank.GenesisSettlement, bank.GenesisVault); err != nil {
+	if err := r.member(cbnKey(b.CBNAccount, b.ID), bank.GenesisSettlement, bank.GenesisVault); err != nil {
 		return fmt.Errorf("open the CBN settlement account of %s: %w", b.ID, err)
 	}
 	return nil

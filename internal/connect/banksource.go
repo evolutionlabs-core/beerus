@@ -31,7 +31,7 @@ type ledgerSource struct {
 }
 
 func profileOf(b *config.Bank) bank.Profile {
-	return bank.Profile{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode}
+	return bank.Profile{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, CBNAccount: b.CBNAccount}
 }
 
 func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, b *config.Bank) (*ledgerSource, error) {
