@@ -3,10 +3,13 @@ package setup
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+var ErrOldSetup = errors.New("This setup was made by an older Beerus. Run beerus reset, then beerus init.")
 
 const (
 	statusFile = "control.json"
@@ -29,10 +32,8 @@ func LoadStatus(dir string) (Status, error) {
 		return Status{}, fmt.Errorf("%s has version %d, but this beerus reads up to version %d. Upgrade beerus", statusFile, head.Version, StatusVersion)
 	case head.Version < 1:
 		return Status{}, fmt.Errorf("%s has no valid version (got %d). Run beerus reset to start again", statusFile, head.Version)
-	}
-	raw, err = dropRetiredStart(raw)
-	if err != nil {
-		return Status{}, fmt.Errorf("decode %s: %w", statusFile, err)
+	case head.Version < StatusVersion:
+		return Status{}, fmt.Errorf("%s: %w", dir, ErrOldSetup)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -41,39 +42,6 @@ func LoadStatus(dir string) (Status, error) {
 		return Status{}, fmt.Errorf("decode %s: %w", statusFile, err)
 	}
 	return s, nil
-}
-
-func dropRetiredStart(raw []byte) ([]byte, error) {
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &top); err != nil {
-		return nil, err
-	}
-	if len(top["applied"]) == 0 {
-		return raw, nil
-	}
-	var applied map[string]json.RawMessage
-	if err := json.Unmarshal(top["applied"], &applied); err != nil {
-		return nil, fmt.Errorf("applied: %w", err)
-	}
-	if len(applied["spec"]) == 0 {
-		return raw, nil
-	}
-	var body map[string]json.RawMessage
-	if err := json.Unmarshal(applied["spec"], &body); err != nil {
-		return nil, fmt.Errorf("applied spec: %w", err)
-	}
-	if _, ok := body["start"]; !ok {
-		return raw, nil
-	}
-	delete(body, "start")
-	var err error
-	if applied["spec"], err = json.Marshal(body); err != nil {
-		return nil, err
-	}
-	if top["applied"], err = json.Marshal(applied); err != nil {
-		return nil, err
-	}
-	return json.Marshal(top)
 }
 
 func SaveStatus(dir string, s Status) error {

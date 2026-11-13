@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -93,23 +92,6 @@ func TestLoadLocalMissingFile(t *testing.T) {
 	_, err := LoadLocal(t.TempDir())
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("got %v", err)
-	}
-}
-
-func TestLoadLocalAcceptsTheRetiredSpeedKey(t *testing.T) {
-	t.Setenv(config.DatabaseURLEnv, "")
-	want, err := LoadLocal(writeLocal(t, sampleLocal))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, pace := range []string{"pace: 1\n", "pace: 60\n"} {
-		got, err := LoadLocal(writeLocal(t, strings.Replace(sampleLocal, "ports:", pace+"ports:", 1)))
-		if err != nil {
-			t.Fatalf("%s: %v", pace, err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s: got %+v, want %+v", pace, got, want)
-		}
 	}
 }
 

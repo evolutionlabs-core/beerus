@@ -115,21 +115,6 @@ func TestTypoGivesLineColumnAndSuggestion(t *testing.T) {
 	}
 }
 
-func TestParseStoredIgnoresStartFromOlderBeerus(t *testing.T) {
-	old := defaultWith(t, "  nip:\n", "  start: 2026-11-04T08:00:00+01:00\n  nip:\n")
-	got, errs := ParseStored("setup.yaml", old)
-	if len(errs) > 0 {
-		t.Fatal(errStrings(errs))
-	}
-	want, errs := Parse("setup.yaml", readFixture(t, "default.yaml"))
-	if len(errs) > 0 {
-		t.Fatal(errStrings(errs))
-	}
-	if !reflect.DeepEqual(clearPos(got), clearPos(want)) {
-		t.Fatalf("got %+v\nwant %+v", got, want)
-	}
-}
-
 func TestTwoErrorsReportedInOneRun(t *testing.T) {
 	_, errs := Parse("setup.yaml", readFixture(t, "bad/two-errors.yaml"))
 	if len(errs) != 2 {
@@ -181,7 +166,6 @@ func TestParseRejects(t *testing.T) {
 		{"repeated key", defaultWith(t, "  name: beerus\n", "  name: beerus\n  name: other\n"), []string{`setup.yaml:5:3: metadata.name appears twice. Keep one.`}},
 		{"zero sessions", defaultWith(t, "sessions: 4", "sessions: 0"), []string{`setup.yaml:7:5: nip.sessions 0 does not split the day into whole minutes. Use a number such as 1, 2, 4, 6, 12 or 24.`}},
 		{"uneven sessions", defaultWith(t, "sessions: 4", "sessions: 7"), []string{`setup.yaml:7:5: nip.sessions 7 does not split the day into whole minutes. Use a number such as 1, 2, 4, 6, 12 or 24.`}},
-		{"retired start", defaultWith(t, "  nip:\n", "  start: 2026-11-04T08:00:00+01:00\n  nip:\n"), []string{`setup.yaml:6:3: start is no longer used. Remove it.`}},
 		{"sessions as text", defaultWith(t, "sessions: 4", "sessions: four"), []string{`setup.yaml:7:15: nip.sessions four is not a whole number. Write digits only, such as 4.`}},
 		{"widget tls in spec", defaultWith(t, "    brand_name: Beerus\n", "    brand_name: Beerus\n    widget_tls: true\n"), []string{`setup.yaml:13:5: unknown field "widget_tls". Remove it.`}},
 		{"typo in spec", defaultWith(t, "  nip:", "  nap:"), []string{`setup.yaml:6:3: unknown field "nap" (did you mean "nip"?)`}},

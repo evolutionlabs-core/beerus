@@ -15,16 +15,8 @@ import (
 const maxSuggestDistance = 2
 
 func Parse(file string, raw []byte) (Spec, []error) {
-	return parse(file, raw, false)
-}
-
-func ParseStored(file string, raw []byte) (Spec, []error) {
-	return parse(file, raw, true)
-}
-
-func parse(file string, raw []byte, stored bool) (Spec, []error) {
 	var s Spec
-	d := &nodeDecoder{file: file, flatten: "spec", retired: []string{"start"}, stored: stored, pos: map[string]Pos{}}
+	d := &nodeDecoder{file: file, flatten: "spec", pos: map[string]Pos{}}
 	d.document(raw, reflect.ValueOf(&s).Elem())
 	s.pos = d.pos
 	if len(d.errs) > 0 && len(d.pos) == 0 {
@@ -41,8 +33,6 @@ func parse(file string, raw []byte, stored bool) (Spec, []error) {
 type nodeDecoder struct {
 	file    string
 	flatten string
-	retired []string
-	stored  bool
 	pos     map[string]Pos
 	failed  []string
 	errs    []error
@@ -183,12 +173,6 @@ func (d *nodeDecoder) object(n *yaml.Node, path string, v reflect.Value) {
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		k, val := n.Content[i], n.Content[i+1]
 		idx, ok := fields[k.Value]
-		if !ok && path == d.flatten && slices.Contains(d.retired, k.Value) {
-			if !d.stored {
-				d.errs = append(d.errs, fmt.Errorf("%s:%d:%d: %s is no longer used. Remove it.", d.file, k.Line, k.Column, k.Value))
-			}
-			continue
-		}
 		if !ok {
 			d.unknown(k, base, names)
 			continue

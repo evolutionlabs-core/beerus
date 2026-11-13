@@ -153,9 +153,6 @@ func TestBankCLI(t *testing.T) {
 	}
 
 	adaID, out := c.capture(`Created customer (cus_\w+), Adaeze Okafor, at bank-a\. BVN (\d+)\.`, "customer", "create", "--bank", "bank-a", "--name", "Adaeze Okafor", "--phone", "08031234567", "--dob", "1988-03-14")
-	if !regexp.MustCompile(`Business time: ` + businessWAT(t)).MatchString(out) {
-		t.Errorf("customer create has no business time: %q", out)
-	}
 	bvn := regexp.MustCompile(`BVN (\d+)`).FindStringSubmatch(out)[1]
 	chidiID, out := c.capture(`Created customer (cus_\w+), Chidi Okafor, at bank-b`, "customer", "create", "--bank", "bank-b", "--name", "Chidi Okafor", "--phone", "08034567890", "--dob", "1995-05-30")
 	if strings.Contains(out, bvn) {
@@ -189,10 +186,10 @@ func TestBankCLI(t *testing.T) {
 		t.Errorf("accounts at bank-b: %q", out)
 	}
 
-	if got := c.ok("deposit", a1, "--bank", "bank-a", "--amount", "5,000.50"); !matches(`Deposited ₦5,000\.50 into account `+a1+` at bank-a\. Balance ₦5,000\.50\.\nBusiness time: `+businessWAT(t)+`\n`, got) {
+	if got := c.ok("deposit", a1, "--bank", "bank-a", "--amount", "5,000.50"); !matches(`Deposited ₦5,000\.50 into account `+a1+` at bank-a\. Balance ₦5,000\.50\.\n`, got) {
 		t.Errorf("deposit: %q", got)
 	}
-	if got := c.ok("withdraw", a1, "--bank", "bank-a", "--amount", "0.50"); !matches(`Withdrew ₦0\.50 from account `+a1+` at bank-a\. Balance ₦5,000\.00\.\nBusiness time: `+businessWAT(t)+`\n`, got) {
+	if got := c.ok("withdraw", a1, "--bank", "bank-a", "--amount", "0.50"); !matches(`Withdrew ₦0\.50 from account `+a1+` at bank-a\. Balance ₦5,000\.00\.\n`, got) {
 		t.Errorf("withdraw: %q", got)
 	}
 	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", a2, "--amount", "1000"); !matches(`Moved ₦1,000\.00 from `+a1+` to `+a2+`, Adaeze Okafor, at `+businessWAT(t)+`\. Balance ₦4,000\.00\.\n`, got) {
@@ -247,7 +244,7 @@ func TestBankCLI(t *testing.T) {
 	if got := c.ok("nip", "status", psid); !matches(`Session `+psid+`: was pending; now success at `+businessWAT(t)+`\nAmount ₦10\.00 .*\n`, got) {
 		t.Errorf("status query: %q", got)
 	}
-	if got := c.ok("fault", "clear"); !matches(`No faults to clear\.\nBusiness time: `+businessWAT(t)+`\n`, got) {
+	if got := c.ok("fault", "clear"); !matches(`No faults to clear\.\n`, got) {
 		t.Errorf("fault clear with none: %q", got)
 	}
 
@@ -255,7 +252,7 @@ func TestBankCLI(t *testing.T) {
 	if got := c.fails("transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "10"); got != "beerus: Bank B is not available right now, so nothing was debited." {
 		t.Errorf("transfer to a bank that is down: %q", got)
 	}
-	if got := c.ok("fault", "clear", "--bank", "bank-b"); !matches(`Cleared 1 fault\.\nBusiness time: `+businessWAT(t)+`\n`, got) {
+	if got := c.ok("fault", "clear", "--bank", "bank-b"); !matches(`Cleared 1 fault\.\n`, got) {
 		t.Errorf("fault clear: %q", got)
 	}
 
@@ -426,7 +423,7 @@ func TestBankSession(t *testing.T) {
 			}
 
 			con, tty, cmd := startConsole(t, c, shell, []string{"INPUTRC=" + inputrc}, "use", "bank-a")
-			con.waitFor(t, 0, `Using Bank A\. Business time: `+businessWAT(t)+`\. Type exit to leave\.`)
+			con.waitFor(t, 0, `Using Bank A\. Type exit to leave\.`)
 			con.waitFor(t, 0, `\(bank-a\) \$ `)
 
 			from := con.send(t, tty, "echo file=$BEERUS_SESSION lvl=$SHLVL rc=$USER_RC\n")
@@ -441,9 +438,9 @@ func TestBankSession(t *testing.T) {
 			level := con.waitFor(t, from, `lvl=(\d+)`)
 
 			from = con.send(t, tty, "beerus customers\n")
-			con.waitFor(t, from, `No customers\.\s+Business time: `+businessWAT(t))
+			con.waitFor(t, from, `No customers\.`)
 			from = con.send(t, tty, "beerus use bank-b\n")
-			con.waitFor(t, from, `Switched to Bank B\. Business time: `+businessWAT(t)+`\. Type exit to leave\.`)
+			con.waitFor(t, from, `Switched to Bank B\. Type exit to leave\.`)
 			con.waitFor(t, from, `\(bank-b\) \$ `)
 			if raw, _ := os.ReadFile(file); string(raw) != "bank-b\n" {
 				t.Errorf("session file after switching holds %q", raw)

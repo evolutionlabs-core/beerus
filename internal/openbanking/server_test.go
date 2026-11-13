@@ -86,7 +86,7 @@ type env struct {
 	good   *http.Client
 	other  *http.Client
 	now    time.Time
-	biz    time.Time
+	clk    time.Time
 	ledger *recorder
 	mu     sync.Mutex
 }
@@ -125,7 +125,7 @@ func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, store: NewMemStore(), key: key, ca: ca, now: time.Now(), biz: time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC), ledger: &recorder{}}
+	e := &env{t: t, store: NewMemStore(), key: key, ca: ca, now: time.Now(), clk: time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC), ledger: &recorder{}}
 	var h http.Handler
 	e.ts = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
 	e.ts.TLS = &tls.Config{Certificates: []tls.Certificate{pair}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool}
@@ -135,8 +135,8 @@ func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	cfg := Config{
 		BankID: "bank-a", BankName: "Bank A", Issuer: e.ts.URL, AuthorizeURL: "http://bank-a.localhost/authorize", HistoryDays: 90,
 		Store: e.store, Registry: fakeRegistry{client}, Data: fakeData{}, Ledger: e.ledger,
-		Now: func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.now },
-		Biz: func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.biz },
+		Real: func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.now },
+		Now:  func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.clk },
 	}
 	for _, tweak := range tweaks {
 		tweak(&cfg)
@@ -148,11 +148,11 @@ func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	return e
 }
 
-func (e *env) advance(real, biz time.Duration) {
+func (e *env) advance(real, clk time.Duration) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.now = e.now.Add(real)
-	e.biz = e.biz.Add(biz)
+	e.clk = e.clk.Add(clk)
 }
 
 func (e *env) assertion() string {
@@ -505,7 +505,7 @@ func TestConsentLifetimeFollowsTheSetting(t *testing.T) {
 	}
 	uri, _ := e.pushed()
 	req, err := e.srv.Request(context.Background(), uri, "OBR-1")
-	if err != nil || req.Months != 6 || !req.Until.Equal(addMonths(e.biz, 6)) {
+	if err != nil || req.Months != 6 || !req.Until.Equal(addMonths(e.clk, 6)) {
 		t.Fatalf("request %+v %v", req, err)
 	}
 }
@@ -610,7 +610,7 @@ func TestTransactionsReportTheWindow(t *testing.T) {
 	e := newEnv(t)
 	tok, _ := e.tokens()
 	access := tok["access_token"].(string)
-	want := clock.DateOf(e.biz).AddDays(defaultLookaheadDays).String()
+	want := clock.DateOf(e.clk).AddDays(defaultLookaheadDays).String()
 	if status, body := e.get(e.good, "/accounts/0123456789/transactions", access); status != 200 || body["to"] != want {
 		t.Errorf("default window: %d %v, want to %s", status, body, want)
 	}
@@ -773,7 +773,7 @@ func TestAddMonthsClampsToMonthEnd(t *testing.T) {
 func TestConsentAuthorisedOnAMonthEndExpiresOnTheLastDay(t *testing.T) {
 	e := newEnv(t, func(c *Config) { c.ConsentMonths = 6; c.DormantDays = 400 })
 	start := time.Date(2026, time.August, 31, 9, 0, 0, 0, time.UTC)
-	e.now, e.biz = start, start
+	e.now, e.clk = start, start
 	tok, id := e.tokens()
 	c, _ := e.store.Consent(context.Background(), id)
 	if want := time.Date(2027, time.February, 28, 9, 0, 0, 0, time.UTC); !c.ExpiresAt.Equal(want) {

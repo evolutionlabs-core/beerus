@@ -42,16 +42,12 @@ const (
 	stepDone = "done"
 )
 
-var ErrFutureWorld = errors.New("This setup was moved ahead of real time by an older Beerus. Run beerus reset, then beerus init.")
-
-var ErrOldSetup = errors.New("This setup was made by an older Beerus. Run beerus reset, then beerus init.")
-
 func refuseOld(dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, oldSpecFile)); err != nil {
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, statusFile)); errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%s: %w", dir, ErrOldSetup)
+		return fmt.Errorf("%s: %w", dir, setup.ErrOldSetup)
 	}
 	return nil
 }

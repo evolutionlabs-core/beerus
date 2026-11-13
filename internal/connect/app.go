@@ -163,10 +163,6 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New(o.Real)
-	if lc := st.LegacyClock; lc != nil && lc.AnchorBusiness.After(a.clock.Now()) {
-		return nil, fmt.Errorf("%s: %w", cfg.Dir, ErrFutureWorld)
-	}
-	st.LegacyClock = nil
 	if err := a.prepareOpenBanking(); err != nil {
 		return nil, err
 	}
@@ -480,7 +476,7 @@ func (a *App) runConnection(id string) {
 	}
 	due := c.Status == "syncing" || c.Status == "institution_down" || expired ||
 		real.Sub(c.LastSyncedReal) >= a.cfg.SyncInterval() ||
-		at.Sub(c.LastSyncedBiz) >= time.Hour
+		at.Sub(c.LastSyncedClock) >= time.Hour
 	a.mu.Unlock()
 	if !due {
 		return
@@ -529,7 +525,7 @@ func (a *App) syncConnection(c *Connection, at time.Time) bool {
 	c.FullDue = false
 	t := at
 	c.LastSyncedAt = &t
-	c.LastSyncedBiz = at
+	c.LastSyncedClock = at
 	c.LastSyncedReal = a.clock.Real()
 	for _, accID := range c.AccountIDs {
 		if changed[accID] {

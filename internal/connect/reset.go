@@ -61,18 +61,15 @@ func FindResetTarget(dir string) (ResetTarget, error) {
 	if err != nil {
 		return t, err
 	}
-	var spec setup.Spec
+	var current oldSetup
 	hasSpec := false
 	if _, err := os.Stat(filepath.Join(dir, statusFile)); err == nil {
-		raw, err := os.ReadFile(filepath.Join(dir, SpecFile))
-		if err != nil {
-			return t, fmt.Errorf("read %s: %w", SpecFile, err)
+		if hasSpec, err = readYAML(filepath.Join(dir, SpecFile), &current); err != nil {
+			return t, err
 		}
-		parsed, errs := setup.ParseStored(SpecFile, raw)
-		if len(errs) > 0 {
-			return t, errors.Join(errs...)
+		if !hasSpec {
+			return t, fmt.Errorf("read %s: %w", SpecFile, os.ErrNotExist)
 		}
-		spec, hasSpec = parsed, true
 	}
 	var local setup.Local
 	if _, err := readYAML(filepath.Join(dir, LocalFile), &local); err != nil {
@@ -80,7 +77,7 @@ func FindResetTarget(dir string) (ResetTarget, error) {
 	}
 	switch {
 	case hasSpec:
-		t.Name = spec.Metadata.Name
+		t.Name = current.Metadata.Name
 	case hasOld && old.Metadata.Name != "":
 		t.Name = old.Metadata.Name
 	case hasOld && old.Name != "":
@@ -128,7 +125,7 @@ func Reset(ctx context.Context, dir, databaseURL string) ([]string, error) {
 		}
 	}
 	st, err := setup.LoadStatus(dir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, setup.ErrOldSetup) {
 		return nil, err
 	}
 	for n := range owned(st, ownedDatabase, ownedSnapshot) {

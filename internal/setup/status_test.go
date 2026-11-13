@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 )
@@ -57,31 +56,19 @@ func TestStatusRoundTrip(t *testing.T) {
 	}
 }
 
-func TestLoadStatusDropsStartFromOlderBeerus(t *testing.T) {
+func TestLoadStatusRefusesAnOlderVersion(t *testing.T) {
 	dir := t.TempDir()
-	in := sampleStatus()
-	if err := SaveStatus(dir, in); err != nil {
+	old := `{"version":1,"setup":"beerus","clock":{"anchor_business":"2026-11-04T08:00:00+01:00"},"applied":{"spec":{"start":"2026-11-04T08:00:00+01:00"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "control.json")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	_, err := LoadStatus(dir)
+	if !errors.Is(err, ErrOldSetup) {
+		t.Fatalf("got %v", err)
 	}
-	old := strings.Replace(string(raw), `"spec":{`, `"spec":{"start":"2026-11-04T08:00:00+01:00",`, 1)
-	if old == string(raw) {
-		t.Fatalf("control.json has no spec to add start to: %s", raw)
-	}
-	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	out, err := LoadStatus(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	in.Version = StatusVersion
-	if !reflect.DeepEqual(in, out) {
-		t.Fatalf("got  %+v\nwant %+v", out, in)
+	want := dir + ": This setup was made by an older Beerus. Run beerus reset, then beerus init."
+	if err.Error() != want {
+		t.Fatalf("got %q, want %q", err.Error(), want)
 	}
 }
 
@@ -128,9 +115,9 @@ func TestLoadStatusRejects(t *testing.T) {
 	cases := []struct {
 		name, body, want string
 	}{
-		{"newer version", `{"version":2,"setup":"beerus","future":true}`, "control.json has version 2, but this beerus reads up to version 1. Upgrade beerus"},
+		{"newer version", `{"version":3,"setup":"beerus","future":true}`, "control.json has version 3, but this beerus reads up to version 2. Upgrade beerus"},
 		{"no version", `{"setup":"beerus"}`, "control.json has no valid version (got 0). Run beerus reset to start again"},
-		{"unknown field", `{"version":1,"setup":"beerus","colour":"red"}`, `decode control.json: json: unknown field "colour"`},
+		{"unknown field", `{"version":2,"setup":"beerus","colour":"red"}`, `decode control.json: json: unknown field "colour"`},
 		{"not json", `{`, "decode control.json: unexpected end of JSON input"},
 	}
 	for _, c := range cases {

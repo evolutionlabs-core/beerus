@@ -38,6 +38,56 @@ func TestResetRefusesTheWrongName(t *testing.T) {
 	}
 }
 
+func writeVersionOneDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "old-v1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"control.json": `{"version":1,"setup":"old-v1","clock":{"anchor_business":"2026-11-04T08:00:00+01:00"}}`,
+		"setup.yaml":   "apiVersion: beerus.dev/v1\nkind: Setup\nmetadata:\n  name: old-v1\nspec:\n  start: 2026-11-04T08:00:00+01:00\n",
+		"local.yaml":   "pace: 60\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestCommandsRefuseASetupFromAnOlderBeerus(t *testing.T) {
+	dir := writeVersionOneDir(t)
+	want := "beerus: " + dir + ": This setup was made by an older Beerus. Run beerus reset, then beerus init.\n"
+	for _, args := range [][]string{{"up", "--dir", dir}, {"get", "banks", "--dir", dir}} {
+		var out, errOut bytes.Buffer
+		if code := report(&out, &errOut, dispatch(args)); code != 1 || errOut.String() != want || out.Len() != 0 {
+			t.Errorf("beerus %v: exit %d, stdout %q, stderr %q", args, code, out.String(), errOut.String())
+		}
+	}
+}
+
+func TestResetClearsASetupFromAnOlderBeerus(t *testing.T) {
+	url := os.Getenv("BEERUS_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set BEERUS_TEST_DATABASE_URL to run")
+	}
+	t.Setenv(config.DatabaseURLEnv, url)
+	dir := writeVersionOneDir(t)
+	var out bytes.Buffer
+	if err := cmdReset([]string{"old-v1", "--dir", dir}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Cleared "+dir) {
+		t.Fatalf("output: %s", out.String())
+	}
+	ok, err := connect.Initialized(dir)
+	if err != nil || ok {
+		t.Fatalf("after reset: %v %v", ok, err)
+	}
+}
+
 func TestResetClearsAnOldDir(t *testing.T) {
 	url := os.Getenv("BEERUS_TEST_DATABASE_URL")
 	if url == "" {
@@ -57,7 +107,7 @@ func TestResetClearsAnOldDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
-	if _, err := connect.Initialized(dir); !errors.Is(err, connect.ErrOldSetup) {
+	if _, err := connect.Initialized(dir); !errors.Is(err, setup.ErrOldSetup) {
 		t.Fatalf("old dir before reset: %v", err)
 	}
 	var out bytes.Buffer

@@ -77,7 +77,7 @@ const (
 	StepSettlement        = "settlement"
 	StepSchema            = "schema"
 
-	StatusVersion = 1
+	StatusVersion = 2
 )
 
 type Pos struct {
@@ -237,7 +237,6 @@ type Resource struct {
 	Owned               []Owned           `json:"owned,omitempty"`
 	Steps               map[string]string `json:"steps,omitempty"`
 	Partner             *PartnerKeys      `json:"partner,omitempty"`
-	Seeded              *Seeded           `json:"seeded,omitempty"`
 	Result              json.RawMessage   `json:"result,omitempty"`
 	Conditions          []Condition       `json:"conditions,omitempty"`
 	Events              []Event           `json:"events,omitempty"`
@@ -262,14 +261,6 @@ type PartnerKeys struct {
 	CertCN       string `json:"cert_cn"`
 	APIKeySHA256 string `json:"api_key_sha256"`
 	CertSHA256   string `json:"cert_sha256,omitempty"`
-}
-
-type Seeded struct {
-	Template    string    `json:"template"`
-	Value       int64     `json:"value"`
-	HistoryDays int       `json:"history_days"`
-	Generator   int       `json:"generator"`
-	SeededAt    time.Time `json:"seeded_at"`
 }
 
 type Condition struct {
