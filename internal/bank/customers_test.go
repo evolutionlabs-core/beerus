@@ -301,25 +301,6 @@ func TestNoChargesSendsThePrincipalOnly(t *testing.T) {
 	mustOK(t, a.L)
 }
 
-func TestClosureReceiptSkipsEMTL(t *testing.T) {
-	ctx := context.Background()
-	a := newBank(t, "bank-a", "999001", "901", 2)
-	at := time.Date(2025, 6, 2, 10, 0, 0, 0, clock.Lagos)
-	if _, err := a.ReceiveNIP(ctx, "999002250602100000000000000001", a.custs[0], 2000000, bank.Counterparty{Name: "X", BankName: "BANK B"}, "", false, at); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.ReceiveNIP(ctx, "999002250602100000000000000002", a.custs[1], 2000000, bank.Counterparty{Name: "X", BankName: "BANK B"}, "", true, at); err != nil {
-		t.Fatal(err)
-	}
-	if got := bal(t, a.Bank, bank.CustomerAccount(a.custs[0])); got != 50000000+2000000-5000 {
-		t.Fatalf("ordinary receipt balance %d, want EMTL taken", got)
-	}
-	if got := bal(t, a.Bank, bank.CustomerAccount(a.custs[1])); got != 50000000+2000000 {
-		t.Fatalf("closure receipt balance %d, want the whole amount", got)
-	}
-	mustOK(t, a.L)
-}
-
 func TestAuthenticate(t *testing.T) {
 	ctx := context.Background()
 	a := newBank(t, "bank-a", "999001", "901", 0)

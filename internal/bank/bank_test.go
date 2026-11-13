@@ -138,7 +138,7 @@ func TestStatementLinesCarryNarration(t *testing.T) {
 		if _, _, err := a.SendNIP(ctx, bank.NIPSend{Key: sid, From: a.custs[0], Amount: 100000, SessionID: sid, To: to, At: t0.Add(time.Hour), Narration: tc.narration}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := a.ReceiveNIP(ctx, sid, a.custs[1], 100000, sender, tc.narration, false, t0.Add(time.Hour)); err != nil {
+		if _, err := a.ReceiveNIP(ctx, sid, a.custs[1], 100000, sender, tc.narration, t0.Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 		sent, _ := a.L.Events(ctx, bank.CustomerAccount(a.custs[0]), 0, 50)
@@ -265,7 +265,7 @@ func TestMoneyIsConservedAcrossBanksUnderFaults(t *testing.T) {
 			receiverCredits := outcome == "success" || outcome == "timeout_success"
 			if receiverCredits {
 				for k := 0; k <= dupes; k++ {
-					r, err := to.ReceiveNIP(ctx, sid, dst, amount, bank.Counterparty{Name: "Y", BankName: from.P.Name}, "", false, clockAt)
+					r, err := to.ReceiveNIP(ctx, sid, dst, amount, bank.Counterparty{Name: "Y", BankName: from.P.Name}, "", clockAt)
 					if err != nil {
 						rt.Fatal(err)
 					}
@@ -400,7 +400,7 @@ func TestReviewRegressions(t *testing.T) {
 	if _, err := a.ReverseNIP(ctx, sent.EntryID, sid, at.Add(time.Hour)); err != nil {
 		t.Fatalf("refund to a frozen account, or a client key colliding with the reversal key: %v", err)
 	}
-	if _, err := a.ReceiveNIP(ctx, "123", c1, 100, bank.Counterparty{Name: "X", BankName: "Y"}, "", false, at); !errors.Is(err, ledger.ErrInvalid) {
+	if _, err := a.ReceiveNIP(ctx, "123", c1, 100, bank.Counterparty{Name: "X", BankName: "Y"}, "", at); !errors.Is(err, ledger.ErrInvalid) {
 		t.Fatalf("short session ID: %v", err)
 	}
 	if _, err := a.L.OpenAccount(ctx, ledger.Account{Code: bank.CustomerAccount("9020000027"), Name: "Tier one", Kind: ledger.Liability, Customer: true, NUBAN: "9020000027", Product: "savings", Owner: "tier1", KYCTier: 1}); err != nil {

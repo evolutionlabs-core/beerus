@@ -207,7 +207,7 @@ func (a *App) Quote(req TransferRequest) (TransferResult, error) {
 		if err != nil {
 			return res, err
 		}
-		c := a.cfg.Fees().ForTransfer(req.Amount, clock.DateOf(now), false)
+		c := a.cfg.Fees().ForTransfer(req.Amount, false)
 		res.Kind, res.ToName = "nip", name
 		res.Fee, res.VAT, res.StampDuty = c.Fee, c.VAT, c.StampDuty
 		if res.TotalDebit, err = totalDebit(req.Amount, c); err != nil {
@@ -354,7 +354,7 @@ func (a *App) nipTransfer(rt transferRoute, req TransferRequest, res TransferRes
 		return res, enquiryError(rt.toName, err)
 	}
 	res.Kind, res.ToName = "nip", name
-	if _, err := totalDebit(req.Amount, a.cfg.Fees().ForTransfer(req.Amount, clock.DateOf(res.At), false)); err != nil {
+	if _, err := totalDebit(req.Amount, a.cfg.Fees().ForTransfer(req.Amount, false)); err != nil {
 		return res, err
 	}
 	lock := a.sendLock(rt.fromBank)
@@ -470,7 +470,7 @@ func (a *App) credit(rt transferRoute, req TransferRequest, sid, senderName stri
 	if a.bankDown(rt.toBank, at) {
 		return fmt.Errorf("%s is down: %w", rt.toName, nibss.ErrUnavailable)
 	}
-	_, err := rt.to.Bank().ReceiveNIP(context.Background(), sid, req.To, req.Amount, bank.Counterparty{Name: senderName, AccountNumber: req.From, BankCode: rt.fromCode, BankName: rt.fromName}, req.Narration, req.Closure, at)
+	_, err := rt.to.Bank().ReceiveNIP(context.Background(), sid, req.To, req.Amount, bank.Counterparty{Name: senderName, AccountNumber: req.From, BankCode: rt.fromCode, BankName: rt.fromName}, req.Narration, at)
 	if err != nil {
 		return fmt.Errorf("credit %s at %s: %w", req.To, rt.toName, err)
 	}

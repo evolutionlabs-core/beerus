@@ -7,7 +7,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"time"
 
 	"go.yaml.in/yaml/v3"
 
@@ -91,14 +90,12 @@ type Band struct {
 	Fee  int64 `yaml:"fee_minor"`
 }
 
-type NIPRule struct {
-	From   string `yaml:"from"`
+type NIPFees struct {
 	Bands  []Band `yaml:"bands"`
 	Source string `yaml:"source"`
 }
 
 type Levy struct {
-	From      string `yaml:"from"`
 	Threshold int64  `yaml:"threshold_minor"`
 	Amount    int64  `yaml:"amount_minor"`
 	Source    string `yaml:"source"`
@@ -110,10 +107,9 @@ type Figure struct {
 }
 
 type Fees struct {
-	NIP                []NIPRule `yaml:"nip"`
-	StampDuty          []Levy    `yaml:"stamp_duty"`
-	EMTL               []Levy    `yaml:"emtl"`
-	VATRateBasisPoints Figure    `yaml:"vat_rate_basis_points"`
+	NIP                NIPFees `yaml:"nip"`
+	StampDuty          Levy    `yaml:"stamp_duty"`
+	VATRateBasisPoints Figure  `yaml:"vat_rate_basis_points"`
 }
 
 type Pack struct {
@@ -155,33 +151,11 @@ const nipCodeLength = 6
 const maxFeeMinor = math.MaxInt64 / 4
 
 func (f Fees) check() error {
-	if len(f.NIP) == 0 {
-		return fmt.Errorf("fees.nip needs at least one rule")
+	if err := f.NIP.check(); err != nil {
+		return fmt.Errorf("fees.nip: %w", err)
 	}
-	froms := make([]string, len(f.NIP))
-	for i, r := range f.NIP {
-		froms[i] = r.From
-		if err := r.check(); err != nil {
-			return fmt.Errorf("fees.nip[%d]: %w", i, err)
-		}
-	}
-	if err := checkFroms("fees.nip", froms); err != nil {
-		return err
-	}
-	for name, levies := range map[string][]Levy{"fees.stamp_duty": f.StampDuty, "fees.emtl": f.EMTL} {
-		if len(levies) == 0 {
-			return fmt.Errorf("%s needs at least one rule", name)
-		}
-		froms := make([]string, len(levies))
-		for i, l := range levies {
-			froms[i] = l.From
-			if err := l.check(); err != nil {
-				return fmt.Errorf("%s[%d]: %w", name, i, err)
-			}
-		}
-		if err := checkFroms(name, froms); err != nil {
-			return err
-		}
+	if err := f.StampDuty.check(); err != nil {
+		return fmt.Errorf("fees.stamp_duty: %w", err)
 	}
 	if f.VATRateBasisPoints.Value < 0 || f.VATRateBasisPoints.Value > 10000 {
 		return fmt.Errorf("fees.vat_rate_basis_points must be from 0 to 10000, not %d", f.VATRateBasisPoints.Value)
@@ -199,19 +173,7 @@ func (f Fees) check() error {
 	return nil
 }
 
-func checkFroms(name string, froms []string) error {
-	for i, s := range froms {
-		if _, err := time.Parse("2006-01-02", s); err != nil {
-			return fmt.Errorf("%s[%d] from %q must be a date like 2020-01-31", name, i, s)
-		}
-		if i > 0 && s <= froms[i-1] {
-			return fmt.Errorf("%s[%d] from %s must be later than %s", name, i, s, froms[i-1])
-		}
-	}
-	return nil
-}
-
-func (r NIPRule) check() error {
+func (r NIPFees) check() error {
 	if r.Source == "" {
 		return fmt.Errorf("no source")
 	}

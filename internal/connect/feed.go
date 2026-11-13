@@ -47,8 +47,6 @@ func Normalise(raw string) string {
 		return "VAT"
 	case strings.HasPrefix(s, "STAMP DUTY"), s == "Stamp duty":
 		return "Stamp duty"
-	case strings.HasPrefix(s, "EMTL"), s == "Electronic money transfer levy":
-		return "Electronic money transfer levy"
 	case reSalary.MatchString(s):
 		return "Salary from " + titleCase(reSalary.FindStringSubmatch(s)[1])
 	case s == "TRF TO SAVINGS":

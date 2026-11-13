@@ -142,7 +142,7 @@ func TestReceivedNIPKeepsTheSender(t *testing.T) {
 	b := newBank(t, "bank-b", "999002", "902", 1)
 	sid := "999001260302100000000000000002"
 	sender := bank.Counterparty{Name: "ADAEZE OKAFOR", AccountNumber: "9010000014", BankCode: "999001", BankName: "BANK A"}
-	if _, err := b.ReceiveNIP(ctx, sid, b.custs[0], 1000000, sender, "", false, t0.Add(time.Hour)); err != nil {
+	if _, err := b.ReceiveNIP(ctx, sid, b.custs[0], 1000000, sender, "", t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	sameRows(t, feedRows(t, b.Bank, b.custs[0], t0.Add(2*time.Hour)), []feedRow{

@@ -96,7 +96,7 @@ func TestOnlineBanking(t *testing.T) {
 	b.get("/transfer")
 	form := url.Values{"from": {current}, "mode": {"other"}, "number": {chidi}, "bank": {"bank-b"}, "amount": {"12000"}, "narration": {"Online test"}}
 	b.post("/transfer/review", form)
-	if !strings.Contains(b.last, "Chidi Okafor") || !strings.Contains(b.last, "₦12,076.88") {
+	if !strings.Contains(b.last, "Chidi Okafor") || !strings.Contains(b.last, "₦12,060.75") {
 		t.Fatalf("review page: %.600s", b.last)
 	}
 	form.Set("csrf", "")
