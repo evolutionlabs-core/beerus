@@ -201,7 +201,7 @@ func TestBankCLI(t *testing.T) {
 
 	sent := c.json("transfer", "--bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000", "--narration", "rent")
 	total := sent["amount_minor"].(float64) + sent["fee_minor"].(float64) + sent["vat_minor"].(float64) + sent["stamp_duty_minor"].(float64)
-	if sent["status"] != "success" || sent["response_code"] != "00" || sent["total_debit_minor"] != total || sent["sender_balance_after_minor"] != 400000-total || sent["fee_minor"].(float64) <= 0 {
+	if sent["status"] != "success" || sent["response_code"] != "00" || sent["total_debit_minor"] != total || sent["sender_balance_after_minor"] != 400000-total || sent["fee_minor"] != float64(0) {
 		t.Errorf("nip transfer: %v", sent)
 	}
 	sid, out := c.capture(`Session (\d+): success at `+businessWAT(t)+``, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000.50")
@@ -211,18 +211,18 @@ func TestBankCLI(t *testing.T) {
 	if got := c.ok("nip", "status", sid); !matches(`Session `+sid+`: success at `+businessWAT(t)+`\nAmount ₦1,000\.50 from `+a1+` \(bank code 000001\) to `+b1+` \(bank code 000002\), started at `+businessWAT(t)+`\.\n`, got) {
 		t.Errorf("nip status: %q", got)
 	}
-	if out := c.ok("statement", a1, "--bank", "bank-a", "--from", s.today().String(), "--to", s.today().String()); !strings.Contains(out, "9 entries on this page.") || !strings.Contains(out, sid) || !strings.Contains(out, "−₦1,000.50") {
+	if out := c.ok("statement", a1, "--bank", "bank-a", "--from", s.today().String(), "--to", s.today().String()); !strings.Contains(out, "5 entries on this page.") || !strings.Contains(out, sid) || !strings.Contains(out, "−₦1,000.50") {
 		t.Errorf("statement: %q", out)
 	}
-	if lines := c.json("statement", a1, "--bank", "bank-a")["data"].([]any); len(lines) != 9 {
-		t.Errorf("statement --json has %d lines, want 9", len(lines))
+	if lines := c.json("statement", a1, "--bank", "bank-a")["data"].([]any); len(lines) != 5 {
+		t.Errorf("statement --json has %d lines, want 5", len(lines))
 	}
 
-	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000", "--dry-run"); !matches(`^Sending ₦1,000\.00 to Chidi Okafor at Bank B\.\nFee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Total debit ₦1,010\.75\. Balance after ₦\d[\d,]*\.\d\d\.\nThis was a quote\. Nothing was sent\.\n$`, got) {
+	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000", "--dry-run"); !matches(`^Sending ₦1,000\.00 to Chidi Okafor at Bank B\.\nFee ₦0\.00, VAT ₦0\.00 and stamp duty ₦0\.00\. Total debit ₦1,000\.00\. Balance after ₦\d[\d,]*\.\d\d\.\nThis was a quote\. Nothing was sent\.\n$`, got) {
 		t.Errorf("transfer --dry-run: %q", got)
 	}
-	if lines := c.json("statement", a1, "--bank", "bank-a")["data"].([]any); len(lines) != 9 {
-		t.Errorf("a quote posted to the statement: %d lines, want 9", len(lines))
+	if lines := c.json("statement", a1, "--bank", "bank-a")["data"].([]any); len(lines) != 5 {
+		t.Errorf("a quote posted to the statement: %d lines, want 5", len(lines))
 	}
 	if help := c.ok("transfer", "--help"); !strings.HasPrefix(help, "Usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [options]\n") || !strings.Contains(help, "\n  --dry-run ") || strings.Contains(help, "beerus customer") {
 		t.Errorf("transfer --help: %q", help)
@@ -304,7 +304,7 @@ func TestBankCLI(t *testing.T) {
 		{[]string{"customer", "close", adaID, "--bank", "bank-a"}, "beerus: Customer has open accounts: customer " + adaID + " still has 2 open accounts; close them first."},
 		{[]string{"customer", "close", "cus_none", "--bank", "bank-a"}, "beerus: No such customer."},
 		{[]string{"account", "open", "--bank", "bank-a", "--customer", adaID}, "beerus: --customer and --type are required; usage: beerus account open --customer ID --type current|savings [options]"},
-		{[]string{"account", "close", a1, "--bank", "bank-a"}, "beerus: Account balance is not zero: account " + a1 + " holds ₦1,957.25; move it out by transfer or cash first."},
+		{[]string{"account", "close", a1, "--bank", "bank-a"}, "beerus: Account balance is not zero: account " + a1 + " holds ₦1,989.50; move it out by transfer or cash first."},
 		{[]string{"account"}, "beerus: usage: beerus account open|close"},
 		{[]string{"accounts", "--bank", "bank-a", "--limit", "0"}, "beerus: Limit must be a number from 1 to 1000."},
 		{[]string{"accounts", "--bank", "bank-a", "--cursor", "junk"}, "beerus: That cursor is not valid. Use next_cursor from the last page."},

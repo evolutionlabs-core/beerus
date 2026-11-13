@@ -110,13 +110,10 @@ type Figure struct {
 }
 
 type Fees struct {
-	NIP                 []NIPRule `yaml:"nip"`
-	StampDuty           []Levy    `yaml:"stamp_duty"`
-	EMTL                []Levy    `yaml:"emtl"`
-	VATRateBasisPoints  Figure    `yaml:"vat_rate_basis_points"`
-	SMSAlertFee         Figure    `yaml:"sms_alert_fee_minor"`
-	SMSMonthlyCap       Figure    `yaml:"sms_monthly_cap_minor"`
-	MaintenancePerMille Figure    `yaml:"maintenance_per_mille"`
+	NIP                []NIPRule `yaml:"nip"`
+	StampDuty          []Levy    `yaml:"stamp_duty"`
+	EMTL               []Levy    `yaml:"emtl"`
+	VATRateBasisPoints Figure    `yaml:"vat_rate_basis_points"`
 }
 
 type Pack struct {
@@ -191,9 +188,6 @@ func (f Fees) check() error {
 	}
 	for name, fig := range map[string]Figure{
 		"fees.vat_rate_basis_points": f.VATRateBasisPoints,
-		"fees.sms_alert_fee_minor":   f.SMSAlertFee,
-		"fees.sms_monthly_cap_minor": f.SMSMonthlyCap,
-		"fees.maintenance_per_mille": f.MaintenancePerMille,
 	} {
 		if fig.Source == "" {
 			return fmt.Errorf("%s has no source", name)

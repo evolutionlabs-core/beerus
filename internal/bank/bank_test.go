@@ -13,6 +13,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
@@ -92,6 +93,34 @@ func TestNIPTransferEntriesMatchPRD(t *testing.T) {
 	evs, _ := a.L.Events(ctx, bank.CustomerAccount(a.custs[0]), 1, 10)
 	if len(evs) != 4 {
 		t.Fatalf("want 4 separate statement lines, got %d", len(evs))
+	}
+	mustOK(t, a.L)
+}
+
+func TestFreeNIPTransferPostsNoFeeLines(t *testing.T) {
+	ctx := context.Background()
+	a := newBank(t, "bank-a", "999001", "901", 1)
+	at := time.Date(2026, 5, 4, 9, 0, 0, 0, clock.Lagos)
+	before := bal(t, a.Bank, bank.CustomerAccount(a.custs[0]))
+	_, c, err := a.SendNIP(ctx, bank.NIPSend{Key: "send-free", From: a.custs[0], Amount: 300000, SessionID: "999001260504090000000000000001", To: bank.Counterparty{Name: "CHIDI OKAFOR", BankName: "BANK B"}, At: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != (charges.Transfer{}) {
+		t.Fatalf("charges %+v, want none", c)
+	}
+	if got := before - bal(t, a.Bank, bank.CustomerAccount(a.custs[0])); got != 300000 {
+		t.Fatalf("customer debited %d, want 300000", got)
+	}
+	if bal(t, a.Bank, bank.FeeIncome) != 0 || bal(t, a.Bank, bank.VATPayable) != 0 || bal(t, a.Bank, bank.StampPayable) != 0 {
+		t.Fatal("a free transfer posted fee, VAT or stamp duty")
+	}
+	evs, err := a.L.Events(ctx, bank.CustomerAccount(a.custs[0]), 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 {
+		t.Fatalf("want the transfer line only, got %d", len(evs))
 	}
 	mustOK(t, a.L)
 }
@@ -347,35 +376,6 @@ func TestConcurrentPostingKeepsInvariants(t *testing.T) {
 	mustOK(t, a.L)
 }
 
-func TestMonthEndChargesOnce(t *testing.T) {
-	ctx := context.Background()
-	a := newBank(t, "bank-a", "999001", "901", 2)
-	march := time.Date(2026, 3, 10, 12, 0, 0, 0, clock.Lagos)
-	for i := 0; i < 3; i++ {
-		if _, err := a.OwnTransfer(ctx, fmt.Sprintf("m%d", i), a.custs[0], a.custs[1], 1000000, "", march.Add(time.Duration(i)*time.Hour)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	end := time.Date(2026, 3, 31, 23, 30, 0, 0, clock.Lagos)
-	before := bal(t, a.Bank, bank.CustomerAccount(a.custs[0]))
-	r, err := a.MonthEnd(ctx, time.March, 2026, end)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.Accounts != 2 {
-		t.Fatalf("charged %d accounts", r.Accounts)
-	}
-	want := int64(4*400) + 120 + 3000 + 225
-	if got := before - bal(t, a.Bank, bank.CustomerAccount(a.custs[0])); got != want {
-		t.Fatalf("sender charged %d, want %d", got, want)
-	}
-	again, err := a.MonthEnd(ctx, time.March, 2026, end)
-	if err != nil || again.Accounts != 0 {
-		t.Fatalf("month end ran twice: %+v %v", again, err)
-	}
-	mustOK(t, a.L)
-}
-
 func TestReviewRegressions(t *testing.T) {
 	ctx := context.Background()
 	a := newBank(t, "bank-a", "999001", "901", 3)
@@ -402,12 +402,6 @@ func TestReviewRegressions(t *testing.T) {
 	}
 	if _, err := a.ReceiveNIP(ctx, "123", c1, 100, bank.Counterparty{Name: "X", BankName: "Y"}, "", false, at); !errors.Is(err, ledger.ErrInvalid) {
 		t.Fatalf("short session ID: %v", err)
-	}
-	if _, err := a.MonthEnd(ctx, time.March, 2026, time.Date(2026, 3, 31, 23, 0, 0, 0, clock.Lagos)); err != nil {
-		t.Fatalf("month end with a frozen customer: %v", err)
-	}
-	if v := bal(t, a.Bank, bank.CustomerAccount(c1)); v >= 50000000 {
-		t.Fatal("month end skipped the other customers")
 	}
 	if _, err := a.L.OpenAccount(ctx, ledger.Account{Code: bank.CustomerAccount("9020000027"), Name: "Tier one", Kind: ledger.Liability, Customer: true, NUBAN: "9020000027", Product: "savings", Owner: "tier1", KYCTier: 1}); err != nil {
 		t.Fatal(err)

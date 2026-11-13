@@ -38,7 +38,7 @@ func TestNIPFeeOn(t *testing.T) {
 		"max amount":         {math.MaxInt64, d, 5000},
 		"before first rule":  {500001, clock.Date{Y: 2019, M: 12, D: 31}, 2500},
 		"first rule day":     {500001, clock.Date{Y: 2020, M: 1, D: 1}, 2500},
-		"far future":         {500001, clock.Date{Y: 2300, M: 2, D: 29}, 2500},
+		"far future":         {500001, clock.Date{Y: 2300, M: 2, D: 29}, 1000},
 	}
 	for name, c := range cases {
 		if got := s.NIPFeeOn(c.amount, c.d); got != c.want {
@@ -95,14 +95,33 @@ func TestStampDutyAndEMTL(t *testing.T) {
 	}
 }
 
-func TestForTransferAndFigures(t *testing.T) {
+func TestForTransfer(t *testing.T) {
 	s := nigeria(t)
-	got := s.ForTransfer(1000000, clock.Date{Y: 2026, M: 1, D: 1}, false)
-	if got != (Transfer{Fee: 2500, VAT: 188, StampDuty: 5000}) || got.Total() != 7688 {
-		t.Errorf("ForTransfer = %+v, total %d", got, got.Total())
+	draft := clock.Date{Y: 2026, M: 5, D: 1}
+	cases := map[string]struct {
+		amount int64
+		d      clock.Date
+		want   Transfer
+		total  int64
+	}{
+		"one naira":            {100, draft, Transfer{}, 0},
+		"top of free band":     {500000, draft, Transfer{}, 0},
+		"above free band":      {500001, draft, Transfer{Fee: 1000, VAT: 75}, 1075},
+		"top of middle band":   {5000000, draft, Transfer{Fee: 1000, VAT: 75, StampDuty: 5000}, 6075},
+		"above middle band":    {5000001, draft, Transfer{Fee: 5000, VAT: 375, StampDuty: 5000}, 10375},
+		"max amount":           {math.MaxInt64, clock.Date{Y: 2300, M: 2, D: 29}, Transfer{Fee: 5000, VAT: 375, StampDuty: 5000}, 10375},
+		"day before draft":     {100, clock.Date{Y: 2026, M: 4, D: 30}, Transfer{Fee: 1000, VAT: 75}, 1075},
+		"old bands in 2025":    {500001, clock.Date{Y: 2025, M: 12, D: 31}, Transfer{Fee: 2500, VAT: 188}, 2688},
+		"old top band in 2025": {5000001, clock.Date{Y: 2025, M: 12, D: 31}, Transfer{Fee: 5000, VAT: 375}, 5375},
 	}
-	if s.VATRateBasisPoints() != 750 || s.SMSAlertFee() != 400 || s.SMSMonthlyCap() != 50000 || s.MaintenancePerMille() != 1 {
-		t.Errorf("figures = %d %d %d %d", s.VATRateBasisPoints(), s.SMSAlertFee(), s.SMSMonthlyCap(), s.MaintenancePerMille())
+	for name, c := range cases {
+		got := s.ForTransfer(c.amount, c.d, false)
+		if got != c.want || got.Total() != c.total {
+			t.Errorf("%s: ForTransfer(%d, %s) = %+v total %d, want %+v total %d", name, c.amount, c.d, got, got.Total(), c.want, c.total)
+		}
+	}
+	if s.VATRateBasisPoints() != 750 {
+		t.Errorf("VAT rate = %d, want 750", s.VATRateBasisPoints())
 	}
 }
 

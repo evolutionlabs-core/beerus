@@ -26,21 +26,15 @@ type levyRule struct {
 }
 
 type Schedule struct {
-	nip                 []nipRule
-	stamp               []levyRule
-	emtl                []levyRule
-	vatRateBasisPoints  int64
-	smsAlertFee         int64
-	smsMonthlyCap       int64
-	maintenancePerMille int64
+	nip                []nipRule
+	stamp              []levyRule
+	emtl               []levyRule
+	vatRateBasisPoints int64
 }
 
 func New(f countrypack.Fees) (*Schedule, error) {
 	s := &Schedule{
-		vatRateBasisPoints:  f.VATRateBasisPoints.Value,
-		smsAlertFee:         f.SMSAlertFee.Value,
-		smsMonthlyCap:       f.SMSMonthlyCap.Value,
-		maintenancePerMille: f.MaintenancePerMille.Value,
+		vatRateBasisPoints: f.VATRateBasisPoints.Value,
 	}
 	for _, r := range f.NIP {
 		from, err := clock.ParseDate(r.From)
@@ -91,18 +85,6 @@ func levyOn(rules []levyRule, amount int64, d clock.Date) int64 {
 
 func (s *Schedule) VATRateBasisPoints() int64 {
 	return s.vatRateBasisPoints
-}
-
-func (s *Schedule) SMSAlertFee() int64 {
-	return s.smsAlertFee
-}
-
-func (s *Schedule) SMSMonthlyCap() int64 {
-	return s.smsMonthlyCap
-}
-
-func (s *Schedule) MaintenancePerMille() int64 {
-	return s.maintenancePerMille
 }
 
 func (s *Schedule) NIPFeeOn(amount int64, d clock.Date) int64 {

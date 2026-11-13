@@ -104,7 +104,7 @@ func TestFeesCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Fees.NIP) != 1 || len(p.Fees.NIP[0].Bands) != 3 || p.Fees.VATRateBasisPoints.Value != 750 {
+	if len(p.Fees.NIP) != 2 || len(p.Fees.NIP[1].Bands) != 3 || p.Fees.VATRateBasisPoints.Value != 750 {
 		t.Errorf("fees = %+v", p.Fees)
 	}
 	bad := func(edit func(f *Fees)) error {
@@ -124,7 +124,7 @@ func TestFeesCheck(t *testing.T) {
 		"bad date":        {func(f *Fees) { f.EMTL[0].From = "soon" }, "fees.emtl[0] from \"soon\" must be a date like 2020-01-31"},
 		"dates repeat":    {func(f *Fees) { f.EMTL[1].From = f.EMTL[0].From }, "fees.emtl[1] from 2020-01-01 must be later than 2020-01-01"},
 		"vat too high":    {func(f *Fees) { f.VATRateBasisPoints.Value = 10001 }, "fees.vat_rate_basis_points must be from 0 to 10000, not 10001"},
-		"no sms source":   {func(f *Fees) { f.SMSAlertFee.Source = "" }, "fees.sms_alert_fee_minor has no source"},
+		"no vat source":   {func(f *Fees) { f.VATRateBasisPoints.Source = "" }, "fees.vat_rate_basis_points has no source"},
 	}
 	for name, c := range cases {
 		if err := bad(c.edit); err == nil || err.Error() != c.want {
