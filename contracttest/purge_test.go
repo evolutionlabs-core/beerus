@@ -216,7 +216,7 @@ func TestPurgeRules(t *testing.T) {
 		t.Fatalf("a bank from the init spec has CBN account %q, want %s", oldBank.Allocated.CBNAccount, oldCode)
 	}
 	s.openAccount(s.join("adaeze", "bank-b"), "current")
-	s.connect("adaeze", "bank-b", s.today().AddDays(-3))
+	oldConn := s.connect("adaeze", "bank-b", s.today().AddDays(-3))
 	consentEvents := func(bank string) int {
 		return len(s.ctl("GET", "/registry/consents?bank="+bank, nil)["data"].([]any))
 	}
@@ -249,7 +249,10 @@ func TestPurgeRules(t *testing.T) {
 		t.Fatalf("consent history of the purged bank: %d under %s, %d under bank-b", oldEvents, retired, consentEvents("bank-b"))
 	}
 	s.openAccount(s.join("adaeze", "bank-b"), "current")
-	s.connect("adaeze", "bank-b", s.today().AddDays(-3))
+	newConn := s.connect("adaeze", "bank-b", s.today().AddDays(-3))
+	if len(newConn.Accounts) != 1 || len(oldConn.Accounts) != 1 || newConn.Accounts[0]["id"] == oldConn.Accounts[0]["id"] {
+		t.Fatalf("the recreated bank's account reuses the purged bank's record: old %v, new %v", oldConn.Accounts, newConn.Accounts)
+	}
 	if consentEvents("bank-b") == 0 || consentEvents(retired) != oldEvents {
 		t.Fatalf("a consent of the recreated bank was dropped: %d under bank-b, %d under %s (was %d)", consentEvents("bank-b"), consentEvents(retired), retired, oldEvents)
 	}

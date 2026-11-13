@@ -118,7 +118,7 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	case ls != nil:
 		errs = append(errs, ls.Drop())
 	case r.Allocated.Database != "":
-		errs = append(errs, store.DropDatabases(context.Background(), a.cfg.DatabaseURL, []string{r.Allocated.Database}))
+		errs = append(errs, store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{r.Allocated.Database}))
 	}
 	for _, snap := range snaps {
 		errs = append(errs, a.dropSnapshotEverywhere(snap))
@@ -169,17 +169,7 @@ func (a *App) dropBankRows(id, retired string) {
 			c.Institution = retired
 		}
 	}
-	prefix := id + ":"
-	for _, rec := range a.st.Accounts {
-		if strings.HasPrefix(rec.Key, prefix) {
-			rec.Key = acctKey(retired, strings.TrimPrefix(rec.Key, prefix))
-		}
-	}
-	for i := range a.st.Access {
-		if strings.HasPrefix(a.st.Access[i].Key, prefix) {
-			a.st.Access[i].Key = acctKey(retired, strings.TrimPrefix(a.st.Access[i].Key, prefix))
-		}
-	}
+	a.retireAccounts(id, retired)
 	for lid, l := range a.st.LinkSessions {
 		if l.Institution == id {
 			delete(a.st.LinkSessions, lid)
@@ -194,6 +184,48 @@ func (a *App) dropBankRows(id, retired string) {
 	}
 	a.regMu.Unlock()
 	a.dirty()
+}
+
+func (a *App) retireAccounts(id, retired string) {
+	prefix := id + ":"
+	moved := map[string]string{}
+	for oldID, rec := range a.st.Accounts {
+		if strings.HasPrefix(rec.Key, prefix) {
+			moved[oldID] = AccountID(rec.PartnerID, retired, strings.TrimPrefix(rec.Key, prefix))
+		}
+	}
+	for oldID, newID := range moved {
+		rec := a.st.Accounts[oldID]
+		delete(a.st.Accounts, oldID)
+		rec.ID = newID
+		rec.Key = acctKey(retired, strings.TrimPrefix(rec.Key, prefix))
+		a.st.Accounts[newID] = rec
+		if f, ok := a.st.Feeds[oldID]; ok {
+			delete(a.st.Feeds, oldID)
+			a.st.Feeds[newID] = f
+		}
+	}
+	for _, ref := range a.st.Refreshes {
+		if newID, ok := moved[ref.AccountID]; ok {
+			ref.AccountID = newID
+		}
+	}
+	for _, c := range a.st.Connections {
+		for i, accID := range c.AccountIDs {
+			if newID, ok := moved[accID]; ok {
+				c.AccountIDs[i] = newID
+			}
+		}
+	}
+	for i := range a.st.Access {
+		ev := &a.st.Access[i]
+		if newID, ok := moved[ev.AccountID]; ok {
+			ev.AccountID = newID
+		}
+		if strings.HasPrefix(ev.Key, prefix) {
+			ev.Key = acctKey(retired, strings.TrimPrefix(ev.Key, prefix))
+		}
+	}
 }
 
 func (a *App) retireMember(ctx context.Context, r setup.Resource) error {

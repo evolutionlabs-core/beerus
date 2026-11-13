@@ -218,23 +218,29 @@ func (p *planner) appliedCodes(b Bank) (string, string) {
 
 func (p *planner) allocate() map[string]codes {
 	usedNIP, usedNUBAN := map[string]bool{}, map[string]bool{}
-	markNUBAN := func(code string) {
-		if n, err := world.NormaliseBankCode(code); err == nil {
-			usedNUBAN[n] = true
+	markNUBAN := func(id, code string) {
+		if code == "" {
+			return
 		}
+		n, err := world.NormaliseBankCode(code)
+		if err != nil {
+			p.fail("banks["+id+"]", nil, "banks[%s]: held NUBAN code is bad: %v", id, err)
+			return
+		}
+		usedNUBAN[n] = true
 	}
 	for _, in := range p.members {
 		usedNIP[in.NIPCode] = true
-		markNUBAN(in.NUBANCode)
+		markNUBAN(in.ID, in.NUBANCode)
 	}
 	for _, in := range p.tombstones {
 		usedNIP[in.NIPCode] = true
-		markNUBAN(in.NUBANCode)
+		markNUBAN(in.ID, in.NUBANCode)
 	}
 	for _, b := range p.st.Applied.Spec.Banks {
 		nip, nuban := p.appliedCodes(b)
 		usedNIP[nip] = true
-		markNUBAN(nuban)
+		markNUBAN(b.ID, nuban)
 	}
 	out := map[string]codes{}
 	for _, b := range p.desired.Spec.Banks {
@@ -247,7 +253,7 @@ func (p *planner) allocate() map[string]codes {
 			continue
 		}
 		usedNIP[c.nip] = true
-		markNUBAN(c.nuban)
+		markNUBAN(b.ID, c.nuban)
 		out[b.ID] = c
 	}
 	return out
