@@ -123,65 +123,6 @@ func (s *Store) Name() string {
 	return s.name
 }
 
-func snapName(name, id string) string {
-	return name + "_snap_" + id
-}
-
-func (s *Store) Snapshot(ctx context.Context, id string) error {
-	if !regexp.MustCompile(`^[a-z0-9]{1,24}$`).MatchString(id) {
-		return fmt.Errorf("bad snapshot id %q", id)
-	}
-	s.Pool.Close()
-	defer func() {
-		if s.Pool != nil {
-			_ = s.connect(ctx)
-		}
-	}()
-	c, err := admin(ctx, s.url)
-	if err != nil {
-		return err
-	}
-	defer c.Close(ctx)
-	_, err = c.Exec(ctx, `CREATE DATABASE `+snapName(s.name, id)+` TEMPLATE `+s.name)
-	return err
-}
-
-func (s *Store) HasSnapshot(ctx context.Context, id string) (bool, error) {
-	c, err := admin(ctx, s.url)
-	if err != nil {
-		return false, err
-	}
-	defer c.Close(ctx)
-	return exists(ctx, c, snapName(s.name, id))
-}
-
-func (s *Store) Restore(ctx context.Context, id string) error {
-	if !regexp.MustCompile(`^[a-z0-9]{1,24}$`).MatchString(id) {
-		return fmt.Errorf("bad snapshot id %q", id)
-	}
-	c, err := admin(ctx, s.url)
-	if err != nil {
-		return err
-	}
-	defer c.Close(ctx)
-	ok, err := exists(ctx, c, snapName(s.name, id))
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("no bank database for snapshot %s", id)
-	}
-	s.Pool.Close()
-	if _, err := c.Exec(ctx, `DROP DATABASE IF EXISTS `+s.name+` WITH (FORCE)`); err != nil {
-		_ = s.connect(ctx)
-		return err
-	}
-	if _, err := c.Exec(ctx, `CREATE DATABASE `+s.name+` TEMPLATE `+snapName(s.name, id)); err != nil {
-		return err
-	}
-	return s.connect(ctx)
-}
-
 func (s *Store) Drop(ctx context.Context) error {
 	if s.Pool != nil {
 		s.Pool.Close()

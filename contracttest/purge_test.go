@@ -51,7 +51,6 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if sent, _ := s.payTry("bank-a", home.Accounts[0], "abuja-digital", target, "100", nil); sent["status"] == "success" {
 		t.Fatalf("the timeout fault did not leave the transfer pending: %v", sent)
 	}
-	snap := fmt.Sprint(s.ctl("POST", "/snapshots", map[string]string{"name": "with abuja"})["id"])
 	databases := func() []string {
 		names, err := store.List(context.Background(), s.cfg.DatabaseURL, bank.Database)
 		if err != nil {
@@ -59,11 +58,11 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 		}
 		return names
 	}
-	if len(databases()) != 2 {
+	if len(databases()) != 1 {
 		t.Fatalf("before the purge: %v", databases())
 	}
 	imp := s.ctl("GET", "/banks/abuja-digital/purge", nil)
-	if !strings.Contains(fmt.Sprint(imp["blockers"]), "to settle 2 transfers (net ₦25,100.00)") || fmt.Sprint(imp["snapshots"]) != "["+snap+"]" || imp["database"] != bank.Database || imp["connections"] != float64(1) {
+	if !strings.Contains(fmt.Sprint(imp["blockers"]), "to settle 2 transfers (net ₦25,100.00)") || imp["database"] != bank.Database || imp["connections"] != float64(1) {
 		t.Fatalf("purge preview: %v", imp)
 	}
 	atBankA := s.balances(home)[home.Accounts[0]]
@@ -71,7 +70,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("purge was not admitted as terminating: %v", res)
 	}
 	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦25,100.00). Wait for it, or run beerus nip settle-now.")
-	if got := databases(); len(got) != 2 {
+	if got := databases(); len(got) != 1 {
 		t.Fatalf("the purge dropped databases while transfers were unsettled: %v", got)
 	}
 	if ne := s.ctl("GET", "/nip/name-enquiry?bank_code="+bank.NIPCode+"&account_number="+target, nil); ne["response_code"] != "91" {
@@ -89,16 +88,13 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("account.removed webhooks: %v", got)
 	}
 	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil), 409)
-	if _, err := s.ctlTry("POST", "/snapshots/"+snap+"/restore", nil); err == nil || !strings.Contains(err.Error(), "HTTP 409") || !strings.Contains(err.Error(), "Abuja Digital is terminating, so a snapshot cannot be restored until that finishes") {
-		t.Fatalf("restore while a bank is terminating: %v", err)
-	}
 	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Abuja Digital", "id": "abuja-digital"}); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
 		t.Fatalf("re-adding a bank that is being removed: %v", err)
 	}
 	s.advance("24h")
 	s.advance("24h")
 	s.waitBlocked("abuja-digital", setup.ReasonMoneyDecisionNeeded, "Abuja Digital holds ₦25,100.00 for 1 customer. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.")
-	if got := databases(); len(got) != 2 {
+	if got := databases(); len(got) != 1 {
 		t.Fatalf("the purge dropped databases before the money was decided: %v", got)
 	}
 	if _, err := s.applyWithout("abuja-digital", map[string]any{"prune": true, "money": map[string]any{"money": "transfer", "to": "bank-a"}}); err != nil {
@@ -117,9 +113,6 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	}
 	if got := databases(); len(got) != 0 {
 		t.Fatalf("databases left behind: %v", got)
-	}
-	if _, err := os.Stat(s.cfg.Path("snapshots", snap+".json")); !os.IsNotExist(err) {
-		t.Fatalf("snapshot file left behind: %v", err)
 	}
 	c := s.loadConfig()
 	if c.Bank("abuja-digital") != nil {
@@ -222,15 +215,8 @@ func TestPurgeRules(t *testing.T) {
 	s.ctl("POST", "/banks/acme-bank/close", map[string]any{"money": "leave"})
 	s.waitPhase("acme-bank", connect.PhaseClosed, 60*time.Second)
 	oldBalance := cbnBalance(t, s.cfg, "acme-bank")
-	snap := fmt.Sprint(s.ctl("POST", "/snapshots", map[string]string{"name": "closed"})["id"])
 	s.ctl("POST", "/banks/acme-bank/purge", nil)
 	s.waitGone("bank", "acme-bank")
-	if _, err := os.Stat(s.cfg.Path("snapshots", snap+".json")); !os.IsNotExist(err) {
-		t.Fatalf("the purge kept a snapshot that holds the bank: %v", err)
-	}
-	if _, err := s.ctlTry("POST", "/snapshots/"+snap+"/restore", nil); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
-		t.Fatalf("restore of a snapshot the purge deleted: %v", err)
-	}
 	if tombs := storedStatus(t, s.cfg.Dir).Tombstones; len(tombs) != 1 || tombs[0].ID != "acme-bank" || tombs[0].NIPCode != oldCode || tombs[0].Status != "removed" {
 		t.Fatalf("tombstones after the purge: %+v", tombs)
 	}

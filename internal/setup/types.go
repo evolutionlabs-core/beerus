@@ -304,7 +304,6 @@ type Impact struct {
 	Customers   int      `json:"customers"`
 	Connections int      `json:"connections"`
 	Databases   []string `json:"databases,omitempty"`
-	Snapshots   []string `json:"snapshots,omitempty"`
 }
 
 type Action struct {

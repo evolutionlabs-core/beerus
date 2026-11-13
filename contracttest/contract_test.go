@@ -289,39 +289,11 @@ func TestExchangeErrors(t *testing.T) {
 	}
 }
 
-func TestSnapshotRestoreResetsCursor(t *testing.T) {
+func TestGarbageCursorIsRejected(t *testing.T) {
 	s := newStack(t)
 	conn := s.connect("tunde", "bank-a", s.today().AddDays(-30))
 	id := fmt.Sprint(conn.Accounts[0]["id"])
-	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "before"})
-	first, _ := s.syncAll(id, "", 100)
-	s.advance("48h")
-	s.ctl("POST", "/banks/bank-a/deposits", map[string]string{"account": s.persona("tunde").Accounts[0], "amount": "15000"})
-	s.syncNow()
-	first, _ = s.syncMore(id, first, 100)
-	restored := s.ctl("POST", "/snapshots/"+fmt.Sprint(snap["id"])+"/restore", nil)
-	if restored["world_id"] == first.worldID {
-		t.Fatal("restore kept the world ID")
-	}
-	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync?cursor="+first.cursor, nil)
-	if r.Status != 409 || r.Code() != "reauth_required" {
-		t.Fatalf("old cursor after restore: %d %s", r.Status, r.Body)
-	}
-	s.connect("tunde", "bank-a", s.today().AddDays(-30))
-	s.syncNow()
-	again, _ := s.syncAll(id, "", 100)
-	if again.worldID == first.worldID {
-		t.Fatal("world_id did not change")
-	}
-	for lid := range again.lines {
-		if _, ok := first.lines[lid]; !ok && !first.removed[lid] {
-			t.Fatalf("line %s is new after the restore", lid)
-		}
-	}
-	if len(again.lines) >= len(first.lines) {
-		t.Fatalf("the restored world should hold fewer lines: %d vs %d", len(again.lines), len(first.lines))
-	}
-	r = s.call("GET", "/v1/accounts/"+id+"/transactions/sync?cursor=cur_garbage", nil)
+	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync?cursor=cur_garbage", nil)
 	if r.Status != 400 || r.Code() != "invalid_cursor" {
 		t.Fatalf("garbage cursor: %d %s", r.Status, r.Body)
 	}

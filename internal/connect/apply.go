@@ -455,11 +455,6 @@ func (a *App) bankImpact(act *setup.Action, st setup.Status) error {
 		return err
 	}
 	im.Transfers, im.NetMinor = transfers, net
-	snaps, err := a.snapshotsWith(act.ID)
-	if err != nil {
-		return err
-	}
-	im.Snapshots = snaps
 	return nil
 }
 

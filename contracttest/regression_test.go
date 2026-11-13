@@ -30,10 +30,6 @@ func TestRevokedConnectionCannotBeReauthorised(t *testing.T) {
 			t.Fatalf("connection %s came back as %v", id, c.JSON["status"])
 		}
 	}
-	s.restoreSnapshot()
-	if c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); c.JSON["status"] != "revoked" {
-		t.Fatalf("a restore moved a revoked connection to %v", c.JSON["status"])
-	}
 	if !testingExternal() {
 		a := s.call("GET", "/v1/accounts/"+fmt.Sprint(conn.Accounts[0]["id"]), nil)
 		if a.Status != 409 || a.Code() != "connection_revoked" {

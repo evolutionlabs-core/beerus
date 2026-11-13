@@ -101,10 +101,6 @@ func commands() []command {
 		{"fault timeout", "", "Make transfers time out", "fault timeout --outcome credited|failed|unknown [options]", nil},
 		{"fault list", "", "List active faults", "fault list [options]", nil},
 		{"fault clear", "", "Clear active faults", "fault clear [options]", nil},
-		{"snapshot", groupFaults, "Save and restore Beerus's data", "", cmdSnapshot},
-		{"snapshot list", "", "List snapshots", "snapshot list", nil},
-		{"snapshot take", "", "Take a snapshot", "snapshot take [name]", nil},
-		{"snapshot restore", "", "Restore a snapshot", "snapshot restore <id>", nil},
 
 		{"run", groupRunning, "Run one participant: cbn, core or a bank", "run --participant cbn|core|<bank-id> [options]", cmdRun},
 		{"compose", groupRunning, "Print a Docker Compose file for the setup", "compose [options]", cmdCompose},

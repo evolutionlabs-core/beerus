@@ -26,15 +26,6 @@ func postedKeys(t *testing.T, st *feedState) map[string]string {
 	return seen
 }
 
-func idSet(st *feedState) []string {
-	ids := []string{}
-	for id := range st.lines {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
 func TestDoneStory(t *testing.T) {
 	s := newBankStack(t)
 	cur := ""
@@ -211,8 +202,6 @@ func TestDoneStory(t *testing.T) {
 	}
 	debit, credit := bySession(feedA), bySession(feedB)
 	check(len(debit) == 1 && len(credit) == 1 && num(debit[0]["amount_minor"]) == -num(credit[0]["amount_minor"]) && num(credit[0]["amount_minor"]) == 10000000, "session %s: Bank A %v, Bank B %v", ownSID[1], debit, credit)
-	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "done-story"})
-	atSnapA, atSnapB := idSet(feedA), idSet(feedB)
 
 	step(7, "she revokes consent in her bank's app")
 	app := s.bankSignIn("adaeze")
@@ -235,7 +224,6 @@ func TestDoneStory(t *testing.T) {
 		t.Log("A running beerus cannot move its clock, so the story stops before the consent expires.")
 		return
 	}
-	oldCursor := feedB.cursor
 	s.advance("366d")
 	check(s.must(s.call("GET", "/v1/connections/"+connB, nil), 200).JSON["status"] == "expired", "Bank B consent did not expire")
 	check(len(s.eventsOf("connection.status_changed", func(d map[string]any) bool {
@@ -258,30 +246,7 @@ func TestDoneStory(t *testing.T) {
 	s.vmu.Unlock()
 	check(n == 0, "%d contract violations", n)
 
-	step(10, "restoring the snapshot asks Balance to reconnect, then rebuilds the feed")
-	restored := s.ctl("POST", "/snapshots/"+fmt.Sprint(snap["id"])+"/restore", nil)
-	check(restored["world_id"] != feedB.worldID, "restore kept the world ID")
-	r = s.call("GET", "/v1/accounts/"+idB+"/transactions/sync?cursor="+oldCursor, nil)
-	check(r.Status == 409 && r.Code() == "reauth_required", "old cursor after restore: %d %s", r.Status, r.Body)
-	for name, id := range map[string]string{"Bank A": connA, "Bank B": connB} {
-		check(s.must(s.call("GET", "/v1/connections/"+id, nil), 200).JSON["status"] == "reauth_required", "%s: the connection should need consent again", name)
-		re := s.must(s.call("POST", "/v1/connections/"+id+"/reauth", map[string]string{"state": "restored"}), 201)
-		res := s.completeLink(fmt.Sprint(re.JSON["widget_url"]), "", "adaeze", nil)
-		check(res.Code != "" && res.State == "restored", "%s: reconnect: %+v", name, res)
-		ex := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 200)
-		check(ex.JSON["id"] == id, "%s: reconnecting created a new connection", name)
-	}
-	s.syncNow()
-	for name, pair := range map[string]struct {
-		id  string
-		was []string
-	}{"Bank A": {idA, atSnapA}, "Bank B": {idB, atSnapB}} {
-		fresh, last := s.syncAll(pair.id, "", 500)
-		check(last.Status == 200, "%s: sync after restore: %d %s", name, last.Status, last.Body)
-		check(fresh.worldID != feedB.worldID, "%s: world_id did not change", name)
-		postedKeys(t, fresh)
-		check(fmt.Sprint(idSet(fresh)) == fmt.Sprint(pair.was), "%s: the rebuilt feed differs from the feed at the snapshot: %d vs %d lines", name, len(fresh.lines), len(pair.was))
-	}
+	step(10, "the settlement and the bank ledgers still balance")
 	if s.app != nil {
 		checkSettled(t, s.app)
 		if c, err := s.app.VerifyBank(); err != nil || !c.OK() {

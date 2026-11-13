@@ -16,6 +16,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/jackc/pgx/v5"
 )
 
 var resetToday = clock.Date{Y: 2026, M: 11, D: 3}
@@ -119,5 +120,49 @@ func TestResetDropsOwnedDatabasesOutsideThePrefix(t *testing.T) {
 	}
 	if len(left) != 0 || !strings.Contains(out.String(), custom) {
 		t.Fatalf("custom database left: %v; output: %s", left, out.String())
+	}
+}
+
+func TestResetDropsALeftoverNIBSSSnapshotDatabase(t *testing.T) {
+	url := os.Getenv("BEERUS_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set BEERUS_TEST_DATABASE_URL to run")
+	}
+	t.Setenv(config.DatabaseURLEnv, url)
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := connect.Init(dir, banktest.Spec(defaultSetupName, resetToday), connect.DefaultLocal(), resetToday); err != nil {
+		t.Fatal(err)
+	}
+	live := config.DatabaseName(dir, setup.SystemNIBSS)
+	s, err := nibss.Open(ctx, url, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	leftover := live + "_snap_old"
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close(ctx) })
+	if _, err := conn.Exec(ctx, `CREATE DATABASE `+leftover+` TEMPLATE `+live); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.DropDatabases(ctx, url, []string{leftover, live}); err != nil {
+			t.Error(err)
+		}
+	})
+	var out bytes.Buffer
+	if err := cmdReset([]string{defaultSetupName, "--dir", dir}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), leftover) {
+		t.Fatalf("output: %s", out.String())
+	}
+	left, err := store.List(ctx, url, strings.TrimSuffix(config.DatabaseName(dir, "x"), "x"))
+	if err != nil || len(left) != 0 {
+		t.Fatalf("databases left after reset: %v %v", left, err)
 	}
 }

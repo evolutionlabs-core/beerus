@@ -2,11 +2,8 @@ package connect
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -17,20 +14,19 @@ import (
 )
 
 type DoctorReport struct {
-	Databases     []string `json:"databases"`
-	Orphans       []string `json:"orphans"`
-	Missing       []string `json:"missing"`
-	DeadSnapshots []string `json:"dead_snapshots"`
-	StaleOwned    []string `json:"stale_owned"`
-	Fixed         bool     `json:"fixed"`
+	Databases  []string `json:"databases"`
+	Orphans    []string `json:"orphans"`
+	Missing    []string `json:"missing"`
+	StaleOwned []string `json:"stale_owned"`
+	Fixed      bool     `json:"fixed"`
 }
 
 func (r DoctorReport) Clean() bool {
-	return len(r.Orphans)+len(r.DeadSnapshots)+len(r.StaleOwned) == 0
+	return len(r.Orphans)+len(r.StaleOwned) == 0
 }
 
 func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, error) {
-	rep := DoctorReport{Databases: []string{}, Orphans: []string{}, Missing: []string{}, DeadSnapshots: []string{}, StaleOwned: []string{}}
+	rep := DoctorReport{Databases: []string{}, Orphans: []string{}, Missing: []string{}, StaleOwned: []string{}}
 	if fix {
 		if _, err := os.Stat(c.Path("running")); err == nil {
 			return rep, errors.New("beerus up is running; stop it before using --fix (or delete " + c.Path("running") + " if it is not)")
@@ -47,59 +43,16 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		}
 	}
 	expected := map[string]bool{}
-	for name := range owned(live, ownedDatabase, ownedSnapshot) {
+	for name := range owned(live, ownedDatabase) {
 		expected[name] = true
 	}
-	cbn := config.DatabaseName(c.Dir, cbnID)
 	if len(c.Banks) > 0 {
-		expected[cbn] = true
+		expected[config.DatabaseName(c.Dir, cbnID)] = true
 	}
 	byID := map[string]*config.Bank{}
 	for _, b := range c.Banks {
 		expected[b.Database] = true
 		byID[b.ID] = b
-	}
-	dir := c.Path("snapshots")
-	entries, err := os.ReadDir(dir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return rep, fmt.Errorf("read %s: %w", dir, err)
-	}
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return rep, fmt.Errorf("read snapshot %s: %w", e.Name(), err)
-		}
-		var f struct {
-			Meta snapshotMeta `json:"meta"`
-		}
-		if err := json.Unmarshal(raw, &f); err != nil {
-			return rep, fmt.Errorf("decode snapshot %s: %w", e.Name(), err)
-		}
-		copies := []string{}
-		for _, id := range f.Meta.Banks {
-			if b := byID[id]; b != nil {
-				copies = append(copies, b.Database+"_snap_"+snapID(f.Meta.ID))
-			}
-		}
-		if len(copies) < len(f.Meta.Banks) {
-			rep.DeadSnapshots = append(rep.DeadSnapshots, f.Meta.ID)
-			continue
-		}
-		for _, n := range copies {
-			expected[n] = true
-		}
-		if f.Meta.CBN {
-			expected[cbn+"_snap_"+snapID(f.Meta.ID)] = true
-		}
-		if f.Meta.NIBSS {
-			expected[nibssSnapshot(c, f.Meta.ID)] = true
-		}
 	}
 	prefix := config.DatabaseName(c.Dir, "")
 	all, err := store.List(ctx, c.DatabaseURL, "beerus_")
@@ -138,11 +91,6 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 	}
 	if err := store.DropDatabases(ctx, c.DatabaseURL, rep.Orphans); err != nil {
 		return rep, err
-	}
-	for _, id := range rep.DeadSnapshots {
-		if err := os.Remove(filepath.Join(dir, id+".json")); err != nil && !os.IsNotExist(err) {
-			return rep, err
-		}
 	}
 	if len(rep.StaleOwned) > 0 {
 		ctl, err := openStore(c.Dir)

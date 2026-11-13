@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -83,58 +82,6 @@ func (s *ledgerSource) EndOfDay(nuban string, d clock.Date) (int64, error) {
 
 func (s *ledgerSource) Account(nuban string) (ledger.Account, error) {
 	return s.Bank().L.Account(s.ctx, bank.CustomerAccount(nuban))
-}
-
-func snapID(id string) string {
-	return strings.ToLower(strings.TrimPrefix(id, "snap_"))
-}
-
-func (s *ledgerSource) Snapshot(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.ctl.Claim(setup.KindBank, s.inst.ID, setup.Owned{Kind: ownedSnapshot, Name: s.snapshotName(id)}); err != nil {
-		return err
-	}
-	if err := s.st.Snapshot(s.ctx, snapID(id)); err != nil {
-		return err
-	}
-	return s.reopen()
-}
-
-func (s *ledgerSource) DropSnapshot(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	name := s.snapshotName(id)
-	if err := store.DropDatabases(s.ctx, s.st.URL(), []string{name}); err != nil {
-		return err
-	}
-	return s.ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name})
-}
-
-func (s *ledgerSource) snapshotName(id string) string {
-	return s.st.Name() + "_snap_" + snapID(id)
-}
-
-func (s *ledgerSource) HasSnapshot(id string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.st.HasSnapshot(s.ctx, snapID(id))
-}
-
-func (s *ledgerSource) Restore(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	serial, err := s.b.NUBANSerial(s.ctx)
-	if err != nil {
-		return err
-	}
-	if err := s.st.Restore(s.ctx, snapID(id)); err != nil {
-		return err
-	}
-	if err := s.reopen(); err != nil {
-		return err
-	}
-	return s.b.RaiseNUBANSerial(s.ctx, serial)
 }
 
 func (s *ledgerSource) Release() {

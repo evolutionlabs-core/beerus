@@ -615,12 +615,6 @@ func parseSpan(s string) (time.Duration, error) {
 	return time.ParseDuration(s)
 }
 
-func (s *Stack) restoreSnapshot() {
-	s.t.Helper()
-	id := fmt.Sprint(s.ctl("POST", "/snapshots", map[string]string{"name": "reauth"})["id"])
-	s.ctl("POST", "/snapshots/"+id+"/restore", nil)
-}
-
 func (s *Stack) today() clock.Date {
 	out := s.ctl("GET", "/clock", nil)
 	d, err := clock.ParseDate(fmt.Sprint(out["business_date"]))

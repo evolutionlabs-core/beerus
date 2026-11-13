@@ -400,7 +400,7 @@ paths:
 
         Lines in `added` and `modified` are ordered by `sequence`. Upsert by `id`. Only pending lines appear in `removed`.
 
-        A cursor belongs to one world. When the world is restored from a snapshot, an old cursor returns `409 cursor_reset`. Start again with no cursor and replace the account's feed with the rebuilt one. Upserting by `id` gives no duplicates.
+        A cursor belongs to one world. When Beerus starts after an unclean shutdown, it starts a new world and an old cursor returns `409 cursor_reset`. Start again with no cursor and replace the account's feed with the rebuilt one. Upserting by `id` gives no duplicates.
       parameters:
         - name: cursor
           in: query
@@ -710,7 +710,7 @@ components:
               message: The connection was revoked. Create a new link session.
               request_id: req_01JBC9X5
     CursorReset:
-      description: The cursor belongs to a world that was replaced by a snapshot restore (`cursor_reset`); start again with no cursor. The same status is used when no consent covers the account any more (`connection_revoked` or `reauth_required`).
+      description: The cursor belongs to a world that was replaced after an unclean shutdown or a reset (`cursor_reset`); start again with no cursor. The same status is used when no consent covers the account any more (`connection_revoked` or `reauth_required`).
       content:
         application/json:
           schema:
@@ -718,7 +718,7 @@ components:
           example:
             error:
               code: cursor_reset
-              message: The world was restored from a snapshot.
+              message: The world was replaced after an unclean shutdown or a reset.
               request_id: req_01JBC9X6
     Unprocessable:
       description: The request is well formed but cannot be processed.
@@ -806,7 +806,7 @@ components:
         - `forbidden` (403): the caller may not do this.
         - `not_found` (404): the resource does not exist for this partner.
         - `invalid_code` (404): the one-time code is unknown, used or expired.
-        - `cursor_reset` (409): the world was restored from a snapshot.
+        - `cursor_reset` (409): the world was replaced after an unclean shutdown or a reset.
         - `connection_revoked` (409): the connection was revoked.
         - `reauth_required` (409): the customer must consent again.
         - `link_session_expired` (409): the link session expired.
@@ -1250,7 +1250,7 @@ components:
           type: boolean
         world_id:
           type: string
-          description: The world this feed belongs to. It changes when the world is restored from a snapshot.
+          description: The world this feed belongs to. It changes when Beerus starts after an unclean shutdown, and after a reset.
     Refresh:
       type: object
       required: [id, account_id, status, requested_at]

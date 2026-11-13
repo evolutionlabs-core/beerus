@@ -297,7 +297,7 @@ func randomToken(prefix string, n int) (string, error) {
 }
 
 func Prepare(c *Config, now time.Time) error {
-	for _, sub := range []string{"ca", "connect", "partners", "webhook", "snapshots"} {
+	for _, sub := range []string{"ca", "connect", "partners", "webhook"} {
 		if err := os.MkdirAll(c.Path(sub), 0o700); err != nil {
 			return fmt.Errorf("create %s: %w", sub, err)
 		}

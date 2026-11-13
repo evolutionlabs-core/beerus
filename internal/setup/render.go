@@ -200,9 +200,6 @@ func details(a Action) []string {
 		if n := len(im.Databases); n > 0 {
 			drop = append(drop, count(n, "database", "databases"))
 		}
-		if n := len(im.Snapshots); n > 0 {
-			drop = append(drop, count(n, "snapshot", "snapshots"))
-		}
 		if len(drop) > 0 {
 			groups = append(groups, []string{"drop " + list(drop)})
 		}

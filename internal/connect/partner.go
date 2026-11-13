@@ -690,7 +690,7 @@ func (a *App) syncTransactions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if c.World != a.st.WorldID {
-			writeError(w, r, http.StatusConflict, "cursor_reset", "The world was restored from a snapshot. Start again with no cursor.")
+			writeError(w, r, http.StatusConflict, "cursor_reset", "The world was replaced after an unclean shutdown or a reset. Start again with no cursor.")
 			return
 		}
 		if c.Account != rec.ID || c.Seq > a.st.Seq {

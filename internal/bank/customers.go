@@ -623,21 +623,3 @@ func (b *Bank) Authenticate(ctx context.Context, username, password string) (Cus
 	}
 	return c, nil
 }
-
-func (b *Bank) NUBANSerial(ctx context.Context) (int64, error) {
-	var n int64
-	if err := b.L.Pool().QueryRow(ctx, `SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM nuban_serial`).Scan(&n); err != nil {
-		return 0, fmt.Errorf("read the NUBAN serial of %s: %w", b.P.ID, err)
-	}
-	return n, nil
-}
-
-func (b *Bank) RaiseNUBANSerial(ctx context.Context, n int64) error {
-	if n < 1 {
-		return nil
-	}
-	if _, err := b.L.Pool().Exec(ctx, `SELECT setval('nuban_serial', greatest($1, (SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM nuban_serial)))`, n); err != nil {
-		return fmt.Errorf("raise the NUBAN serial of %s to %d: %w", b.P.ID, n, err)
-	}
-	return nil
-}

@@ -16,7 +16,7 @@ func TestRenderSample(t *testing.T) {
 		}},
 		{Op: OpRemove, Kind: KindBank, ID: "bank-b", Destructive: true,
 			Fields: []FieldChange{{Path: "on_remove.money", To: MoneyTransfer}, {Path: "on_remove.to", To: "Zenith Bank"}},
-			Impact: &Impact{Transfers: 2, NetMinor: 125000000, MoneyMinor: 8421050000, Customers: 3, Connections: 3, Databases: []string{"beerus_x_bank_b"}, Snapshots: []string{"snapshots/bank-b.json"}}},
+			Impact: &Impact{Transfers: 2, NetMinor: 125000000, MoneyMinor: 8421050000, Customers: 3, Connections: 3, Databases: []string{"beerus_x_bank_b"}}},
 		{Op: OpDrift, Kind: KindBank, ID: "bank-c", Fields: []FieldChange{{Path: "steps.database", From: stepDone, To: "missing"}}},
 	}}
 	want := `Setup beerus
@@ -26,7 +26,7 @@ func TestRenderSample(t *testing.T) {
   - bank bank-b      remove   DESTRUCTIVE
         stop routing; revoke 3 connections; settle 2 open transfers (net ₦1,250,000.00);
         transfer ₦84,210,500.00 for 3 customers to Zenith Bank (on_remove); settle the moves;
-        drop 1 database and 1 snapshot. Its ID and codes stay reserved.
+        drop 1 database. Its ID and codes stay reserved.
   ! bank bank-c      drift    database missing; it will be rebuilt
 
 Plan: 1 to create, 1 to update, 1 to remove, 1 to repair.
@@ -53,7 +53,7 @@ func TestRenderSingularsAndOtherChoices(t *testing.T) {
 			Impact: &Impact{Transfers: 1, NetMinor: -5050, MoneyMinor: 100, Customers: 1, Connections: 1}},
 		{Op: OpRemove, Kind: KindBank, ID: "mfb", Destructive: true,
 			Fields:   []FieldChange{{Path: "on_remove.money", To: MoneyLeave}},
-			Impact:   &Impact{MoneyMinor: 20000, Customers: 2, Databases: []string{"a", "b"}, Snapshots: []string{"s1", "s2", "s3"}},
+			Impact:   &Impact{MoneyMinor: 20000, Customers: 2, Databases: []string{"a", "b"}},
 			Blockers: []string{"mfb is the last bank. Keep at least one bank in the file."}},
 		{Op: OpRemove, Kind: KindPartner, ID: "balance", Destructive: true, Impact: &Impact{Connections: 2}},
 		{Op: OpRemove, Kind: KindPartner, ID: "ledgerly", Destructive: true, Impact: &Impact{}},
@@ -75,7 +75,7 @@ func TestRenderSingularsAndOtherChoices(t *testing.T) {
   - bank mfb               remove   DESTRUCTIVE
         stop routing;
         leave ₦200.00 for 2 customers on frozen accounts (on_remove);
-        drop 2 databases and 3 snapshots. Its ID and codes stay reserved.
+        drop 2 databases. Its ID and codes stay reserved.
         blocked: mfb is the last bank. Keep at least one bank in the file.
   - partner balance        remove   DESTRUCTIVE
         revoke 2 connections; drop its keys and live rows.

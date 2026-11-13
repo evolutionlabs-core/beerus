@@ -47,7 +47,6 @@ Open banking:
 
 Failures and recovery:
   fault         Make a bank go down or time out
-  snapshot      Save and restore Beerus's data
 
 Running Beerus:
   run           Run one participant: cbn, core or a bank
