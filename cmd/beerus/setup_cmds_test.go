@@ -109,7 +109,11 @@ func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
 	if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("exported file: %v %v", fi, err)
 	}
-	if raw, _ := os.ReadFile(file); !strings.Contains(string(raw), "bank-b") || !strings.Contains(string(raw), "nuban_code: \"002\"") && !strings.Contains(string(raw), "nuban_code: 002") {
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "bank-b") || !strings.Contains(string(raw), "nuban_code: \"002\"") && !strings.Contains(string(raw), "nuban_code: 002") {
 		t.Fatalf("export should pin the codes:\n%s", raw)
 	}
 	if r := invoke(cmdDiff, "", false, "--dir", dir, "-f", file); r.code != 0 || r.out != "No changes.\n" {

@@ -174,28 +174,6 @@ func (a *App) removedBanks(ctx context.Context) ([]nibss.Institution, error) {
 	return out, nil
 }
 
-func (a *App) freeID(ctx context.Context, slug string) (string, error) {
-	if slug == "" {
-		return slug, nil
-	}
-	removed, err := a.removedBanks(ctx)
-	if err != nil {
-		return "", err
-	}
-	taken := map[string]bool{}
-	for _, in := range removed {
-		taken[in.ID] = true
-	}
-	for _, b := range a.bankList() {
-		taken[b.ID] = true
-	}
-	id := slug
-	for n := 2; taken[id]; n++ {
-		id = fmt.Sprintf("%s-%d", slug, n)
-	}
-	return id, nil
-}
-
 func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, error) {
 	if req.NIPCode != "" || req.NUBANCode != "" {
 		return BankStatus{}, invalid("nip_code and nuban_code are assigned by Beerus; leave them out")
@@ -205,9 +183,12 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 	}
 	name := strings.TrimSpace(req.Name)
 	id := strings.TrimSpace(req.ID)
+	slug := ""
+	var removed []nibss.Institution
 	if id == "" {
+		slug = strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
 		var err error
-		if id, err = a.freeID(ctx, strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")); err != nil {
+		if removed, err = a.removedBanks(ctx); err != nil {
 			return BankStatus{}, err
 		}
 	}
@@ -216,9 +197,25 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 		return BankStatus{}, fmt.Errorf("read control.json: %w", err)
 	}
 	if r := findResource(&stored, setup.KindBank, id); r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
-		return BankStatus{}, applyFail(http.StatusConflict, codeBeingRemoved, "banks[%s] is being removed and cannot be added back until removal finishes. Wait for it.", id)
+		return BankStatus{}, applyFail(http.StatusConflict, codeBeingRemoved, "banks[%s] is being removed, and its id is never reused. Choose another id.", id)
 	}
 	err = a.applyEdit(func(sp *setup.Spec) error {
+		if slug != "" {
+			taken := map[string]bool{}
+			for _, b := range sp.Spec.Banks {
+				taken[b.ID] = true
+			}
+			for _, in := range removed {
+				taken[in.ID] = true
+			}
+			for _, b := range a.bankList() {
+				taken[b.ID] = true
+			}
+			id = slug
+			for n := 2; taken[id]; n++ {
+				id = fmt.Sprintf("%s-%d", slug, n)
+			}
+		}
 		nb := setup.Bank{ID: id, Name: name, Type: orDefault(req.Type, "commercial"), SettlesThrough: req.SettlesThrough}
 		if nb.SettlesThrough == "" && nb.Type == "microfinance" {
 			for _, b := range sp.Spec.Banks {

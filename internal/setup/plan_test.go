@@ -812,7 +812,7 @@ func TestBuildAllocation(t *testing.T) {
 				tombstone("old-3", "Old 3", "001000", "001000"), tombstone("old-4", "Old 4", "001001", "001001"),
 			},
 			desired: func(s *Spec) { s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "commercial")) },
-			errs:    []string{"banks[bank-c]: no bank codes left for deposit money banks (all 4 are used)"},
+			errs:    []string{"banks[bank-c]: no bank codes left for deposit money banks (all 4 are used). Run beerus reset to start again."},
 		},
 		{
 			name: "codes cannot be set on a new bank",

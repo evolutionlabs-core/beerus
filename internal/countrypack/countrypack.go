@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 //go:embed ng.yaml
@@ -173,9 +175,7 @@ func Nigeria() (*Pack, error) {
 	return &p, nil
 }
 
-const (
-	nipCodeLength = 6
-)
+const nipCodeLength = 6
 
 const maxFeeMinor = math.MaxInt64 / 4
 
@@ -309,9 +309,7 @@ func checkTiers(category string, tiers []CodeTier) error {
 		case t.Last >= pow10(t.NIPDigits) || t.Last >= pow10(t.NUBANDigits):
 			return fmt.Errorf("%s ends at %d, which does not fit its digits", name, t.Last)
 		}
-		switch len(t.NUBANPrefix) + t.NUBANDigits {
-		case 3, 5, 6:
-		default:
+		if _, err := world.NormaliseBankCode(t.NUBAN(t.First)); err != nil {
 			return fmt.Errorf("%s must make NUBAN codes of 3, 5 or 6 digits", name)
 		}
 		prev = t.Last

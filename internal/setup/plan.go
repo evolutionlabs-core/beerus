@@ -293,7 +293,7 @@ func (p *planner) nextCodes(b Bank, usedNIP, usedNUBAN map[string]bool) (codes, 
 		}
 		total += t.Last - t.First + 1
 	}
-	p.fail("banks["+b.ID+"]", nil, "banks[%s]: no bank codes left for %s (all %d are used)", b.ID, strings.ReplaceAll(category, "_", " ")+"s", total)
+	p.fail("banks["+b.ID+"]", nil, "banks[%s]: no bank codes left for %s (all %d are used). Run beerus reset to start again.", b.ID, strings.ReplaceAll(category, "_", " ")+"s", total)
 	return codes{}, false
 }
 
