@@ -877,7 +877,11 @@ func cmdDescribe(e *cli, args []string) error {
 	raw, err := c.send("GET", "/resources/"+strings.ToLower(kind)+"/"+url.PathEscape(pos[1]), nil)
 	var ae *apiError
 	if errors.As(err, &ae) && ae.Status == http.StatusNotFound && kind == setup.KindBank {
-		if cl := closureOf(st, pos[1]); cl != nil {
+		cl := closureOf(st, pos[1])
+		if purged, ok := st.PurgedClosure(pos[1]); cl == nil && ok {
+			cl = &purged
+		}
+		if cl != nil {
 			if *asJSON {
 				out, merr := json.Marshal(cl)
 				if merr != nil {

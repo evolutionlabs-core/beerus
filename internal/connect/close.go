@@ -266,7 +266,7 @@ func (a *App) CloseBank(id string, req CloseRequest) (setup.Resource, error) {
 	return a.Resource(setup.KindBank, id)
 }
 
-func (a *App) decideMoney(_ context.Context, r setup.Resource) (*setup.Condition, error) {
+func (a *App) decideMoney(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
 	b := a.bankByID(id)
 	if b == nil {
@@ -283,7 +283,7 @@ func (a *App) decideMoney(_ context.Context, r setup.Resource) (*setup.Condition
 	if cond != nil {
 		return cond, nil
 	}
-	res, err := a.closeBooks(id, imp, choice, to)
+	res, err := a.closeBooks(ctx, id, imp, choice, to)
 	if err != nil {
 		return nil, err
 	}
@@ -369,7 +369,7 @@ func plural(n int, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
-func (a *App) closeBooks(id string, imp CloseImpact, choice map[string]string, to string) (CloseResult, error) {
+func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice map[string]string, to string) (CloseResult, error) {
 	now := a.clock.Now()
 	a.mu.Lock()
 	from, dest := a.ledgerFor(id), a.ledgerFor(to)
@@ -436,16 +436,16 @@ func (a *App) closeBooks(id string, imp CloseImpact, choice map[string]string, t
 			}
 		}
 	}
-	return a.closeOutcome(id, imp, choice, from)
+	return a.closeOutcome(ctx, id, imp, choice, from)
 }
 
-func (a *App) closeOutcome(id string, imp CloseImpact, choice map[string]string, from *ledgerSource) (CloseResult, error) {
+func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choice map[string]string, from *ledgerSource) (CloseResult, error) {
 	b := a.bankByID(id)
 	sw := a.nibssStore()
 	if b == nil || sw == nil {
 		return CloseResult{}, errors.New("NIBSS is not available right now, so the closure moves cannot be read back; try again soon")
 	}
-	sent, err := sw.ClosureSent(context.Background(), b.NIPCode)
+	sent, err := sw.ClosureSent(ctx, b.NIPCode)
 	if err != nil {
 		return CloseResult{}, fmt.Errorf("read back closure moves: %w", err)
 	}
@@ -590,6 +590,11 @@ func (a *App) Closure(id string) (setup.Closure, error) {
 	}
 	for _, c := range st.Closures {
 		if c.Bank == id {
+			return c, nil
+		}
+	}
+	if findResource(&st, setup.KindBank, id) == nil {
+		if c, ok := st.PurgedClosure(id); ok {
 			return c, nil
 		}
 	}

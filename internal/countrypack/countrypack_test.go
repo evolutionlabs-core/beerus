@@ -36,6 +36,7 @@ func TestBankCodesCheck(t *testing.T) {
 		{"descending", BankCodes{Categories: map[string][]CodeTier{"dmb": {next, good}}, Source: "x"}, "bank_codes.dmb[1] starts at 1, but the tier before it ends at 89999"},
 		{"short nip", BankCodes{Categories: map[string][]CodeTier{"dmb": {{First: 1, Last: 9, NUBANDigits: 3, NIPDigits: 3}}}, Source: "x"}, "bank_codes.dmb[0] must make NIP codes of 6 digits"},
 		{"bad nuban length", BankCodes{Categories: map[string][]CodeTier{"dmb": {{First: 1, Last: 9, NUBANDigits: 4, NIPPrefix: "000", NIPDigits: 3}}}, Source: "x"}, "bank_codes.dmb[0] must make NUBAN codes of 3, 5 or 6 digits"},
+		{"letters in a prefix", BankCodes{Categories: map[string][]CodeTier{"dmb": {{First: 1, Last: 9, NUBANDigits: 3, NIPPrefix: "0x0", NIPDigits: 3}}}, Source: "x"}, "bank_codes.dmb[0] prefixes must be digits"},
 		{"last too big", BankCodes{Categories: map[string][]CodeTier{"dmb": {{First: 1, Last: 1000, NUBANDigits: 3, NIPPrefix: "000", NIPDigits: 3}}}, Source: "x"}, "bank_codes.dmb[0] ends at 1000, which does not fit its digits"},
 	}
 	for _, c := range cases {

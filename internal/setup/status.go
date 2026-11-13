@@ -74,3 +74,15 @@ func SaveStatus(dir string, s Status) error {
 	done = true
 	return nil
 }
+
+func (s Status) PurgedClosure(id string) (Closure, bool) {
+	for i := len(s.Closures) - 1; i >= 0; i-- {
+		c := s.Closures[i]
+		for _, t := range s.Tombstones {
+			if c.Bank == t.ID && t.ID == id+"-"+t.NIPCode {
+				return c, true
+			}
+		}
+	}
+	return Closure{}, false
+}

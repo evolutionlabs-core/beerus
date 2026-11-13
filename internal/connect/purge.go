@@ -145,6 +145,11 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 		st.Applied.Spec.Banks = slices.DeleteFunc(st.Applied.Spec.Banks, func(x setup.Bank) bool { return x.ID == id })
 		st.Resources = slices.DeleteFunc(st.Resources, func(x setup.Resource) bool { return x.Kind == setup.KindBank && x.ID == id })
 		keepTombstone(st, tomb)
+		for i := range st.Closures {
+			if st.Closures[i].Bank == id {
+				st.Closures[i].Bank = retiredID(r)
+			}
+		}
 		return true, resum(st)
 	}); err != nil {
 		return nil, err
@@ -170,6 +175,7 @@ func (a *App) dropBankRows(id, retired string) {
 		}
 	}
 	a.retireAccounts(id, retired)
+	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *Fault) bool { return f.Bank == id })
 	for lid, l := range a.st.LinkSessions {
 		if l.Institution == id {
 			delete(a.st.LinkSessions, lid)
@@ -202,6 +208,13 @@ func (a *App) retireAccounts(id, retired string) {
 		a.st.Accounts[newID] = rec
 		if f, ok := a.st.Feeds[oldID]; ok {
 			delete(a.st.Feeds, oldID)
+			for key, line := range f.Lines {
+				line.AccountID = newID
+				f.Lines[key] = line
+			}
+			for i := range f.Log {
+				f.Log[i].Txn.AccountID = newID
+			}
 			a.st.Feeds[newID] = f
 		}
 	}

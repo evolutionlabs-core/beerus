@@ -41,8 +41,8 @@ func (e planError) Error() string { return e.msg }
 func (e planError) Unwrap() error { return e.kind }
 
 type codes struct {
-	nip, nuban string
-	allocated  []string
+	nip, nuban, nubanKey string
+	allocated            []string
 }
 
 type planner struct {
@@ -218,29 +218,35 @@ func (p *planner) appliedCodes(b Bank) (string, string) {
 
 func (p *planner) allocate() map[string]codes {
 	usedNIP, usedNUBAN := map[string]bool{}, map[string]bool{}
-	markNUBAN := func(id, code string) {
+	markNUBAN := func(code string) error {
 		if code == "" {
-			return
+			return nil
 		}
 		n, err := world.NormaliseBankCode(code)
-		if err != nil {
-			p.fail("banks["+id+"]", nil, "banks[%s]: held NUBAN code is bad: %v", id, err)
-			return
+		if err == nil {
+			usedNUBAN[n] = true
 		}
-		usedNUBAN[n] = true
+		return err
+	}
+	markHeld := func(in nibss.Institution) {
+		if err := markNUBAN(in.NUBANCode); err != nil {
+			p.fail("", nil, "NIBSS holds a bad NUBAN code %q for %s", in.NUBANCode, in.ID)
+		}
 	}
 	for _, in := range p.members {
 		usedNIP[in.NIPCode] = true
-		markNUBAN(in.ID, in.NUBANCode)
+		markHeld(in)
 	}
 	for _, in := range p.tombstones {
 		usedNIP[in.NIPCode] = true
-		markNUBAN(in.ID, in.NUBANCode)
+		markHeld(in)
 	}
 	for _, b := range p.st.Applied.Spec.Banks {
 		nip, nuban := p.appliedCodes(b)
 		usedNIP[nip] = true
-		markNUBAN(b.ID, nuban)
+		if err := markNUBAN(nuban); err != nil {
+			p.fail("banks["+b.ID+"]", nil, "banks[%s]: held NUBAN code %q is bad", b.ID, nuban)
+		}
 	}
 	out := map[string]codes{}
 	for _, b := range p.desired.Spec.Banks {
@@ -253,7 +259,7 @@ func (p *planner) allocate() map[string]codes {
 			continue
 		}
 		usedNIP[c.nip] = true
-		markNUBAN(b.ID, c.nuban)
+		usedNUBAN[c.nubanKey] = true
 		out[b.ID] = c
 	}
 	return out
@@ -274,13 +280,9 @@ func (p *planner) nextCodes(b Bank, usedNIP, usedNUBAN map[string]bool) (codes, 
 	for _, t := range tiers {
 		for n := t.First; n <= t.Last; n++ {
 			nip, nuban := t.NIP(n), t.NUBAN(n)
-			normal, err := world.NormaliseBankCode(nuban)
-			if err != nil {
-				p.fail("banks["+b.ID+"]", nil, "banks[%s]: country pack makes a bad NUBAN code: %v", b.ID, err)
-				return codes{}, false
-			}
-			if !usedNIP[nip] && !usedNUBAN[normal] {
-				return codes{nip: nip, nuban: nuban, allocated: []string{fieldNIPCode, fieldNUBANCode}}, true
+			key := t.NUBANKey(n)
+			if !usedNIP[nip] && !usedNUBAN[key] {
+				return codes{nip: nip, nuban: nuban, nubanKey: key, allocated: []string{fieldNIPCode, fieldNUBANCode}}, true
 			}
 		}
 		total += t.Last - t.First + 1

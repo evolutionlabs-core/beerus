@@ -202,28 +202,28 @@ func (a *App) attachMember(ls *ledgerSource) {
 	}
 }
 
-func (a *App) setMemberStatus(id, status string) error {
+func (a *App) setMemberStatus(ctx context.Context, id, status string) error {
 	a.mu.Lock()
 	s := a.nibss
 	a.mu.Unlock()
 	if s == nil {
 		return nil
 	}
-	if err := s.SetStatus(context.Background(), id, status); err != nil {
+	if err := s.SetStatus(ctx, id, status); err != nil {
 		return fmt.Errorf("set NIBSS status of %s to %s: %w", id, status, err)
 	}
 	return a.refreshDirectory()
 }
 
-func (a *App) stopRouting(_ context.Context, r setup.Resource) (*setup.Condition, error) {
+func (a *App) stopRouting(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	sw := a.nibssStore()
 	if sw == nil {
 		return nil, errors.New("NIBSS is not open, so routing to the bank cannot be stopped; try again soon")
 	}
-	if err := a.setMemberStatus(r.ID, nibss.StatusTerminating); err != nil {
+	if err := a.setMemberStatus(ctx, r.ID, nibss.StatusTerminating); err != nil {
 		return nil, err
 	}
-	in, err := sw.Institution(context.Background(), r.Allocated.NIPCode)
+	in, err := sw.Institution(ctx, r.Allocated.NIPCode)
 	if err != nil {
 		return nil, fmt.Errorf("read back the NIBSS status of %s: %w", r.ID, err)
 	}

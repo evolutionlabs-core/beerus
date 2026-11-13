@@ -6,6 +6,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -54,6 +55,14 @@ func (t CodeTier) NIP(n int) string {
 
 func (t CodeTier) NUBAN(n int) string {
 	return fmt.Sprintf("%s%0*d", t.NUBANPrefix, t.NUBANDigits, n)
+}
+
+func (t CodeTier) NUBANKey(n int) string {
+	code := t.NUBAN(n)
+	if len(code) == 5 {
+		return "9" + code
+	}
+	return fmt.Sprintf("%06s", code)
 }
 
 type BankCodes struct {
@@ -303,6 +312,8 @@ func checkTiers(category string, tiers []CodeTier) error {
 			return fmt.Errorf("%s starts at %d, but the tier before it ends at %d", name, t.First, prev)
 		case len(t.NIPPrefix)+t.NIPDigits != nipCodeLength:
 			return fmt.Errorf("%s must make NIP codes of %d digits", name, nipCodeLength)
+		case strings.Trim(t.NIPPrefix+t.NUBANPrefix, "0123456789") != "":
+			return fmt.Errorf("%s prefixes must be digits", name)
 		case t.Last >= pow10(t.NIPDigits) || t.Last >= pow10(t.NUBANDigits):
 			return fmt.Errorf("%s ends at %d, which does not fit its digits", name, t.Last)
 		}

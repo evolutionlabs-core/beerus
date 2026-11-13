@@ -223,6 +223,7 @@ func TestPurgeRules(t *testing.T) {
 	if consentEvents("bank-b") == 0 {
 		t.Fatal("no consent event was recorded for bank-b")
 	}
+	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "bank-b", "outcome": "credited", "count": 5})
 	s.ctl("POST", "/banks/bank-b/close", map[string]any{"money": "leave"})
 	s.waitPhase("bank-b", connect.PhaseClosed, 60*time.Second)
 	oldBalance := cbnBalance(t, s.cfg, oldCode)
@@ -244,6 +245,12 @@ func TestPurgeRules(t *testing.T) {
 	}
 	s.ctl("POST", "/banks", map[string]any{"name": "Bank B", "type": "digital"})
 	s.waitPhase("bank-b", connect.PhaseActive, 60*time.Second)
+	if faults := s.ctl("GET", "/faults", nil); strings.Contains(fmt.Sprint(faults), "bank-b") {
+		t.Fatalf("a fault of the purged bank survives for the recreated one: %v", faults)
+	}
+	if closures := storedStatus(t, s.cfg.Dir).Closures; len(closures) != 1 || closures[0].Bank != retired {
+		t.Fatalf("closures after the recreate: %+v, want one under %s", closures, retired)
+	}
 	oldEvents := consentEvents(retired)
 	if oldEvents == 0 || consentEvents("bank-b") != 0 {
 		t.Fatalf("consent history of the purged bank: %d under %s, %d under bank-b", oldEvents, retired, consentEvents("bank-b"))
