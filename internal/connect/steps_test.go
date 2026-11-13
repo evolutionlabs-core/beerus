@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"maps"
@@ -68,8 +69,8 @@ func finalizerApp(t *testing.T, r setup.Resource) *App {
 func TestOneFinalizerPerStep(t *testing.T) {
 	a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: setup.PhaseClosing, Finalizers: []string{"one", "two", "three"}})
 	ran := []string{}
-	run := func(name string) func(*App, setup.Resource) (*setup.Condition, error) {
-		return func(*App, setup.Resource) (*setup.Condition, error) {
+	run := func(name string) func(*App, context.Context, setup.Resource) (*setup.Condition, error) {
+		return func(*App, context.Context, setup.Resource) (*setup.Condition, error) {
 			ran = append(ran, name)
 			return nil, nil
 		}
@@ -93,7 +94,7 @@ func TestOneFinalizerPerStep(t *testing.T) {
 func TestFinalizerFailureBacksOff(t *testing.T) {
 	a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: setup.PhaseClosing, Finalizers: []string{"one"}})
 	calls := 0
-	lists := map[string][]finalizer{setup.KindBank: {{name: "one", run: func(*App, setup.Resource) (*setup.Condition, error) {
+	lists := map[string][]finalizer{setup.KindBank: {{name: "one", run: func(*App, context.Context, setup.Resource) (*setup.Condition, error) {
 		calls++
 		return nil, errors.New("postgres is down")
 	}}}}

@@ -232,7 +232,7 @@ func (a *App) dropSnapshotEverywhere(snap string) error {
 	return errors.Join(errs...)
 }
 
-func (a *App) purgePartner(r setup.Resource) (*setup.Condition, error) {
+func (a *App) purgePartner(_ context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
 	a.partnerMu.Lock()
 	defer a.partnerMu.Unlock()

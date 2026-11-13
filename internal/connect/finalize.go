@@ -17,9 +17,7 @@ type ApplyOptions struct {
 
 type finalizer struct {
 	name string
-	run  func(a *App, r setup.Resource) (*setup.Condition, error)
-
-	runCtx func(a *App, ctx context.Context, r setup.Resource) (*setup.Condition, error)
+	run  func(a *App, ctx context.Context, r setup.Resource) (*setup.Condition, error)
 }
 
 func finalizerNames(list []finalizer) []string {
@@ -36,7 +34,7 @@ var bankFinalizers = []finalizer{
 	{name: setup.FinalizerSettleInflight, run: (*App).settleInflight},
 	{name: setup.FinalizerDecideMoney, run: (*App).decideMoney},
 	{name: setup.FinalizerSettleMoves, run: (*App).settleMoves},
-	{name: setup.FinalizerPurgeOwned, runCtx: (*App).purgeBank},
+	{name: setup.FinalizerPurgeOwned, run: (*App).purgeBank},
 }
 
 var partnerFinalizers = []finalizer{
@@ -110,11 +108,8 @@ func (a *App) advanceFinalizers(ctx context.Context, lists map[string][]finalize
 		}
 		var cond *setup.Condition
 		var err error
-		switch {
-		case f.runCtx != nil:
-			cond, err = f.runCtx(a, ctx, r)
-		case f.run != nil:
-			cond, err = f.run(a, r)
+		if f.run != nil {
+			cond, err = f.run(a, ctx, r)
 		}
 		kind, id := r.Kind, r.ID
 		closed := false

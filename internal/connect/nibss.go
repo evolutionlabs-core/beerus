@@ -215,7 +215,7 @@ func (a *App) setMemberStatus(id, status string) error {
 	return a.refreshDirectory()
 }
 
-func (a *App) stopRouting(r setup.Resource) (*setup.Condition, error) {
+func (a *App) stopRouting(_ context.Context, r setup.Resource) (*setup.Condition, error) {
 	sw := a.nibssStore()
 	if sw == nil {
 		return nil, errors.New("NIBSS is not open, so routing to the bank cannot be stopped; try again soon")

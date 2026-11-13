@@ -38,11 +38,11 @@ func (a *App) wantsSettleNow(r setup.Resource) bool {
 	return slices.Contains(a.st.SettleNow, resourceKey(r))
 }
 
-func (a *App) settleInflight(r setup.Resource) (*setup.Condition, error) {
+func (a *App) settleInflight(_ context.Context, r setup.Resource) (*setup.Condition, error) {
 	return a.settleWait(r)
 }
 
-func (a *App) settleMoves(r setup.Resource) (*setup.Condition, error) {
+func (a *App) settleMoves(_ context.Context, r setup.Resource) (*setup.Condition, error) {
 	cond, err := a.settleWait(r)
 	if cond != nil || err != nil {
 		return cond, err

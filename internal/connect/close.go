@@ -266,7 +266,7 @@ func (a *App) CloseBank(id string, req CloseRequest) (setup.Resource, error) {
 	return a.Resource(setup.KindBank, id)
 }
 
-func (a *App) decideMoney(r setup.Resource) (*setup.Condition, error) {
+func (a *App) decideMoney(_ context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
 	b := a.bankByID(id)
 	if b == nil {
