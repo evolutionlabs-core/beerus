@@ -189,7 +189,6 @@ type LocalConnect struct {
 	HealthPort   int    `yaml:"health_port,omitempty"`
 	SyncInterval string `yaml:"sync_interval,omitempty"`
 	RefreshEvery string `yaml:"refresh_min_interval,omitempty"`
-	PauseLease   string `yaml:"pause_lease,omitempty"`
 }
 
 type PartnerLocal struct {

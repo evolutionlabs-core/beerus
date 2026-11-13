@@ -83,9 +83,6 @@ type App struct {
 	coreURL      string
 	replicated   bool
 	synced       atomic.Bool
-	paused       atomic.Bool
-	pauseMu      sync.Mutex
-	pauseTimer   *time.Timer
 	pullMu       sync.Mutex
 	pulledAt     time.Time
 	pullFailed   time.Time
@@ -94,7 +91,6 @@ type App struct {
 	pulling      *pullFlight
 	peers        *http.Client
 	probeHTTP    *http.Client
-	resumeWait   time.Duration
 	eventMu      sync.Mutex
 	eventHTTP    map[string]*http.Client
 	bankWrap     func(http.RoundTripper) http.RoundTripper
@@ -125,21 +121,20 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		return nil, fmt.Errorf("control token: %w", err)
 	}
 	a := &App{
-		cfg:        cfg,
-		key:        key,
-		ctlToken:   token,
-		log:        o.Logger,
-		limiters:   map[string]*rate.Limiter{},
-		peers:      &http.Client{Timeout: peerTimeout},
-		probeHTTP:  &http.Client{Timeout: probeTimeout},
-		resumeWait: defaultResume,
-		coreURL:    o.CoreURL,
-		client:     o.Client,
-		bankWrap:   o.BankWrap,
-		role:       o.Role,
-		wake:       make(chan struct{}, 1),
-		statePath:  cfg.Path("stub-state.json"),
-		sending:    make(chan struct{}, 4),
+		cfg:       cfg,
+		key:       key,
+		ctlToken:  token,
+		log:       o.Logger,
+		limiters:  map[string]*rate.Limiter{},
+		peers:     &http.Client{Timeout: peerTimeout},
+		probeHTTP: &http.Client{Timeout: probeTimeout},
+		coreURL:   o.CoreURL,
+		client:    o.Client,
+		bankWrap:  o.BankWrap,
+		role:      o.Role,
+		wake:      make(chan struct{}, 1),
+		statePath: cfg.Path("stub-state.json"),
+		sending:   make(chan struct{}, 4),
 	}
 	a.settleDone = sync.NewCond(&a.mu)
 	if a.log == nil {

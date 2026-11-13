@@ -81,8 +81,6 @@ func (app *App) BankHandler(id string) http.Handler {
 	mux.HandleFunc("POST /apps/{id}/revoke", a.obRevoke)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("POST /internal/revoke", a.internalRevoke)
-	mux.HandleFunc("POST /internal/pause", a.internalPause)
-	mux.HandleFunc("POST /internal/resume", a.internalResume)
 	mux.HandleFunc("GET /authorize", a.obAuthorize)
 	mux.HandleFunc("GET /authorize/consent", a.obConsentPage)
 	mux.HandleFunc("POST /authorize/consent", a.obConsentSubmit)
@@ -106,7 +104,7 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 			return
 		}
 		a.freshen()
-		if a.role == RoleBank && (!a.synced.Load() || a.paused.Load()) && !strings.HasPrefix(r.URL.Path, "/assets/") {
+		if a.role == RoleBank && !a.synced.Load() && !strings.HasPrefix(r.URL.Path, "/assets/") {
 			http.Error(w, "starting", http.StatusServiceUnavailable)
 			return
 		}

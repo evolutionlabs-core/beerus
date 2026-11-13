@@ -84,12 +84,6 @@ func (s *ledgerSource) Account(nuban string) (ledger.Account, error) {
 	return s.Bank().L.Account(s.ctx, bank.CustomerAccount(nuban))
 }
 
-func (s *ledgerSource) Release() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.st.Pool.Close()
-}
-
 func (s *ledgerSource) Reconnect() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -51,7 +51,6 @@ type Connect struct {
 	CACNumber    string `yaml:"cac_number"`
 	SyncInterval string `yaml:"sync_interval"`
 	RefreshEvery string `yaml:"refresh_min_interval"`
-	PauseLease   string `yaml:"pause_lease,omitempty"`
 }
 
 type Bank struct {
@@ -210,10 +209,6 @@ func (c *Config) SyncInterval() time.Duration {
 
 func (c *Config) RefreshMinInterval() time.Duration {
 	return dur(c.Connect.RefreshEvery, time.Minute)
-}
-
-func (c *Config) PauseLease() time.Duration {
-	return dur(c.Connect.PauseLease, 2*time.Minute)
 }
 
 func dur(s string, def time.Duration) time.Duration {
