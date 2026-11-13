@@ -38,16 +38,16 @@ func TestResetRefusesTheWrongName(t *testing.T) {
 	}
 }
 
-func writeVersionOneDir(t *testing.T) string {
+const (
+	versionOneStatus = `{"version":1,"setup":"old-v1","clock":{"anchor_business":"2026-11-04T08:00:00+01:00"}}`
+	oldSetupYAML     = "apiVersion: beerus.dev/v1\nkind: Setup\nmetadata:\n  name: old-v1\nspec:\n  start: 2026-11-04T08:00:00+01:00\n"
+)
+
+func writeOldDir(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "old-v1")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
-	}
-	files := map[string]string{
-		"control.json": `{"version":1,"setup":"old-v1","clock":{"anchor_business":"2026-11-04T08:00:00+01:00"}}`,
-		"setup.yaml":   "apiVersion: beerus.dev/v1\nkind: Setup\nmetadata:\n  name: old-v1\nspec:\n  start: 2026-11-04T08:00:00+01:00\n",
-		"local.yaml":   "pace: 60\n",
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
@@ -55,6 +55,11 @@ func writeVersionOneDir(t *testing.T) string {
 		}
 	}
 	return dir
+}
+
+func writeVersionOneDir(t *testing.T) string {
+	t.Helper()
+	return writeOldDir(t, map[string]string{"control.json": versionOneStatus, "setup.yaml": oldSetupYAML, "local.yaml": "pace: 60\n"})
 }
 
 func TestCommandsRefuseASetupFromAnOlderBeerus(t *testing.T) {
@@ -74,17 +79,31 @@ func TestResetClearsASetupFromAnOlderBeerus(t *testing.T) {
 		t.Skip("set BEERUS_TEST_DATABASE_URL to run")
 	}
 	t.Setenv(config.DatabaseURLEnv, url)
-	dir := writeVersionOneDir(t)
-	var out bytes.Buffer
-	if err := cmdReset([]string{"old-v1", "--dir", dir}, &out); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name  string
+		files map[string]string
+	}{
+		{"version one with start and pace", map[string]string{"control.json": versionOneStatus, "setup.yaml": oldSetupYAML, "local.yaml": "pace: 60\n"}},
+		{"version zero", map[string]string{"control.json": `{"version":0,"setup":"old-v1"}`, "setup.yaml": oldSetupYAML}},
+		{"corrupt control.json", map[string]string{"control.json": "{", "setup.yaml": oldSetupYAML}},
+		{"empty control.json", map[string]string{"control.json": "", "setup.yaml": oldSetupYAML}},
+		{"missing setup.yaml", map[string]string{"control.json": versionOneStatus}},
 	}
-	if !strings.Contains(out.String(), "Cleared "+dir) {
-		t.Fatalf("output: %s", out.String())
-	}
-	ok, err := connect.Initialized(dir)
-	if err != nil || ok {
-		t.Fatalf("after reset: %v %v", ok, err)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := writeOldDir(t, c.files)
+			var out bytes.Buffer
+			if err := cmdReset([]string{"old-v1", "--dir", dir}, &out); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out.String(), "Cleared "+dir) {
+				t.Fatalf("output: %s", out.String())
+			}
+			ok, err := connect.Initialized(dir)
+			if err != nil || ok {
+				t.Fatalf("after reset: %v %v", ok, err)
+			}
+		})
 	}
 }
 

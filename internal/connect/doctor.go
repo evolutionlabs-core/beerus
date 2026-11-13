@@ -80,7 +80,7 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		if r.Kind == setup.KindBank && byID[r.ID] == nil {
 			rep.StaleOwned = append(rep.StaleOwned, r.ID)
 			for _, o := range r.Owned {
-				if (o.Kind == ownedDatabase || o.Kind == ownedSnapshot) && !slices.Contains(rep.Orphans, o.Name) {
+				if (o.Kind == ownedDatabase) && !slices.Contains(rep.Orphans, o.Name) {
 					rep.Orphans = append(rep.Orphans, o.Name)
 				}
 			}
@@ -89,23 +89,11 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 	if !fix || rep.Clean() {
 		return rep, nil
 	}
-	claims := owned(st, ownedSnapshot)
-	var claimed []string
-	for _, name := range rep.Orphans {
-		if _, ok := claims[name]; ok {
-			claimed = append(claimed, name)
-		}
-	}
 	var ctl *ctlStore
-	if len(claimed)+len(rep.StaleOwned) > 0 {
+	if len(rep.StaleOwned) > 0 {
 		var err error
 		ctl, err = openStore(c.Dir)
 		if err != nil {
-			return rep, err
-		}
-	}
-	for _, name := range claimed {
-		if err := ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name}); err != nil {
 			return rep, err
 		}
 	}

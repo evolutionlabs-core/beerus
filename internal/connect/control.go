@@ -16,9 +16,8 @@ import (
 func (a *App) ControlHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "world_id": a.WorldID(), "business_time": ts(a.clock.Now())})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "world_id": a.WorldID()})
 	})
-	mux.HandleFunc("GET /clock", a.ctlClock)
 	mux.HandleFunc("GET /nip/name-enquiry", a.ctlNameEnquiry)
 	mux.HandleFunc("GET /nip/participants", a.ctlNIPParticipants)
 	mux.HandleFunc("GET /nip/positions", a.ctlNIPPositions)
@@ -136,10 +135,6 @@ func (a *App) WorldID() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.st.WorldID
-}
-
-func (a *App) ctlClock(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"business_time": ts(a.clock.Now()), "business_date": a.clock.Today().String(), "world_id": a.WorldID()})
 }
 
 func parseNaira(s string) (int64, error) {

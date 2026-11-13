@@ -221,7 +221,7 @@ func TestInstall(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r, err := openRTGS(context.Background(), cfg, ctl, clock.New(nil))
+		r, err := openRTGS(t.Context(), cfg, ctl, clock.New(nil))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -243,7 +243,7 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 	local.DatabaseURL = url
 	dir := t.TempDir()
 	t.Cleanup(func() {
-		if _, err := Reset(context.Background(), dir, url); err != nil {
+		if _, err := Reset(context.WithoutCancel(t.Context()), dir, url); err != nil {
 			t.Errorf("drop databases: %v", err)
 		}
 	})
@@ -265,14 +265,14 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 		t.Helper()
 		var at time.Time
 		var n int
-		err := pool.QueryRow(context.Background(), `SELECT min(posted_at), count(*) FROM journal_entries WHERE idempotency_key = $1`, key).Scan(&at, &n)
+		err := pool.QueryRow(t.Context(), `SELECT min(posted_at), count(*) FROM journal_entries WHERE idempotency_key = $1`, key).Scan(&at, &n)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return at, n
 	}
 	for _, at := range []time.Time{first, second} {
-		ls, err := openLedgerSource(context.Background(), cfg, ctl, clock.New(func() time.Time { return at }), b)
+		ls, err := openLedgerSource(t.Context(), cfg, ctl, clock.New(func() time.Time { return at }), b)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -280,7 +280,7 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 			t.Fatalf("bank genesis opened at %v: posted at %v, %d entries; want %v, 1", at, got, n, first)
 		}
 		if at == second {
-			if err := ls.Drop(context.Background()); err != nil {
+			if err := ls.Drop(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			continue
@@ -288,7 +288,7 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 		ls.Close()
 	}
 	for _, at := range []time.Time{first, second} {
-		r, err := openRTGS(context.Background(), cfg, ctl, clock.New(func() time.Time { return at }))
+		r, err := openRTGS(t.Context(), cfg, ctl, clock.New(func() time.Time { return at }))
 		if err != nil {
 			t.Fatal(err)
 		}

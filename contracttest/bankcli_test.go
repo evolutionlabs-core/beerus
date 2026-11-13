@@ -256,7 +256,7 @@ func TestBankCLI(t *testing.T) {
 		t.Errorf("fault clear: %q", got)
 	}
 
-	if got := c.json("nip", "settle-now"); got["settled_sessions"] == nil || !matches(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d.*`, fmt.Sprint(got["business_time"])) {
+	if got := c.json("nip", "settle-now"); got["settled_sessions"] == nil || !matches(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d.*`, fmt.Sprint(got["at"])) {
 		t.Errorf("settle-now --json: %v", got)
 	}
 	if got := c.ok("nip", "settle-now"); !matches(`No sessions to settle at `+businessWAT(t)+`\.\n`, got) {

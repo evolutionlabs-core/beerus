@@ -63,12 +63,14 @@ func FindResetTarget(dir string) (ResetTarget, error) {
 	}
 	var current oldSetup
 	hasSpec := false
-	if _, err := os.Stat(filepath.Join(dir, statusFile)); err == nil {
+	_, statErr := os.Stat(filepath.Join(dir, statusFile))
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return t, fmt.Errorf("look for %s: %w", statusFile, statErr)
+	}
+	hasStatus := statErr == nil
+	if hasStatus {
 		if hasSpec, err = readYAML(filepath.Join(dir, SpecFile), &current); err != nil {
 			return t, err
-		}
-		if !hasSpec {
-			return t, fmt.Errorf("read %s: %w", SpecFile, os.ErrNotExist)
 		}
 	}
 	var local setup.Local
@@ -76,13 +78,13 @@ func FindResetTarget(dir string) (ResetTarget, error) {
 		return t, err
 	}
 	switch {
-	case hasSpec:
+	case hasSpec && current.Metadata.Name != "":
 		t.Name = current.Metadata.Name
 	case hasOld && old.Metadata.Name != "":
 		t.Name = old.Metadata.Name
 	case hasOld && old.Name != "":
 		t.Name = old.Name
-	case hasOld:
+	case hasOld || hasStatus:
 		t.Name = filepath.Base(abs)
 	default:
 		return t, fmt.Errorf("%s holds no Beerus setup", dir)
@@ -125,10 +127,10 @@ func Reset(ctx context.Context, dir, databaseURL string) ([]string, error) {
 		}
 	}
 	st, err := setup.LoadStatus(dir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, setup.ErrOldSetup) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, setup.ErrOldSetup) && !setup.IsCorrupt(err) {
 		return nil, err
 	}
-	for n := range owned(st, ownedDatabase, ownedSnapshot) {
+	for n := range owned(st, ownedDatabase) {
 		if !slices.Contains(names, n) {
 			names = append(names, n)
 		}

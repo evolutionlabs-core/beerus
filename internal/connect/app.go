@@ -475,8 +475,7 @@ func (a *App) runConnection(id string) {
 		at = c.ExpiresAt.Add(-time.Millisecond)
 	}
 	due := c.Status == "syncing" || c.Status == "institution_down" || expired ||
-		real.Sub(c.LastSyncedReal) >= a.cfg.SyncInterval() ||
-		at.Sub(c.LastSyncedClock) >= time.Hour
+		real.Sub(c.LastSyncedReal) >= a.cfg.SyncInterval()
 	a.mu.Unlock()
 	if !due {
 		return
@@ -525,7 +524,6 @@ func (a *App) syncConnection(c *Connection, at time.Time) bool {
 	c.FullDue = false
 	t := at
 	c.LastSyncedAt = &t
-	c.LastSyncedClock = at
 	c.LastSyncedReal = a.clock.Real()
 	for _, accID := range c.AccountIDs {
 		if changed[accID] {

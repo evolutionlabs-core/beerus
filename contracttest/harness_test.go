@@ -615,12 +615,7 @@ func parseSpan(s string) (time.Duration, error) {
 }
 
 func (s *Stack) today() clock.Date {
-	out := s.ctl("GET", "/clock", nil)
-	d, err := clock.ParseDate(fmt.Sprint(out["business_date"]))
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	return d
+	return clock.New(s.realNow).Today()
 }
 
 type persona struct {

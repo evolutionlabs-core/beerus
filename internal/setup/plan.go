@@ -23,7 +23,6 @@ const (
 	stepDone = "done"
 
 	ownedDatabase = "database"
-	ownedSnapshot = "snapshot"
 
 	fieldNIPCode   = "nip_code"
 	fieldNUBANCode = "nuban_code"
@@ -522,8 +521,7 @@ func (p *planner) bankRemovals() []Action {
 func ownedImpact(r Resource) *Impact {
 	im := &Impact{}
 	for _, o := range r.Owned {
-		switch o.Kind {
-		case ownedDatabase, ownedSnapshot:
+		if o.Kind == ownedDatabase {
 			im.Databases = append(im.Databases, o.Name)
 		}
 	}

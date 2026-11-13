@@ -689,7 +689,7 @@ func cmdNip(args []string) error {
 		return f.show(out, func() error {
 			r, err := decodeMap[struct {
 				Settled int       `json:"settled_sessions"`
-				At      time.Time `json:"business_time"`
+				At      time.Time `json:"at"`
 			}](out)
 			if err != nil {
 				return err

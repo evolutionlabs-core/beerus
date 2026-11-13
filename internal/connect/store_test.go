@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -281,73 +280,5 @@ func TestWriteFilesRestoresExactlyTheSavedSet(t *testing.T) {
 	}
 	if err := writeFiles(filepath.Join(dir, "api.key", "x"), map[string][]byte{"a": nil}); err == nil {
 		t.Fatal("a restore under a file did not fail")
-	}
-}
-
-func claimSnapshot(t *testing.T, cfg *config.Config, ctl *ctlStore, id, suffix string) setup.Owned {
-	t.Helper()
-	name := config.DatabaseName(cfg.Dir, id) + "_snap_" + suffix
-	conn, err := pgx.Connect(t.Context(), cfg.DatabaseURL)
-	if err != nil {
-		t.Skipf("no Postgres (%v); set BEERUS_TEST_DATABASE_URL", err)
-	}
-	defer conn.Close(t.Context())
-	if _, err := conn.Exec(t.Context(), `CREATE DATABASE `+name); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := store.DropDatabases(context.WithoutCancel(t.Context()), cfg.DatabaseURL, []string{name}); err != nil {
-			t.Error(err)
-		}
-	})
-	o := setup.Owned{Kind: ownedSnapshot, Name: name}
-	if err := ctl.Claim(setup.KindBank, id, o); err != nil {
-		t.Fatal(err)
-	}
-	return o
-}
-
-func TestLeftoverSnapshotDatabasesAreDroppedAndReleased(t *testing.T) {
-	if testing.Short() {
-		t.Skip("opens bank databases; run without -short")
-	}
-	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
-	ctl, err := openStore(cfg.Dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leftover := claimSnapshot(t, cfg, ctl, "bank-a", "x")
-	rep, err := Doctor(t.Context(), cfg, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(rep.Orphans, []string{leftover.Name}) || !rep.Fixed {
-		t.Fatalf("doctor: %+v", rep)
-	}
-	names, err := store.List(t.Context(), cfg.DatabaseURL, leftover.Name)
-	if err != nil || len(names) != 0 {
-		t.Fatalf("databases after doctor --fix: %v %v", names, err)
-	}
-	if left := owned(diskStatus(t, ctl), ownedSnapshot); len(left) != 0 {
-		t.Fatalf("claims after doctor --fix: %v", left)
-	}
-
-	a := newTestApp(t, Options{})
-	leftover = claimSnapshot(t, a.cfg, a.ctl, "bank-b", "y")
-	res, err := a.Resource(setup.KindBank, "bank-b")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		if cond, err := a.purgeBank(t.Context(), res); err != nil || cond != nil {
-			t.Fatalf("purge: %v %v", cond, err)
-		}
-		names, err := store.List(t.Context(), a.cfg.DatabaseURL, leftover.Name)
-		if err != nil || len(names) != 0 {
-			t.Fatalf("databases after the purge: %v %v", names, err)
-		}
-		if left := owned(diskStatus(t, a.ctl), ownedSnapshot); len(left) != 0 {
-			t.Fatalf("claims after the purge: %v", left)
-		}
 	}
 }

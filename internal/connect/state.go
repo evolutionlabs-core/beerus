@@ -71,7 +71,6 @@ type Connection struct {
 	AuthorisedAt     time.Time   `json:"authorised_at"`
 	ExpiresAt        time.Time   `json:"expires_at"`
 	LastSyncedAt     *time.Time  `json:"last_synced_at"`
-	LastSyncedClock  time.Time   `json:"last_synced_clock"`
 	LastSyncedReal   time.Time   `json:"last_synced_real"`
 	CreatedAt        time.Time   `json:"created_at"`
 	SyncDueReal      time.Time   `json:"sync_due_real"`
