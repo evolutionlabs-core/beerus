@@ -53,7 +53,7 @@ func Open(ctx context.Context, url, name string) (*Store, error) {
 	if !validName.MatchString(name) {
 		return nil, fmt.Errorf("database name %q must look like beerus_something", name)
 	}
-	if err := createDatabase(ctx, url, name); err != nil {
+	if err := Create(ctx, url, name); err != nil {
 		return nil, err
 	}
 	cfg, err := pgxpool.ParseConfig(url)
@@ -74,7 +74,10 @@ func Open(ctx context.Context, url, name string) (*Store, error) {
 	return s, nil
 }
 
-func createDatabase(ctx context.Context, url, name string) error {
+func Create(ctx context.Context, url, name string) error {
+	if !validName.MatchString(name) {
+		return fmt.Errorf("database name %q must look like beerus_something", name)
+	}
 	cfg, err := pgx.ParseConfig(url)
 	if err != nil {
 		return fmt.Errorf("parse NIBSS database url: %w", err)
@@ -106,27 +109,43 @@ func newStore(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load country pack: %w", err)
 	}
-	if err := migrate(ctx, pool); err != nil {
+	if _, err := migrate(ctx, pool); err != nil {
 		return nil, err
 	}
 	return &Store{pool: pool, phone: p.Phone, participants: map[string]Participant{}}, nil
 }
 
-func migrate(ctx context.Context, pool *pgxpool.Pool) error {
+func Migrate(ctx context.Context, url, name string) (int, error) {
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return 0, fmt.Errorf("parse NIBSS database url: %w", err)
+	}
+	cfg.ConnConfig.Database = name
+	cfg.MaxConns = maxConns
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return 0, fmt.Errorf("open NIBSS database: %w", err)
+	}
+	defer pool.Close()
+	return migrate(ctx, pool)
+}
+
+func migrate(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 	db := stdlib.OpenDBFromPool(pool)
 	defer db.Close()
 	sub, err := fs.Sub(migrations, "migrations")
 	if err != nil {
-		return fmt.Errorf("read NIBSS migrations: %w", err)
+		return 0, fmt.Errorf("read NIBSS migrations: %w", err)
 	}
 	p, err := goose.NewProvider(goose.DialectPostgres, db, sub)
 	if err != nil {
-		return fmt.Errorf("load NIBSS migrations: %w", err)
+		return 0, fmt.Errorf("load NIBSS migrations: %w", err)
 	}
-	if _, err := p.Up(ctx); err != nil {
-		return fmt.Errorf("run NIBSS migrations: %w", err)
+	results, err := p.Up(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("run NIBSS migrations: %w", err)
 	}
-	return nil
+	return len(results), nil
 }
 
 func (s *Store) Attach(id string, p Participant) {

@@ -13,17 +13,17 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
+func Migrate(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 	db := stdlib.OpenDBFromPool(pool)
 	defer db.Close()
 	sub, err := fs.Sub(migrations, "migrations")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	p, err := goose.NewProvider(goose.DialectPostgres, db, sub, goose.WithTableName("goose_openbanking"))
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = p.Up(ctx)
-	return err
+	results, err := p.Up(ctx)
+	return len(results), err
 }

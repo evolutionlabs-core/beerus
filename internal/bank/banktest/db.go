@@ -88,7 +88,7 @@ func Schema(t testing.TB) *pgxpool.Pool {
 			c.Close(context.Background())
 		}
 	})
-	if err := ledger.Migrate(ctx, pool); err != nil {
+	if _, err := ledger.Migrate(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
 	return pool
