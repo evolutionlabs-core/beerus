@@ -6,7 +6,7 @@ fixed:
     - {name: Workers' Day, month: 5, day: 1}
     - {name: Independence Day, month: 10, day: 1}
     - {name: Christmas Day, month: 12, day: 25}
-  source: Federal Ministry of Interior public holidays. https://interior.gov.ng
+  source: Public Holidays Act, Cap P40 LFN 2004. https://placng.org/lawsofnigeria/view2.php?sn=467. Beerus keeps only the four fixed-date holidays; add others in the setup file.
 bank_codes:
   deposit_money_bank:
     - {first: 1, last: 999, nuban_prefix: "", nuban_digits: 3, nip_prefix: "000", nip_digits: 3}

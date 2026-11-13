@@ -23,6 +23,8 @@ func TestFixedCheck(t *testing.T) {
 		want string
 	}{
 		{"no source", Fixed{Days: []Day{jan}}, "fixed has no source"},
+		{"no days", Fixed{Source: "x"}, "fixed has no days"},
+		{"repeated day", Fixed{Days: []Day{jan, {Month: 5, Day: 1}, jan}, Source: "x"}, "fixed.days[2] 1-1 appears twice"},
 		{"month 2 day 30", Fixed{Days: []Day{jan, {Month: 2, Day: 30}}, Source: "x"}, "fixed.days[1] 2-30 is not a day of the year"},
 		{"month 13", Fixed{Days: []Day{{Month: 13, Day: 1}}, Source: "x"}, "fixed.days[0] 13-1 is not a day of the year"},
 		{"day 0", Fixed{Days: []Day{{Month: 5, Day: 0}}, Source: "x"}, "fixed.days[0] 5-0 is not a day of the year"},

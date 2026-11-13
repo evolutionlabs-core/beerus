@@ -7,7 +7,11 @@ import (
 )
 
 func TestCalendar(t *testing.T) {
-	fixed := []countrypack.Day{{Month: 1, Day: 1}, {Month: 5, Day: 1}, {Month: 10, Day: 1}, {Month: 12, Day: 25}}
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := pack.Fixed.Days
 	plain := NewCalendar(fixed, nil, nil)
 	custom := NewCalendar(fixed, []Date{{2026, 6, 12}, {2026, 12, 24}}, []Date{{2026, 5, 1}, {2026, 12, 24}})
 	cases := []struct {

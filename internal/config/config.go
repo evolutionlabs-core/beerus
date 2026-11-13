@@ -143,14 +143,15 @@ func (c *Config) Calendar() clock.Calendar {
 	return c.calendar
 }
 
-func (c *Config) buildCountryData() error {
-	pack, err := countrypack.Nigeria()
-	if err != nil {
-		return fmt.Errorf("load country pack: %w", err)
-	}
+func (c *Config) buildFees(pack *countrypack.Pack) error {
+	var err error
 	if c.fees, err = charges.New(pack.Fees); err != nil {
 		return fmt.Errorf("build fee schedule: %w", err)
 	}
+	return nil
+}
+
+func (c *Config) buildCalendar(pack *countrypack.Pack) error {
 	var h Holidays
 	if c.Holidays != nil {
 		h = *c.Holidays
@@ -274,7 +275,14 @@ func (c *Config) Finish() error {
 	if err := c.validatePorts(); err != nil {
 		return err
 	}
-	return c.buildCountryData()
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return fmt.Errorf("load country pack: %w", err)
+	}
+	if err := c.buildFees(pack); err != nil {
+		return err
+	}
+	return c.buildCalendar(pack)
 }
 
 func randomToken(prefix string, n int) (string, error) {
