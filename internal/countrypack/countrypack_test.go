@@ -7,16 +7,34 @@ func TestNigeria(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Country != "NG" || len(p.Fixed) != 6 || len(p.Easter) != 2 || len(p.Islamic) != 3 {
+	if p.Country != "NG" || len(p.Fixed.Days) != 4 || p.Fixed.Source == "" {
 		t.Errorf("unexpected pack: %+v", p)
 	}
 	if p.BankCodes.Source == "" || len(p.BankCodes.Categories) != 2 {
 		t.Errorf("bank codes = %+v", p.BankCodes)
 	}
-	for _, d := range p.Declared {
-		if d.Source == "" || len(d.Add)+len(d.Remove) == 0 {
-			t.Errorf("declared %d has no source or no dates", d.Year)
+}
+
+func TestFixedCheck(t *testing.T) {
+	jan := Day{Month: 1, Day: 1}
+	cases := []struct {
+		name string
+		in   Fixed
+		want string
+	}{
+		{"no source", Fixed{Days: []Day{jan}}, "fixed has no source"},
+		{"month 2 day 30", Fixed{Days: []Day{jan, {Month: 2, Day: 30}}, Source: "x"}, "fixed.days[1] 2-30 is not a day of the year"},
+		{"month 13", Fixed{Days: []Day{{Month: 13, Day: 1}}, Source: "x"}, "fixed.days[0] 13-1 is not a day of the year"},
+		{"day 0", Fixed{Days: []Day{{Month: 5, Day: 0}}, Source: "x"}, "fixed.days[0] 5-0 is not a day of the year"},
+	}
+	for _, c := range cases {
+		err := c.in.check()
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%s: err = %v, want %q", c.name, err, c.want)
 		}
+	}
+	if err := (Fixed{Days: []Day{jan, {Month: 2, Day: 29}}, Source: "x"}).check(); err != nil {
+		t.Errorf("valid days: %v", err)
 	}
 }
 

@@ -36,6 +36,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -181,13 +182,18 @@ var (
 
 func stackBase() time.Time {
 	baseOnce.Do(func() {
+		pack, err := countrypack.Nigeria()
+		if err != nil {
+			panic(err)
+		}
+		cal := clock.NewCalendar(pack.Fixed.Days, nil, nil)
 		for d := clock.DateOf(time.Now()).AddDays(1); ; d = d.AddDays(1) {
 			if d.Weekday() != stackWeekday || d.D < stackFirstDay || d.D > stackLastDay {
 				continue
 			}
 			quiet := true
 			for i := 0; i <= stackQuietDays; i++ {
-				quiet = quiet && !clock.IsHoliday(d.AddDays(i))
+				quiet = quiet && !cal.IsHoliday(d.AddDays(i))
 			}
 			if quiet {
 				baseTime = d.Start().Add(stackHour * time.Hour)

@@ -29,7 +29,7 @@ var reservedIDs = map[string]bool{cbnID: true, "nibss": true}
 
 type schedule struct {
 	per int
-	cal *clock.Calendar
+	cal clock.Calendar
 }
 
 func (s schedule) every() time.Duration {

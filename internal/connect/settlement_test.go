@@ -6,6 +6,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 )
 
 func TestSessionSchedule(t *testing.T) {
@@ -60,38 +61,42 @@ func TestSessionSchedule(t *testing.T) {
 }
 
 func TestSessionScheduleSkipsHolidays(t *testing.T) {
-	s := schedule{per: 12}
-	day := func(v string) clock.Date {
-		d, err := clock.ParseDate(v)
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := schedule{per: 12, cal: clock.NewCalendar(pack.Fixed.Days, nil, nil)}
+	at := func(day string, hh int) time.Time {
+		d, err := clock.ParseDate(day)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return d
+		return d.Start().Add(time.Duration(hh) * time.Hour)
 	}
-	if got := s.next(day("2026-09-30").Start().Add(23 * time.Hour)); !got.Equal(day("2026-10-01").Start()) {
-		t.Errorf("last session of 30 Sep closes at %s", got)
-	}
-	if got := s.next(day("2026-10-01").Start().Add(-time.Nanosecond)); !got.Equal(day("2026-10-01").Start()) {
-		t.Errorf("midnight session closes at %s", got)
-	}
-	if got := s.next(day("2026-10-01").Start()); !got.Equal(day("2026-10-02").Start().Add(2 * time.Hour)) {
-		t.Errorf("first session after Independence Day closes at %s", got)
-	}
-	if got := s.next(day("2026-10-01").Start().Add(10 * time.Hour)); !got.Equal(day("2026-10-02").Start().Add(2 * time.Hour)) {
-		t.Errorf("a transfer on Independence Day settles at %s", got)
-	}
-	if got := s.next(day("2026-04-02").Start().Add(23 * time.Hour)); !got.Equal(day("2026-04-03").Start()) {
-		t.Errorf("last session before Good Friday closes at %s", got)
-	}
-	if got := s.next(day("2026-04-03").Start()); !got.Equal(day("2026-04-07").Start().Add(2 * time.Hour)) {
-		t.Errorf("first session after Easter Monday closes at %s", got)
+	for _, c := range []struct {
+		name   string
+		booked time.Time
+		want   time.Time
+	}{
+		{"last session of 30 Sep", at("2026-09-30", 23), at("2026-10-01", 0)},
+		{"midnight session of Independence Day", at("2026-10-01", 0).Add(-time.Nanosecond), at("2026-10-01", 0)},
+		{"first session after Independence Day", at("2026-10-01", 0), at("2026-10-02", 2)},
+		{"transfer on Independence Day", at("2026-10-01", 10), at("2026-10-02", 2)},
+		{"Good Friday is a business day", at("2026-04-03", 0), at("2026-04-03", 2)},
+		{"Christmas Day then the weekend", at("2026-12-24", 23), at("2026-12-25", 0)},
+		{"first session after Christmas Day", at("2026-12-25", 0), at("2026-12-28", 2)},
+		{"New Year's Day then the weekend", at("2027-01-01", 5), at("2027-01-04", 2)},
+	} {
+		if got := s.next(c.booked); !got.Equal(c.want) {
+			t.Errorf("%s: next session after %s closes at %s, want %s", c.name, c.booked.Format(time.RFC3339), got.Format(time.RFC3339), c.want.Format(time.RFC3339))
+		}
 	}
 }
 
 func TestScheduleFollowsCalendar(t *testing.T) {
 	friday := clock.Date{Y: 2026, M: 11, D: 6}
 	plain := schedule{per: 12}
-	closed := schedule{per: 12, cal: clock.NewCalendar([]clock.Date{friday.AddDays(3)}, nil)}
+	closed := schedule{per: 12, cal: clock.NewCalendar(nil, []clock.Date{friday.AddDays(3)}, nil)}
 	from := friday.AddDays(2).Start()
 	if got := plain.next(from); !got.Equal(friday.AddDays(3).Start().Add(2 * time.Hour)) {
 		t.Fatalf("plain next session %s", got)
