@@ -41,9 +41,9 @@ const (
 	stepDone = "done"
 )
 
-var ErrFutureWorld = errors.New("This setup was moved ahead of real time by an older Beerus. Run beerus reset, then beerus up.")
+var ErrFutureWorld = errors.New("This setup was moved ahead of real time by an older Beerus. Run beerus reset, then beerus init.")
 
-var ErrOldSetup = errors.New("This setup was made by an older Beerus. Run beerus reset, then beerus up.")
+var ErrOldSetup = errors.New("This setup was made by an older Beerus. Run beerus reset, then beerus init.")
 
 func refuseOld(dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, oldSpecFile)); err != nil {
@@ -127,7 +127,7 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	}
 	st := setup.Status{Version: setup.StatusVersion, Setup: spec.Metadata.Name, SetupKey: key, Applied: pinCodes(spec, plan)}
 	st.Resources = []setup.Resource{
-		{Kind: setup.KindSystem, ID: setup.SystemCBN, Phase: setup.PhaseActive},
+		{Kind: setup.KindSystem, ID: setup.SystemCBN, Phase: setup.PhaseProvisioning},
 		{Kind: setup.KindSystem, ID: setup.SystemNIBSS, Phase: setup.PhaseProvisioning},
 	}
 	cfg, err := buildConfig(dir, st, local)
@@ -285,7 +285,7 @@ func LoadConfig(dir string) (*config.Config, error) {
 	st, err := setup.LoadStatus(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%s holds no Beerus setup; run beerus up to make one", dir)
+			return nil, fmt.Errorf("%s holds no Beerus setup; run beerus init to make one", dir)
 		}
 		return nil, err
 	}

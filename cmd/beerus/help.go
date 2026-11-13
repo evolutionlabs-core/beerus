@@ -64,7 +64,7 @@ func commands() []command {
 		{"nip positions", "", "Show each bank's NIP position", "nip positions [options]", nil},
 		{"nip settlement", "", "Check that NIP settlement balances", "nip settlement [options]", nil},
 
-		{"init", groupSetup, "Create the state directory and a setup file", "init [options]", cmdInit},
+		{"init", groupSetup, "Check Postgres and set up Beerus", "init [options]", cmdInit},
 		{"apply", groupSetup, "Apply the setup file to the running Beerus", "apply [options]", runCLI(cmdApply)},
 		{"diff", groupSetup, "Show what apply would change", "diff [options]", runCLI(cmdDiff)},
 		{"get", groupSetup, "List banks or partners", "get banks|partners [options]", runCLI(cmdGet)},

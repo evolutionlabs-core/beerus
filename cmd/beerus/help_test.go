@@ -20,7 +20,7 @@ Main commands:
   nip           Check NIP sessions and settle now
 
 Setup:
-  init          Create the state directory and a setup file
+  init          Check Postgres and set up Beerus
   apply         Apply the setup file to the running Beerus
   diff          Show what apply would change
   get           List banks or partners

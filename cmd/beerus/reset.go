@@ -54,6 +54,6 @@ func cmdReset(args []string, out io.Writer) error {
 			fmt.Fprintln(out, "  "+d)
 		}
 	}
-	fmt.Fprintf(out, "Cleared %s (kept %s). Run beerus up to start again.\n", t.Dir, connect.LocalFile)
+	fmt.Fprintf(out, "Cleared %s (kept %s). Run beerus init to start again.\n", t.Dir, connect.LocalFile)
 	return nil
 }

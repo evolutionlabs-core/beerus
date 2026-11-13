@@ -40,11 +40,12 @@ var (
 )
 
 type BankStep struct {
-	ID    string     `json:"id"`
-	Name  string     `json:"name"`
-	Done  bool       `json:"done"`
-	Error string     `json:"error,omitempty"`
-	At    *time.Time `json:"at,omitempty"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Done      bool       `json:"done"`
+	Error     string     `json:"error,omitempty"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	At        *time.Time `json:"at,omitempty"`
 }
 
 type BankStatus struct {

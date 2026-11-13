@@ -113,6 +113,9 @@ func startUp(t *testing.T, c *cli, spec string) (*lockedBuffer, *lockedBuffer) {
 	args, name := []string{"up", "-f", spec}, "story"
 	if spec == "" {
 		args, name = []string{"up"}, "beerus"
+		c.ok("init")
+	} else {
+		c.ok("init", "-f", spec)
 	}
 	cmd := exec.Command(c.bin, args...)
 	cmd.Env = c.env()
@@ -197,7 +200,7 @@ func TestStory(t *testing.T) {
 	)
 
 	out, errOut := startUp(t, c, spec)
-	if !regexp.MustCompile(`^Created `+quote(dir)+` from `+quote(spec)+`\.\n\nBeerus is running\. [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT\.\n\n[\s\S]*\nNo customers yet\. Create one with beerus customer create\.\n\nPress Ctrl\+C to stop\.\n$`).MatchString(out.String()) || strings.Count(out.String(), "Partner API") != 1 || strings.Contains(errOut.String(), "level=ERROR") {
+	if !regexp.MustCompile(`^Beerus is running\. [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT\.\n\n[\s\S]*\nPress Ctrl\+C to stop\.\n$`).MatchString(out.String()) || strings.Count(out.String(), "Partner API") != 1 || strings.Contains(errOut.String(), "level=ERROR") {
 		t.Fatalf("up printed %q and logged %q", out.String(), errOut.String())
 	}
 	if got := c.ok("diff"); got != "No changes.\n" {
