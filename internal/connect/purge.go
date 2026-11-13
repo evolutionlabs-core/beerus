@@ -89,7 +89,7 @@ func (a *App) PurgeBank(id string, settleNow bool) (setup.Resource, error) {
 	return a.Resource(setup.KindBank, id)
 }
 
-func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
+func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
 	waiting, err := a.inflightWith(r.Allocated.NIPCode, id)
 	if err != nil {
@@ -125,15 +125,15 @@ func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
 	a.obMu.Lock()
 	delete(a.obs, id)
 	a.obMu.Unlock()
-	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.removeMember(id))
+	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.removeMember(ctx, id))
 	a.dropBankRows(id)
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("purge %s: %w", id, err)
 	}
-	if err := a.retireMember(r); err != nil {
+	if err := a.retireMember(ctx, r); err != nil {
 		return nil, err
 	}
-	tomb, err := a.readBackPurge(r)
+	tomb, err := a.readBackPurge(ctx, r)
 	if err != nil {
 		return nil, err
 	}
@@ -173,22 +173,22 @@ func (a *App) dropBankRows(id string) {
 	a.dirty()
 }
 
-func (a *App) retireMember(r setup.Resource) error {
+func (a *App) retireMember(ctx context.Context, r setup.Resource) error {
 	sw := a.nibssStore()
 	if sw == nil {
 		return errors.New("NIBSS is not open, so the id of the removed bank cannot be retired; try again soon")
 	}
 	code := r.Allocated.NIPCode
-	if err := sw.Retire(context.Background(), code, r.ID+"-"+code); err != nil {
+	if err := sw.Retire(ctx, code, r.ID+"-"+code); err != nil {
 		return fmt.Errorf("retire the NIBSS id of %s: %w", r.ID, err)
 	}
 	return nil
 }
 
-func (a *App) readBackPurge(r setup.Resource) (nibss.Institution, error) {
+func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nibss.Institution, error) {
 	id := r.ID
 	if r.Allocated.Database != "" {
-		left, err := store.List(context.Background(), a.cfg.DatabaseURL, r.Allocated.Database)
+		left, err := store.List(ctx, a.cfg.DatabaseURL, r.Allocated.Database)
 		if err != nil {
 			return nibss.Institution{}, fmt.Errorf("read back the databases of %s: %w", id, err)
 		}
@@ -203,7 +203,7 @@ func (a *App) readBackPurge(r setup.Resource) (nibss.Institution, error) {
 	if sw == nil {
 		return nibss.Institution{}, errors.New("NIBSS is not open, so its tombstone for the bank cannot be read back; try again soon")
 	}
-	in, err := sw.Institution(context.Background(), r.Allocated.NIPCode)
+	in, err := sw.Institution(ctx, r.Allocated.NIPCode)
 	if err != nil {
 		return nibss.Institution{}, fmt.Errorf("read back the NIBSS status of %s: %w", id, err)
 	}

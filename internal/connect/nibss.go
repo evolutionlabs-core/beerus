@@ -233,7 +233,7 @@ func (a *App) stopRouting(r setup.Resource) (*setup.Condition, error) {
 	return nil, nil
 }
 
-func (a *App) removeMember(id string) error {
+func (a *App) removeMember(ctx context.Context, id string) error {
 	a.mu.Lock()
 	s := a.nibss
 	a.mu.Unlock()
@@ -241,7 +241,6 @@ func (a *App) removeMember(id string) error {
 		return nil
 	}
 	s.Attach(id, nil)
-	ctx := context.Background()
 	list, err := s.Directory(ctx)
 	if err != nil {
 		return fmt.Errorf("read the NIBSS directory: %w", err)

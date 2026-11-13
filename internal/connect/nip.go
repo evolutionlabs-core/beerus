@@ -362,6 +362,6 @@ func (a *App) ctlBankTransfer(w http.ResponseWriter, r *http.Request) {
 	rep := a.bankTransfer(r, r.PathValue("id"), body, r.Header.Get("Idempotency-Key"))
 	rep.write(w)
 	if rep.status == http.StatusOK {
-		a.SyncAll()
+		a.SyncAll(r.Context())
 	}
 }

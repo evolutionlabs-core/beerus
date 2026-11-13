@@ -52,7 +52,7 @@ func (fakeData) BalanceOn(string, clock.Date) (int64, error) {
 	return 4200, nil
 }
 
-func (fakeData) Transactions(string, clock.Date, clock.Date) ([]Txn, error) {
+func (fakeData) Transactions(context.Context, string, clock.Date, clock.Date) ([]Txn, error) {
 	d, _ := clock.ParseDate("2026-01-05")
 	out := []Txn{}
 	for i := 0; i < 5; i++ {

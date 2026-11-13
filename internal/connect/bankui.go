@@ -591,7 +591,7 @@ func (a *bankSite) obTransferConfirm(w http.ResponseWriter, r *http.Request) {
 		a.transferFailed(w, r, s, err)
 		return
 	}
-	a.SyncAll()
+	a.SyncAll(r.Context())
 	http.Redirect(w, r, "/accounts/"+res.From+"?transfer="+url.QueryEscape(res.Status), http.StatusSeeOther)
 }
 

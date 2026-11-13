@@ -270,7 +270,7 @@ func TestConsentEventsAreKeptAndRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.skewReal(time.Hour)
-	s.app.Step()
+	s.app.Step(t.Context())
 	var left, delivered int
 	if err := db.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE delivered_at IS NULL), count(*) FILTER (WHERE delivered_at IS NOT NULL) FROM ob_events WHERE consent_id = $1`, consentID).Scan(&left, &delivered); err != nil || left != 0 || delivered < 2 {
 		t.Fatalf("events after the retry: %d undelivered, %d delivered, %v", left, delivered, err)

@@ -105,7 +105,7 @@ func TestSettlementRunsAlongsideTheApp(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			s.app.Step()
+			s.app.Step(t.Context())
 		}()
 		go func() {
 			defer wg.Done()
@@ -135,7 +135,7 @@ func TestSettlementRunsAlongsideTheApp(t *testing.T) {
 			}
 		}()
 	}
-	snap, err := s.app.TakeSnapshot("while paying")
+	snap, err := s.app.TakeSnapshot(t.Context(), "while paying")
 	close(stop)
 	wg.Wait()
 	if err != nil {

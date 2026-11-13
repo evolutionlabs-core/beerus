@@ -477,7 +477,7 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 		var res TransferResult
 		res, err = a.Transfer(req)
 		if err == nil {
-			a.SyncAll()
+			a.SyncAll(r.Context())
 			http.Redirect(w, r, "/ui/accounts/"+url.PathEscape(acctKey(res.FromBank, res.From))+"?transfer="+url.QueryEscape(res.Status), http.StatusSeeOther)
 			return
 		}

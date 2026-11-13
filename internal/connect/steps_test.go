@@ -76,7 +76,7 @@ func TestOneFinalizerPerStep(t *testing.T) {
 	}
 	lists := map[string][]finalizer{setup.KindBank: {{name: "one", run: run("one")}, {name: "two", run: run("two")}, {name: "three"}}}
 	for range 4 {
-		a.advanceFinalizers(lists)
+		a.advanceFinalizers(t.Context(), lists)
 	}
 	if !slices.Equal(ran, []string{"one", "two"}) {
 		t.Fatalf("ran %v", ran)
@@ -97,8 +97,8 @@ func TestFinalizerFailureBacksOff(t *testing.T) {
 		calls++
 		return nil, errors.New("postgres is down")
 	}}}}
-	a.advanceFinalizers(lists)
-	a.advanceFinalizers(lists)
+	a.advanceFinalizers(t.Context(), lists)
+	a.advanceFinalizers(t.Context(), lists)
 	if calls != 1 {
 		t.Fatalf("ran %d times inside the backoff", calls)
 	}

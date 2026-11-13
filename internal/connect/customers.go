@@ -181,12 +181,12 @@ func (a *App) CloseAccount(bankID, nuban string) error {
 	return bk.ls.Bank().CloseAccount(context.Background(), nuban, a.clock.Now())
 }
 
-func (a *App) Cash(bankID, kind string, req CashRequest) (CashResult, error) {
+func (a *App) Cash(ctx context.Context, bankID, kind string, req CashRequest) (CashResult, error) {
 	res, err := a.postCash(bankID, kind, req)
 	if err != nil {
 		return CashResult{}, err
 	}
-	a.SyncAll()
+	a.SyncAll(ctx)
 	return res, nil
 }
 
@@ -451,7 +451,7 @@ func (a *App) ctlCash(kind string) http.HandlerFunc {
 			return
 		}
 		req.Key = key
-		res, err := a.Cash(r.PathValue("id"), kind, req)
+		res, err := a.Cash(r.Context(), r.PathValue("id"), kind, req)
 		if err != nil {
 			a.bankingError(w, r, err)
 			return

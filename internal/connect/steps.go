@@ -171,7 +171,7 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 	return err == nil
 }
 
-func (a *App) reconcileBanks() {
+func (a *App) reconcileBanks(ctx context.Context) {
 	a.checkDrift()
 	now := a.clock.Real()
 	stored, err := a.ctl.status()
@@ -195,7 +195,7 @@ func (a *App) reconcileBanks() {
 		a.provision(b)
 	}
 	a.reconcileChanges()
-	a.advanceFinalizers(finalizerLists)
+	a.advanceFinalizers(ctx, finalizerLists)
 }
 
 func (a *App) needsRepairLocked(st *BankStatus, stored setup.Status) bool {

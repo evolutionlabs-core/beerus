@@ -301,9 +301,9 @@ func (a *App) Run(ctx context.Context) {
 			}
 			return
 		case <-tick.C:
-			a.Step()
+			a.Step(ctx)
 		case <-a.wake:
-			a.Step()
+			a.Step(ctx)
 		case <-save.C:
 			a.mu.Lock()
 			if a.isDirty.Load() {
@@ -316,12 +316,12 @@ func (a *App) Run(ctx context.Context) {
 	}
 }
 
-func (a *App) Step() {
+func (a *App) Step(ctx context.Context) {
 	a.stepMu.Lock()
 	defer a.stepMu.Unlock()
 	a.gate.RLock()
 	if a.recMu.TryLock() {
-		a.reconcileBanks()
+		a.reconcileBanks(ctx)
 		a.recMu.Unlock()
 	}
 	a.gate.RUnlock()

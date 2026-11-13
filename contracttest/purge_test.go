@@ -281,7 +281,7 @@ func TestPurgeRules(t *testing.T) {
 
 func cbnBalance(t *testing.T, cfg *config.Config, account string) int64 {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	st, err := store.Open(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, setup.SystemCBN))
 	if err != nil {
 		t.Fatal(err)
@@ -362,7 +362,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.app.Cash(bank, "deposit", connect.CashRequest{Account: acc.NUBAN, Amount: naira}); err != nil {
+		if _, err := r.app.Cash(t.Context(), bank, "deposit", connect.CashRequest{Account: acc.NUBAN, Amount: naira}); err != nil {
 			t.Fatal(err)
 		}
 		return acc.NUBAN

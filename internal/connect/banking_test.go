@@ -58,7 +58,7 @@ func funded(t *testing.T, a *App, bankID, name, naira string) string {
 	if naira == "" {
 		return acc.NUBAN
 	}
-	if _, err := a.Cash(bankID, "deposit", CashRequest{Account: acc.NUBAN, Amount: naira}); err != nil {
+	if _, err := a.Cash(t.Context(), bankID, "deposit", CashRequest{Account: acc.NUBAN, Amount: naira}); err != nil {
 		t.Fatal(err)
 	}
 	return acc.NUBAN
