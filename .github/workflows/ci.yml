@@ -102,7 +102,6 @@ jobs:
           metadata:
             name: beerus
           spec:
-            start: "$(TZ=Africa/Lagos date +%Y-%m-%dT%H:%M:%S+01:00)"
             nip:
               sessions: 4
               tsq_after: 2m
