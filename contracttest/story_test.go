@@ -323,7 +323,7 @@ func TestStory(t *testing.T) {
 	if err := os.WriteFile(readd, []byte(strings.Replace(strings.Replace(fmt.Sprintf(storySpec, sink.srv.URL+"/webhooks"), "    - id: bank-c\n      name: Bank C\n      type: microfinance\n", "", 1), "", "", 0)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.fails("apply", "-f", readd); !regexp.MustCompile(`^beerus: ` + quote(readd) + `:\d+:\d+: banks\[bank-b\] is being removed and cannot be added back until removal finishes\. Take it out of the file, or wait\.$`).MatchString(got) {
+	if got := c.fails("apply", "-f", readd); !regexp.MustCompile(`^beerus: ` + quote(readd) + `:\d+:\d+: banks\[bank-b\] is being removed, and its id is never reused\. Choose another id\.$`).MatchString(got) {
 		t.Errorf("re-adding bank-b while it is terminating: %q", got)
 	}
 

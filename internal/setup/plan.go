@@ -336,7 +336,7 @@ func (p *planner) order(banks []Bank) []Bank {
 func (p *planner) bankAction(b Bank, c codes) (Action, bool) {
 	r, hasRes := p.resource(KindBank, b.ID)
 	if hasRes && r.Phase == PhaseTerminating {
-		p.fail("banks["+b.ID+"].id", ErrBeingRemoved, "banks[%s] is being removed and cannot be added back until removal finishes. Take it out of the file, or wait.", b.ID)
+		p.fail("banks["+b.ID+"].id", ErrBeingRemoved, "banks[%s] is being removed, and its id is never reused. Choose another id.", b.ID)
 		return Action{}, false
 	}
 	old, existing := p.applied[b.ID]

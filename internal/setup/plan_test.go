@@ -602,7 +602,7 @@ func TestBuildRemoval(t *testing.T) {
 			desired: func(s *Spec) {
 				s.pos = map[string]Pos{"banks[bank-b].id": {File: "setup.yaml", Line: 27, Col: 11}}
 			},
-			errs: []string{"setup.yaml:27:11: banks[bank-b] is being removed and cannot be added back until removal finishes. Take it out of the file, or wait."},
+			errs: []string{"setup.yaml:27:11: banks[bank-b] is being removed, and its id is never reused. Choose another id."},
 			is:   ErrBeingRemoved,
 		},
 		{
