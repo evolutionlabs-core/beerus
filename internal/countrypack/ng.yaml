@@ -14,10 +14,14 @@ islamic:
   - {name: Eid-el-Fitr, month: 10, day: 1, days: 2}
   - {name: Eid-el-Kabir, month: 12, day: 10, days: 2}
   - {name: Eid-el-Maulud, month: 3, day: 12, days: 1}
-simulator_codes:
-  nip: {first: 999001, last: 999999}
-  nuban: {first: 901, last: 999}
-  source: Beerus placeholder ranges for allocating codes to banks created in Beerus. They are not real CBN or NIBSS allocations.
+bank_codes:
+  deposit_money_bank:
+    - {first: 1, last: 999, nuban_prefix: "", nuban_digits: 3, nip_prefix: "000", nip_digits: 3}
+    - {first: 1000, last: 89999, nuban_prefix: "", nuban_digits: 6, nip_prefix: "", nip_digits: 6}
+  microfinance_bank:
+    - {first: 1, last: 999, nuban_prefix: "5", nuban_digits: 4, nip_prefix: "090", nip_digits: 3}
+    - {first: 1000, last: 9999, nuban_prefix: "5", nuban_digits: 4, nip_prefix: "09", nip_digits: 4}
+  source: "CBN Revised Standards on NUBAN (2020): deposit money banks have 3-digit codes, other financial institutions 5-digit codes that NUBAN prefixes with 9. https://www.cbn.gov.ng/Out/2020/PSMD/REVISED%20STANDARDS%20ON%20NIGERIA%20UNIFORM%20BANK%20ACCOUNT%20NUMBER%20(NUBAN)%20FOR%20BANKS%20AND%20OTHER%20FINANCIAL%20INSTITUTIONS%20.pdf . NIP code shapes (000xxx for deposit money banks, 090xxx for microfinance banks) follow public bank code lists; NIBSS publishes no official list. Second tiers are Beerus placeholders for when the real-format codes run out."
 fees:
   nip:
     - from: 2020-01-01

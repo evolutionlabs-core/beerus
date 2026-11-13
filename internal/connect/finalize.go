@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"fmt"
 	"slices"
 
@@ -16,7 +17,7 @@ type ApplyOptions struct {
 
 type finalizer struct {
 	name string
-	run  func(a *App, r setup.Resource) (*setup.Condition, error)
+	run  func(a *App, ctx context.Context, r setup.Resource) (*setup.Condition, error)
 }
 
 func finalizerNames(list []finalizer) []string {
@@ -86,7 +87,7 @@ func clearCondition(r *setup.Resource, kind string) bool {
 	return len(r.Conditions) != n
 }
 
-func (a *App) advanceFinalizers(lists map[string][]finalizer) {
+func (a *App) advanceFinalizers(ctx context.Context, lists map[string][]finalizer) {
 	st, err := a.ctl.status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
@@ -108,7 +109,7 @@ func (a *App) advanceFinalizers(lists map[string][]finalizer) {
 		var cond *setup.Condition
 		var err error
 		if f.run != nil {
-			cond, err = f.run(a, r)
+			cond, err = f.run(a, ctx, r)
 		}
 		kind, id := r.Kind, r.ID
 		closed := false

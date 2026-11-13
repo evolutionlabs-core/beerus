@@ -216,7 +216,7 @@ func (c *specChecker) bankName(p string, b Bank, names map[string]string) {
 func (c *specChecker) bankCodes(p string, b Bank, nips, nubans map[string]string) {
 	if b.NIPCode != "" || c.s.has(p+".nip_code") {
 		if !specNIPPattern.MatchString(b.NIPCode) {
-			c.add(p+".nip_code", "%s.nip_code %q is not valid. Use 6 digits, or leave it out to have one allocated", p, b.NIPCode)
+			c.add(p+".nip_code", "%s.nip_code %q is not valid. Remove it and Beerus assigns one", p, b.NIPCode)
 		} else if other, ok := nips[b.NIPCode]; ok {
 			c.add(p+".nip_code", "%s.nip_code %s is already used by %s. Give each bank its own code", p, b.NIPCode, other)
 		} else {
@@ -225,8 +225,8 @@ func (c *specChecker) bankCodes(p string, b Bank, nips, nubans map[string]string
 	}
 	if b.NUBANCode != "" || c.s.has(p+".nuban_code") {
 		norm, err := world.NormaliseBankCode(b.NUBANCode)
-		if err != nil || (len(b.NUBANCode) == 6 && b.NUBANCode[0] != '9') {
-			c.add(p+".nuban_code", "%s.nuban_code %q is not valid. Use 3 or 5 digits, or 6 digits starting with 9, or leave it out to have one allocated", p, b.NUBANCode)
+		if err != nil {
+			c.add(p+".nuban_code", "%s.nuban_code %q is not valid. Remove it and Beerus assigns one", p, b.NUBANCode)
 		} else if other, ok := nubans[norm]; ok {
 			c.add(p+".nuban_code", "%s.nuban_code %s is already used by %s. Give each bank its own code", p, b.NUBANCode, other)
 		} else {

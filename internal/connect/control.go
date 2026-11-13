@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -100,7 +101,7 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("POST /snapshots", a.ctlTakeSnapshot)
 	mux.HandleFunc("POST /snapshots/{id}/restore", a.ctlRestore)
 	mux.HandleFunc("POST /sync", func(w http.ResponseWriter, r *http.Request) {
-		a.SyncAll()
+		a.SyncAll(r.Context())
 		writeJSON(w, http.StatusOK, map[string]string{"status": "synced"})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +240,7 @@ func (a *App) ctlDeliveries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, listPage(out, next))
 }
 
-func (a *App) SyncAll() {
+func (a *App) SyncAll(ctx context.Context) {
 	if a.role == RoleBank {
 		return
 	}
@@ -255,7 +256,7 @@ func (a *App) SyncAll() {
 	for _, c := range due {
 		a.syncConnection(c, now)
 	}
-	a.Step()
+	a.Step(ctx)
 }
 
 type snapshotMeta struct {
@@ -282,8 +283,8 @@ func (a *App) snapshotDir() string {
 	return a.cfg.Path("snapshots")
 }
 
-func (a *App) TakeSnapshot(name string) (meta snapshotMeta, err error) {
-	a.Step()
+func (a *App) TakeSnapshot(ctx context.Context, name string) (meta snapshotMeta, err error) {
+	a.Step(ctx)
 	resume, err := a.pauseBanks()
 	if err != nil {
 		return snapshotMeta{}, err
@@ -558,7 +559,7 @@ func (a *App) ctlTakeSnapshot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	meta, err := a.TakeSnapshot(body.Name)
+	meta, err := a.TakeSnapshot(r.Context(), body.Name)
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
 		return

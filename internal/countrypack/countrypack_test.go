@@ -10,8 +10,8 @@ func TestNigeria(t *testing.T) {
 	if p.Country != "NG" || len(p.Fixed) != 6 || len(p.Easter) != 2 || len(p.Islamic) != 3 {
 		t.Errorf("unexpected pack: %+v", p)
 	}
-	if c := p.SimulatorCodes; c.Source == "" || c.NIP != (CodeRange{First: 999001, Last: 999999}) || c.NUBAN != (CodeRange{First: 901, Last: 999}) {
-		t.Errorf("simulator codes = %+v", c)
+	if p.BankCodes.Source == "" || len(p.BankCodes.Categories) != 2 {
+		t.Errorf("bank codes = %+v", p.BankCodes)
 	}
 	for _, d := range p.Declared {
 		if d.Source == "" || len(d.Add)+len(d.Remove) == 0 {
@@ -20,24 +20,54 @@ func TestNigeria(t *testing.T) {
 	}
 }
 
-func TestSimulatorCodesCheck(t *testing.T) {
-	ok := CodeRange{First: 1, Last: 2}
-	cases := map[string]struct {
-		in   SimulatorCodes
+func TestBankCodesCheck(t *testing.T) {
+	types := map[string]string{"commercial": "dmb"}
+	good := CodeTier{First: 1, Last: 999, NUBANDigits: 3, NIPPrefix: "000", NIPDigits: 3}
+	next := CodeTier{First: 1000, Last: 89999, NUBANDigits: 6, NIPDigits: 6}
+	cases := []struct {
+		name string
+		in   BankCodes
 		want string
 	}{
-		"no source":   {SimulatorCodes{NIP: ok, NUBAN: ok}, "simulator_codes has no source"},
-		"zero first":  {SimulatorCodes{NIP: CodeRange{Last: 5}, NUBAN: ok, Source: "x"}, "simulator_codes.nip must have 0 < first <= last, not 0 to 5"},
-		"last before": {SimulatorCodes{NIP: ok, NUBAN: CodeRange{First: 9, Last: 3}, Source: "x"}, "simulator_codes.nuban must have 0 < first <= last, not 9 to 3"},
+		{"no source", BankCodes{Categories: map[string][]CodeTier{"dmb": {good}}}, "bank_codes has no source"},
+		{"no tiers", BankCodes{Categories: map[string][]CodeTier{}, Source: "x"}, "bank_codes has no tiers for dmb"},
+		{"zero first", BankCodes{Categories: map[string][]CodeTier{"dmb": {{Last: 5, NUBANDigits: 3, NIPPrefix: "000", NIPDigits: 3}}}, Source: "x"}, "bank_codes.dmb[0] must have 1 <= first <= last, not 0 to 5"},
+		{"overlap", BankCodes{Categories: map[string][]CodeTier{"dmb": {good, {First: 500, Last: 9999, NUBANDigits: 6, NIPDigits: 6}}}, Source: "x"}, "bank_codes.dmb[1] starts at 500, but the tier before it ends at 999"},
+		{"descending", BankCodes{Categories: map[string][]CodeTier{"dmb": {next, good}}, Source: "x"}, "bank_codes.dmb[1] starts at 1, but the tier before it ends at 89999"},
+		{"short nip", BankCodes{Categories: map[string][]CodeTier{"dmb": {{First: 1, Last: 9, NUBANDigits: 3, NIPDigits: 3}}}, Source: "x"}, "bank_codes.dmb[0] must make NIP codes of 6 digits"},
+		{"bad nuban length", BankCodes{Categories: map[string][]CodeTier{"dmb": {{First: 1, Last: 9, NUBANDigits: 4, NIPPrefix: "000", NIPDigits: 3}}}, Source: "x"}, "bank_codes.dmb[0] must make NUBAN codes of 3, 5 or 6 digits"},
+		{"letters in a prefix", BankCodes{Categories: map[string][]CodeTier{"dmb": {{First: 1, Last: 9, NUBANDigits: 3, NIPPrefix: "0x0", NIPDigits: 3}}}, Source: "x"}, "bank_codes.dmb[0] prefixes must be digits"},
+		{"last too big", BankCodes{Categories: map[string][]CodeTier{"dmb": {{First: 1, Last: 1000, NUBANDigits: 3, NIPPrefix: "000", NIPDigits: 3}}}, Source: "x"}, "bank_codes.dmb[0] ends at 1000, which does not fit its digits"},
 	}
-	for name, c := range cases {
-		err := c.in.check()
+	for _, c := range cases {
+		err := c.in.check(types)
 		if err == nil || err.Error() != c.want {
-			t.Errorf("%s: err = %v, want %q", name, err, c.want)
+			t.Errorf("%s: err = %v, want %q", c.name, err, c.want)
 		}
 	}
-	if err := (SimulatorCodes{NIP: ok, NUBAN: ok, Source: "x"}).check(); err != nil {
+	if err := (BankCodes{Categories: map[string][]CodeTier{"dmb": {good, next}}, Source: "x"}).check(types); err != nil {
 		t.Errorf("valid codes: %v", err)
+	}
+}
+
+func TestBankCodeFormats(t *testing.T) {
+	p, err := Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		bankType, category, nip, nuban string
+		n, tier                        int
+	}{
+		{"commercial", "deposit_money_bank", "000001", "001", 1, 0},
+		{"digital", "deposit_money_bank", "001000", "001000", 1000, 1},
+		{"microfinance", "microfinance_bank", "090001", "50001", 1, 0},
+		{"microfinance", "microfinance_bank", "091000", "51000", 1000, 1},
+	} {
+		category, tiers := p.CodeTiers(c.bankType)
+		if category != c.category || tiers[c.tier].NIP(c.n) != c.nip || tiers[c.tier].NUBAN(c.n) != c.nuban {
+			t.Errorf("%s %d = %s %s %s", c.bankType, c.n, category, tiers[c.tier].NIP(c.n), tiers[c.tier].NUBAN(c.n))
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -10,12 +11,12 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-func (a *App) revokeBankConnections(r setup.Resource) (*setup.Condition, error) {
+func (a *App) revokeBankConnections(_ context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
 	return nil, a.revokeConnections(func(c *Connection) bool { return c.Institution == id })
 }
 
-func (a *App) revokePartnerConnections(r setup.Resource) (*setup.Condition, error) {
+func (a *App) revokePartnerConnections(_ context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
 	return nil, a.revokeConnections(func(c *Connection) bool { return c.PartnerID == id })
 }

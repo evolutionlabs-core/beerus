@@ -208,7 +208,7 @@ func TestBankCLI(t *testing.T) {
 	if !strings.HasPrefix(out, "Sending ₦1,000.50 to Chidi Okafor at Bank B.\n") || !strings.Contains(out, "Total debit ₦") {
 		t.Errorf("nip transfer text: %q", out)
 	}
-	if got := c.ok("nip", "status", sid); !matches(`Session `+sid+`: success at `+businessWAT+`\nAmount ₦1,000\.50 from `+a1+` \(bank code 999001\) to `+b1+` \(bank code 999002\), started at `+businessWAT+`\.\n`, got) {
+	if got := c.ok("nip", "status", sid); !matches(`Session `+sid+`: success at `+businessWAT+`\nAmount ₦1,000\.50 from `+a1+` \(bank code 000001\) to `+b1+` \(bank code 000002\), started at `+businessWAT+`\.\n`, got) {
 		t.Errorf("nip status: %q", got)
 	}
 	if out := c.ok("statement", a1, "--bank", "bank-a", "--from", s.today().String(), "--to", s.today().String()); !strings.Contains(out, "9 entries on this page.") || !strings.Contains(out, sid) || !strings.Contains(out, "−₦1,000.50") {

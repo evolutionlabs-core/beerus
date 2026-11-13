@@ -274,7 +274,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 			select {
 			case lastErr = <-done:
 				cancel()
-				if err := app.DropBankDatabases(); err != nil {
+				if err := app.DropBankDatabases(context.WithoutCancel(t.Context())); err != nil {
 					t.Errorf("drop bank database: %v", err)
 				}
 				continue
@@ -286,7 +286,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 				if err := <-done; err != nil {
 					t.Errorf("serve: %v", err)
 				}
-				if err := app.DropBankDatabases(); err != nil {
+				if err := app.DropBankDatabases(context.WithoutCancel(t.Context())); err != nil {
 					t.Errorf("drop bank database: %v", err)
 				}
 			})

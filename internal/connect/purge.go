@@ -25,7 +25,7 @@ type PurgeImpact struct {
 	Blockers    []string   `json:"blockers"`
 }
 
-func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
+func (a *App) PurgeImpact(ctx context.Context, id string) (PurgeImpact, error) {
 	st, ok := a.bankStatus(id)
 	banks := a.bankList()
 	b := findBank(banks, id)
@@ -37,15 +37,12 @@ func (a *App) PurgeImpact(id string) (PurgeImpact, error) {
 		return PurgeImpact{}, err
 	}
 	out := PurgeImpact{Bank: st, Database: b.Database, Snapshots: snaps, Blockers: []string{}}
-	if len(banks) == 1 {
-		out.Blockers = append(out.Blockers, "it is the only bank left; add another bank first")
-	}
 	for _, other := range banks {
 		if other.SettlesThrough == id {
 			out.Blockers = append(out.Blockers, other.Name+" settles through this bank; purge it first")
 		}
 	}
-	waiting, err := a.inflightWith(b.NIPCode, id)
+	waiting, err := a.inflightWith(ctx, b.NIPCode, id)
 	if err != nil {
 		return PurgeImpact{}, err
 	}
@@ -92,9 +89,9 @@ func (a *App) PurgeBank(id string, settleNow bool) (setup.Resource, error) {
 	return a.Resource(setup.KindBank, id)
 }
 
-func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
+func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
-	waiting, err := a.inflightWith(r.Allocated.NIPCode, id)
+	waiting, err := a.inflightWith(ctx, r.Allocated.NIPCode, id)
 	if err != nil {
 		return nil, err
 	}
@@ -118,9 +115,9 @@ func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
 	var errs []error
 	switch {
 	case ls != nil:
-		errs = append(errs, ls.Drop())
+		errs = append(errs, ls.Drop(ctx))
 	case r.Allocated.Database != "":
-		errs = append(errs, store.DropDatabases(context.Background(), a.cfg.DatabaseURL, []string{r.Allocated.Database}))
+		errs = append(errs, store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{r.Allocated.Database}))
 	}
 	for _, snap := range snaps {
 		errs = append(errs, a.dropSnapshotEverywhere(snap))
@@ -128,12 +125,12 @@ func (a *App) purgeBank(r setup.Resource) (*setup.Condition, error) {
 	a.obMu.Lock()
 	delete(a.obs, id)
 	a.obMu.Unlock()
-	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.removeMember(id))
+	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.removeMember(ctx, id))
 	a.dropBankRows(id)
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("purge %s: %w", id, err)
 	}
-	tomb, err := a.readBackPurge(r)
+	tomb, err := a.readBackPurge(ctx, r)
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +161,7 @@ func (a *App) dropBankRows(id string) {
 			a.vaultDrop(cid)
 		}
 	}
+	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *Fault) bool { return f.Bank == id })
 	for lid, l := range a.st.LinkSessions {
 		if l.Institution == id {
 			delete(a.st.LinkSessions, lid)
@@ -173,10 +171,10 @@ func (a *App) dropBankRows(id string) {
 	a.dirty()
 }
 
-func (a *App) readBackPurge(r setup.Resource) (nibss.Institution, error) {
+func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nibss.Institution, error) {
 	id := r.ID
 	if r.Allocated.Database != "" {
-		left, err := store.List(context.Background(), a.cfg.DatabaseURL, r.Allocated.Database)
+		left, err := store.List(ctx, a.cfg.DatabaseURL, r.Allocated.Database)
 		if err != nil {
 			return nibss.Institution{}, fmt.Errorf("read back the databases of %s: %w", id, err)
 		}
@@ -191,7 +189,7 @@ func (a *App) readBackPurge(r setup.Resource) (nibss.Institution, error) {
 	if sw == nil {
 		return nibss.Institution{}, errors.New("NIBSS is not open, so its tombstone for the bank cannot be read back; try again soon")
 	}
-	in, err := sw.Institution(context.Background(), r.Allocated.NIPCode)
+	in, err := sw.Institution(ctx, r.Allocated.NIPCode)
 	if err != nil {
 		return nibss.Institution{}, fmt.Errorf("read back the NIBSS status of %s: %w", id, err)
 	}
@@ -220,7 +218,7 @@ func (a *App) dropSnapshotEverywhere(snap string) error {
 	return errors.Join(errs...)
 }
 
-func (a *App) purgePartner(r setup.Resource) (*setup.Condition, error) {
+func (a *App) purgePartner(_ context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
 	a.partnerMu.Lock()
 	defer a.partnerMu.Unlock()
@@ -269,7 +267,7 @@ func (a *App) dropPartnerRows(id string) {
 }
 
 func (a *App) ctlPurgeImpact(w http.ResponseWriter, r *http.Request) {
-	imp, err := a.PurgeImpact(r.PathValue("id"))
+	imp, err := a.PurgeImpact(r.Context(), r.PathValue("id"))
 	if err != nil {
 		a.bankError(w, r, err)
 		return

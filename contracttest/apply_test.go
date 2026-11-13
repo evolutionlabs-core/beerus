@@ -71,7 +71,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 	withC := applied()
 	withC.Spec.Banks = append(withC.Spec.Banks, setup.Bank{ID: "bank-c", Name: "Bank C", Type: "digital", SettlesThrough: "bank-a"})
 	plan, err := post("/plan", withC, nil)
-	if err != nil || !strings.Contains(fmt.Sprint(plan["text"]), "+ bank bank-c") || !strings.Contains(fmt.Sprint(plan["text"]), "NIP 999003 (allocated), NUBAN 903 (allocated)") {
+	if err != nil || !strings.Contains(fmt.Sprint(plan["text"]), "+ bank bank-c") || !strings.Contains(fmt.Sprint(plan["text"]), "NIP 000003 (allocated), NUBAN 003 (allocated)") {
 		t.Fatalf("plan to add a bank: %v %v", plan, err)
 	}
 	if got := generations(); !maps.Equal(before, got) {
@@ -81,13 +81,13 @@ func TestApplyFromTheSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := settled("bank", "bank-c")
-	if pinned := applied().Spec.Banks[2]; pinned.NIPCode != "999003" || pinned.NUBANCode != "903" || r["generation"] != float64(1) {
+	if pinned := applied().Spec.Banks[2]; pinned.NIPCode != "000003" || pinned.NUBANCode != "003" || r["generation"] != float64(1) {
 		t.Fatalf("bank-c after the apply: %+v %v", pinned, r)
 	}
 	who := s.join("adaeze", "bank-c")
 	nuban := s.openAccount(who, "current")
 	enquiry := func() map[string]any {
-		return s.ctl("GET", "/nip/name-enquiry?bank_code=999003&account_number="+nuban, nil)
+		return s.ctl("GET", "/nip/name-enquiry?bank_code=000003&account_number="+nuban, nil)
 	}
 	if ne := enquiry(); ne["response_code"] != "00" || ne["account_name"] != who.Name || ne["bank_name"] != "Bank C" {
 		t.Fatalf("name enquiry at the new bank: %v", ne)
@@ -169,7 +169,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 	if got := total(home); got != held+10000 {
 		t.Fatalf("adaeze holds %d at bank-a after bank-c sent her money, want %d", got, held+10000)
 	}
-	if _, err := post("/apply", withC, nil); err == nil || !strings.Contains(err.Error(), "banks[bank-c].id bank-c belonged to a removed bank and stays reserved") {
+	if _, err := post("/apply", withC, nil); err == nil || !strings.Contains(err.Error(), "banks[bank-c].id bank-c belonged to a removed bank. Choose another id.") {
 		t.Fatalf("adding the removed bank back: %v", err)
 	}
 

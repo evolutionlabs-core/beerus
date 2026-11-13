@@ -142,7 +142,7 @@ func TestCreateBank(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := cfg.Bank("abuja-digital")
-	if b == nil || b.Type != "digital" || b.NIPCode != "999003" || b.NUBANCode != "903" || b.Database != config.DatabaseName(cfg.Dir, "abuja-digital") {
+	if b == nil || b.Type != "digital" || b.NIPCode != "000003" || b.NUBANCode != "003" || b.Database != config.DatabaseName(cfg.Dir, "abuja-digital") {
 		t.Fatalf("saved bank: %+v", b)
 	}
 	claimed := map[string]bool{}

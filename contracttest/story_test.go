@@ -267,16 +267,16 @@ func TestStory(t *testing.T) {
 	}
 	sh.expect("beerus fault list", `No faults\.\n`+at)
 	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 0\n\}\n`)
-	sh.expect("beerus nip status "+pending[0], `Session `+pending[0]+`: was pending; now success at `+hm+` WAT\nAmount ₦1,000\.00 from `+nubA+` \(bank code 999001\) to `+nubAdaB+` \(bank code 999002\), started at `+hm+` WAT\.\n`)
+	sh.expect("beerus nip status "+pending[0], `Session `+pending[0]+`: was pending; now success at `+hm+` WAT\nAmount ₦1,000\.00 from `+nubA+` \(bank code 000001\) to `+nubAdaB+` \(bank code 000002\), started at `+hm+` WAT\.\n`)
 	sh.expect("beerus nip settle-now", `Settled 1 session at `+hm+` WAT\.\n`)
 	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 1\n\}\n`)
-	sh.expect("beerus nip status "+first, `Session `+first+`: success at `+hm+` WAT\nAmount ₦5,000\.00 from `+nubA+` \(bank code 999001\) to `+nubChidi+` \(bank code 999002\), started at `+hm+` WAT\.\nSettled in settlement session `+settleAt+`\.\n`)
+	sh.expect("beerus nip status "+first, `Session `+first+`: success at `+hm+` WAT\nAmount ₦5,000\.00 from `+nubA+` \(bank code 000001\) to `+nubChidi+` \(bank code 000002\), started at `+hm+` WAT\.\nSettled in settlement session `+settleAt+`\.\n`)
 	sh.expect("beerus nip settle-now", `No sessions to settle at `+hm+` WAT\.\n`)
 
 	sh.expect("beerus transfer --from "+nubA+" --to "+nubTunde+" --to-bank bank-c --amount 4000", `Sending ₦4,000\.00 to Tunde Motors at Bank C\.\nSession \d+: success at `+hm+` WAT\nTotal debit ₦4,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦489,967\.75\.\n`)
 	dropBank(t, dir, "bank-c")
 	out1, err1, code1 := c.run("apply", "--prune", "--money", "transfer", "--to", "bank-a", "--settle-now", "--wait", "60s")
-	wantPlanC := "Setup story\n\n  - bank bank-c      remove   DESTRUCTIVE\n        stop routing; settle 1 open transfer (net ₦4,000.00);\n        transfer ₦7,000.00 for 1 customer to Bank A (on_remove); settle the moves;\n        drop 1 database. Its ID, name and codes stay reserved.\n\nPlan: 1 to remove.\n"
+	wantPlanC := "Setup story\n\n  - bank bank-c      remove   DESTRUCTIVE\n        stop routing; settle 1 open transfer (net ₦4,000.00);\n        transfer ₦7,000.00 for 1 customer to Bank A (on_remove); settle the moves;\n        drop 1 database. Its ID and codes stay reserved.\n\nPlan: 1 to remove.\n"
 	if code1 != 0 || !regexp.MustCompile(`^`+quote(wantPlanC)+`Money of Bank C on `+hm+` WAT:\n  Tunde Motors +\d{10} +₦7,000\.00 +transferred to Bank A account \d{10}\n$`).MatchString(out1) || err1 != "" {
 		t.Fatalf("removing bank-c with --settle-now: exit %d, output %q, error %q", code1, out1, err1)
 	}
@@ -300,13 +300,13 @@ func TestStory(t *testing.T) {
 	}
 	settlePending := "SettlementPending: Waiting for the 00:00 NIP session to settle 2 transfers (net ₦2,300.00). Wait for it, or run beerus nip settle-now."
 	out2, err2, code2 := c.run("apply", "--prune", "--wait", "1s")
-	wantPlanB := "Setup story\n\n  - bank bank-b      remove   DESTRUCTIVE\n        stop routing; revoke 1 connection; settle 2 open transfers (net ₦2,300.00);\n        ₦8,300.00 for 2 customers needs a money decision: add on_remove or run with --money;\n        drop 1 database and 1 snapshot. Its ID, name and codes stay reserved.\n\nPlan: 1 to remove.\n"
+	wantPlanB := "Setup story\n\n  - bank bank-b      remove   DESTRUCTIVE\n        stop routing; revoke 1 connection; settle 2 open transfers (net ₦2,300.00);\n        ₦8,300.00 for 2 customers needs a money decision: add on_remove or run with --money;\n        drop 1 database and 1 snapshot. Its ID and codes stay reserved.\n\nPlan: 1 to remove.\n"
 	if code2 != 3 || out2 != wantPlanB || !regexp.MustCompile(`^(bank bank-b: `+quote(settlePending)+`\n)?beerus: bank bank-b: `+quote(settlePending)+`$`).MatchString(err2) {
 		t.Fatalf("removing bank-b with --prune --wait 1s: exit %d, output %q, error %q", code2, out2, err2)
 	}
 
-	unavailable := `\{\n  "account_number": "` + nubChidi + `",\n  "bank_code": "999002",\n  "bank_name": "Bank B",\n  "message": "Bank B is not available right now\.",\n  "response_code": "91"\n\}\n`
-	sh.expect("beerus nip name-enquiry 999002 "+nubChidi, unavailable)
+	unavailable := `\{\n  "account_number": "` + nubChidi + `",\n  "bank_code": "000002",\n  "bank_name": "Bank B",\n  "message": "Bank B is not available right now\.",\n  "response_code": "91"\n\}\n`
+	sh.expect("beerus nip name-enquiry 000002 "+nubChidi, unavailable)
 	sh.refuse("beerus transfer --from "+nubA+" --to "+nubChidi+" --to-bank bank-b --amount 10", "beerus: Bank B is not available right now, so nothing was debited.")
 	sh.refuse("beerus snapshot restore "+snapshot, "beerus: Bank B is terminating, so a snapshot cannot be restored until that finishes")
 	revoked := func() []map[string]any {
@@ -323,11 +323,11 @@ func TestStory(t *testing.T) {
 	if err := os.WriteFile(readd, []byte(strings.Replace(strings.Replace(fmt.Sprintf(storySpec, sink.srv.URL+"/webhooks"), "    - id: bank-c\n      name: Bank C\n      type: microfinance\n", "", 1), "", "", 0)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.fails("apply", "-f", readd); !regexp.MustCompile(`^beerus: ` + quote(readd) + `:\d+:\d+: banks\[bank-b\] is being removed and cannot be added back until removal finishes\. Take it out of the file, or wait\.$`).MatchString(got) {
+	if got := c.fails("apply", "-f", readd); !regexp.MustCompile(`^beerus: ` + quote(readd) + `:\d+:\d+: banks\[bank-b\] is being removed, and its id is never reused\. Choose another id\.$`).MatchString(got) {
 		t.Errorf("re-adding bank-b while it is terminating: %q", got)
 	}
 
-	sh.expect("beerus nip status "+late, `Session `+late+`: was pending; now success at `+hm+` WAT\nAmount ₦300\.00 from `+nubA+` \(bank code 999001\) to `+nubAdaB+` \(bank code 999002\), started at `+hm+` WAT\.\n`)
+	sh.expect("beerus nip status "+late, `Session `+late+`: was pending; now success at `+hm+` WAT\nAmount ₦300\.00 from `+nubA+` \(bank code 000001\) to `+nubAdaB+` \(bank code 000002\), started at `+hm+` WAT\.\n`)
 	sh.expect("beerus nip settle-now", `Settled 1 session at `+hm+` WAT\.\n`)
 	moneyDecision := `bank bank-b: MoneyDecisionNeeded: Bank B holds ₦8,300.00 for 2 customers. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.`
 	waitFor(t, "the money decision to be asked", func() bool { return strings.Contains(c.ok("get", "banks"), moneyDecision) })
@@ -347,7 +347,7 @@ func TestStory(t *testing.T) {
 	if out, code := sh.run("beerus statement " + nubA); code != 0 || !strings.Contains(out, "NIP TRF TO Chidi Okafor/Bank B/") {
 		t.Errorf("statement after the removal: exit %d, %q", code, out)
 	}
-	sh.expect("beerus nip name-enquiry 999002 "+nubChidi, unavailable)
+	sh.expect("beerus nip name-enquiry 000002 "+nubChidi, unavailable)
 	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 5\n\}\n`)
 	if len(revoked()) != 1 {
 		t.Errorf("revoked webhooks after the removal: %v", revoked())
@@ -375,7 +375,7 @@ func TestStory(t *testing.T) {
 	if err := os.WriteFile(readd, []byte(fmt.Sprintf(storySpec, sink.srv.URL+"/webhooks")), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.fails("apply", "-f", readd); !strings.Contains(got, "banks[bank-b].id bank-b belonged to a removed bank and stays reserved. Choose another id.") {
+	if got := c.fails("apply", "-f", readd); !strings.Contains(got, "banks[bank-b].id bank-b belonged to a removed bank. Choose another id.") {
 		t.Errorf("re-adding bank-b after its removal: %q", got)
 	}
 	if got := c.ok("doctor"); !strings.HasSuffix(got, "Nothing is left behind.\n") {

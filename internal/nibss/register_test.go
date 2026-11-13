@@ -62,14 +62,16 @@ func TestRegisterRefusals(t *testing.T) {
 		{member("bank-x", "member a", "999031", "931"), `bank bank-x: name "member a" is held by bank-a: code or name already used`},
 		{member("bank-x", "Member X", "999009", "931"), "bank bank-x: nip_code 999009 is held by removed bank bank-gone: code or name already used"},
 		{member("bank-x", "Member X", "999031", "909"), "bank bank-x: nuban_code 909 is held by removed bank bank-gone: code or name already used"},
-		{member("bank-x", "Gone Bank", "999031", "931"), `bank bank-x: name "Gone Bank" is held by removed bank bank-gone: code or name already used`},
 		{member("bank-gone", "Gone Bank", "999009", "909"), "bank bank-gone was removed, and its id stays reserved: code or name already used"},
 		{member("bank-x", " ", "999031", "931"), "a bank needs an id, a name and a type"},
 		{member("bank-x", "X", "99913", "931"), `bank bank-x: nip_code "99913" must be 6 digits`},
-		{member("bank-x", "X", "999031", "93"), `bank bank-x: nuban_code "93" must be 3 or 6 digits`},
+		{member("bank-x", "X", "999031", "93"), `bank bank-x: nuban_code "93" must be 3, 5 or 6 digits`},
 	}
 	for _, c := range cases {
 		wantErr(t, s.Register(ctx, c.in), c.want)
+	}
+	if err := s.Register(ctx, member("bank-y", "Gone Bank", "999032", "932")); err != nil {
+		t.Fatalf("a removed bank's name is free again: %v", err)
 	}
 	suspended := member("bank-x", "X", "999031", "931")
 	suspended.Status = StatusSuspended

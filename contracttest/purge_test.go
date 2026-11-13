@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
@@ -142,7 +144,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if r := s.call("GET", "/v1/accounts/"+acct+"/balance", nil); r.Status != 404 && r.Status != 409 {
 		t.Fatalf("partner balance after the purge: %d", r.Status)
 	}
-	for _, req := range []map[string]any{{"name": "Abuja Digital"}, {"name": "Another", "id": "abuja-digital"}, {"name": "Another", "nip_code": bank.NIPCode}, {"name": "Another", "nuban_code": bank.NUBANCode}} {
+	for _, req := range []map[string]any{{"name": "Another", "nip_code": bank.NIPCode}, {"name": "Another", "nuban_code": bank.NUBANCode}} {
 		if _, err := s.ctlTry("POST", "/banks", req); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
 			t.Fatalf("create %v after the purge: %v", req, err)
 		}
@@ -205,39 +207,100 @@ func TestPurgeRules(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newStubStack(t)
-	s.ctl("POST", "/banks/bank-b/close", map[string]any{"money": "leave"})
-	s.waitPhase("bank-b", connect.PhaseClosed, 60*time.Second)
+	s.ctl("POST", "/banks", map[string]any{"name": "Acme Bank", "type": "digital"})
+	s.waitPhase("acme-bank", connect.PhaseActive, 60*time.Second)
+	oldBank, err := s.app.Resource(setup.KindBank, "acme-bank")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCode := oldBank.Allocated.NIPCode
+	home := s.persona("adaeze")
+	target := s.openAccount(s.join("adaeze", "acme-bank"), "current")
+	s.pay("bank-a", home.Accounts[0], "acme-bank", target, "1000")
+	s.ctl("POST", "/nip/settle-now", nil)
+	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "acme-bank", "outcome": "credited", "count": 5})
+	s.ctl("POST", "/banks/acme-bank/close", map[string]any{"money": "leave"})
+	s.waitPhase("acme-bank", connect.PhaseClosed, 60*time.Second)
+	oldBalance := cbnBalance(t, s.cfg, "acme-bank")
 	snap := fmt.Sprint(s.ctl("POST", "/snapshots", map[string]string{"name": "closed"})["id"])
-	s.ctl("POST", "/banks/bank-b/purge", nil)
-	s.waitGone("bank", "bank-b")
+	s.ctl("POST", "/banks/acme-bank/purge", nil)
+	s.waitGone("bank", "acme-bank")
 	if _, err := os.Stat(s.cfg.Path("snapshots", snap+".json")); !os.IsNotExist(err) {
 		t.Fatalf("the purge kept a snapshot that holds the bank: %v", err)
 	}
 	if _, err := s.ctlTry("POST", "/snapshots/"+snap+"/restore", nil); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("restore of a snapshot the purge deleted: %v", err)
 	}
-	if imp := s.ctl("GET", "/banks/bank-a/purge", nil); !strings.Contains(fmt.Sprint(imp["blockers"]), "only bank left") {
-		t.Fatalf("purge preview of the last bank: %v", imp)
+	if tombs := storedStatus(t, s.cfg.Dir).Tombstones; len(tombs) != 1 || tombs[0].ID != "acme-bank" || tombs[0].NIPCode != oldCode || tombs[0].Status != "removed" {
+		t.Fatalf("tombstones after the purge: %+v", tombs)
 	}
-	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Other", "id": "bank-b"}); err == nil || !strings.Contains(err.Error(), "removed bank") {
+	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Acme Two", "id": "acme-bank"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "banks[acme-bank].id acme-bank belonged to a removed bank. Choose another id.") {
 		t.Fatalf("create with a purged id: %v", err)
+	}
+	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Acme Three", "nip_code": "123456"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "nip_code and nuban_code are assigned by Beerus; leave them out") {
+		t.Fatalf("create with a chosen code: %v", err)
+	}
+	s.ctl("POST", "/banks", map[string]any{"name": "Acme Bank", "type": "digital"})
+	s.waitPhase("acme-bank-2", connect.PhaseActive, 60*time.Second)
+	s.ctl("POST", "/banks", map[string]any{"name": "Bank-B", "type": "digital"})
+	s.waitPhase("bank-b-2", connect.PhaseActive, 60*time.Second)
+	fresh, err := s.app.Resource(setup.KindBank, "acme-bank-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Allocated.NIPCode == oldCode {
+		t.Fatalf("the recreated bank reused the code %s", oldCode)
+	}
+	if got := cbnBalance(t, s.cfg, "acme-bank-2"); got != bank.GenesisSettlement {
+		t.Fatalf("the recreated bank has %d at the CBN, want %d", got, bank.GenesisSettlement)
+	}
+	if got := cbnBalance(t, s.cfg, "acme-bank"); got != oldBalance {
+		t.Fatalf("the purged bank's CBN account holds %d, want %d", got, oldBalance)
+	}
+	if faults := s.ctl("GET", "/faults", nil); strings.Contains(fmt.Sprint(faults), "acme-bank") {
+		t.Fatalf("a fault of the purged bank survives: %v", faults)
+	}
+	for _, id := range []string{"acme-bank-2", "bank-b-2", "bank-b", "bank-a"} {
+		s.ctl("POST", "/banks/"+id+"/close", map[string]any{"money": "leave"})
+		s.waitPhase(id, connect.PhaseClosed, 60*time.Second)
+		if imp := s.ctl("GET", "/banks/"+id+"/purge", nil); fmt.Sprint(imp["blockers"]) != "[]" {
+			t.Fatalf("purge preview of %s: %v", id, imp)
+		}
+		s.ctl("POST", "/banks/"+id+"/purge", nil)
+		s.waitGone("bank", id)
+	}
+	if left := s.ctl("GET", "/banks", nil)["data"].([]any); len(left) != 0 {
+		t.Fatalf("banks after purging every bank: %v", left)
 	}
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
 	c := s.loadConfig()
-	if c.Bank("bank-b") != nil {
-		t.Fatal("the setup still lists the purged bank")
+	if len(c.Banks) != 0 {
+		t.Fatal("the setup still lists a purged bank")
 	}
 	again, err := connect.New(c, connect.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, st := range again.BankStatuses() {
-		if st.ID == "bank-b" {
-			t.Fatal("a purged bank came back after a restart")
-		}
+	if left := again.BankStatuses(); len(left) != 0 {
+		t.Fatalf("purged banks came back after a restart: %v", left)
 	}
+}
+
+func cbnBalance(t *testing.T, cfg *config.Config, account string) int64 {
+	t.Helper()
+	ctx := t.Context()
+	st, err := store.Open(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, setup.SystemCBN))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	bal, err := ledger.New(st.Pool, nil).Balance(ctx, "SETTLEMENT/"+account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bal
 }
 
 func waitFor(t *testing.T, what string, cond func() bool) {
@@ -308,7 +371,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.app.Cash(bank, "deposit", connect.CashRequest{Account: acc.NUBAN, Amount: naira}); err != nil {
+		if _, err := r.app.Cash(t.Context(), bank, "deposit", connect.CashRequest{Account: acc.NUBAN, Amount: naira}); err != nil {
 			t.Fatal(err)
 		}
 		return acc.NUBAN

@@ -441,8 +441,6 @@ func cmdBankCreate(args []string) error {
 	name := fs.String("name", "", "bank name")
 	typ := fs.String("type", "commercial", "bank type: commercial, digital or microfinance")
 	id := fs.String("id", "", "bank ID, derived from the name when empty")
-	nip := fs.String("nip-code", "", "6-digit NIP institution `code`, assigned when empty")
-	nuban := fs.String("nuban-code", "", "3-digit NUBAN bank `code`, assigned when empty")
 	via := fs.String("settles-through", "", "`bank` that a microfinance bank settles through")
 	if _, err := parseAfter("bank create", fs, args, 1); err != nil {
 		return err
@@ -462,7 +460,7 @@ func cmdBankCreate(args []string) error {
 	}
 	clk := clock.New(nil)
 	start := clk.Real()
-	raw, err := c.send("POST", "/banks", map[string]any{"name": *name, "type": *typ, "id": *id, "nip_code": *nip, "nuban_code": *nuban, "settles_through": *via})
+	raw, err := c.send("POST", "/banks", map[string]any{"name": *name, "type": *typ, "id": *id, "settles_through": *via})
 	if err != nil {
 		return err
 	}

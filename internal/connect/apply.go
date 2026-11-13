@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -376,7 +377,11 @@ func (a *App) buildPlan(desired setup.Spec, st setup.Status, opt ApplyOptions) (
 	if err != nil {
 		return planned{}, fmt.Errorf("read the NIBSS directory: %w", err)
 	}
-	plan := setup.Build(desired, st, dir, a.clock.Today())
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return planned{}, fmt.Errorf("load the country pack: %w", err)
+	}
+	plan := setup.Build(pack, desired, st, dir, a.clock.Today())
 	if len(plan.Errors) > 0 {
 		return planned{}, planFailure(plan.Errors)
 	}

@@ -14,7 +14,7 @@ var (
 	errCodeTaken = errors.New("code or name already used")
 
 	nipCodeRe   = regexp.MustCompile(`^[0-9]{6}$`)
-	nubanCodeRe = regexp.MustCompile(`^([0-9]{3}|[0-9]{6})$`)
+	nubanCodeRe = regexp.MustCompile(`^([0-9]{3}|[0-9]{5}|[0-9]{6})$`)
 )
 
 func checkRegister(in Institution) error {
@@ -24,7 +24,7 @@ func checkRegister(in Institution) error {
 	case !nipCodeRe.MatchString(in.NIPCode):
 		return fmt.Errorf("bank %s: nip_code %q must be 6 digits", in.ID, in.NIPCode)
 	case !nubanCodeRe.MatchString(in.NUBANCode):
-		return fmt.Errorf("bank %s: nuban_code %q must be 3 or 6 digits", in.ID, in.NUBANCode)
+		return fmt.Errorf("bank %s: nuban_code %q must be 3, 5 or 6 digits", in.ID, in.NUBANCode)
 	case in.Status != "" && in.Status != StatusActive:
 		return fmt.Errorf("bank %s registers as active, not %s; use SetStatus to change it", in.ID, in.Status)
 	}
@@ -40,7 +40,7 @@ func (s *Store) Register(ctx context.Context, in Institution) error {
 			return fmt.Errorf("lock institutions: %w", err)
 		}
 		rows, err := tx.Query(ctx, `SELECT `+institutionCols+` FROM institutions
-WHERE id = $1 OR nip_code = $2 OR nuban_code = $3 OR lower(name) = lower($4)
+WHERE id = $1 OR nip_code = $2 OR nuban_code = $3 OR (lower(name) = lower($4) AND status <> 'removed')
 ORDER BY nip_code`, in.ID, in.NIPCode, in.NUBANCode, in.Name)
 		if err != nil {
 			return fmt.Errorf("look up bank %s: %w", in.ID, err)

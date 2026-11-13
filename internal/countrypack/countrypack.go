@@ -3,10 +3,15 @@ package countrypack
 import (
 	_ "embed"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 //go:embed ng.yaml
@@ -37,15 +42,26 @@ type Declared struct {
 	Source string   `yaml:"source"`
 }
 
-type CodeRange struct {
-	First int `yaml:"first"`
-	Last  int `yaml:"last"`
+type CodeTier struct {
+	First       int    `yaml:"first"`
+	Last        int    `yaml:"last"`
+	NUBANPrefix string `yaml:"nuban_prefix"`
+	NUBANDigits int    `yaml:"nuban_digits"`
+	NIPPrefix   string `yaml:"nip_prefix"`
+	NIPDigits   int    `yaml:"nip_digits"`
 }
 
-type SimulatorCodes struct {
-	NIP    CodeRange `yaml:"nip"`
-	NUBAN  CodeRange `yaml:"nuban"`
-	Source string    `yaml:"source"`
+func (t CodeTier) NIP(n int) string {
+	return fmt.Sprintf("%s%0*d", t.NIPPrefix, t.NIPDigits, n)
+}
+
+func (t CodeTier) NUBAN(n int) string {
+	return fmt.Sprintf("%s%0*d", t.NUBANPrefix, t.NUBANDigits, n)
+}
+
+type BankCodes struct {
+	Categories map[string][]CodeTier `yaml:",inline"`
+	Source     string                `yaml:"source"`
 }
 
 type Phone struct {
@@ -125,7 +141,7 @@ type Pack struct {
 	Islamic  []Islamic  `yaml:"islamic"`
 	Declared []Declared `yaml:"declared"`
 
-	SimulatorCodes   SimulatorCodes   `yaml:"simulator_codes"`
+	BankCodes        BankCodes        `yaml:"bank_codes"`
 	Phone            Phone            `yaml:"phone"`
 	DepositInsurance DepositInsurance `yaml:"deposit_insurance"`
 	Fees             Fees             `yaml:"fees"`
@@ -144,7 +160,7 @@ func Nigeria() (*Pack, error) {
 			return nil, fmt.Errorf("country pack NG: declared %d has no source", d.Year)
 		}
 	}
-	if err := p.SimulatorCodes.check(); err != nil {
+	if err := p.BankCodes.check(p.DepositInsurance.BankTypes); err != nil {
 		return nil, fmt.Errorf("country pack NG: %w", err)
 	}
 	if p.Phone.CallingCode == "" || p.Phone.TrunkPrefix == "" || p.Phone.Source == "" {
@@ -158,6 +174,8 @@ func Nigeria() (*Pack, error) {
 	}
 	return &p, nil
 }
+
+const nipCodeLength = 6
 
 const maxFeeMinor = math.MaxInt64 / 4
 
@@ -258,14 +276,56 @@ func (l Levy) check() error {
 	return nil
 }
 
-func (s SimulatorCodes) check() error {
-	if s.Source == "" {
-		return fmt.Errorf("simulator_codes has no source")
+func (c BankCodes) check(bankTypes map[string]string) error {
+	if c.Source == "" {
+		return fmt.Errorf("bank_codes has no source")
 	}
-	for name, r := range map[string]CodeRange{"nip": s.NIP, "nuban": s.NUBAN} {
-		if r.First <= 0 || r.Last < r.First {
-			return fmt.Errorf("simulator_codes.%s must have 0 < first <= last, not %d to %d", name, r.First, r.Last)
+	for _, category := range slices.Sorted(maps.Values(bankTypes)) {
+		if len(c.Categories[category]) == 0 {
+			return fmt.Errorf("bank_codes has no tiers for %s", category)
+		}
+	}
+	for _, category := range slices.Sorted(maps.Keys(c.Categories)) {
+		if err := checkTiers(category, c.Categories[category]); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func checkTiers(category string, tiers []CodeTier) error {
+	prev := 0
+	for i, t := range tiers {
+		name := fmt.Sprintf("bank_codes.%s[%d]", category, i)
+		switch {
+		case t.First < 1 || t.Last < t.First:
+			return fmt.Errorf("%s must have 1 <= first <= last, not %d to %d", name, t.First, t.Last)
+		case t.First <= prev:
+			return fmt.Errorf("%s starts at %d, but the tier before it ends at %d", name, t.First, prev)
+		case len(t.NIPPrefix)+t.NIPDigits != nipCodeLength:
+			return fmt.Errorf("%s must make NIP codes of %d digits", name, nipCodeLength)
+		case strings.Trim(t.NIPPrefix+t.NUBANPrefix, "0123456789") != "":
+			return fmt.Errorf("%s prefixes must be digits", name)
+		case t.Last >= pow10(t.NIPDigits) || t.Last >= pow10(t.NUBANDigits):
+			return fmt.Errorf("%s ends at %d, which does not fit its digits", name, t.Last)
+		}
+		if _, err := world.NormaliseBankCode(t.NUBAN(t.First)); err != nil {
+			return fmt.Errorf("%s must make NUBAN codes of 3, 5 or 6 digits", name)
+		}
+		prev = t.Last
+	}
+	return nil
+}
+
+func pow10(n int) int {
+	out := 1
+	for range n {
+		out *= 10
+	}
+	return out
+}
+
+func (p *Pack) CodeTiers(bankType string) (string, []CodeTier) {
+	category := p.DepositInsurance.BankTypes[bankType]
+	return category, p.BankCodes.Categories[category]
 }

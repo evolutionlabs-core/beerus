@@ -60,11 +60,11 @@ func TestValidateRules(t *testing.T) {
 		{"40 character bank name", func(s *Spec) { s.Spec.Banks[0].Name = strings.Repeat("é", 40) }, nil},
 		{"same name in another case", func(s *Spec) { s.Spec.Banks[1].Name = "BANK A" }, []string{`banks[bank-b].name "BANK A" is already used by bank-a. Give each bank its own name.`}},
 		{"no type", func(s *Spec) { s.Spec.Banks[0].Type = "" }, []string{"banks[bank-a].type is required. Use commercial, digital or microfinance."}},
-		{"short nip code", func(s *Spec) { s.Spec.Banks[0].NIPCode = "99901" }, []string{`banks[bank-a].nip_code "99901" is not valid. Use 6 digits, or leave it out to have one allocated.`}},
+		{"short nip code", func(s *Spec) { s.Spec.Banks[0].NIPCode = "99901" }, []string{`banks[bank-a].nip_code "99901" is not valid. Remove it and Beerus assigns one.`}},
 		{"repeated nip code", func(s *Spec) { s.Spec.Banks[1].NIPCode = "999001" }, []string{"banks[bank-b].nip_code 999001 is already used by bank-a. Give each bank its own code."}},
-		{"nuban code of 4 digits", func(s *Spec) { s.Spec.Banks[0].NUBANCode = "9010" }, []string{`banks[bank-a].nuban_code "9010" is not valid. Use 3 or 5 digits, or 6 digits starting with 9, or leave it out to have one allocated.`}},
-		{"6 digit nuban code without 9", func(s *Spec) { s.Spec.Banks[0].NUBANCode = "100901" }, []string{`banks[bank-a].nuban_code "100901" is not valid. Use 3 or 5 digits, or 6 digits starting with 9, or leave it out to have one allocated.`}},
-		{"nuban code same after normalising", func(s *Spec) { s.Spec.Banks[1].NUBANCode = "000901" }, []string{`banks[bank-b].nuban_code "000901" is not valid. Use 3 or 5 digits, or 6 digits starting with 9, or leave it out to have one allocated.`}},
+		{"nuban code of 4 digits", func(s *Spec) { s.Spec.Banks[0].NUBANCode = "9010" }, []string{`banks[bank-a].nuban_code "9010" is not valid. Remove it and Beerus assigns one.`}},
+		{"6 digit nuban code without 9", func(s *Spec) { s.Spec.Banks[0].NUBANCode = "100901" }, nil},
+		{"nuban code same after normalising", func(s *Spec) { s.Spec.Banks[1].NUBANCode = "000901" }, []string{"banks[bank-b].nuban_code 000901 is already used by bank-a. Give each bank its own code."}},
 		{"5 and 6 digit nuban codes clash", func(s *Spec) {
 			s.Spec.Banks[0].NUBANCode = "50211"
 			s.Spec.Banks[1].NUBANCode = "950211"

@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"maps"
@@ -68,15 +69,15 @@ func finalizerApp(t *testing.T, r setup.Resource) *App {
 func TestOneFinalizerPerStep(t *testing.T) {
 	a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: setup.PhaseClosing, Finalizers: []string{"one", "two", "three"}})
 	ran := []string{}
-	run := func(name string) func(*App, setup.Resource) (*setup.Condition, error) {
-		return func(*App, setup.Resource) (*setup.Condition, error) {
+	run := func(name string) func(*App, context.Context, setup.Resource) (*setup.Condition, error) {
+		return func(*App, context.Context, setup.Resource) (*setup.Condition, error) {
 			ran = append(ran, name)
 			return nil, nil
 		}
 	}
 	lists := map[string][]finalizer{setup.KindBank: {{name: "one", run: run("one")}, {name: "two", run: run("two")}, {name: "three"}}}
 	for range 4 {
-		a.advanceFinalizers(lists)
+		a.advanceFinalizers(t.Context(), lists)
 	}
 	if !slices.Equal(ran, []string{"one", "two"}) {
 		t.Fatalf("ran %v", ran)
@@ -93,12 +94,12 @@ func TestOneFinalizerPerStep(t *testing.T) {
 func TestFinalizerFailureBacksOff(t *testing.T) {
 	a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: setup.PhaseClosing, Finalizers: []string{"one"}})
 	calls := 0
-	lists := map[string][]finalizer{setup.KindBank: {{name: "one", run: func(*App, setup.Resource) (*setup.Condition, error) {
+	lists := map[string][]finalizer{setup.KindBank: {{name: "one", run: func(*App, context.Context, setup.Resource) (*setup.Condition, error) {
 		calls++
 		return nil, errors.New("postgres is down")
 	}}}}
-	a.advanceFinalizers(lists)
-	a.advanceFinalizers(lists)
+	a.advanceFinalizers(t.Context(), lists)
+	a.advanceFinalizers(t.Context(), lists)
 	if calls != 1 {
 		t.Fatalf("ran %d times inside the backoff", calls)
 	}

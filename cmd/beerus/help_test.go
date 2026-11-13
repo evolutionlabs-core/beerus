@@ -75,8 +75,6 @@ Create a bank.
 Options:
   --id ID                  Bank ID, derived from the name when empty
   --name NAME              Bank name
-  --nip-code CODE          6-digit NIP institution code, assigned when empty
-  --nuban-code CODE        3-digit NUBAN bank code, assigned when empty
   --settles-through BANK   Bank that a microfinance bank settles through
   --type TYPE              Bank type: commercial, digital or microfinance (default commercial)
 `

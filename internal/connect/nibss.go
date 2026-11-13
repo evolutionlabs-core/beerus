@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
@@ -94,7 +97,7 @@ func (a *App) syncDirectory(s *nibss.Store) error {
 			}
 		}
 	}
-	return a.refreshDirectory()
+	return a.refreshDirectory(ctx)
 }
 
 func nibssSnapshot(cfg *config.Config, id string) string {
@@ -187,7 +190,7 @@ func (a *App) registerMember(b *config.Bank) error {
 	}); err != nil {
 		return err
 	}
-	return a.refreshDirectory()
+	return a.refreshDirectory(ctx)
 }
 
 func (a *App) attachMember(ls *ledgerSource) {
@@ -199,28 +202,28 @@ func (a *App) attachMember(ls *ledgerSource) {
 	}
 }
 
-func (a *App) setMemberStatus(id, status string) error {
+func (a *App) setMemberStatus(ctx context.Context, id, status string) error {
 	a.mu.Lock()
 	s := a.nibss
 	a.mu.Unlock()
 	if s == nil {
 		return nil
 	}
-	if err := s.SetStatus(context.Background(), id, status); err != nil {
+	if err := s.SetStatus(ctx, id, status); err != nil {
 		return fmt.Errorf("set NIBSS status of %s to %s: %w", id, status, err)
 	}
-	return a.refreshDirectory()
+	return a.refreshDirectory(ctx)
 }
 
-func (a *App) stopRouting(r setup.Resource) (*setup.Condition, error) {
+func (a *App) stopRouting(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	sw := a.nibssStore()
 	if sw == nil {
 		return nil, errors.New("NIBSS is not open, so routing to the bank cannot be stopped; try again soon")
 	}
-	if err := a.setMemberStatus(r.ID, nibss.StatusTerminating); err != nil {
+	if err := a.setMemberStatus(ctx, r.ID, nibss.StatusTerminating); err != nil {
 		return nil, err
 	}
-	in, err := sw.Institution(context.Background(), r.Allocated.NIPCode)
+	in, err := sw.Institution(ctx, r.Allocated.NIPCode)
 	if err != nil {
 		return nil, fmt.Errorf("read back the NIBSS status of %s: %w", r.ID, err)
 	}
@@ -230,7 +233,7 @@ func (a *App) stopRouting(r setup.Resource) (*setup.Condition, error) {
 	return nil, nil
 }
 
-func (a *App) removeMember(id string) error {
+func (a *App) removeMember(ctx context.Context, id string) error {
 	a.mu.Lock()
 	s := a.nibss
 	a.mu.Unlock()
@@ -238,7 +241,6 @@ func (a *App) removeMember(id string) error {
 		return nil
 	}
 	s.Attach(id, nil)
-	ctx := context.Background()
 	list, err := s.Directory(ctx)
 	if err != nil {
 		return fmt.Errorf("read the NIBSS directory: %w", err)
@@ -261,17 +263,17 @@ func (a *App) removeMember(id string) error {
 		}
 		cur = status
 	}
-	return a.refreshDirectory()
+	return a.refreshDirectory(ctx)
 }
 
-func (a *App) refreshDirectory() error {
+func (a *App) refreshDirectory(ctx context.Context) error {
 	a.mu.Lock()
 	s := a.nibss
 	a.mu.Unlock()
 	if s == nil {
 		return nil
 	}
-	list, err := s.Directory(context.Background())
+	list, err := s.Directory(ctx)
 	if err != nil {
 		return fmt.Errorf("read the NIBSS directory: %w", err)
 	}
@@ -289,4 +291,30 @@ func (a *App) refreshDirectory() error {
 
 func (a *App) directoryLocked() *nip.Directory {
 	return nip.NewDirectory(a.members, nil)
+}
+
+const removedSuffix = " (removed)"
+
+func (a *App) markRemoved(ctx context.Context, lines []bank.FeedLine) error {
+	if !slices.ContainsFunc(lines, func(l bank.FeedLine) bool { return l.Counterparty != nil }) {
+		return nil
+	}
+	s := a.nibssStore()
+	if s == nil {
+		return nil
+	}
+	directory, err := s.Directory(ctx)
+	if err != nil {
+		return fmt.Errorf("read the NIBSS directory: %w", err)
+	}
+	removed := map[string]bool{}
+	for _, in := range directory {
+		removed[in.NIPCode] = in.Status == nibss.StatusRemoved
+	}
+	for _, l := range lines {
+		if cp := l.Counterparty; cp != nil && removed[cp.BankCode] && !strings.HasSuffix(cp.BankName, removedSuffix) {
+			cp.BankName += removedSuffix
+		}
+	}
+	return nil
 }

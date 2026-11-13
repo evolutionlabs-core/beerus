@@ -9,6 +9,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -35,7 +36,11 @@ func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
 		rows = slices.Clone(st.Tombstones)
 		warning = fmt.Sprintf("NIBSS is not reachable (%v); the plan uses only the removed banks cached in %s, so it cannot check codes against live banks.", err, statusFile)
 	}
-	plan := setup.Build(desired, st, rows, clock.New(nil).Today())
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return PlanReply{}, fmt.Errorf("load the country pack: %w", err)
+	}
+	plan := setup.Build(pack, desired, st, rows, clock.New(nil).Today())
 	if len(plan.Errors) > 0 {
 		return PlanReply{}, planFailure(plan.Errors)
 	}

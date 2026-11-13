@@ -22,7 +22,7 @@ const (
 )
 
 var bankSteps = []struct{ id, name string }{
-	{setup.StepAllocate, "Allocating codes, port and database"},
+	{setup.StepAllocate, "Allocating codes"},
 	{setup.StepDirectory, "Registering with NIBSS"},
 	{setup.StepDatabase, "Creating the bank database"},
 	{setup.StepLedgerSchema, "Migrating bank ledger"},
@@ -48,7 +48,11 @@ func backoff(attempts int) time.Duration {
 func newStatus(b *config.Bank, done bool) *BankStatus {
 	st := &BankStatus{ID: b.ID, Name: b.Name, Phase: PhaseProvisioning, URL: b.URL()}
 	for _, s := range bankSteps {
-		st.Steps = append(st.Steps, BankStep{ID: s.id, Name: s.name, Done: done})
+		name := s.name
+		if s.id == setup.StepAllocate && b.NIPCode != "" {
+			name += " (NIP " + b.NIPCode + ", NUBAN " + b.NUBANCode + ")"
+		}
+		st.Steps = append(st.Steps, BankStep{ID: s.id, Name: name, Done: done})
 	}
 	if done {
 		st.Phase = runningPhase(b)
@@ -171,7 +175,7 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 	return err == nil
 }
 
-func (a *App) reconcileBanks() {
+func (a *App) reconcileBanks(ctx context.Context) {
 	a.checkDrift()
 	now := a.clock.Real()
 	stored, err := a.ctl.status()
@@ -195,7 +199,7 @@ func (a *App) reconcileBanks() {
 		a.provision(b)
 	}
 	a.reconcileChanges()
-	a.advanceFinalizers(finalizerLists)
+	a.advanceFinalizers(ctx, finalizerLists)
 }
 
 func (a *App) needsRepairLocked(st *BankStatus, stored setup.Status) bool {
@@ -224,14 +228,14 @@ func (a *App) provision(b *config.Bank) {
 		if err != nil {
 			return err
 		}
-		a.nameStep(st, setup.StepLedgerSchema, n)
+		a.nameStep(st, setup.StepLedgerSchema, migrationCount(n))
 		return nil
 	}) && a.step(st, setup.StepOpenBankingSchema, func() error {
 		n, err := store.Migrate(context.Background(), a.cfg.DatabaseURL, b.Database, openbanking.Migrate)
 		if err != nil {
 			return err
 		}
-		a.nameStep(st, setup.StepOpenBankingSchema, n)
+		a.nameStep(st, setup.StepOpenBankingSchema, migrationCount(n))
 		return a.openLedger(b)
 	}) && a.step(st, setup.StepCerts, func() error {
 		return a.bankCerts(b)
@@ -264,11 +268,11 @@ func (a *App) provision(b *config.Bank) {
 	a.lifeMu.Unlock()
 }
 
-func (a *App) nameStep(st *BankStatus, id string, migrations int) {
+func (a *App) nameStep(st *BankStatus, id, detail string) {
 	i := stepIndex(id)
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
-	st.Steps[i].Name = bankSteps[i].name + " (" + migrationCount(migrations) + ")"
+	st.Steps[i].Name = bankSteps[i].name + " (" + detail + ")"
 }
 
 func migrationCount(n int) string {

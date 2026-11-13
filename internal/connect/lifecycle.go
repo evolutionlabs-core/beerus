@@ -156,12 +156,12 @@ func (a *App) postgresRoom(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) removedBanks() ([]nibss.Institution, error) {
+func (a *App) removedBanks(ctx context.Context) ([]nibss.Institution, error) {
 	s := a.nibssStore()
 	if s == nil {
 		return nil, errors.New("the NIBSS directory is not open yet, so the codes of removed banks cannot be checked; try again soon")
 	}
-	all, err := s.Directory(context.Background())
+	all, err := s.Directory(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -174,24 +174,56 @@ func (a *App) removedBanks() ([]nibss.Institution, error) {
 	return out, nil
 }
 
-func (a *App) CreateBank(req BankRequest) (BankStatus, error) {
+func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, error) {
+	if req.NIPCode != "" || req.NUBANCode != "" {
+		return BankStatus{}, invalid("nip_code and nuban_code are assigned by Beerus; leave them out")
+	}
 	if req.HistoryDays != 0 {
 		return BankStatus{}, invalid("history_days can no longer be set; it follows the bank type")
 	}
 	name := strings.TrimSpace(req.Name)
 	id := strings.TrimSpace(req.ID)
+	slug := ""
+	var removed []nibss.Institution
 	if id == "" {
-		id = strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
+		slug = strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
+	}
+	if slug != "" {
+		var err error
+		if removed, err = a.removedBanks(ctx); err != nil {
+			return BankStatus{}, err
+		}
 	}
 	stored, err := a.ctl.status()
 	if err != nil {
 		return BankStatus{}, fmt.Errorf("read control.json: %w", err)
 	}
 	if r := findResource(&stored, setup.KindBank, id); r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
-		return BankStatus{}, applyFail(http.StatusConflict, codeBeingRemoved, "banks[%s] is being removed and cannot be added back until removal finishes. Wait for it.", id)
+		return BankStatus{}, applyFail(http.StatusConflict, codeBeingRemoved, "banks[%s] is being removed, and its id is never reused. Choose another id.", id)
 	}
 	err = a.applyEdit(func(sp *setup.Spec) error {
-		nb := setup.Bank{ID: id, Name: name, Type: orDefault(req.Type, "commercial"), NIPCode: req.NIPCode, NUBANCode: req.NUBANCode, SettlesThrough: req.SettlesThrough}
+		if slug != "" {
+			taken := map[string]bool{}
+			for _, b := range sp.Spec.Banks {
+				taken[b.ID] = true
+			}
+			for _, in := range removed {
+				taken[in.ID] = true
+			}
+			for _, r := range stored.Resources {
+				if r.Kind == setup.KindBank {
+					taken[r.ID] = true
+				}
+			}
+			for _, b := range a.bankList() {
+				taken[b.ID] = true
+			}
+			id = slug
+			for n := 2; taken[id]; n++ {
+				id = fmt.Sprintf("%s-%d", slug, n)
+			}
+		}
+		nb := setup.Bank{ID: id, Name: name, Type: orDefault(req.Type, "commercial"), SettlesThrough: req.SettlesThrough}
 		if nb.SettlesThrough == "" && nb.Type == "microfinance" {
 			for _, b := range sp.Spec.Banks {
 				if b.Type == "commercial" && b.State != setup.StateClosed {
@@ -326,7 +358,7 @@ func (a *App) ctlCreateBank(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"...","type":"commercial"}.`)
 		return
 	}
-	st, err := a.CreateBank(req)
+	st, err := a.CreateBank(r.Context(), req)
 	if err != nil {
 		a.bankError(w, r, err)
 		return

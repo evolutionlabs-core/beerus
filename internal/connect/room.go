@@ -317,6 +317,10 @@ func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 		a.roomFail(w, r, err)
 		return
 	}
+	if err := a.markRemoved(ctx, ls); err != nil {
+		a.roomFail(w, r, err)
+		return
+	}
 	lines := []lineView{}
 	for _, l := range ls {
 		lines = append(lines, newLineView(bk.bank, l))
@@ -384,12 +388,20 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 		a.roomFail(w, r, err)
 		return
 	}
+	if err := a.markRemoved(ctx, []bank.FeedLine{l}); err != nil {
+		a.roomFail(w, r, err)
+		return
+	}
 	trace := []lineView{}
 	var debit, credit, charges int64
 	if l.SessionID != "" {
 		for _, other := range a.books() {
 			ls, err := other.ls.Bank().SessionLines(ctx, l.SessionID)
 			if err != nil {
+				a.roomFail(w, r, err)
+				return
+			}
+			if err := a.markRemoved(ctx, ls); err != nil {
 				a.roomFail(w, r, err)
 				return
 			}
@@ -465,7 +477,7 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 		var res TransferResult
 		res, err = a.Transfer(req)
 		if err == nil {
-			a.SyncAll()
+			a.SyncAll(r.Context())
 			http.Redirect(w, r, "/ui/accounts/"+url.PathEscape(acctKey(res.FromBank, res.From))+"?transfer="+url.QueryEscape(res.Status), http.StatusSeeOther)
 			return
 		}
@@ -602,7 +614,7 @@ func (a *App) roomCreateBank(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f := r.PostForm
-	b, err := a.CreateBank(BankRequest{Name: f.Get("name"), Type: f.Get("type"), SettlesThrough: f.Get("settles_through")})
+	b, err := a.CreateBank(r.Context(), BankRequest{Name: f.Get("name"), Type: f.Get("type"), SettlesThrough: f.Get("settles_through")})
 	if err != nil {
 		msg := err.Error()
 		if errors.Is(err, ErrBankInvalid) {
@@ -783,7 +795,7 @@ func (a *App) roomPurgeBank(w http.ResponseWriter, r *http.Request) {
 			msg = strings.ToUpper(msg[:1]) + msg[1:] + "."
 		}
 	}
-	imp, err := a.PurgeImpact(id)
+	imp, err := a.PurgeImpact(r.Context(), id)
 	if err != nil && !errors.Is(err, errNotFound) {
 		a.roomFail(w, r, err)
 		return
