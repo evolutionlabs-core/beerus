@@ -307,6 +307,11 @@ type refreshPlan struct {
 	refresh string
 }
 
+type refreshFlight struct {
+	done chan struct{}
+	err  error
+}
+
 func (a *App) refreshPlanLocked(vid string) (refreshPlan, error) {
 	e := a.st.Vault[vid]
 	if e == nil {
@@ -335,7 +340,7 @@ func (a *App) refreshApplyLocked(p refreshPlan, r tokenReply, err error) error {
 	if cur == nil {
 		return errReauth
 	}
-	if err != nil && cur != p.entry {
+	if cur != p.entry {
 		return nil
 	}
 	if err != nil {
@@ -351,29 +356,47 @@ func (a *App) refreshApplyLocked(p refreshPlan, r tokenReply, err error) error {
 	return a.vaultPut(p.vid, a.toToken(r))
 }
 
-func (a *App) refreshToken(vid string, b *config.Bank) error {
+func (a *App) refreshToken(vid string, b *config.Bank, seen *VaultEntry) error {
 	a.mu.Lock()
+	if f := a.refreshing[vid]; f != nil {
+		a.mu.Unlock()
+		<-f.done
+		return f.err
+	}
+	if a.st.Vault[vid] != seen {
+		a.mu.Unlock()
+		return nil
+	}
 	p, err := a.refreshPlanLocked(vid)
-	a.mu.Unlock()
 	if err != nil {
+		a.mu.Unlock()
 		return err
 	}
+	f := &refreshFlight{done: make(chan struct{})}
+	if a.refreshing == nil {
+		a.refreshing = map[string]*refreshFlight{}
+	}
+	a.refreshing[vid] = f
+	a.mu.Unlock()
 	r, err := a.refreshCall(b, p.refresh)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.refreshApplyLocked(p, r, err)
+	f.err = a.refreshApplyLocked(p, r, err)
+	delete(a.refreshing, vid)
+	close(f.done)
+	return f.err
 }
 
-func (a *App) accessTokenLocked(vid string, force bool) (string, bool, error) {
+func (a *App) accessTokenLocked(vid string, force bool) (string, *VaultEntry, error) {
 	e := a.st.Vault[vid]
 	if e == nil {
-		return "", false, errReauth
+		return "", nil, errReauth
 	}
 	if force || !e.AccessExpires.After(a.clock.Real().Add(refreshMargin)) {
-		return "", true, nil
+		return "", e, nil
 	}
 	tok, err := a.openAccessLocked(vid)
-	return tok, false, err
+	return tok, nil, err
 }
 
 func (a *App) openAccessLocked(vid string) (string, error) {
@@ -390,12 +413,12 @@ func (a *App) openAccessLocked(vid string) (string, error) {
 
 func (a *App) accessToken(vid string, b *config.Bank, force bool) (string, error) {
 	a.mu.Lock()
-	tok, needsRefresh, err := a.accessTokenLocked(vid, force)
+	tok, stale, err := a.accessTokenLocked(vid, force)
 	a.mu.Unlock()
-	if err != nil || !needsRefresh {
+	if err != nil || stale == nil {
 		return tok, err
 	}
-	if err := a.refreshToken(vid, b); err != nil {
+	if err := a.refreshToken(vid, b, stale); err != nil {
 		return "", err
 	}
 	a.mu.Lock()
@@ -550,7 +573,7 @@ func (a *App) refreshConnectionToken(id string) {
 		return
 	}
 	a.mu.Unlock()
-	err := a.refreshToken(id, b)
+	err := a.refreshToken(id, b, e)
 	if err == nil {
 		return
 	}
