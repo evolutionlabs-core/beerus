@@ -118,23 +118,23 @@ type Ledger struct {
 	limits Limits
 }
 
-func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
+func Migrate(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 	db := stdlib.OpenDBFromPool(pool)
 	defer db.Close()
 	return migrate(ctx, db)
 }
 
-func migrate(ctx context.Context, db *sql.DB) error {
+func migrate(ctx context.Context, db *sql.DB) (int, error) {
 	sub, err := fs.Sub(migrations, "migrations")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	p, err := goose.NewProvider(goose.DialectPostgres, db, sub)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = p.Up(ctx)
-	return err
+	results, err := p.Up(ctx)
+	return len(results), err
 }
 
 func New(pool *pgxpool.Pool, limits Limits) *Ledger {

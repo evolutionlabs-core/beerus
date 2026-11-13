@@ -16,7 +16,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-var createSteps = []string{setup.StepAllocate, setup.StepDirectory, setup.StepDatabase, setup.StepCerts, setup.StepCBN, setup.StepSite, setup.StepAPI}
+var createSteps = []string{setup.StepAllocate, setup.StepDirectory, setup.StepDatabase, setup.StepLedgerSchema, setup.StepOpenBankingSchema, setup.StepCerts, setup.StepCBN, setup.StepSite, setup.StepAPI}
 
 func storedStatus(t *testing.T, dir string) setup.Status {
 	t.Helper()

@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -19,13 +22,15 @@ const (
 )
 
 var bankSteps = []struct{ id, name string }{
-	{setup.StepAllocate, "Allocate codes, ports and database"},
-	{setup.StepDirectory, "Register with NIBSS"},
-	{setup.StepDatabase, "Create database and ledger"},
-	{setup.StepCerts, "Issue certificates"},
-	{setup.StepCBN, "Open the CBN settlement account"},
-	{setup.StepSite, "Start online banking"},
-	{setup.StepAPI, "Start the open banking API"},
+	{setup.StepAllocate, "Allocating codes, port and database"},
+	{setup.StepDirectory, "Registering with NIBSS"},
+	{setup.StepDatabase, "Creating the bank database"},
+	{setup.StepLedgerSchema, "Migrating bank ledger"},
+	{setup.StepOpenBankingSchema, "Migrating open banking"},
+	{setup.StepCerts, "Issuing certificates"},
+	{setup.StepCBN, "Opening the CBN settlement account"},
+	{setup.StepSite, "Starting online banking"},
+	{setup.StepAPI, "Starting the open banking API"},
 }
 
 func stepIndex(id string) int {
@@ -130,6 +135,10 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 	if done {
 		return true
 	}
+	started := a.clock.Real()
+	a.lifeMu.Lock()
+	st.Steps[i].StartedAt = &started
+	a.lifeMu.Unlock()
 	err := run()
 	now := a.clock.Real()
 	a.lifeMu.Lock()
@@ -209,20 +218,21 @@ func (a *App) provision(b *config.Bank) {
 	}) && a.step(st, setup.StepDirectory, func() error {
 		return a.registerMember(b)
 	}) && a.step(st, setup.StepDatabase, func() error {
-		a.mu.Lock()
-		ls := a.ledgerFor(b.ID)
-		a.mu.Unlock()
-		if ls == nil {
-			var err error
-			if ls, err = openLedgerSource(context.Background(), a.cfg, a.ctl, b); err != nil {
-				return err
-			}
-			a.mu.Lock()
-			a.addLedger(ls)
-			a.mu.Unlock()
+		return store.Create(context.Background(), a.cfg.DatabaseURL, b.Database)
+	}) && a.step(st, setup.StepLedgerSchema, func() error {
+		n, err := store.Migrate(context.Background(), a.cfg.DatabaseURL, b.Database, ledger.Migrate)
+		if err != nil {
+			return err
 		}
-		a.attachMember(ls)
+		a.nameStep(st, setup.StepLedgerSchema, n)
 		return nil
+	}) && a.step(st, setup.StepOpenBankingSchema, func() error {
+		n, err := store.Migrate(context.Background(), a.cfg.DatabaseURL, b.Database, openbanking.Migrate)
+		if err != nil {
+			return err
+		}
+		a.nameStep(st, setup.StepOpenBankingSchema, n)
+		return a.openLedger(b)
 	}) && a.step(st, setup.StepCerts, func() error {
 		return a.bankCerts(b)
 	}) && a.step(st, setup.StepCBN, func() error {
@@ -252,6 +262,40 @@ func (a *App) provision(b *config.Bank) {
 	a.lifeMu.Lock()
 	st.Phase, st.Reason, st.Attempts, st.NextAttemptAt = phase, "", 0, nil
 	a.lifeMu.Unlock()
+}
+
+func (a *App) nameStep(st *BankStatus, id string, migrations int) {
+	i := stepIndex(id)
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	st.Steps[i].Name = bankSteps[i].name + " (" + migrationCount(migrations) + ")"
+}
+
+func migrationCount(n int) string {
+	switch n {
+	case 0:
+		return "no new migrations"
+	case 1:
+		return "1 migration"
+	}
+	return fmt.Sprintf("%d migrations", n)
+}
+
+func (a *App) openLedger(b *config.Bank) error {
+	a.mu.Lock()
+	ls := a.ledgerFor(b.ID)
+	a.mu.Unlock()
+	if ls == nil {
+		var err error
+		if ls, err = openLedgerSource(context.Background(), a.cfg, a.ctl, b); err != nil {
+			return err
+		}
+		a.mu.Lock()
+		a.addLedger(ls)
+		a.mu.Unlock()
+	}
+	a.attachMember(ls)
+	return nil
 }
 
 func (a *App) bankCerts(b *config.Bank) error {
@@ -394,7 +438,7 @@ func (a *App) probe(b *config.Bank) (string, []string) {
 	a.mu.Lock()
 	ls := a.ledgerFor(b.ID)
 	a.mu.Unlock()
-	rebuild := []string{setup.StepDatabase, setup.StepSite, setup.StepAPI}
+	rebuild := []string{setup.StepDatabase, setup.StepLedgerSchema, setup.StepOpenBankingSchema, setup.StepSite, setup.StepAPI}
 	if ls == nil {
 		return "its ledger is not open", rebuild
 	}

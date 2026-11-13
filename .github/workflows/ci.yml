@@ -68,6 +68,18 @@ jobs:
 
   multi-process:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       BEERUS_PARTNER_ID: balance
       BEERUS_PARTNER_NAME: Balance
@@ -104,7 +116,7 @@ jobs:
                 type: digital
           EOF
           go build -o "$RUNNER_TEMP/beerus" ./cmd/beerus
-          "$RUNNER_TEMP/beerus" init --dir "$RUNNER_TEMP/render" -f "$RUNNER_TEMP/beerus-state/setup.yaml"
+          BEERUS_DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable "$RUNNER_TEMP/beerus" init --dir "$RUNNER_TEMP/render" -f "$RUNNER_TEMP/beerus-state/setup.yaml"
           "$RUNNER_TEMP/beerus" compose --dir "$RUNNER_TEMP/render" > compose.ci.yaml
           {
             echo "COMPOSE_FILE=compose.ci.yaml"

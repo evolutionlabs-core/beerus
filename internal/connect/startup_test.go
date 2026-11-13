@@ -24,7 +24,7 @@ func TestOldDirIsRefused(t *testing.T) {
 		"init":  Init(dir, banktest.Spec("beerus", clock.Date{Y: 2026, M: 11, D: 3}), DefaultLocal(), clock.Date{Y: 2026, M: 11, D: 3}),
 		"check": func() error { _, err := Initialized(dir); return err }(),
 	} {
-		if !errors.Is(err, ErrOldSetup) || !strings.Contains(err.Error(), "This setup was made by an older Beerus. Run beerus reset, then beerus up.") {
+		if !errors.Is(err, ErrOldSetup) || !strings.Contains(err.Error(), "This setup was made by an older Beerus. Run beerus reset, then beerus init.") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

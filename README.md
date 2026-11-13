@@ -30,22 +30,30 @@ beerus nip status <session_id>
 ## Start
 
 1. Run a Postgres server. Beerus connects to `postgres:///postgres` by default; change `database_url` in `.beerus/local.yaml` if yours differs.
-2. Build and start it:
+2. Build it and set it up:
 
 ```
 go build -o beerus ./cmd/beerus
+./beerus init
+```
+
+`beerus init` checks Postgres, writes the config and creates the CBN and NIBSS databases. It shows each step with the time it took. Run it again if it stops part-way; it carries on where it stopped.
+
+3. Start it:
+
+```
 ./beerus up
 ```
 
-3. Open a second terminal and add your first bank. A new Beerus has no banks:
+4. Open a second terminal and add your first bank. A new Beerus has no banks:
 
 ```
 ./beerus bank create --name "Bank A" --type commercial
 ```
 
-4. Use the other commands.
+5. Use the other commands.
 
-`beerus up` creates the state directory on the first run, starts every participant and stays in the foreground. Press Ctrl+C to stop it. It prints the ports and the control room link; `beerus info` prints them again. The state directory is `.beerus` in the current directory. Set `BEERUS_DIR` to use another one, and set it the same way in every terminal.
+`beerus up` starts every participant and stays in the foreground. It needs a finished `beerus init` first. Press Ctrl+C to stop it. It prints the ports and the control room link; `beerus info` prints them again. The state directory is `.beerus` in the current directory. Set `BEERUS_DIR` to use another one, and set it the same way in every terminal.
 
 `beerus help` lists every command, and `beerus <command> --help` shows one command's usage.
 
@@ -94,10 +102,10 @@ beerus up -f my-setup.yaml
 
 - `diff` shows the plan and changes nothing.
 - `apply` makes the running system match the file. `--prune` also removes banks and partners that are not in the file.
-- `up -f` starts from that file. On a new directory it creates the setup from the file.
+- `up -f` starts from that file. Run `beerus init -f my-setup.yaml` first to make a new directory from it.
 - `beerus get banks`, `beerus describe bank <id>`, `beerus export` and `beerus verify` show what is running.
 
-You can also add banks and partners one at a time. After the first `beerus up` there are no banks, so add the first one:
+You can also add banks and partners one at a time. After `beerus init` there are no banks, so add the first one:
 
 ```
 beerus bank create --name "Bank A" --type commercial

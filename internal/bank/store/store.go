@@ -16,7 +16,7 @@ import (
 
 var validName = regexp.MustCompile(`^beerus_[a-z0-9_]{1,50}$`)
 
-type Migration func(context.Context, *pgxpool.Pool) error
+type Migration func(context.Context, *pgxpool.Pool) (int, error)
 
 type Store struct {
 	url        string
@@ -40,26 +40,48 @@ func exists(ctx context.Context, c *pgx.Conn, name string) (bool, error) {
 	return ok, err
 }
 
-func Open(ctx context.Context, url, name string, migrations ...Migration) (*Store, error) {
+func Create(ctx context.Context, url, name string) error {
 	if !validName.MatchString(name) {
-		return nil, fmt.Errorf("database name %q must look like beerus_something", name)
+		return fmt.Errorf("database name %q must look like beerus_something", name)
 	}
 	c, err := admin(ctx, url)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reach Postgres for the bank ledger (%w); start Postgres or set database_url in local.yaml", err)
+		return fmt.Errorf("cannot reach Postgres for the bank ledger (%w); start Postgres or set database_url in local.yaml", err)
 	}
 	defer c.Close(ctx)
 	ok, err := exists(ctx, c, name)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if !ok {
-		if _, err := c.Exec(ctx, `CREATE DATABASE `+name); err != nil {
-			var pgErr *pgconn.PgError
-			if !errors.As(err, &pgErr) || (pgErr.Code != "42P04" && pgErr.Code != "23505") {
-				return nil, err
-			}
+	if ok {
+		return nil
+	}
+	if _, err := c.Exec(ctx, `CREATE DATABASE `+name); err != nil {
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || (pgErr.Code != "42P04" && pgErr.Code != "23505") {
+			return err
 		}
+	}
+	return nil
+}
+
+func Migrate(ctx context.Context, url, name string, m Migration) (int, error) {
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return 0, err
+	}
+	cfg.ConnConfig.Database = name
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return 0, err
+	}
+	defer pool.Close()
+	return m(ctx, pool)
+}
+
+func Open(ctx context.Context, url, name string, migrations ...Migration) (*Store, error) {
+	if err := Create(ctx, url, name); err != nil {
+		return nil, err
 	}
 	s := &Store{url: url, name: name, migrations: migrations}
 	if err := s.connect(ctx); err != nil {
@@ -79,12 +101,12 @@ func (s *Store) connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := ledger.Migrate(ctx, pool); err != nil {
+	if _, err := ledger.Migrate(ctx, pool); err != nil {
 		pool.Close()
 		return err
 	}
 	for _, m := range s.migrations {
-		if err := m(ctx, pool); err != nil {
+		if _, err := m(ctx, pool); err != nil {
 			pool.Close()
 			return err
 		}

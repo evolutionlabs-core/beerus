@@ -65,13 +65,17 @@ const (
 	FinalizerSettleMoves       = "settle-moves"
 	FinalizerPurgeOwned        = "purge-owned"
 
-	StepAllocate  = "allocate"
-	StepDirectory = "directory"
-	StepDatabase  = "database"
-	StepCerts     = "certs"
-	StepCBN       = "cbn"
-	StepSite      = "site"
-	StepAPI       = "api"
+	StepAllocate          = "allocate"
+	StepDirectory         = "directory"
+	StepDatabase          = "database"
+	StepLedgerSchema      = "ledger_schema"
+	StepOpenBankingSchema = "openbanking_schema"
+	StepCerts             = "certs"
+	StepCBN               = "cbn"
+	StepSite              = "site"
+	StepAPI               = "api"
+	StepSettlement        = "settlement"
+	StepSchema            = "schema"
 
 	StatusVersion = 1
 )

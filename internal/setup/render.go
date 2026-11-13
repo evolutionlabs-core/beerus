@@ -23,14 +23,16 @@ var opSummary = []struct{ op, verb string }{
 }
 
 var stepParts = map[string]string{
-	StepAllocate:  "allocation",
-	StepDirectory: "directory row",
-	StepDatabase:  "database",
-	StepCerts:     "certificates",
-	StepCBN:       "CBN member",
-	StepSite:      "site",
-	StepAPI:       "API",
-	"status":      "status record",
+	StepAllocate:          "allocation",
+	StepDirectory:         "directory row",
+	StepDatabase:          "database",
+	StepLedgerSchema:      "ledger schema",
+	StepOpenBankingSchema: "open banking schema",
+	StepCerts:             "certificates",
+	StepCBN:               "CBN member",
+	StepSite:              "site",
+	StepAPI:               "API",
+	"status":              "status record",
 }
 
 func Render(p Plan) string {

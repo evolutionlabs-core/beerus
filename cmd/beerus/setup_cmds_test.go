@@ -74,6 +74,16 @@ func initDir(t *testing.T, local setup.Local, spec setup.Spec) string {
 	return dir
 }
 
+func installDir(t *testing.T, local setup.Local, spec setup.Spec) string {
+	t.Helper()
+	dir := t.TempDir()
+	err := connect.Install(context.Background(), dir, spec, local, clock.DateOf(time.Now()), func(connect.InstallStep) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
 	spec := banktest.Spec(defaultSetupName, clock.DateOf(time.Now()))
 	dir := initDir(t, freeLocal(t), spec)
@@ -150,7 +160,7 @@ func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
 			t.Errorf("%v: %+v", c.args, r)
 		}
 	}
-	if r := invoke(cmdDiff, "", false, "--dir", t.TempDir()); r.code != 1 || !strings.Contains(r.err, "holds no Beerus setup; run beerus up to make one") {
+	if r := invoke(cmdDiff, "", false, "--dir", t.TempDir()); r.code != 1 || !strings.Contains(r.err, "holds no Beerus setup; run beerus init to make one") {
 		t.Errorf("diff in an empty dir: %+v", r)
 	}
 }
@@ -210,7 +220,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	local.DatabaseURL = url
 	today := clock.DateOf(time.Now())
 	spec := banktest.Spec("cli", today)
-	dir := initDir(t, local, spec)
+	dir := installDir(t, local, spec)
 	withC := spec
 	withC.Spec.Banks = append(append([]setup.Bank(nil), spec.Spec.Banks...), setup.Bank{ID: "bank-c", Name: "Bank C", Type: "digital", SettlesThrough: "bank-a"})
 	raw, err := setup.Export(withC)

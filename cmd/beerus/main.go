@@ -43,15 +43,54 @@ func defaultDir() string {
 	return ".beerus"
 }
 
+type initPlan struct {
+	dir   string
+	spec  setup.Spec
+	local setup.Local
+	today clock.Date
+}
+
 func cmdInit(args []string) error {
-	c, err := initState(args)
+	p, err := parseInit(args)
 	if err != nil {
 		return err
 	}
-	return printInfo(c)
+	width := 0
+	for _, n := range connect.InstallLabels() {
+		width = max(width, len(n))
+	}
+	clk := clock.New(nil)
+	start := clk.Real()
+	err = connect.Install(context.Background(), p.dir, p.spec, p.local, p.today, func(s connect.InstallStep) {
+		fmt.Println(stepLine(installLabel(s), width, s.Err == nil, s.Duration))
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("\nBeerus is ready in %s (%s). Start it with beerus up, then add a bank with beerus bank create --name NAME.\n", p.dir, seconds(clk.Real().Sub(start)))
+	return nil
 }
 
-func initState(args []string) (*config.Config, error) {
+func installLabel(s connect.InstallStep) string {
+	if s.Detail == "" {
+		return s.Name
+	}
+	return s.Name + " (" + s.Detail + ")"
+}
+
+func seconds(d time.Duration) string {
+	return fmt.Sprintf("%.1fs", d.Seconds())
+}
+
+func stepLine(label string, width int, ok bool, d time.Duration) string {
+	mark := "\u2713"
+	if !ok {
+		mark = "\u2717"
+	}
+	return fmt.Sprintf("%-*s  %s  %s", width, label, mark, seconds(d))
+}
+
+func parseInit(args []string) (initPlan, error) {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	file := fs.String("f", "", "setup `FILE` to start from")
@@ -61,11 +100,11 @@ func initState(args []string) (*config.Config, error) {
 	fs.IntVar(&flagged.ControlPort, "control-port", flagged.ControlPort, "control API `port`")
 	fs.IntVar(&flagged.HealthPort, "health-port", flagged.HealthPort, "health `port` of the cbn container")
 	if err := parseFlags("init", fs, args); err != nil {
-		return nil, err
+		return initPlan{}, err
 	}
 	local, err := connect.FreshLocal(*dir)
 	if err != nil {
-		return nil, err
+		return initPlan{}, err
 	}
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -79,22 +118,14 @@ func initState(args []string) (*config.Config, error) {
 			local.Connect.HealthPort = flagged.HealthPort
 		}
 	})
-	today := clock.DateOf(time.Now())
+	today := clock.New(nil).Today()
 	spec := setup.DefaultSpec(defaultSetupName, today)
 	if *file != "" {
 		if spec, err = readSpec(*file); err != nil {
-			return nil, err
+			return initPlan{}, err
 		}
 	}
-	if err := connect.Init(*dir, spec, local, today); err != nil {
-		return nil, err
-	}
-	c, err := connect.LoadConfig(*dir)
-	if err != nil {
-		return nil, err
-	}
-	fmt.Printf("Created %s. The setup is in %s; machine settings are in %s.\n\n", c.Dir, c.Path(connect.SpecFile), c.Path(connect.LocalFile))
-	return c, nil
+	return initPlan{dir: *dir, spec: spec, local: local, today: today}, nil
 }
 
 func printInfo(c *config.Config) error {
@@ -189,7 +220,7 @@ type ctl struct {
 func newCtl() (*ctl, error) {
 	c, err := connect.LoadConfig(defaultDir())
 	if err != nil {
-		return nil, fmt.Errorf("%w (run beerus up or set BEERUS_DIR)", err)
+		return nil, fmt.Errorf("%w (run beerus init or set BEERUS_DIR)", err)
 	}
 	return newCtlFor(c)
 }
@@ -423,38 +454,113 @@ func cmdBankCreate(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, err := c.do("POST", "/banks", map[string]any{"name": *name, "type": *typ, "id": *id, "nip_code": *nip, "nuban_code": *nuban, "settles_through": *via})
+	if _, err := c.send("GET", "/banks", nil); err != nil {
+		if errors.Is(err, errNotRunning) {
+			return errors.New("Beerus is not running. Start it with beerus up first.")
+		}
+		return err
+	}
+	clk := clock.New(nil)
+	start := clk.Real()
+	raw, err := c.send("POST", "/banks", map[string]any{"name": *name, "type": *typ, "id": *id, "nip_code": *nip, "nuban_code": *nuban, "settles_through": *via})
 	if err != nil {
 		return err
 	}
-	out, err = waitBank(c, fmt.Sprint(out["id"]))
+	created, err := decode[bankProgress](raw, "bank")
 	if err != nil {
 		return err
 	}
-	pretty(out)
+	ready, err := waitBank(c, created, clk)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("\n%s is ready (%s) at %s\n", ready.Name, seconds(clk.Real().Sub(start)), ready.URL)
 	return nil
 }
 
-func waitBank(c *ctl, id string) (map[string]any, error) {
-	deadline := time.Now().Add(90 * time.Second)
-	for {
-		out, err := c.do("GET", "/banks", nil)
-		if err != nil {
-			return nil, err
-		}
-		data, _ := out["data"].([]any)
-		for _, d := range data {
-			st, _ := d.(map[string]any)
-			if st["id"] != id {
-				continue
-			}
-			if st["phase"] != "provisioning" || time.Now().After(deadline) {
-				return st, nil
-			}
-		}
-		if time.Now().After(deadline) {
-			return out, nil
-		}
-		time.Sleep(500 * time.Millisecond)
+const (
+	bankPoll    = 200 * time.Millisecond
+	bankTimeout = 90 * time.Second
+)
+
+type bankProgress struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Phase string `json:"phase"`
+	URL   string `json:"online_banking"`
+	Steps []struct {
+		Name      string     `json:"name"`
+		Done      bool       `json:"done"`
+		Error     string     `json:"error"`
+		StartedAt *time.Time `json:"started_at"`
+		At        *time.Time `json:"at"`
+	} `json:"steps"`
+}
+
+func waitBank(c *ctl, first bankProgress, clk *clock.Clock) (bankProgress, error) {
+	width := 0
+	for _, s := range first.Steps {
+		width = max(width, len(s.Name))
 	}
+	width += len(" (no new migrations)")
+	tick := time.NewTicker(bankPoll)
+	defer tick.Stop()
+	deadline := time.NewTimer(bankTimeout)
+	defer deadline.Stop()
+	stalled := fmt.Errorf("%s is still provisioning. Beerus retries it on its own; check it with beerus bank list.", first.Name)
+	shown := 0
+	st := first
+	for {
+		for ; shown < len(st.Steps); shown++ {
+			s := st.Steps[shown]
+			if s.Error != "" {
+				fmt.Println(stepLine(s.Name, width, false, stepTime(s.StartedAt, s.At)))
+				fmt.Println("  " + s.Error)
+				return st, stalled
+			}
+			if !s.Done {
+				break
+			}
+			fmt.Println(stepLine(s.Name, width, true, stepTime(s.StartedAt, s.At)))
+		}
+		if st.Phase != "provisioning" && shown == len(st.Steps) {
+			return st, nil
+		}
+		select {
+		case <-deadline.C:
+			return st, stalled
+		case <-tick.C:
+		}
+		next, err := bankNow(c, first.ID)
+		if err != nil {
+			return st, err
+		}
+		st = next
+	}
+}
+
+func stepTime(started, at *time.Time) time.Duration {
+	if started == nil || at == nil {
+		return 0
+	}
+	return at.Sub(*started)
+}
+
+func bankNow(c *ctl, id string) (bankProgress, error) {
+	raw, err := c.send("GET", "/banks", nil)
+	if err != nil {
+		return bankProgress{}, err
+	}
+	list, err := decode[struct {
+		Data []bankProgress `json:"data"`
+	}](raw, "banks")
+	if err != nil {
+		return bankProgress{}, err
+	}
+	for _, b := range list.Data {
+		if b.ID == id {
+			return b, nil
+		}
+	}
+	return bankProgress{}, fmt.Errorf("bank %s is gone", id)
 }

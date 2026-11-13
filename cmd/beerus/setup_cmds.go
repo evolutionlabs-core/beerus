@@ -23,7 +23,6 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -41,7 +40,6 @@ const (
 	opFinish     = "finish"
 	yamlIndent   = 2
 	notRunning   = "Beerus is not running. Start it with beerus up."
-	upHint       = "No customers yet. Create one with beerus customer create."
 	upNoBanks    = "No banks yet. Add the first one with beerus bank create --name NAME."
 )
 
@@ -675,7 +673,7 @@ func loadApplied(dir string) (setup.Status, error) {
 		return setup.Status{}, err
 	}
 	if !ok {
-		return setup.Status{}, fmt.Errorf("%s holds no Beerus setup; run beerus up to make one", dir)
+		return setup.Status{}, fmt.Errorf("%s holds no Beerus setup; run beerus init to make one", dir)
 	}
 	return setup.LoadStatus(dir)
 }
@@ -1102,28 +1100,8 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 			return errors.Join(errs...)
 		}
 	}
-	ok, err := connect.Initialized(*dir)
-	if err != nil {
+	if err := connect.CheckStart(*dir); err != nil {
 		return err
-	}
-	fresh := !ok
-	noBanks := true
-	switch {
-	case fresh && *file == "":
-		if _, err := initState([]string{"--dir", *dir}); err != nil {
-			return err
-		}
-	case fresh:
-		spec, _ := setup.Parse(req.File, []byte(req.Spec))
-		noBanks = len(spec.Spec.Banks) == 0
-		local, err := connect.FreshLocal(*dir)
-		if err != nil {
-			return err
-		}
-		if err := connect.Init(*dir, spec, local, clock.DateOf(time.Now())); err != nil {
-			return err
-		}
-		fmt.Fprintf(e.out, "Created %s from %s.\n\n", *dir, req.File)
 	}
 	c, err := connect.LoadConfig(*dir)
 	if err != nil {
@@ -1153,28 +1131,25 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 		serveErr = app.Serve(serveCtx)
 		close(served)
 	}()
-	if !fresh {
-		if *file == "" {
-			if req, err = specRequest(*dir, ""); err != nil {
-				cancel()
-				<-served
-				return errors.Join(err, serveErr)
-			}
-		}
-		req.Prune = *prune
-		cl, err := newCtlFor(c)
-		if err == nil {
-			err = e.startApply(serveCtx, cl, req, served)
-		}
-		if err != nil {
+	if *file == "" {
+		if req, err = specRequest(*dir, ""); err != nil {
 			cancel()
 			<-served
 			return errors.Join(err, serveErr)
 		}
-	} else if noBanks {
+	}
+	req.Prune = *prune
+	cl, err := newCtlFor(c)
+	if err == nil {
+		err = e.startApply(serveCtx, cl, req, served)
+	}
+	if err != nil {
+		cancel()
+		<-served
+		return errors.Join(err, serveErr)
+	}
+	if len(c.Banks) == 0 {
 		fmt.Fprintln(e.out, "\n"+upNoBanks)
-	} else {
-		fmt.Fprintln(e.out, "\n"+upHint)
 	}
 	fmt.Fprintln(e.out, "\nPress Ctrl+C to stop.")
 	<-served

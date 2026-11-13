@@ -95,6 +95,17 @@ func openRTGS(ctx context.Context, cfg *config.Config, ctl *ctlStore, genesis ti
 		st.Close()
 		return nil, err
 	}
+	if err := ctl.update(func(s *setup.Status) (bool, error) {
+		res := ensureResource(s, setup.KindSystem, setup.SystemCBN)
+		if res.Phase == setup.PhaseActive {
+			return false, nil
+		}
+		res.Phase = setup.PhaseActive
+		return true, nil
+	}); err != nil {
+		st.Close()
+		return nil, err
+	}
 	return r, nil
 }
 
