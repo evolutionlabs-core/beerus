@@ -474,6 +474,25 @@ func cmdTransfer(args []string) error {
 	})
 }
 
+func chargeSentence(r connect.TransferResult) string {
+	parts := []string{}
+	for _, c := range []struct {
+		name   string
+		amount int64
+	}{{"fee", r.Fee}, {"VAT", r.VAT}, {"stamp duty", r.StampDuty}} {
+		if c.amount != 0 {
+			parts = append(parts, c.name+" "+connect.FormatNaira(c.amount))
+		}
+	}
+	switch len(parts) {
+	case 0:
+		return "No charges."
+	case 1:
+		return "Charges: " + parts[0] + "."
+	}
+	return "Charges: " + strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1] + "."
+}
+
 func printQuote(c *ctl, r connect.TransferResult) error {
 	if r.Kind == "internal" {
 		fmt.Printf("Moving %s from %s to %s, %s, costs no charges. Balance after %s.\n", connect.FormatNaira(r.Amount), r.From, r.To, r.ToName, connect.FormatNaira(r.BalanceAfter))
@@ -483,7 +502,7 @@ func printQuote(c *ctl, r connect.TransferResult) error {
 			return err
 		}
 		fmt.Printf("Sending %s to %s at %s.\n", connect.FormatNaira(r.Amount), r.ToName, to.Name)
-		fmt.Printf("Fee %s, VAT %s and stamp duty %s. Total debit %s. Balance after %s.\n", connect.FormatNaira(r.Fee), connect.FormatNaira(r.VAT), connect.FormatNaira(r.StampDuty), connect.FormatNaira(r.TotalDebit), connect.FormatNaira(r.BalanceAfter))
+		fmt.Printf("%s Total debit %s. Balance after %s.\n", chargeSentence(r), connect.FormatNaira(r.TotalDebit), connect.FormatNaira(r.BalanceAfter))
 	}
 	fmt.Println("This was a quote. Nothing was sent.")
 	return nil
@@ -500,7 +519,7 @@ func printTransfer(c *ctl, r connect.TransferResult) error {
 		return err
 	}
 	fmt.Printf("Sending %s to %s at %s.\n", connect.FormatNaira(r.Amount), r.ToName, to.Name)
-	charges := fmt.Sprintf("Total debit %s: fee %s, VAT %s and stamp duty %s. Balance %s.", connect.FormatNaira(r.TotalDebit), connect.FormatNaira(r.Fee), connect.FormatNaira(r.VAT), connect.FormatNaira(r.StampDuty), connect.FormatNaira(r.BalanceAfter))
+	charges := fmt.Sprintf("%s Total debit %s. Balance %s.", chargeSentence(r), connect.FormatNaira(r.TotalDebit), connect.FormatNaira(r.BalanceAfter))
 	switch r.Status {
 	case nip.Success:
 		fmt.Printf("Session %s: success at %s\n%s\n", r.SessionID, at, charges)

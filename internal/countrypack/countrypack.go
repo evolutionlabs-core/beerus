@@ -95,7 +95,7 @@ type NIPFees struct {
 	Source string `yaml:"source"`
 }
 
-type Levy struct {
+type Stamp struct {
 	Threshold int64  `yaml:"threshold_minor"`
 	Amount    int64  `yaml:"amount_minor"`
 	Source    string `yaml:"source"`
@@ -108,7 +108,7 @@ type Figure struct {
 
 type Fees struct {
 	NIP                NIPFees `yaml:"nip"`
-	StampDuty          Levy    `yaml:"stamp_duty"`
+	StampDuty          Stamp   `yaml:"stamp_duty"`
 	VATRateBasisPoints Figure  `yaml:"vat_rate_basis_points"`
 }
 
@@ -160,15 +160,8 @@ func (f Fees) check() error {
 	if f.VATRateBasisPoints.Value < 0 || f.VATRateBasisPoints.Value > 10000 {
 		return fmt.Errorf("fees.vat_rate_basis_points must be from 0 to 10000, not %d", f.VATRateBasisPoints.Value)
 	}
-	for name, fig := range map[string]Figure{
-		"fees.vat_rate_basis_points": f.VATRateBasisPoints,
-	} {
-		if fig.Source == "" {
-			return fmt.Errorf("%s has no source", name)
-		}
-		if fig.Value < 0 || fig.Value > maxFeeMinor {
-			return fmt.Errorf("%s must be from 0 to %d, not %d", name, int64(maxFeeMinor), fig.Value)
-		}
+	if f.VATRateBasisPoints.Source == "" {
+		return fmt.Errorf("fees.vat_rate_basis_points has no source")
 	}
 	return nil
 }
@@ -200,7 +193,7 @@ func (r NIPFees) check() error {
 	return nil
 }
 
-func (l Levy) check() error {
+func (l Stamp) check() error {
 	if l.Source == "" {
 		return fmt.Errorf("no source")
 	}

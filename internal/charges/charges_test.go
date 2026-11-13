@@ -39,24 +39,22 @@ func TestForTransfer(t *testing.T) {
 	s := nigeria(t)
 	cases := map[string]struct {
 		amount int64
-		exempt bool
 		want   Transfer
 		total  int64
 	}{
-		"one naira":             {100, false, Transfer{}, 0},
-		"top of free band":      {500000, false, Transfer{}, 0},
-		"above free band":       {500001, false, Transfer{Fee: 1000, VAT: 75}, 1075},
-		"below stamp threshold": {999999, false, Transfer{Fee: 1000, VAT: 75}, 1075},
-		"at stamp threshold":    {1000000, false, Transfer{Fee: 1000, VAT: 75, StampDuty: 5000}, 6075},
-		"top of middle band":    {5000000, false, Transfer{Fee: 1000, VAT: 75, StampDuty: 5000}, 6075},
-		"above middle band":     {5000001, false, Transfer{Fee: 5000, VAT: 375, StampDuty: 5000}, 10375},
-		"stamp exempt":          {10000000, true, Transfer{Fee: 5000, VAT: 375}, 5375},
-		"max amount":            {math.MaxInt64, false, Transfer{Fee: 5000, VAT: 375, StampDuty: 5000}, 10375},
+		"one naira":             {100, Transfer{}, 0},
+		"top of free band":      {500000, Transfer{}, 0},
+		"above free band":       {500001, Transfer{Fee: 1000, VAT: 75}, 1075},
+		"below stamp threshold": {999999, Transfer{Fee: 1000, VAT: 75}, 1075},
+		"at stamp threshold":    {1000000, Transfer{Fee: 1000, VAT: 75, StampDuty: 5000}, 6075},
+		"top of middle band":    {5000000, Transfer{Fee: 1000, VAT: 75, StampDuty: 5000}, 6075},
+		"above middle band":     {5000001, Transfer{Fee: 5000, VAT: 375, StampDuty: 5000}, 10375},
+		"max amount":            {math.MaxInt64, Transfer{Fee: 5000, VAT: 375, StampDuty: 5000}, 10375},
 	}
 	for name, c := range cases {
-		got := s.ForTransfer(c.amount, c.exempt)
+		got := s.ForTransfer(c.amount)
 		if got != c.want || got.Total() != c.total {
-			t.Errorf("%s: ForTransfer(%d, %t) = %+v total %d, want %+v total %d", name, c.amount, c.exempt, got, got.Total(), c.want, c.total)
+			t.Errorf("%s: ForTransfer(%d) = %+v total %d, want %+v total %d", name, c.amount, got, got.Total(), c.want, c.total)
 		}
 	}
 	if s.VATRateBasisPoints() != 750 {

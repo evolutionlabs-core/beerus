@@ -207,7 +207,7 @@ func (a *App) Quote(req TransferRequest) (TransferResult, error) {
 		if err != nil {
 			return res, err
 		}
-		c := a.cfg.Fees().ForTransfer(req.Amount, false)
+		c := a.cfg.Fees().ForTransfer(req.Amount)
 		res.Kind, res.ToName = "nip", name
 		res.Fee, res.VAT, res.StampDuty = c.Fee, c.VAT, c.StampDuty
 		if res.TotalDebit, err = totalDebit(req.Amount, c); err != nil {
@@ -354,7 +354,7 @@ func (a *App) nipTransfer(rt transferRoute, req TransferRequest, res TransferRes
 		return res, enquiryError(rt.toName, err)
 	}
 	res.Kind, res.ToName = "nip", name
-	if _, err := totalDebit(req.Amount, a.cfg.Fees().ForTransfer(req.Amount, false)); err != nil {
+	if _, err := totalDebit(req.Amount, a.cfg.Fees().ForTransfer(req.Amount)); err != nil {
 		return res, err
 	}
 	lock := a.sendLock(rt.fromBank)

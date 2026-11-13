@@ -168,9 +168,9 @@ const bankTemplates = `
 <p class="text-[13px] text-muted">{{.ToBank}} · <span class="num">{{.Q.To}}</span></p>
 <dl class="mt-6 grid grid-cols-[1fr_auto] gap-y-2.5 text-[13.5px]">
 <dt class="text-muted">Amount</dt><dd class="num text-right">{{naira .Q.Amount}}</dd>
-<dt class="text-muted">Transfer fee</dt><dd class="num text-right">{{naira .Q.Fee}}</dd>
-<dt class="text-muted">VAT on fee</dt><dd class="num text-right">{{naira .Q.VAT}}</dd>
-<dt class="text-muted">Stamp duty</dt><dd class="num text-right">{{naira .Q.StampDuty}}</dd>
+{{if .Q.Fee}}<dt class="text-muted">Transfer fee</dt><dd class="num text-right">{{naira .Q.Fee}}</dd>{{end}}
+{{if .Q.VAT}}<dt class="text-muted">VAT on fee</dt><dd class="num text-right">{{naira .Q.VAT}}</dd>{{end}}
+{{if .Q.StampDuty}}<dt class="text-muted">Stamp duty</dt><dd class="num text-right">{{naira .Q.StampDuty}}</dd>{{end}}
 <dt class="border-t border-line pt-2.5">Total debit</dt><dd class="num border-t border-line pt-2.5 text-right">{{naira .Q.TotalDebit}}</dd>
 <dt class="text-muted">Balance after</dt><dd class="num text-right text-muted">{{naira .Q.BalanceAfter}}</dd>
 </dl>

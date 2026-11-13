@@ -218,7 +218,7 @@ func TestBankCLI(t *testing.T) {
 		t.Errorf("statement --json has %d lines, want 5", len(lines))
 	}
 
-	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000", "--dry-run"); !matches(`^Sending ₦1,000\.00 to Chidi Okafor at Bank B\.\nFee ₦0\.00, VAT ₦0\.00 and stamp duty ₦0\.00\. Total debit ₦1,000\.00\. Balance after ₦\d[\d,]*\.\d\d\.\nThis was a quote\. Nothing was sent\.\n$`, got) {
+	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000", "--dry-run"); !matches(`^Sending ₦1,000\.00 to Chidi Okafor at Bank B\.\nNo charges\. Total debit ₦1,000\.00\. Balance after ₦\d[\d,]*\.\d\d\.\nThis was a quote\. Nothing was sent\.\n$`, got) {
 		t.Errorf("transfer --dry-run: %q", got)
 	}
 	if lines := c.json("statement", a1, "--bank", "bank-a")["data"].([]any); len(lines) != 5 {

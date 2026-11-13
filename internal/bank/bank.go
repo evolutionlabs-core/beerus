@@ -228,7 +228,7 @@ func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.T
 	}
 	c := charges.Transfer{}
 	if !s.NoCharges {
-		c = b.fees.ForTransfer(s.Amount, false)
+		c = b.fees.ForTransfer(s.Amount)
 	}
 	short := s.SessionID[18:]
 	to := s.To
@@ -361,27 +361,4 @@ func (b *Bank) Settlements(ctx context.Context) (map[string]int64, error) {
 		return nil, fmt.Errorf("read settlements: %w", err)
 	}
 	return out, nil
-}
-
-func (b *Bank) RemitTaxes(ctx context.Context, key string, at time.Time) (ledger.Posted, error) {
-	vat, err := b.L.Balance(ctx, VATPayable)
-	if err != nil {
-		return ledger.Posted{}, err
-	}
-	stamp, err := b.L.Balance(ctx, StampPayable)
-	if err != nil {
-		return ledger.Posted{}, err
-	}
-	lines := []ledger.Line{}
-	if vat > 0 {
-		lines = append(lines, dr(VATPayable, vat, "VAT remittance"))
-	}
-	if stamp > 0 {
-		lines = append(lines, dr(StampPayable, stamp, "Stamp duty remittance"))
-	}
-	if vat+stamp == 0 {
-		return ledger.Posted{}, nil
-	}
-	lines = append(lines, cr(Settlement, vat+stamp, "Tax remittance to government"))
-	return b.L.Post(ctx, entry(key, "tax_remittance", at, "Monthly tax remittance", lines...))
 }
