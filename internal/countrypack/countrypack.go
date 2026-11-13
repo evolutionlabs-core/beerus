@@ -28,28 +28,6 @@ type Fixed struct {
 	Source string `yaml:"source"`
 }
 
-func (f Fixed) check() error {
-	if f.Source == "" {
-		return fmt.Errorf("fixed has no source")
-	}
-	if len(f.Days) == 0 {
-		return fmt.Errorf("fixed has no days")
-	}
-	seen := map[[2]int]bool{}
-	for i, d := range f.Days {
-		t := time.Date(leapYear, time.Month(d.Month), d.Day, 0, 0, 0, 0, time.UTC)
-		if int(t.Month()) != d.Month || t.Day() != d.Day {
-			return fmt.Errorf("fixed.days[%d] %d-%d is not a day of the year", i, d.Month, d.Day)
-		}
-		key := [2]int{d.Month, d.Day}
-		if seen[key] {
-			return fmt.Errorf("fixed.days[%d] %d-%d appears twice", i, d.Month, d.Day)
-		}
-		seen[key] = true
-	}
-	return nil
-}
-
 type CodeTier struct {
 	First       int    `yaml:"first"`
 	Last        int    `yaml:"last"`
@@ -160,9 +138,6 @@ func Nigeria() (*Pack, error) {
 	if p.Version == "" {
 		return nil, fmt.Errorf("country pack NG: no version")
 	}
-	if err := p.Fixed.check(); err != nil {
-		return nil, fmt.Errorf("country pack NG: %w", err)
-	}
 	if err := p.BankCodes.check(p.DepositInsurance.BankTypes); err != nil {
 		return nil, fmt.Errorf("country pack NG: %w", err)
 	}
@@ -179,8 +154,6 @@ func Nigeria() (*Pack, error) {
 }
 
 const nipCodeLength = 6
-
-const leapYear = 2024
 
 const maxFeeMinor = math.MaxInt64 / 4
 
