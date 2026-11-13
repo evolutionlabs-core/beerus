@@ -249,12 +249,6 @@ func addMinor(a, b int64) (int64, bool) {
 }
 
 func (a *App) settle(now time.Time, adhoc bool) (int, error) {
-	a.gate.RLock()
-	defer a.gate.RUnlock()
-	return a.settleGated(now, adhoc)
-}
-
-func (a *App) settleGated(now time.Time, adhoc bool) (int, error) {
 	a.mu.Lock()
 	for a.settling {
 		a.settleDone.Wait()

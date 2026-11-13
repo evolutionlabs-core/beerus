@@ -414,7 +414,7 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		if err != nil {
 			return CloseResult{}, err
 		}
-		tr, err := a.transfer(TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: key, Closure: true})
+		tr, err := a.Transfer(TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: key, Closure: true})
 		if err != nil {
 			return CloseResult{}, fmt.Errorf("move %s from %s: %w", naira(bal), acc.NUBAN, err)
 		}

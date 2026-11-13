@@ -27,7 +27,6 @@ import (
 
 type App struct {
 	applyMu      sync.Mutex
-	gate         sync.RWMutex
 	mu           sync.Mutex
 	cfg          *config.Config
 	clock        *clock.Clock
@@ -314,12 +313,10 @@ func (a *App) Run(ctx context.Context) {
 func (a *App) Step(ctx context.Context) {
 	a.stepMu.Lock()
 	defer a.stepMu.Unlock()
-	a.gate.RLock()
 	if a.recMu.TryLock() {
 		a.reconcileBanks(ctx)
 		a.recMu.Unlock()
 	}
-	a.gate.RUnlock()
 	a.nibssStore()
 	if err := a.ensureRTGS(); err != nil {
 		a.log.Error("CBN ledger", "err", err)

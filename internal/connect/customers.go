@@ -96,8 +96,6 @@ func writeKey(key, op string) string {
 }
 
 func (a *App) CreateCustomer(bankID string, req CustomerRequest) (bank.Customer, error) {
-	a.gate.RLock()
-	defer a.gate.RUnlock()
 	bk, err := a.activeBook(bankID)
 	if err != nil {
 		return bank.Customer{}, err
@@ -138,8 +136,6 @@ func (a *App) CreateCustomer(bankID string, req CustomerRequest) (bank.Customer,
 }
 
 func (a *App) CloseCustomer(bankID, id string) error {
-	a.gate.RLock()
-	defer a.gate.RUnlock()
 	bk, err := a.activeBook(bankID)
 	if err != nil {
 		return err
@@ -156,8 +152,6 @@ func accountJSON(ctx context.Context, b *bank.Bank, acc ledger.Account) (Account
 }
 
 func (a *App) OpenAccount(bankID string, req AccountRequest) (AccountJSON, error) {
-	a.gate.RLock()
-	defer a.gate.RUnlock()
 	bk, err := a.activeBook(bankID)
 	if err != nil {
 		return AccountJSON{}, err
@@ -172,8 +166,6 @@ func (a *App) OpenAccount(bankID string, req AccountRequest) (AccountJSON, error
 }
 
 func (a *App) CloseAccount(bankID, nuban string) error {
-	a.gate.RLock()
-	defer a.gate.RUnlock()
 	bk, err := a.activeBook(bankID)
 	if err != nil {
 		return err
@@ -191,8 +183,6 @@ func (a *App) Cash(ctx context.Context, bankID, kind string, req CashRequest) (C
 }
 
 func (a *App) postCash(bankID, kind string, req CashRequest) (CashResult, error) {
-	a.gate.RLock()
-	defer a.gate.RUnlock()
 	bk, err := a.activeBook(bankID)
 	if err != nil {
 		return CashResult{}, err
