@@ -415,10 +415,6 @@ func (a *bankSite) obStatement(w http.ResponseWriter, r *http.Request) {
 		a.bankFail(w, r, err)
 		return
 	}
-	if err := a.markRemoved(ctx, ls); err != nil {
-		a.bankFail(w, r, err)
-		return
-	}
 	lines := []bankLineView{}
 	for _, l := range ls {
 		lines = append(lines, bankLineView{FeedLine: l, Description: Normalise(l.Narration), Href: bankHref(l)})
@@ -450,18 +446,10 @@ func (a *bankSite) obTx(w http.ResponseWriter, r *http.Request) {
 		a.bankFail(w, r, err)
 		return
 	}
-	if err := a.markRemoved(ctx, []bank.FeedLine{l}); err != nil {
-		a.bankFail(w, r, err)
-		return
-	}
 	related := []bankLineView{}
 	if l.SessionID != "" {
 		ls, err := bk.ls.Bank().SessionLines(ctx, l.SessionID)
 		if err != nil {
-			a.bankFail(w, r, err)
-			return
-		}
-		if err := a.markRemoved(ctx, ls); err != nil {
 			a.bankFail(w, r, err)
 			return
 		}

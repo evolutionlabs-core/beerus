@@ -215,6 +215,14 @@ func TestPurgeRules(t *testing.T) {
 	if oldBank.Allocated.CBNAccount != oldCode {
 		t.Fatalf("a bank from the init spec has CBN account %q, want %s", oldBank.Allocated.CBNAccount, oldCode)
 	}
+	s.openAccount(s.join("adaeze", "bank-b"), "current")
+	s.connect("adaeze", "bank-b", s.today().AddDays(-3))
+	consentEvents := func(bank string) int {
+		return len(s.ctl("GET", "/registry/consents?bank="+bank, nil)["data"].([]any))
+	}
+	if consentEvents("bank-b") == 0 {
+		t.Fatal("no consent event was recorded for bank-b")
+	}
 	s.ctl("POST", "/banks/bank-b/close", map[string]any{"money": "leave"})
 	s.waitPhase("bank-b", connect.PhaseClosed, 60*time.Second)
 	oldBalance := cbnBalance(t, s.cfg, oldCode)
@@ -236,6 +244,15 @@ func TestPurgeRules(t *testing.T) {
 	}
 	s.ctl("POST", "/banks", map[string]any{"name": "Bank B", "type": "digital"})
 	s.waitPhase("bank-b", connect.PhaseActive, 60*time.Second)
+	oldEvents := consentEvents(retired)
+	if oldEvents == 0 || consentEvents("bank-b") != 0 {
+		t.Fatalf("consent history of the purged bank: %d under %s, %d under bank-b", oldEvents, retired, consentEvents("bank-b"))
+	}
+	s.openAccount(s.join("adaeze", "bank-b"), "current")
+	s.connect("adaeze", "bank-b", s.today().AddDays(-3))
+	if consentEvents("bank-b") == 0 || consentEvents(retired) != oldEvents {
+		t.Fatalf("a consent of the recreated bank was dropped: %d under bank-b, %d under %s (was %d)", consentEvents("bank-b"), consentEvents(retired), retired, oldEvents)
+	}
 	fresh, err := s.app.Resource(setup.KindBank, "bank-b")
 	if err != nil {
 		t.Fatal(err)

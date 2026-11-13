@@ -126,11 +126,14 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	delete(a.obs, id)
 	a.obMu.Unlock()
 	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.removeMember(ctx, id))
-	a.dropBankRows(id)
+	a.dropBankRows(id, retiredID(r))
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("purge %s: %w", id, err)
 	}
 	if err := a.retireMember(ctx, r); err != nil {
+		return nil, err
+	}
+	if err := a.retireConsents(ctx, r); err != nil {
 		return nil, err
 	}
 	tomb, err := a.readBackPurge(ctx, r)
@@ -156,7 +159,7 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	return nil, nil
 }
 
-func (a *App) dropBankRows(id string) {
+func (a *App) dropBankRows(id, retired string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for cid, c := range a.st.Connections {
@@ -170,6 +173,13 @@ func (a *App) dropBankRows(id string) {
 		}
 	}
 	a.st.Revokes = slices.DeleteFunc(a.st.Revokes, func(p PendingRevoke) bool { return p.Bank == id })
+	a.regMu.Lock()
+	for i := range a.st.ConsentLedger {
+		if a.st.ConsentLedger[i].Bank == id {
+			a.st.ConsentLedger[i].Bank = retired
+		}
+	}
+	a.regMu.Unlock()
 	a.dirty()
 }
 
@@ -178,11 +188,25 @@ func (a *App) retireMember(ctx context.Context, r setup.Resource) error {
 	if sw == nil {
 		return errors.New("NIBSS is not open, so the id of the removed bank cannot be retired; try again soon")
 	}
-	code := r.Allocated.NIPCode
-	if err := sw.Retire(ctx, code, r.ID+"-"+code); err != nil {
+	if err := sw.Retire(ctx, r.Allocated.NIPCode, retiredID(r)); err != nil {
 		return fmt.Errorf("retire the NIBSS id of %s: %w", r.ID, err)
 	}
 	return nil
+}
+
+func (a *App) retireConsents(ctx context.Context, r setup.Resource) error {
+	sw := a.nibssStore()
+	if sw == nil {
+		return errors.New("NIBSS is not open, so the consent history of the removed bank cannot be kept; try again soon")
+	}
+	if err := sw.RetireConsents(ctx, r.ID, retiredID(r)); err != nil {
+		return fmt.Errorf("retire the NIBSS consent history of %s: %w", r.ID, err)
+	}
+	return nil
+}
+
+func retiredID(r setup.Resource) string {
+	return r.ID + "-" + r.Allocated.NIPCode
 }
 
 func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nibss.Institution, error) {
