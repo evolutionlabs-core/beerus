@@ -31,8 +31,8 @@ func TestBVNAndSessionID(t *testing.T) {
 	}
 }
 
-func TestSimulatorDefaultCap(t *testing.T) {
-	if SimulatorDefaultCap("microfinance") >= SimulatorDefaultCap("commercial") || SimulatorDefaultCap("digital") != SimulatorDefaultCap("commercial") {
+func TestDefaultCap(t *testing.T) {
+	if DefaultCap("microfinance") >= DefaultCap("commercial") || DefaultCap("digital") != DefaultCap("commercial") {
 		t.Fatal("a microfinance bank should have a lower default cap than a commercial or digital bank")
 	}
 }

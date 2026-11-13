@@ -148,7 +148,7 @@ func initFromEnv(dir string) error {
 		}
 	}
 	today := clock.DateOf(time.Now())
-	spec := setup.DefaultSpec(defaultSetupName, today)
+	spec := setup.DefaultSpec(defaultSetupName)
 	if path := os.Getenv("BEERUS_SETUP_FILE"); path != "" {
 		var err error
 		if spec, err = readSpec(path); err != nil {

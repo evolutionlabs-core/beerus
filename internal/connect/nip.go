@@ -191,7 +191,7 @@ func (a *App) ctlSettleNow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"settled_sessions": n, "business_time": ts(a.clock.Now())})
+	writeJSON(w, http.StatusOK, map[string]any{"settled_sessions": n, "at": ts(a.clock.Now())})
 }
 
 func (a *App) ctlNIPSession(w http.ResponseWriter, r *http.Request) {

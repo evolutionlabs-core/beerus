@@ -74,7 +74,7 @@ func (b *Bank) Cap() int64 {
 	if b.NetDebitCap > 0 {
 		return b.NetDebitCap
 	}
-	return nip.SimulatorDefaultCap(b.Type)
+	return nip.DefaultCap(b.Type)
 }
 
 func (b *Bank) CapIsDefault() bool {
@@ -128,7 +128,6 @@ type Config struct {
 	Partners    []*Partner    `yaml:"partners"`
 	Holidays    *Holidays     `yaml:"holidays,omitempty"`
 	Dir         string        `yaml:"-"`
-	Start       time.Time     `yaml:"-"`
 	calendar    clock.Calendar
 	fees        *charges.Schedule
 }

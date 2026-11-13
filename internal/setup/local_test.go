@@ -13,7 +13,6 @@ import (
 
 const sampleLocal = `database_url: postgres:///postgres?host=/tmp
 bind: 127.0.0.1
-pace: 1
 ports: {api_offset: 10, window: 300}
 connect:
   host: localhost
@@ -43,7 +42,7 @@ func TestLoadLocal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.DatabaseURL != "postgres:///postgres?host=/tmp" || l.Bind != "127.0.0.1" || l.Pace != 1 || l.Ports.Window != 300 {
+	if l.DatabaseURL != "postgres:///postgres?host=/tmp" || l.Bind != "127.0.0.1" || l.Ports.Window != 300 {
 		t.Fatalf("%+v", l)
 	}
 	if !l.Connect.WidgetTLS || l.Connect.ControlPort != 7480 || l.Connect.RefreshEvery != "5m" {
@@ -102,15 +101,12 @@ func TestLoadLocalRejects(t *testing.T) {
 		name, old, new, want string
 	}{
 		{"typo", "database_url:", "databse_url:", `local.yaml:1:1: unknown field "databse_url" (did you mean "database_url"?)`},
-		{"fast pace", "pace: 1", "pace: 60", "local.yaml:3:1: pace 60 is not real time. Beerus runs on real time; remove pace or use 1."},
-		{"zero pace", "pace: 1", "pace: 0", "local.yaml:3:1: pace 0 is not real time. Beerus runs on real time; remove pace or use 1."},
-		{"text pace", "pace: 1", "pace: fast", "local.yaml:3:7: pace fast is not a number. Write a number such as 1."},
 		{"bad bind", "bind: 127.0.0.1", "bind: nowhere", `local.yaml:2:1: bind "nowhere" is not an IP address. Use an address such as 127.0.0.1.`},
-		{"port too high", "partner_port: 7443", "partner_port: 70000", "local.yaml:7:3: connect.partner_port 70000 is not a port. Use a number from 1 to 65535, or leave it out."},
-		{"zero window", "window: 300", "window: 0", "local.yaml:4:25: ports.window 0 must be more than zero. Leave it out for the default."},
-		{"bad duration", "sync_interval: 30s", "sync_interval: soon", `local.yaml:12:3: connect.sync_interval "soon" is not a duration longer than zero. Use a duration such as 30s.`},
-		{"tls as text", "widget_tls: true", "widget_tls: maybe", "local.yaml:9:15: connect.widget_tls maybe is not true or false. Write true or false."},
-		{"bad webhook", "webhook_url: http://localhost:3000/webhooks", "webhook_url: ftp://x", `local.yaml:15:62: partners[balance].webhook_url "ftp://x" is not an http or https URL. Use a full URL such as http://localhost:3000/webhooks.`},
+		{"port too high", "partner_port: 7443", "partner_port: 70000", "local.yaml:6:3: connect.partner_port 70000 is not a port. Use a number from 1 to 65535, or leave it out."},
+		{"zero window", "window: 300", "window: 0", "local.yaml:3:25: ports.window 0 must be more than zero. Leave it out for the default."},
+		{"bad duration", "sync_interval: 30s", "sync_interval: soon", `local.yaml:11:3: connect.sync_interval "soon" is not a duration longer than zero. Use a duration such as 30s.`},
+		{"tls as text", "widget_tls: true", "widget_tls: maybe", "local.yaml:8:15: connect.widget_tls maybe is not true or false. Write true or false."},
+		{"bad webhook", "webhook_url: http://localhost:3000/webhooks", "webhook_url: ftp://x", `local.yaml:14:62: partners[balance].webhook_url "ftp://x" is not an http or https URL. Use a full URL such as http://localhost:3000/webhooks.`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

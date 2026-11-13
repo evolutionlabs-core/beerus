@@ -64,7 +64,7 @@ type CashResult struct {
 	Amount   int64     `json:"amount_minor"`
 	Balance  int64     `json:"balance_minor"`
 	Replayed bool      `json:"replayed"`
-	At       time.Time `json:"business_time"`
+	At       time.Time `json:"at"`
 }
 
 var errBankNotFound = errors.New("no such bank")

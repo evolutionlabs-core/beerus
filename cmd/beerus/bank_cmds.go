@@ -80,17 +80,6 @@ func decodeList[T any](m map[string]any) ([]T, error) {
 	return v, nil
 }
 
-func businessNow(c *ctl) (time.Time, error) {
-	out, err := c.do("GET", "/clock", nil)
-	if err != nil {
-		return time.Time{}, err
-	}
-	v, err := decodeMap[struct {
-		At time.Time `json:"business_time"`
-	}](out)
-	return v.At, err
-}
-
 func stamp(t time.Time) string {
 	return t.In(clock.Lagos).Format("Mon 2 Jan 2006 15:04 MST")
 }
@@ -100,15 +89,6 @@ func plural(n int, one, many string) string {
 		return "1 " + one
 	}
 	return fmt.Sprintf("%d %s", n, many)
-}
-
-func printBusinessTime(c *ctl) error {
-	now, err := businessNow(c)
-	if err != nil {
-		return err
-	}
-	fmt.Println("Business time:", stamp(now))
-	return nil
 }
 
 func printNext(out map[string]any) {
@@ -205,7 +185,6 @@ func cmdCustomer(args []string) error {
 			if cu.Username != "" {
 				fmt.Printf("%s can sign in to online banking as %s.\n", cu.Name, cu.Username)
 			}
-			fmt.Println("Business time:", stamp(cu.CreatedAt))
 			return nil
 		})
 	case "close":
@@ -223,7 +202,7 @@ func cmdCustomer(args []string) error {
 		}
 		return f.show(out, func() error {
 			fmt.Printf("Closed customer %s at %s.\n", pos[1], id)
-			return printBusinessTime(c)
+			return nil
 		})
 	}
 	return usageError("customer")
@@ -258,7 +237,7 @@ func cmdAccount(args []string) error {
 				return err
 			}
 			fmt.Printf("Opened %s account %s for %s (%s) at %s. Balance %s.\n", a.Type, a.NUBAN, a.Name, a.Customer, id, connect.FormatNaira(a.Balance))
-			return printBusinessTime(c)
+			return nil
 		})
 	case "close":
 		pos, err := f.parse("account close", args, 2)
@@ -275,7 +254,7 @@ func cmdAccount(args []string) error {
 		}
 		return f.show(out, func() error {
 			fmt.Printf("Closed account %s at %s.\n", pos[1], id)
-			return printBusinessTime(c)
+			return nil
 		})
 	}
 	return usageError("account")
@@ -323,22 +302,22 @@ func cmdList(what string, args []string) error {
 	return f.show(out, func() error {
 		switch what {
 		case "customers":
-			return printCustomers(c, out)
+			return printCustomers(out)
 		case "accounts":
-			return printAccounts(c, out)
+			return printAccounts(out)
 		}
-		return printStatement(c, out, pos[0])
+		return printStatement(out, pos[0])
 	})
 }
 
-func printCustomers(c *ctl, out map[string]any) error {
+func printCustomers(out map[string]any) error {
 	rows, err := decodeList[bank.Customer](out)
 	if err != nil {
 		return err
 	}
 	if len(rows) == 0 {
 		fmt.Println("No customers.")
-		return printBusinessTime(c)
+		return nil
 	}
 	w := newTable()
 	fmt.Fprintln(w, "ID\tNAME\tPHONE\tBVN\tSTATUS")
@@ -350,17 +329,17 @@ func printCustomers(c *ctl, out map[string]any) error {
 	}
 	fmt.Println(plural(len(rows), "customer", "customers") + " on this page.")
 	printNext(out)
-	return printBusinessTime(c)
+	return nil
 }
 
-func printAccounts(c *ctl, out map[string]any) error {
+func printAccounts(out map[string]any) error {
 	rows, err := decodeList[connect.AccountJSON](out)
 	if err != nil {
 		return err
 	}
 	if len(rows) == 0 {
 		fmt.Println("No accounts.")
-		return printBusinessTime(c)
+		return nil
 	}
 	w := newTable()
 	fmt.Fprintln(w, "NUBAN\tOWNER\tCUSTOMER\tTYPE\tSTATUS\tBALANCE")
@@ -372,17 +351,17 @@ func printAccounts(c *ctl, out map[string]any) error {
 	}
 	fmt.Println(plural(len(rows), "account", "accounts") + " on this page.")
 	printNext(out)
-	return printBusinessTime(c)
+	return nil
 }
 
-func printStatement(c *ctl, out map[string]any, nuban string) error {
+func printStatement(out map[string]any, nuban string) error {
 	rows, err := decodeList[connect.StatementLine](out)
 	if err != nil {
 		return err
 	}
 	if len(rows) == 0 {
 		fmt.Printf("No entries on account %s.\n", nuban)
-		return printBusinessTime(c)
+		return nil
 	}
 	w := newTable()
 	fmt.Fprintln(w, "DATE\tTIME\tAMOUNT\tBALANCE\tNARRATION\tSESSION")
@@ -394,7 +373,7 @@ func printStatement(c *ctl, out map[string]any, nuban string) error {
 	}
 	fmt.Println(plural(len(rows), "entry", "entries") + " on this page.")
 	printNext(out)
-	return printBusinessTime(c)
+	return nil
 }
 
 func cmdCash(kind string, args []string) error {
@@ -429,7 +408,6 @@ func cmdCash(kind string, args []string) error {
 			verb, prep = "Withdrew", "from"
 		}
 		fmt.Printf("%s %s %s account %s at %s. Balance %s.\n", verb, connect.FormatNaira(r.Amount), prep, r.Account, id, connect.FormatNaira(r.Balance))
-		fmt.Println("Business time:", stamp(r.At))
 		return nil
 	})
 }
@@ -591,7 +569,7 @@ func cmdFault(args []string) error {
 				return err
 			}
 			fmt.Printf("Fault %s on %s: %s.\n", fl.ID, fl.Bank, describeFault(fl))
-			return printBusinessTime(c)
+			return nil
 		})
 	case "list":
 		if _, err := f.parse("fault list", args, 1); err != nil {
@@ -624,12 +602,12 @@ func cmdFault(args []string) error {
 			}
 			if shown == 0 {
 				fmt.Println("No faults.")
-				return printBusinessTime(c)
+				return nil
 			}
 			if err := w.Flush(); err != nil {
 				return fmt.Errorf("print faults: %w", err)
 			}
-			return printBusinessTime(c)
+			return nil
 		})
 	case "clear":
 		if _, err := f.parse("fault clear", args, 1); err != nil {
@@ -652,10 +630,10 @@ func cmdFault(args []string) error {
 			}
 			if r.Cleared == 0 {
 				fmt.Println("No faults to clear.")
-				return printBusinessTime(c)
+				return nil
 			}
 			fmt.Printf("Cleared %s.\n", plural(r.Cleared, "fault", "faults"))
-			return printBusinessTime(c)
+			return nil
 		})
 	}
 	return usageError("fault")
@@ -711,7 +689,7 @@ func cmdNip(args []string) error {
 		return f.show(out, func() error {
 			r, err := decodeMap[struct {
 				Settled int       `json:"settled_sessions"`
-				At      time.Time `json:"business_time"`
+				At      time.Time `json:"at"`
 			}](out)
 			if err != nil {
 				return err

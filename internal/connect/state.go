@@ -71,7 +71,6 @@ type Connection struct {
 	AuthorisedAt     time.Time   `json:"authorised_at"`
 	ExpiresAt        time.Time   `json:"expires_at"`
 	LastSyncedAt     *time.Time  `json:"last_synced_at"`
-	LastSyncedBiz    time.Time   `json:"last_synced_biz"`
 	LastSyncedReal   time.Time   `json:"last_synced_real"`
 	CreatedAt        time.Time   `json:"created_at"`
 	SyncDueReal      time.Time   `json:"sync_due_real"`
@@ -222,7 +221,6 @@ type State struct {
 	ConsentLedger  []ConsentRecord            `json:"consent_ledger"`
 	Access         []AccessEvent              `json:"access"`
 	WorldID        string                     `json:"world_id"`
-	LegacyClock    *legacyClock               `json:"clock,omitempty"`
 	Faults         []*Fault                   `json:"faults"`
 	LinkSessions   map[string]*LinkSession    `json:"link_sessions"`
 	WidgetSessions map[string]*WidgetSession  `json:"widget_sessions"`
@@ -297,10 +295,6 @@ func (s *State) fill() {
 			f.Gone = map[string]bool{}
 		}
 	}
-}
-
-type legacyClock struct {
-	AnchorBusiness time.Time `json:"anchor_business"`
 }
 
 func loadState(path string) (*State, error) {

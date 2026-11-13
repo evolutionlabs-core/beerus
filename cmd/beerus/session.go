@@ -169,10 +169,6 @@ func bankStatus(c *ctl, id string) (connect.BankStatus, error) {
 }
 
 func sessionBanner(c *ctl, st connect.BankStatus) (string, error) {
-	now, err := businessNow(c)
-	if err != nil {
-		return "", err
-	}
 	out, err := c.do("GET", "/faults", nil)
 	if err != nil {
 		return "", err
@@ -182,7 +178,7 @@ func sessionBanner(c *ctl, st connect.BankStatus) (string, error) {
 		return "", err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Using %s. Business time: %s. Type exit to leave.", st.Name, stamp(now))
+	fmt.Fprintf(&b, "Using %s. Type exit to leave.", st.Name)
 	for _, f := range faults {
 		if f.Bank == st.ID {
 			fmt.Fprintf(&b, "\nFault: %s", describeFault(f))

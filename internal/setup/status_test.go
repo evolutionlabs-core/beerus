@@ -8,8 +8,6 @@ import (
 	"reflect"
 	"testing"
 	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 func sampleStatus() Status {
@@ -17,7 +15,7 @@ func sampleStatus() Status {
 	return Status{
 		Setup:         "beerus",
 		SetupKey:      1<<63 + 5,
-		Applied:       DefaultSpec("beerus", clock.Date{Y: 2026, M: time.November, D: 4}),
+		Applied:       DefaultSpec("beerus"),
 		AppliedSHA256: "abc",
 		Resources: []Resource{{
 			Kind:                KindBank,
@@ -55,6 +53,43 @@ func TestStatusRoundTrip(t *testing.T) {
 	}
 	if out.SetupKey != 1<<63+5 {
 		t.Fatalf("setup key = %d", out.SetupKey)
+	}
+}
+
+func TestLoadStatusRefusesAnOlderVersion(t *testing.T) {
+	bodies := map[string]string{
+		"version 1":  `{"version":1,"setup":"beerus","clock":{"anchor_business":"2026-11-04T08:00:00+01:00"},"applied":{"spec":{"start":"2026-11-04T08:00:00+01:00"}}}`,
+		"version 0":  `{"version":0,"setup":"beerus"}`,
+		"no version": `{"setup":"beerus"}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := LoadStatus(dir)
+			if !errors.Is(err, ErrOldSetup) {
+				t.Fatalf("got %v", err)
+			}
+			want := dir + ": This setup was made by an older Beerus. Run beerus reset, then beerus init."
+			if err.Error() != want {
+				t.Fatalf("got %q, want %q", err.Error(), want)
+			}
+		})
+	}
+}
+
+func TestIsCorrupt(t *testing.T) {
+	for body, want := range map[string]bool{"{": true, "": true, `{"version":"x"}`: true, `{"version":2,"colour":1}`: false} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadStatus(dir)
+		if got := IsCorrupt(err); got != want {
+			t.Errorf("%q: IsCorrupt = %v (%v), want %v", body, got, err, want)
+		}
 	}
 }
 
@@ -101,9 +136,8 @@ func TestLoadStatusRejects(t *testing.T) {
 	cases := []struct {
 		name, body, want string
 	}{
-		{"newer version", `{"version":2,"setup":"beerus","future":true}`, "control.json has version 2, but this beerus reads up to version 1. Upgrade beerus"},
-		{"no version", `{"setup":"beerus"}`, "control.json has no valid version (got 0). Run beerus reset to start again"},
-		{"unknown field", `{"version":1,"setup":"beerus","colour":"red"}`, `decode control.json: json: unknown field "colour"`},
+		{"newer version", `{"version":3,"setup":"beerus","future":true}`, "control.json has version 3, but this beerus reads up to version 2. Upgrade beerus"},
+		{"unknown field", `{"version":2,"setup":"beerus","colour":"red"}`, `decode control.json: json: unknown field "colour"`},
 		{"not json", `{`, "decode control.json: unexpected end of JSON input"},
 	}
 	for _, c := range cases {

@@ -597,7 +597,6 @@ func nextApplied(st *setup.Status, ad *admission) setup.Spec {
 	desired := ad.pl.desired
 	out := st.Applied
 	body := desired.Spec
-	body.Start = st.Applied.Spec.Start
 	body.NIP.Sessions = st.Applied.Spec.NIP.Sessions
 	created := createdFields(ad.pl.plan)
 	body.Banks = make([]setup.Bank, 0, len(desired.Spec.Banks))

@@ -37,8 +37,8 @@ type Config struct {
 	Data          Data
 	Ledger        Ledger
 	LedgerOutbox  bool
+	Real          func() time.Time
 	Now           func() time.Time
-	Biz           func() time.Time
 	CodeLife      time.Duration
 	AccessLife    time.Duration
 	RefreshGrace  time.Duration
@@ -90,12 +90,6 @@ var (
 )
 
 func New(cfg Config) *Server {
-	if cfg.Now == nil {
-		cfg.Now = time.Now
-	}
-	if cfg.Biz == nil {
-		cfg.Biz = cfg.Now
-	}
 	if cfg.CodeLife <= 0 || cfg.CodeLife > time.Minute {
 		cfg.CodeLife = time.Minute
 	}
@@ -215,7 +209,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*Client, 
 		fail(w, http.StatusUnauthorized, "invalid_client", "The client assertion is not valid: "+err.Error()+".")
 		return nil, "", false
 	}
-	now := s.cfg.Now()
+	now := s.cfg.Real()
 	exp, _ := claims["exp"].(float64)
 	jti, _ := claims["jti"].(string)
 	if claims["iss"] != c.ID || claims["sub"] != c.ID || !s.audience(claims["aud"]) || jti == "" ||
@@ -312,7 +306,7 @@ func (s *Server) par(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "invalid_scope", err.Error())
 		return
 	}
-	from := clock.DateOf(s.cfg.Biz())
+	from := clock.DateOf(s.cfg.Now())
 	if v := f.Get("transaction_from"); v != "" {
 		d, err := clock.ParseDate(v)
 		if err != nil {
@@ -321,7 +315,7 @@ func (s *Server) par(w http.ResponseWriter, r *http.Request) {
 		}
 		from = d
 	}
-	now := s.cfg.Now()
+	now := s.cfg.Real()
 	consent := &Consent{
 		ID:              random("obc_", 12),
 		ClientID:        c.ID,
@@ -333,7 +327,7 @@ func (s *Server) par(w http.ResponseWriter, r *http.Request) {
 		Scopes:          scopes,
 		TransactionFrom: from,
 		Analytics:       f.Get("analytics") == "yes",
-		CreatedAt:       s.cfg.Biz(),
+		CreatedAt:       s.cfg.Now(),
 	}
 	if err := s.cfg.Store.CreateConsent(r.Context(), consent); err != nil {
 		fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
@@ -386,7 +380,7 @@ func addMonths(t time.Time, n int) time.Time {
 }
 
 func (s *Server) sweep(ctx context.Context) {
-	now := s.cfg.Now()
+	now := s.cfg.Real()
 	stale := []string{}
 	s.mu.Lock()
 	for uri, p := range s.pars {
@@ -436,13 +430,13 @@ func (s *Server) Resume(ctx context.Context) error {
 }
 
 func (s *Server) HistoryFloor() clock.Date {
-	return clock.DateOf(s.cfg.Biz()).AddDays(-s.cfg.HistoryDays)
+	return clock.DateOf(s.cfg.Now()).AddDays(-s.cfg.HistoryDays)
 }
 
 func (s *Server) Request(ctx context.Context, requestURI, clientID string) (*Request, error) {
 	s.mu.Lock()
 	p := s.pars[requestURI]
-	valid := p != nil && !p.used && !s.cfg.Now().After(p.expires) && p.clientID == clientID
+	valid := p != nil && !p.used && !s.cfg.Real().After(p.expires) && p.clientID == clientID
 	s.mu.Unlock()
 	if !valid {
 		return nil, ErrInvalidRequest
@@ -459,14 +453,14 @@ func (s *Server) Request(ctx context.Context, requestURI, clientID string) (*Req
 	if floor := s.HistoryFloor(); eff.Before(floor) {
 		eff, capped = floor, true
 	}
-	return &Request{Client: client, Consent: c, Effective: eff, Capped: capped, Months: s.cfg.ConsentMonths, Until: s.renewal(s.cfg.Biz())}, nil
+	return &Request{Client: client, Consent: c, Effective: eff, Capped: capped, Months: s.cfg.ConsentMonths, Until: s.renewal(s.cfg.Now())}, nil
 }
 
 func (s *Server) take(requestURI string) (*par, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := s.pars[requestURI]
-	if p == nil || p.used || s.cfg.Now().After(p.expires) {
+	if p == nil || p.used || s.cfg.Real().After(p.expires) {
 		return nil, ErrInvalidRequest
 	}
 	p.used = true
@@ -489,23 +483,23 @@ func (s *Server) redirect(base string, q url.Values) string {
 }
 
 func (s *Server) record(ctx context.Context, c *Consent, status Status, via string) error {
-	e := ConsentEvent{ConsentID: c.ID, Bank: s.cfg.BankID, ClientID: c.ClientID, PartnerID: c.PartnerID, Status: status, Via: via, At: s.cfg.Biz()}
+	e := ConsentEvent{ConsentID: c.ID, Bank: s.cfg.BankID, ClientID: c.ClientID, PartnerID: c.PartnerID, Status: status, Via: via, At: s.cfg.Now()}
 	if s.cfg.LedgerOutbox {
-		if err := s.cfg.Store.EnqueueLedger(ctx, e, s.cfg.Now()); err != nil {
+		if err := s.cfg.Store.EnqueueLedger(ctx, e, s.cfg.Real()); err != nil {
 			return err
 		}
 	} else if s.cfg.Ledger != nil {
 		s.cfg.Ledger.Record(e)
 	}
-	return s.cfg.Store.Enqueue(ctx, e, s.cfg.Now())
+	return s.cfg.Store.Enqueue(ctx, e, s.cfg.Real())
 }
 
 func (s *Server) Due(ctx context.Context, limit int) ([]Event, error) {
-	return s.cfg.Store.Due(ctx, s.cfg.Now(), limit)
+	return s.cfg.Store.Due(ctx, s.cfg.Real(), limit)
 }
 
 func (s *Server) LedgerDue(ctx context.Context, limit int) ([]Event, error) {
-	return s.cfg.Store.LedgerDue(ctx, s.cfg.Now(), limit)
+	return s.cfg.Store.LedgerDue(ctx, s.cfg.Real(), limit)
 }
 
 func (s *Server) Delivered(ctx context.Context, e Event) error {
@@ -545,7 +539,7 @@ func consentFail(w http.ResponseWriter, desc string, err error) {
 func (s *Server) Approve(ctx context.Context, requestURI, customer string, accounts []string, analytics bool) (string, error) {
 	s.mu.Lock()
 	p := s.pars[requestURI]
-	ok := p != nil && !p.used && !s.cfg.Now().After(p.expires)
+	ok := p != nil && !p.used && !s.cfg.Real().After(p.expires)
 	s.mu.Unlock()
 	if !ok {
 		return "", ErrInvalidRequest
@@ -571,7 +565,7 @@ func (s *Server) Approve(ctx context.Context, requestURI, customer string, accou
 	if _, err := s.take(requestURI); err != nil {
 		return "", err
 	}
-	now := s.cfg.Biz()
+	now := s.cfg.Now()
 	if floor := s.HistoryFloor(); c.TransactionFrom.Before(floor) {
 		c.TransactionFrom = floor
 	}
@@ -585,7 +579,7 @@ func (s *Server) Approve(ctx context.Context, requestURI, customer string, accou
 	}
 	raw := random("oc_", 24)
 	s.mu.Lock()
-	s.codes[Hash(raw)] = &code{clientID: p.clientID, redirect: p.redirect, challenge: p.challenge, consentID: c.ID, expires: s.cfg.Now().Add(s.cfg.CodeLife)}
+	s.codes[Hash(raw)] = &code{clientID: p.clientID, redirect: p.redirect, challenge: p.challenge, consentID: c.ID, expires: s.cfg.Real().Add(s.cfg.CodeLife)}
 	s.mu.Unlock()
 	q := url.Values{"code": {raw}}
 	if p.state != "" {
@@ -652,7 +646,7 @@ func (s *Server) Effective(c *Consent) Status {
 	if c.Status != Authorised {
 		return c.Status
 	}
-	now := s.cfg.Biz()
+	now := s.cfg.Now()
 	if !now.Before(c.ExpiresAt) {
 		return ReconsentRequired
 	}
@@ -766,7 +760,7 @@ func (s *Server) codeGrant(w http.ResponseWriter, r *http.Request, client *Clien
 	switch {
 	case cd.clientID != client.ID:
 		fail(w, http.StatusBadRequest, "invalid_grant", "The code was issued to another client.")
-	case s.cfg.Now().After(cd.expires):
+	case s.cfg.Real().After(cd.expires):
 		fail(w, http.StatusBadRequest, "invalid_grant", "The code has expired.")
 	case f.Get("redirect_uri") != cd.redirect:
 		fail(w, http.StatusBadRequest, "invalid_grant", "The redirect_uri does not match the request.")
@@ -786,7 +780,7 @@ func (s *Server) refreshGrant(w http.ResponseWriter, r *http.Request, client *Cl
 	ctx := r.Context()
 	h := Hash(r.PostForm.Get("refresh_token"))
 	tok, err := s.cfg.Store.Token(ctx, h)
-	now := s.cfg.Now()
+	now := s.cfg.Real()
 	if err != nil || tok.Kind != "refresh" || tok.Revoked || tok.ClientID != client.ID || now.After(tok.ExpiresAt) {
 		fail(w, http.StatusBadRequest, "invalid_grant", "The refresh token is not valid.")
 		return
@@ -818,7 +812,7 @@ func (s *Server) refreshGrant(w http.ResponseWriter, r *http.Request, client *Cl
 }
 
 func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clientID, thumb, parent, family string) {
-	now := s.cfg.Now()
+	now := s.cfg.Real()
 	access, refresh := random("oba_", 24), random("obr_", 24)
 	refreshUntil := now.AddDate(0, 0, s.cfg.RefreshDays)
 	for _, t := range []*Token{

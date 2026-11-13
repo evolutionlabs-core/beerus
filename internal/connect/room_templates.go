@@ -48,7 +48,7 @@ const roomTemplates = `
 {{define "stat"}}<div class="rounded-2xl border border-line bg-panel px-5 py-4"><p class="text-[12.5px] text-muted">{{index . 0}}</p><p class="mt-2 text-[22px] tracking-tight tabular-nums">{{index . 1}}</p>{{if index . 2}}<p class="mt-1 text-[12px] text-faint">{{index . 2}}</p>{{end}}</div>{{end}}
 
 {{define "overview"}}{{template "room_head" .}}
-<div class="mb-7"><h1 class="text-[24px]">Overview</h1><p class="mt-1.5 text-[13.5px] text-muted">Business time {{when .Now}} WAT</p></div>
+<div class="mb-7"><h1 class="text-[24px]">Overview</h1><p class="mt-1.5 text-[13.5px] text-muted">As of {{when .Now}} WAT</p></div>
 <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
 {{template "stat" (list "Customer deposits" (naira .Total) "Across all banks")}}
 {{range .BankSums}}{{template "stat" (list .Name (naira .Deposits) (count .Accounts "account" "accounts"))}}{{end}}

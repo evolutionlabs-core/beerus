@@ -3,20 +3,16 @@ package setup
 import (
 	"reflect"
 	"testing"
-	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 func TestDefaultSpecLeavesCodesAndLegalFieldsOut(t *testing.T) {
-	got := DefaultSpec("beerus", clock.Date{Y: 2026, M: time.November, D: 4})
+	got := DefaultSpec("beerus")
 	want := Spec{
 		APIVersion: APIVersion,
 		Kind:       KindSetup,
 		Metadata:   Metadata{Name: "beerus"},
 		Spec: Body{
-			Start: "2026-11-04T00:00:00+01:00",
-			NIP:   NIP{Sessions: 4, TSQAfter: "2m", TSQAttempts: 3},
+			NIP: NIP{Sessions: 4, TSQAfter: "2m", TSQAttempts: 3},
 		},
 	}
 	if !reflect.DeepEqual(clearPos(got), want) {
@@ -28,9 +24,8 @@ func TestDefaultSpecLeavesCodesAndLegalFieldsOut(t *testing.T) {
 }
 
 func TestDefaultSpecMatchesTheFixtureApartFromPinnedFields(t *testing.T) {
-	got := DefaultSpec("beerus", clock.Date{Y: 2026, M: time.November, D: 4})
+	got := DefaultSpec("beerus")
 	fixture := clearPos(parseFixture(t, "default.yaml"))
-	fixture.Spec.Start = got.Spec.Start
 	fixture.Spec.Connect = ConnectLegal{}
 	fixture.Spec.Holidays = Holidays{}
 	fixture.Spec.Banks = nil
@@ -39,21 +34,8 @@ func TestDefaultSpecMatchesTheFixtureApartFromPinnedFields(t *testing.T) {
 	}
 }
 
-func TestDefaultSpecStartsAtMidnightInLagos(t *testing.T) {
-	cases := map[clock.Date]string{
-		{Y: 2028, M: time.February, D: 29}: "2028-02-29T00:00:00+01:00",
-		{Y: 2026, M: time.December, D: 31}: "2026-12-31T00:00:00+01:00",
-		{Y: 2399, M: time.January, D: 1}:   "2399-01-01T00:00:00+01:00",
-	}
-	for today, want := range cases {
-		if got := DefaultSpec("lagos-dev", today).Spec.Start; got != want {
-			t.Errorf("DefaultSpec(%s).Start = %s, want %s", today, got, want)
-		}
-	}
-}
-
 func TestDefaultSpecExportsAndParsesClean(t *testing.T) {
-	s := DefaultSpec("lagos-dev", clock.Date{Y: 2026, M: time.November, D: 7})
+	s := DefaultSpec("lagos-dev")
 	out, err := Export(s)
 	if err != nil {
 		t.Fatal(err)

@@ -42,16 +42,12 @@ const (
 	stepDone = "done"
 )
 
-var ErrFutureWorld = errors.New("This setup was moved ahead of real time by an older Beerus. Run beerus reset, then beerus init.")
-
-var ErrOldSetup = errors.New("This setup was made by an older Beerus. Run beerus reset, then beerus init.")
-
 func refuseOld(dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, oldSpecFile)); err != nil {
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, statusFile)); errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%s: %w", dir, ErrOldSetup)
+		return fmt.Errorf("%s: %w", dir, setup.ErrOldSetup)
 	}
 	return nil
 }
@@ -303,11 +299,7 @@ func LoadConfig(dir string) (*config.Config, error) {
 
 func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config, error) {
 	spec := st.Applied.Spec
-	start, err := time.Parse(time.RFC3339, spec.Start)
-	if err != nil {
-		return nil, fmt.Errorf("start %q: %w", spec.Start, err)
-	}
-	def := setup.DefaultSpec(st.Applied.Metadata.Name, clock.DateOf(start)).Spec
+	def := setup.DefaultSpec(st.Applied.Metadata.Name).Spec
 	tsqAfter, err := time.ParseDuration(orDefault(spec.NIP.TSQAfter, def.NIP.TSQAfter))
 	if err != nil {
 		return nil, fmt.Errorf("nip.tsq_after %q: %w", spec.NIP.TSQAfter, err)
@@ -320,7 +312,6 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 	c := &config.Config{
 		Dir:         dir,
 		DatabaseURL: local.DatabaseURL,
-		Start:       start,
 		NIPSessions: spec.NIP.Sessions,
 		TSQAfter:    tsqAfter,
 		TSQAttempts: tsqAttempts,

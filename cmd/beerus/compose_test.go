@@ -16,7 +16,7 @@ func newSetup(t *testing.T, local setup.Local) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
 	today := clock.DateOf(time.Now())
-	if err := connect.Init(dir, setup.DefaultSpec(defaultSetupName, today), local, today); err != nil {
+	if err := connect.Init(dir, setup.DefaultSpec(defaultSetupName), local, today); err != nil {
 		t.Fatal(err)
 	}
 	c, err := connect.LoadConfig(dir)

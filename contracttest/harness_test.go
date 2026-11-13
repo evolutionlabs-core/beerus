@@ -202,14 +202,14 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}
-	ports := stackPorts(t, len(banktest.Spec("contract", clock.Date{Y: 2026, M: 1, D: 15}).Spec.Banks))
+	ports := stackPorts(t, len(banktest.Spec("contract").Spec.Banks))
 	local := connect.DefaultLocal()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort = ports[0], ports[1], ports[2], ports[3]
 	today := clock.DateOf(stackBase(t))
-	spec := banktest.Spec("contract", today)
+	spec := banktest.Spec("contract")
 	spec.Spec.Partners = []setup.Partner{{
 		ID:           "balance",
 		Name:         "Balance",
@@ -615,12 +615,7 @@ func parseSpan(s string) (time.Duration, error) {
 }
 
 func (s *Stack) today() clock.Date {
-	out := s.ctl("GET", "/clock", nil)
-	d, err := clock.ParseDate(fmt.Sprint(out["business_date"]))
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	return d
+	return clock.New(s.realNow).Today()
 }
 
 type persona struct {

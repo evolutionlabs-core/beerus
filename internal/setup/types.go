@@ -77,7 +77,7 @@ const (
 	StepSettlement        = "settlement"
 	StepSchema            = "schema"
 
-	StatusVersion = 1
+	StatusVersion = 2
 )
 
 type Pos struct {
@@ -104,7 +104,6 @@ type Metadata struct {
 }
 
 type Body struct {
-	Start    string       `yaml:"start" json:"start"`
 	NIP      NIP          `yaml:"nip,omitempty" json:"nip,omitempty"`
 	Holidays Holidays     `yaml:"holidays,omitempty" json:"holidays,omitempty"`
 	Connect  ConnectLegal `yaml:"connect,omitempty" json:"connect,omitempty"`
@@ -169,7 +168,6 @@ type Partner struct {
 type Local struct {
 	DatabaseURL string                  `yaml:"database_url"`
 	Bind        string                  `yaml:"bind,omitempty"`
-	Pace        float64                 `yaml:"pace,omitempty"`
 	Ports       Ports                   `yaml:"ports,omitempty"`
 	Connect     LocalConnect            `yaml:"connect,omitempty"`
 	Partners    map[string]PartnerLocal `yaml:"partners,omitempty"`
@@ -239,7 +237,6 @@ type Resource struct {
 	Owned               []Owned           `json:"owned,omitempty"`
 	Steps               map[string]string `json:"steps,omitempty"`
 	Partner             *PartnerKeys      `json:"partner,omitempty"`
-	Seeded              *Seeded           `json:"seeded,omitempty"`
 	Result              json.RawMessage   `json:"result,omitempty"`
 	Conditions          []Condition       `json:"conditions,omitempty"`
 	Events              []Event           `json:"events,omitempty"`
@@ -264,14 +261,6 @@ type PartnerKeys struct {
 	CertCN       string `json:"cert_cn"`
 	APIKeySHA256 string `json:"api_key_sha256"`
 	CertSHA256   string `json:"cert_sha256,omitempty"`
-}
-
-type Seeded struct {
-	Template    string    `json:"template"`
-	Value       int64     `json:"value"`
-	HistoryDays int       `json:"history_days"`
-	Generator   int       `json:"generator"`
-	SeededAt    time.Time `json:"seeded_at"`
 }
 
 type Condition struct {

@@ -77,11 +77,11 @@ type rtgs struct {
 	ctl     *ctlStore
 	st      *store.Store
 	l       *ledger.Ledger
-	genesis time.Time
+	clock   *clock.Clock
 	members map[string]bool
 }
 
-func openRTGS(ctx context.Context, cfg *config.Config, ctl *ctlStore, genesis time.Time) (*rtgs, error) {
+func openRTGS(ctx context.Context, cfg *config.Config, ctl *ctlStore, clk *clock.Clock) (*rtgs, error) {
 	name := config.DatabaseName(cfg.Dir, cbnID)
 	if err := ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
 		return nil, err
@@ -90,7 +90,7 @@ func openRTGS(ctx context.Context, cfg *config.Config, ctl *ctlStore, genesis ti
 	if err != nil {
 		return nil, err
 	}
-	r := &rtgs{ctx: ctx, cfg: cfg, ctl: ctl, st: st, genesis: genesis}
+	r := &rtgs{ctx: ctx, cfg: cfg, ctl: ctl, st: st, clock: clk}
 	if err := r.setup(); err != nil {
 		st.Close()
 		return nil, err
@@ -159,7 +159,7 @@ func (r *rtgs) member(id string, settlement, vault int64) error {
 	if vault > 0 {
 		lines = append(lines, ledger.Line{Account: cbnCurrency, Amount: -vault, Narration: "Vault cash issued"})
 	}
-	at := r.genesis.Add(-time.Hour)
+	at := r.clock.Now()
 	if _, err := r.l.Post(r.ctx, ledger.Entry{Key: "genesis:" + id, Kind: "genesis", PostingDate: clock.DateOf(at), PostedAt: at, Narration: "Genesis funding of " + id, Lines: lines}); err != nil {
 		return err
 	}
@@ -192,7 +192,7 @@ func (a *App) ensureRTGS() error {
 	}
 	a.rtgsTried, a.rtgsOpening = a.clock.Real(), true
 	a.mu.Unlock()
-	r, err := openRTGS(context.Background(), a.cfg, a.ctl, a.cfg.Start)
+	r, err := openRTGS(context.Background(), a.cfg, a.ctl, a.clock)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.rtgsOpening = false

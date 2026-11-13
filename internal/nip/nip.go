@@ -29,15 +29,15 @@ const (
 )
 
 const (
-	simulatorCapCommercial   int64 = 500_000_000_000
-	simulatorCapMicrofinance int64 = 50_000_000_000
+	defaultCapCommercial   int64 = 500_000_000_000
+	defaultCapMicrofinance int64 = 50_000_000_000
 )
 
-func SimulatorDefaultCap(bankType string) int64 {
+func DefaultCap(bankType string) int64 {
 	if bankType == "microfinance" {
-		return simulatorCapMicrofinance
+		return defaultCapMicrofinance
 	}
-	return simulatorCapCommercial
+	return defaultCapCommercial
 }
 
 type Participant struct {

@@ -16,7 +16,6 @@ import (
 
 const (
 	ownedDatabase = "database"
-	ownedSnapshot = "snapshot"
 	ownedPort     = "port"
 	ownedDir      = "dir"
 )

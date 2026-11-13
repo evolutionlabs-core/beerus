@@ -23,7 +23,7 @@ var resetToday = clock.Date{Y: 2026, M: 11, D: 3}
 
 func TestResetRefusesTheWrongName(t *testing.T) {
 	dir := t.TempDir()
-	if err := connect.Init(dir, banktest.Spec("lagos", resetToday), connect.DefaultLocal(), resetToday); err != nil {
+	if err := connect.Init(dir, banktest.Spec("lagos"), connect.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -35,6 +35,75 @@ func TestResetRefusesTheWrongName(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, connect.SpecFile)); err != nil {
 		t.Fatalf("a refused reset touched the dir: %v", err)
+	}
+}
+
+const (
+	versionOneStatus = `{"version":1,"setup":"old-v1","clock":{"anchor_business":"2026-11-04T08:00:00+01:00"}}`
+	oldSetupYAML     = "apiVersion: beerus.dev/v1\nkind: Setup\nmetadata:\n  name: old-v1\nspec:\n  start: 2026-11-04T08:00:00+01:00\n"
+)
+
+func writeOldDir(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "old-v1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func writeVersionOneDir(t *testing.T) string {
+	t.Helper()
+	return writeOldDir(t, map[string]string{"control.json": versionOneStatus, "setup.yaml": oldSetupYAML, "local.yaml": "pace: 60\n"})
+}
+
+func TestCommandsRefuseASetupFromAnOlderBeerus(t *testing.T) {
+	dir := writeVersionOneDir(t)
+	want := "beerus: " + dir + ": This setup was made by an older Beerus. Run beerus reset, then beerus init.\n"
+	for _, args := range [][]string{{"up", "--dir", dir}, {"get", "banks", "--dir", dir}} {
+		var out, errOut bytes.Buffer
+		if code := report(&out, &errOut, dispatch(args)); code != 1 || errOut.String() != want || out.Len() != 0 {
+			t.Errorf("beerus %v: exit %d, stdout %q, stderr %q", args, code, out.String(), errOut.String())
+		}
+	}
+}
+
+func TestResetClearsASetupFromAnOlderBeerus(t *testing.T) {
+	url := os.Getenv("BEERUS_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set BEERUS_TEST_DATABASE_URL to run")
+	}
+	t.Setenv(config.DatabaseURLEnv, url)
+	cases := []struct {
+		name  string
+		files map[string]string
+	}{
+		{"version one with start and pace", map[string]string{"control.json": versionOneStatus, "setup.yaml": oldSetupYAML, "local.yaml": "pace: 60\n"}},
+		{"version zero", map[string]string{"control.json": `{"version":0,"setup":"old-v1"}`, "setup.yaml": oldSetupYAML}},
+		{"corrupt control.json", map[string]string{"control.json": "{", "setup.yaml": oldSetupYAML}},
+		{"empty control.json", map[string]string{"control.json": "", "setup.yaml": oldSetupYAML}},
+		{"missing setup.yaml", map[string]string{"control.json": versionOneStatus}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := writeOldDir(t, c.files)
+			var out bytes.Buffer
+			if err := cmdReset([]string{"old-v1", "--dir", dir}, &out); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out.String(), "Cleared "+dir) {
+				t.Fatalf("output: %s", out.String())
+			}
+			ok, err := connect.Initialized(dir)
+			if err != nil || ok {
+				t.Fatalf("after reset: %v %v", ok, err)
+			}
+		})
 	}
 }
 
@@ -57,7 +126,7 @@ func TestResetClearsAnOldDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
-	if _, err := connect.Initialized(dir); !errors.Is(err, connect.ErrOldSetup) {
+	if _, err := connect.Initialized(dir); !errors.Is(err, setup.ErrOldSetup) {
 		t.Fatalf("old dir before reset: %v", err)
 	}
 	var out bytes.Buffer
@@ -78,7 +147,7 @@ func TestResetClearsAnOldDir(t *testing.T) {
 	if err != nil || ok {
 		t.Fatalf("after reset: %v %v", ok, err)
 	}
-	if err := connect.Init(dir, banktest.Spec(defaultSetupName, resetToday), connect.DefaultLocal(), resetToday); err != nil {
+	if err := connect.Init(dir, banktest.Spec(defaultSetupName), connect.DefaultLocal(), resetToday); err != nil {
 		t.Fatalf("up after reset: %v", err)
 	}
 	if _, err := connect.LoadConfig(dir); err != nil {
@@ -93,7 +162,7 @@ func TestResetDropsOwnedDatabasesOutsideThePrefix(t *testing.T) {
 	}
 	t.Setenv(config.DatabaseURLEnv, url)
 	dir := t.TempDir()
-	if err := connect.Init(dir, banktest.Spec(defaultSetupName, resetToday), connect.DefaultLocal(), resetToday); err != nil {
+	if err := connect.Init(dir, banktest.Spec(defaultSetupName), connect.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	custom := "beerus_custom_" + config.HashKey(dir)[:8]
@@ -131,7 +200,7 @@ func TestResetDropsALeftoverNIBSSSnapshotDatabase(t *testing.T) {
 	t.Setenv(config.DatabaseURLEnv, url)
 	ctx := context.Background()
 	dir := t.TempDir()
-	if err := connect.Init(dir, banktest.Spec(defaultSetupName, resetToday), connect.DefaultLocal(), resetToday); err != nil {
+	if err := connect.Init(dir, banktest.Spec(defaultSetupName), connect.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	live := config.DatabaseName(dir, setup.SystemNIBSS)

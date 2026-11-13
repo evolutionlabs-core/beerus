@@ -3,10 +3,13 @@ package setup
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+var ErrOldSetup = errors.New("This setup was made by an older Beerus. Run beerus reset, then beerus init.")
 
 const (
 	statusFile = "control.json"
@@ -27,8 +30,8 @@ func LoadStatus(dir string) (Status, error) {
 	switch {
 	case head.Version > StatusVersion:
 		return Status{}, fmt.Errorf("%s has version %d, but this beerus reads up to version %d. Upgrade beerus", statusFile, head.Version, StatusVersion)
-	case head.Version < 1:
-		return Status{}, fmt.Errorf("%s has no valid version (got %d). Run beerus reset to start again", statusFile, head.Version)
+	case head.Version < StatusVersion:
+		return Status{}, fmt.Errorf("%s: %w", dir, ErrOldSetup)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -37,6 +40,12 @@ func LoadStatus(dir string) (Status, error) {
 		return Status{}, fmt.Errorf("decode %s: %w", statusFile, err)
 	}
 	return s, nil
+}
+
+func IsCorrupt(err error) bool {
+	var syntax *json.SyntaxError
+	var kind *json.UnmarshalTypeError
+	return errors.As(err, &syntax) || errors.As(err, &kind)
 }
 
 func SaveStatus(dir string, s Status) error {

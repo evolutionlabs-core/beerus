@@ -49,7 +49,7 @@ type TransferResult struct {
 	TotalDebit   int64      `json:"total_debit_minor"`
 	BalanceAfter int64      `json:"sender_balance_after_minor"`
 	NextCheckAt  *time.Time `json:"next_check_at,omitempty"`
-	At           time.Time  `json:"business_time"`
+	At           time.Time  `json:"at"`
 }
 
 var (
