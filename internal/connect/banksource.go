@@ -23,7 +23,7 @@ type ledgerSource struct {
 	st      *store.Store
 	b       *bank.Bank
 	inst    bank.Profile
-	start   time.Time
+	clock   *clock.Clock
 	cfg     *config.Config
 	ctl     *ctlStore
 	settled time.Time
@@ -33,12 +33,12 @@ func profileOf(b *config.Bank) bank.Profile {
 	return bank.Profile{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode}
 }
 
-func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, b *config.Bank) (*ledgerSource, error) {
+func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, clk *clock.Clock, b *config.Bank) (*ledgerSource, error) {
 	st, err := store.Open(ctx, cfg.DatabaseURL, b.Database, openbanking.Migrate)
 	if err != nil {
 		return nil, err
 	}
-	s := &ledgerSource{ctx: ctx, st: st, inst: profileOf(b), start: cfg.Start, cfg: cfg, ctl: ctl}
+	s := &ledgerSource{ctx: ctx, st: st, inst: profileOf(b), clock: clk, cfg: cfg, ctl: ctl}
 	if err := s.setup(); err != nil {
 		st.Close()
 		return nil, err
@@ -51,7 +51,7 @@ func (s *ledgerSource) setup() error {
 	if err := s.b.Setup(s.ctx); err != nil {
 		return err
 	}
-	if err := s.b.Genesis(s.ctx, bank.GenesisSettlement, bank.GenesisVault, s.start.Add(-time.Hour)); err != nil {
+	if err := s.b.Genesis(s.ctx, bank.GenesisSettlement, bank.GenesisVault, s.clock.Now()); err != nil {
 		return err
 	}
 	s.settled = time.Time{}

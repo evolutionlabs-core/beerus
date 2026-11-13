@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
@@ -18,7 +17,6 @@ import (
 var (
 	ErrSetupMismatch = errors.New("setup mismatch")
 	ErrBeingRemoved  = errors.New("being removed")
-	ErrFutureStart   = errors.New("start is in the future")
 )
 
 const (
@@ -62,7 +60,6 @@ type planner struct {
 func Build(pack *countrypack.Pack, desired Spec, st Status, dir []nibss.Institution, today clock.Date) Plan {
 	p := newPlanner(desired, st, dir, today)
 	p.pack = pack
-	p.checkStart()
 	var actions []Action
 	if a, ok := p.setupAction(); ok {
 		actions = append(actions, a)
@@ -81,13 +78,6 @@ func Build(pack *countrypack.Pack, desired Spec, st Status, dir []nibss.Institut
 		return Plan{Setup: desired.Metadata.Name, Errors: p.errs}
 	}
 	return Plan{Setup: desired.Metadata.Name, Actions: actions}
-}
-
-func (p *planner) checkStart() {
-	start, err := time.Parse(time.RFC3339, p.desired.Spec.Start)
-	if err == nil && clock.DateOf(start).After(p.today) {
-		p.fail("start", ErrFutureStart, "start %s is after today, %s. Beerus runs on real time; use today or an earlier date.", p.desired.Spec.Start, p.today)
-	}
 }
 
 func newPlanner(desired Spec, st Status, dir []nibss.Institution, today clock.Date) *planner {
@@ -145,10 +135,7 @@ func (p *planner) setupAction() (Action, bool) {
 	}
 	p.locked("apiVersion", a.APIVersion, d.APIVersion)
 	p.locked("kind", a.Kind, d.Kind)
-	if !sameTime(a.Spec.Start, d.Spec.Start) {
-		p.locked("start", a.Spec.Start, d.Spec.Start)
-	}
-	def := DefaultSpec(d.Metadata.Name, p.today).Spec
+	def := DefaultSpec(d.Metadata.Name).Spec
 	p.locked("nip.sessions", strconv.Itoa(orInt(a.Spec.NIP.Sessions, def.NIP.Sessions)), strconv.Itoa(orInt(d.Spec.NIP.Sessions, def.NIP.Sessions)))
 	var fields []FieldChange
 	add := func(path, from, to string) {
@@ -638,15 +625,6 @@ func removal(rm *Removal) string {
 		s += " (customers " + strings.Join(parts, ", ") + ")"
 	}
 	return s
-}
-
-func sameTime(a, b string) bool {
-	if a == b {
-		return true
-	}
-	ta, errA := time.Parse(time.RFC3339, a)
-	tb, errB := time.Parse(time.RFC3339, b)
-	return errA == nil && errB == nil && ta.Equal(tb)
 }
 
 func sameNUBAN(a, b string) bool {

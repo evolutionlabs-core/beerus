@@ -202,14 +202,14 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}
-	ports := stackPorts(t, len(banktest.Spec("contract", clock.Date{Y: 2026, M: 1, D: 15}).Spec.Banks))
+	ports := stackPorts(t, len(banktest.Spec("contract").Spec.Banks))
 	local := connect.DefaultLocal()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort = ports[0], ports[1], ports[2], ports[3]
 	today := clock.DateOf(stackBase(t))
-	spec := banktest.Spec("contract", today)
+	spec := banktest.Spec("contract")
 	spec.Spec.Partners = []setup.Partner{{
 		ID:           "balance",
 		Name:         "Balance",

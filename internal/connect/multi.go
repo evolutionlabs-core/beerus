@@ -188,7 +188,7 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 		a.ctl = &ctlStore{dir: cfg.Dir, readOnly: true}
 	}
 	a.setupKey = a.ctl.setupKey()
-	ls, err := openLedgerSource(context.Background(), cfg, a.ctl, b)
+	ls, err := openLedgerSource(context.Background(), cfg, a.ctl, a.clock, b)
 	if err != nil {
 		return nil, err
 	}

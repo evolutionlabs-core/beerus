@@ -224,9 +224,6 @@ func TestBalanceRangeAndHistoryLimit(t *testing.T) {
 	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
 	eff := fmt.Sprint(c.JSON["effective_start_date"])
 	want := today.AddDays(-s.cfg.Bank("bank-b").HistoryDays)
-	if start := clock.DateOf(s.cfg.Start); start.After(want) {
-		want = start
-	}
 	if eff != want.String() {
 		t.Fatalf("effective_start_date %s, want %s", eff, want)
 	}

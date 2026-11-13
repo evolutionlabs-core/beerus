@@ -68,7 +68,7 @@ func FindResetTarget(dir string) (ResetTarget, error) {
 		if err != nil {
 			return t, fmt.Errorf("read %s: %w", SpecFile, err)
 		}
-		parsed, errs := setup.Parse(SpecFile, raw)
+		parsed, errs := setup.ParseStored(SpecFile, raw)
 		if len(errs) > 0 {
 			return t, errors.Join(errs...)
 		}

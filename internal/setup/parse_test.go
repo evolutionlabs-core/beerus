@@ -45,7 +45,7 @@ func TestParseGoodFixtures(t *testing.T) {
 	if b.NetDebitCap != 50000000000 || b.OnRemove == nil || b.OnRemove.Money != MoneyTransfer || b.OnRemove.To != "bank-c" {
 		t.Fatalf("bank-b: %+v", b)
 	}
-	if three.Spec.Banks[2].NIPCode != "" || three.Spec.Start != "2026-11-04T08:00:00+01:00" {
+	if three.Spec.Banks[2].NIPCode != "" {
 		t.Fatalf("three: %+v", three.Spec)
 	}
 	if !slices.Equal(three.Spec.Holidays.Add, []string{"2026-12-28"}) {
@@ -62,26 +62,23 @@ func TestParseBadFixtures(t *testing.T) {
 			`setup.yaml:4:3: metadata.name "Beerus_Setup" is not valid. Use 2 to 31 lowercase letters, digits or hyphens, starting with a letter.`,
 		},
 		"closed-without-on-remove.yaml": {
-			`setup.yaml:30:7: banks[bank-b].state closed needs on_remove. Add on_remove with money: transfer, payout or leave.`,
+			`setup.yaml:29:7: banks[bank-b].state closed needs on_remove. Add on_remove with money: transfer, payout or leave.`,
 		},
 		"duplicate-bank.yaml": {
-			`setup.yaml:25:7: banks[1].id bank-a is already used by another bank. Give each bank its own id.`,
+			`setup.yaml:24:7: banks[1].id bank-a is already used by another bank. Give each bank its own id.`,
 		},
 		"float-amount.yaml": {
-			`setup.yaml:25:28: banks[bank-a].net_debit_cap_minor 1.5 is not a whole number. Give the amount in kobo, such as 150 for 1.50 naira.`,
-		},
-		"missing-start.yaml": {
-			`setup.yaml:5:1: start is required. Add an RFC 3339 time such as 2026-11-04T08:00:00+01:00.`,
+			`setup.yaml:24:28: banks[bank-a].net_debit_cap_minor 1.5 is not a whole number. Give the amount in kobo, such as 150 for 1.50 naira.`,
 		},
 		"remove-to-unknown.yaml": {
-			`setup.yaml:30:36: banks[bank-b].on_remove.to "bank-z" is not a bank in this file. Name a bank listed under banks.`,
+			`setup.yaml:29:36: banks[bank-b].on_remove.to "bank-z" is not a bank in this file. Name a bank listed under banks.`,
 		},
 		"two-errors.yaml": {
-			`setup.yaml:6:3: start "tomorrow" is not an RFC 3339 time. Use a time such as 2026-11-04T08:00:00+01:00.`,
-			`setup.yaml:27:7: banks[bank-b].type "online" is not a bank type. Use commercial, digital or microfinance.`,
+			`setup.yaml:8:5: nip.tsq_after "soon" is not a duration. Use a duration such as 2m.`,
+			`setup.yaml:26:7: banks[bank-b].type "online" is not a bank type. Use commercial, digital or microfinance.`,
 		},
 		"unknown-field.yaml": {
-			`setup.yaml:8:5: unknown field "sesions" (did you mean "sessions"?)`,
+			`setup.yaml:7:5: unknown field "sesions" (did you mean "sessions"?)`,
 		},
 		"wrong-version.yaml": {
 			`setup.yaml:1:1: apiVersion "beerus.dev/v2" is not supported. Use beerus.dev/v1.`,
@@ -112,9 +109,24 @@ func TestParseBadFixtures(t *testing.T) {
 func TestTypoGivesLineColumnAndSuggestion(t *testing.T) {
 	_, errs := Parse("setup.yaml", readFixture(t, "bad/unknown-field.yaml"))
 	got := errStrings(errs)
-	want := []string{`setup.yaml:8:5: unknown field "sesions" (did you mean "sessions"?)`}
+	want := []string{`setup.yaml:7:5: unknown field "sesions" (did you mean "sessions"?)`}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestParseStoredIgnoresStartFromOlderBeerus(t *testing.T) {
+	old := defaultWith(t, "  nip:\n", "  start: 2026-11-04T08:00:00+01:00\n  nip:\n")
+	got, errs := ParseStored("setup.yaml", old)
+	if len(errs) > 0 {
+		t.Fatal(errStrings(errs))
+	}
+	want, errs := Parse("setup.yaml", readFixture(t, "default.yaml"))
+	if len(errs) > 0 {
+		t.Fatal(errStrings(errs))
+	}
+	if !reflect.DeepEqual(clearPos(got), clearPos(want)) {
+		t.Fatalf("got %+v\nwant %+v", got, want)
 	}
 }
 
@@ -130,13 +142,12 @@ func TestParseKeepsPositions(t *testing.T) {
 	cases := map[string]Pos{
 		"":                              {"setup.yaml", 1, 1},
 		"spec":                          {"setup.yaml", 5, 1},
-		"start":                         {"setup.yaml", 6, 3},
-		"nip.sessions":                  {"setup.yaml", 8, 5},
-		"holidays.add[2026-12-28]":      {"setup.yaml", 10, 11},
-		"banks[bank-b]":                 {"setup.yaml", 17, 7},
-		"banks[bank-b].nip_code":        {"setup.yaml", 20, 7},
-		"banks[bank-b].on_remove.to":    {"setup.yaml", 23, 36},
-		"partners[balance].webhook_url": {"setup.yaml", 33, 7},
+		"nip.sessions":                  {"setup.yaml", 7, 5},
+		"holidays.add[2026-12-28]":      {"setup.yaml", 9, 11},
+		"banks[bank-b]":                 {"setup.yaml", 16, 7},
+		"banks[bank-b].nip_code":        {"setup.yaml", 19, 7},
+		"banks[bank-b].on_remove.to":    {"setup.yaml", 22, 36},
+		"partners[balance].webhook_url": {"setup.yaml", 32, 7},
 	}
 	for path, want := range cases {
 		got, ok := s.Pos(path)
@@ -165,22 +176,22 @@ func TestParseRejects(t *testing.T) {
 		want []string
 	}{
 		{"empty", []byte(""), []string{`setup.yaml: the file is empty. Write the settings in it.`}},
-		{"two documents", append(readFixture(t, "default.yaml"), []byte("---\nkind: Setup\n")...), []string{`setup.yaml:31:1: the file holds more than one document. Keep one setup per file.`}},
+		{"two documents", append(readFixture(t, "default.yaml"), []byte("---\nkind: Setup\n")...), []string{`setup.yaml:30:1: the file holds more than one document. Keep one setup per file.`}},
 		{"scalar root", []byte("hello\n"), []string{`setup.yaml:1:1: must be a mapping of fields. Write it as key: value lines.`}},
 		{"repeated key", defaultWith(t, "  name: beerus\n", "  name: beerus\n  name: other\n"), []string{`setup.yaml:5:3: metadata.name appears twice. Keep one.`}},
-		{"zero sessions", defaultWith(t, "sessions: 4", "sessions: 0"), []string{`setup.yaml:8:5: nip.sessions 0 does not split the day into whole minutes. Use a number such as 1, 2, 4, 6, 12 or 24.`}},
-		{"uneven sessions", defaultWith(t, "sessions: 4", "sessions: 7"), []string{`setup.yaml:8:5: nip.sessions 7 does not split the day into whole minutes. Use a number such as 1, 2, 4, 6, 12 or 24.`}},
-		{"start as list", defaultWith(t, "start: 2026-11-04T08:00:00+01:00", "start: [a]"), []string{`setup.yaml:6:10: start must be text, not a list or mapping. Write a single value.`}},
-		{"sessions as text", defaultWith(t, "sessions: 4", "sessions: four"), []string{`setup.yaml:8:15: nip.sessions four is not a whole number. Write digits only, such as 4.`}},
-		{"widget tls in spec", defaultWith(t, "    brand_name: Beerus\n", "    brand_name: Beerus\n    widget_tls: true\n"), []string{`setup.yaml:14:5: unknown field "widget_tls". Remove it.`}},
-		{"typo hides required", defaultWith(t, "  start:", "  strat:"), []string{`setup.yaml:6:3: unknown field "strat" (did you mean "start"?)`}},
+		{"zero sessions", defaultWith(t, "sessions: 4", "sessions: 0"), []string{`setup.yaml:7:5: nip.sessions 0 does not split the day into whole minutes. Use a number such as 1, 2, 4, 6, 12 or 24.`}},
+		{"uneven sessions", defaultWith(t, "sessions: 4", "sessions: 7"), []string{`setup.yaml:7:5: nip.sessions 7 does not split the day into whole minutes. Use a number such as 1, 2, 4, 6, 12 or 24.`}},
+		{"retired start", defaultWith(t, "  nip:\n", "  start: 2026-11-04T08:00:00+01:00\n  nip:\n"), []string{`setup.yaml:6:3: start is no longer used. Remove it.`}},
+		{"sessions as text", defaultWith(t, "sessions: 4", "sessions: four"), []string{`setup.yaml:7:15: nip.sessions four is not a whole number. Write digits only, such as 4.`}},
+		{"widget tls in spec", defaultWith(t, "    brand_name: Beerus\n", "    brand_name: Beerus\n    widget_tls: true\n"), []string{`setup.yaml:13:5: unknown field "widget_tls". Remove it.`}},
+		{"typo in spec", defaultWith(t, "  nip:", "  nap:"), []string{`setup.yaml:6:3: unknown field "nap" (did you mean "nip"?)`}},
 		{"bad yaml", []byte("kind: [\n"), []string{"setup.yaml: read yaml: yaml: line 1: did not find expected node content"}},
-		{"zero tsq attempts", defaultWith(t, "tsq_attempts: 3", "tsq_attempts: 0"), []string{`setup.yaml:10:5: nip.tsq_attempts 0 must be more than zero. Use a number such as 3, or leave it out.`}},
-		{"zero cap", defaultWith(t, "      nuban_code: \"901\"\n", "      nuban_code: \"901\"\n      net_debit_cap_minor: 0\n"), []string{`setup.yaml:25:7: banks[bank-a].net_debit_cap_minor 0 must be more than zero. Give it in kobo, or leave it out for the default.`}},
-		{"empty state", defaultWith(t, "      nuban_code: \"902\"\n", "      nuban_code: \"902\"\n      state: \"\"\n"), []string{`setup.yaml:30:7: banks[bank-b].state "" is not valid. Use active, suspended or closed.`}},
+		{"zero tsq attempts", defaultWith(t, "tsq_attempts: 3", "tsq_attempts: 0"), []string{`setup.yaml:9:5: nip.tsq_attempts 0 must be more than zero. Use a number such as 3, or leave it out.`}},
+		{"zero cap", defaultWith(t, "      nuban_code: \"901\"\n", "      nuban_code: \"901\"\n      net_debit_cap_minor: 0\n"), []string{`setup.yaml:24:7: banks[bank-a].net_debit_cap_minor 0 must be more than zero. Give it in kobo, or leave it out for the default.`}},
+		{"empty state", defaultWith(t, "      nuban_code: \"902\"\n", "      nuban_code: \"902\"\n      state: \"\"\n"), []string{`setup.yaml:29:7: banks[bank-b].state "" is not valid. Use active, suspended or closed.`}},
 		{"unknown and bad type together", defaultWith(t, "type: digital", "type: online\n      colour: red"), []string{
-			`setup.yaml:28:7: unknown field "colour". Remove it.`,
-			`setup.yaml:27:7: banks[bank-b].type "online" is not a bank type. Use commercial, digital or microfinance.`,
+			`setup.yaml:27:7: unknown field "colour". Remove it.`,
+			`setup.yaml:26:7: banks[bank-b].type "online" is not a bank type. Use commercial, digital or microfinance.`,
 		}},
 	}
 	for _, c := range cases {
@@ -208,7 +219,7 @@ func TestParseAcceptsAliasesAndNullBlocks(t *testing.T) {
 func TestParseDuplicateIDsPointAtTheSecond(t *testing.T) {
 	raw := defaultWith(t, "  partners: []\n", "  partners:\n    - {id: balance, name: Balance}\n    - {id: balance, name: Other}\n")
 	_, errs := Parse("setup.yaml", raw)
-	want := []string{`setup.yaml:32:8: partners[1].id balance is already used by another partner. Give each partner its own id.`}
+	want := []string{`setup.yaml:31:8: partners[1].id balance is already used by another partner. Give each partner its own id.`}
 	if got := errStrings(errs); !slices.Equal(got, want) {
 		t.Fatalf("got %q", got)
 	}
@@ -245,12 +256,12 @@ func TestExportRoundTrip(t *testing.T) {
 	}
 }
 
-func TestExportQuotesStartAndCodes(t *testing.T) {
+func TestExportQuotesCodes(t *testing.T) {
 	out, err := Export(parseFixture(t, "three.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range []string{`  start: "2026-11-04T08:00:00+01:00"`, `      nip_code: "999001"`, `      nuban_code: "901"`, `      - "2026-12-28"`} {
+	for _, line := range []string{`      nip_code: "999001"`, `      nuban_code: "901"`, `      - "2026-12-28"`} {
 		if !strings.Contains(string(out), line+"\n") {
 			t.Errorf("export has no line %q:\n%s", line, out)
 		}

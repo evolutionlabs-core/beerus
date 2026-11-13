@@ -182,7 +182,7 @@ func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *ctl
 		return err
 	}
 	return in.ensure(ctl, st, setup.SystemCBN, steps[2], stepNameCBNOpen, steps, func() (string, error) {
-		r, err := openRTGS(ctx, cfg, ctl, cfg.Start)
+		r, err := openRTGS(ctx, cfg, ctl, in.clock)
 		if err != nil {
 			return "", err
 		}

@@ -30,7 +30,7 @@ func TestEnvNumberRejectsBadValues(t *testing.T) {
 }
 
 func TestInitFromEnvReadsTheSetupFile(t *testing.T) {
-	good := "apiVersion: beerus.dev/v1\nkind: Setup\nmetadata:\n  name: beerus\nspec:\n  start: \"2026-11-04T08:00:00+01:00\"\n  banks:\n    - id: bank-a\n      name: Bank A\n      type: commercial\n    - id: bank-b\n      name: Bank B\n      type: digital\n"
+	good := "apiVersion: beerus.dev/v1\nkind: Setup\nmetadata:\n  name: beerus\nspec:\n  banks:\n    - id: bank-a\n      name: Bank A\n      type: commercial\n    - id: bank-b\n      name: Bank B\n      type: digital\n"
 	for _, c := range []struct {
 		name    string
 		content string

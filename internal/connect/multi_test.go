@@ -57,10 +57,10 @@ func TestReplicaPullTakesLocksInOrder(t *testing.T) {
 	}
 }
 
-func TestSlowSimulatorDoesNotQueueEveryRequest(t *testing.T) {
+func TestSlowCoreDoesNotQueueEveryRequest(t *testing.T) {
 	var calls int
 	var mu sync.Mutex
-	a := &App{role: RoleBank, clock: clock.New(nil), coreURL: "http://sim.invalid", peers: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+	a := &App{role: RoleBank, clock: clock.New(nil), coreURL: "http://core.invalid", peers: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
@@ -68,11 +68,11 @@ func TestSlowSimulatorDoesNotQueueEveryRequest(t *testing.T) {
 	})}}
 	for i := 0; i < 5; i++ {
 		if err := a.pullReplica(); err == nil {
-			t.Fatal("pull from a broken simulator worked")
+			t.Fatal("pull from a broken core worked")
 		}
 	}
 	if calls != 1 {
-		t.Fatalf("%d pulls reached a simulator that just failed", calls)
+		t.Fatalf("%d pulls reached the core that just failed", calls)
 	}
 }
 
@@ -117,7 +117,7 @@ func TestControlAcceptsOnlyLoopbackPeersWhenBoundToLoopback(t *testing.T) {
 func TestSlowPullDoesNotHoldThePullLock(t *testing.T) {
 	in, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	a := &App{role: RoleBank, clock: clock.New(nil), coreURL: "http://sim.invalid", peers: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+	a := &App{role: RoleBank, clock: clock.New(nil), coreURL: "http://core.invalid", peers: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		calls.Add(1)
 		in <- struct{}{}
 		<-release
@@ -135,23 +135,23 @@ func TestSlowPullDoesNotHoldThePullLock(t *testing.T) {
 		}
 	}
 	if !free {
-		t.Fatal("the pull lock is held during the call to the simulator")
+		t.Fatal("the pull lock is held during the call to the core")
 	}
 	time.Sleep(50 * time.Millisecond)
 	close(release)
 	for i := 0; i < 3; i++ {
 		if err := <-errs; err == nil {
-			t.Error("a pull from a broken simulator worked")
+			t.Error("a pull from a broken core worked")
 		}
 	}
 	if calls.Load() != 1 {
-		t.Fatalf("%d calls reached the simulator for three waiting requests", calls.Load())
+		t.Fatalf("%d calls reached the core for three waiting requests", calls.Load())
 	}
 }
 
 func TestPeerAnswerOverTheLimitFailsClearly(t *testing.T) {
 	big := bytes.Repeat([]byte(" "), maxPeerBody+1)
-	a := &App{coreURL: "http://sim.invalid", peers: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+	a := &App{coreURL: "http://core.invalid", peers: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(big)), Header: http.Header{}}, nil
 	})}}
 	var out replica

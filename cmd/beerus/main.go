@@ -119,7 +119,7 @@ func parseInit(args []string) (initPlan, error) {
 		}
 	})
 	today := clock.New(nil).Today()
-	spec := setup.DefaultSpec(defaultSetupName, today)
+	spec := setup.DefaultSpec(defaultSetupName)
 	if *file != "" {
 		if spec, err = readSpec(*file); err != nil {
 			return initPlan{}, err

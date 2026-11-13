@@ -183,7 +183,7 @@ func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
-	if err := Init(dir, banktest.Spec("beerus", today), local, today); err != nil {
+	if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := LoadConfig(dir)

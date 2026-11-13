@@ -3,10 +3,9 @@ kind: Setup
 metadata:
   name: beerus
 spec:
-  start: tomorrow
   nip:
     sessions: 4
-    tsq_after: 2m
+    tsq_after: soon
     tsq_attempts: 3
   connect:
     legal_name: Beerus Connect Ltd

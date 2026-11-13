@@ -6,10 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 func sampleStatus() Status {
@@ -17,7 +16,7 @@ func sampleStatus() Status {
 	return Status{
 		Setup:         "beerus",
 		SetupKey:      1<<63 + 5,
-		Applied:       DefaultSpec("beerus", clock.Date{Y: 2026, M: time.November, D: 4}),
+		Applied:       DefaultSpec("beerus"),
 		AppliedSHA256: "abc",
 		Resources: []Resource{{
 			Kind:                KindBank,
@@ -55,6 +54,34 @@ func TestStatusRoundTrip(t *testing.T) {
 	}
 	if out.SetupKey != 1<<63+5 {
 		t.Fatalf("setup key = %d", out.SetupKey)
+	}
+}
+
+func TestLoadStatusDropsStartFromOlderBeerus(t *testing.T) {
+	dir := t.TempDir()
+	in := sampleStatus()
+	if err := SaveStatus(dir, in); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "control.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := strings.Replace(string(raw), `"spec":{`, `"spec":{"start":"2026-11-04T08:00:00+01:00",`, 1)
+	if old == string(raw) {
+		t.Fatalf("control.json has no spec to add start to: %s", raw)
+	}
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := LoadStatus(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Version = StatusVersion
+	if !reflect.DeepEqual(in, out) {
+		t.Fatalf("got  %+v\nwant %+v", out, in)
 	}
 }
 

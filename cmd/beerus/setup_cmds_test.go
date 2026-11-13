@@ -85,7 +85,7 @@ func installDir(t *testing.T, local setup.Local, spec setup.Spec) string {
 }
 
 func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
-	spec := banktest.Spec(defaultSetupName, clock.DateOf(time.Now()))
+	spec := banktest.Spec(defaultSetupName)
 	dir := initDir(t, freeLocal(t), spec)
 	file := filepath.Join(dir, "copy.yaml")
 
@@ -222,8 +222,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	}
 	local := freeLocal(t)
 	local.DatabaseURL = url
-	today := clock.DateOf(time.Now())
-	spec := banktest.Spec("cli", today)
+	spec := banktest.Spec("cli")
 	dir := installDir(t, local, spec)
 	withC := spec
 	withC.Spec.Banks = append(append([]setup.Bank(nil), spec.Spec.Banks...), setup.Bank{ID: "bank-c", Name: "Bank C", Type: "digital", SettlesThrough: "bank-a"})

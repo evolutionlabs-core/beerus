@@ -3,7 +3,6 @@ kind: Setup
 metadata:
   name: Beerus_Setup
 spec:
-  start: 2026-11-04T08:00:00+01:00
   nip:
     sessions: 4
     tsq_after: 2m

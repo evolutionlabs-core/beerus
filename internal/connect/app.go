@@ -177,7 +177,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		if err := a.claimBank(b); err != nil {
 			return nil, err
 		}
-		ls, err := openLedgerSource(context.Background(), cfg, a.ctl, b)
+		ls, err := openLedgerSource(context.Background(), cfg, a.ctl, a.clock, b)
 		if err != nil {
 			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
 			continue

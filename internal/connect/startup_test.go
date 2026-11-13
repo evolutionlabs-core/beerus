@@ -22,7 +22,7 @@ func TestOldDirIsRefused(t *testing.T) {
 	}
 	for name, err := range map[string]error{
 		"load":  func() error { _, err := LoadConfig(dir); return err }(),
-		"init":  Init(dir, banktest.Spec("beerus", clock.Date{Y: 2026, M: 11, D: 3}), DefaultLocal(), clock.Date{Y: 2026, M: 11, D: 3}),
+		"init":  Init(dir, banktest.Spec("beerus"), DefaultLocal(), clock.Date{Y: 2026, M: 11, D: 3}),
 		"check": func() error { _, err := Initialized(dir); return err }(),
 	} {
 		if !errors.Is(err, ErrOldSetup) || !strings.Contains(err.Error(), "This setup was made by an older Beerus. Run beerus reset, then beerus init.") {
@@ -54,7 +54,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 	if len(errs) > 0 {
 		t.Fatal(errs)
 	}
-	if spec.Spec.Start != "2026-11-03T00:00:00+01:00" || len(spec.Spec.Banks) != 2 {
+	if len(spec.Spec.Banks) != 2 {
 		t.Fatalf("setup.yaml: %+v", spec.Spec)
 	}
 	want := []struct {
@@ -69,9 +69,6 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 		if b.HistoryDays != typeHistoryDays[w.typ] {
 			t.Errorf("%s history %d", b.ID, b.HistoryDays)
 		}
-	}
-	if !cfg.Start.Equal(time.Date(2026, 11, 3, 0, 0, 0, 0, clock.Lagos)) {
-		t.Errorf("start %v", cfg.Start)
 	}
 	st, err := setup.LoadStatus(cfg.Dir)
 	if err != nil {
@@ -92,7 +89,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 			t.Errorf("no %s system resource", id)
 		}
 	}
-	if err := Init(cfg.Dir, banktest.Spec("beerus", today), DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "already holds") {
+	if err := Init(cfg.Dir, banktest.Spec("beerus"), DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "already holds") {
 		t.Fatalf("second init: %v", err)
 	}
 }
@@ -117,7 +114,7 @@ func TestDatabaseURLFromEnvIsNeverWritten(t *testing.T) {
 
 func TestInitRefusesABadSpec(t *testing.T) {
 	today := clock.Date{Y: 2026, M: 11, D: 3}
-	spec := banktest.Spec("beerus", today)
+	spec := banktest.Spec("beerus")
 	spec.Spec.Banks[1].ID = "cbn"
 	dir := t.TempDir()
 	if err := Init(dir, spec, DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "reserved for the CBN") {

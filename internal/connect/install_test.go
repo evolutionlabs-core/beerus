@@ -9,9 +9,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -47,7 +50,7 @@ func runInstall(ctx context.Context, dir, url string, after func(InstallStep)) (
 	local := DefaultLocal()
 	local.DatabaseURL = url
 	var lines []string
-	err := Install(ctx, dir, banktest.Spec("beerus", today), local, today, func(s InstallStep) {
+	err := Install(ctx, dir, banktest.Spec("beerus"), local, today, func(s InstallStep) {
 		mark := "ok"
 		if s.Err != nil {
 			mark = "failed"
@@ -207,7 +210,7 @@ func TestInstall(t *testing.T) {
 				t.Errorf("drop databases: %v", err)
 			}
 		})
-		if err := Init(dir, banktest.Spec("beerus", today), local, today); err != nil {
+		if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
 			t.Fatal(err)
 		}
 		cfg, err := LoadConfig(dir)
@@ -218,7 +221,7 @@ func TestInstall(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r, err := openRTGS(context.Background(), cfg, ctl, cfg.Start)
+		r, err := openRTGS(context.Background(), cfg, ctl, clock.New(nil))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -231,4 +234,70 @@ func TestInstall(t *testing.T) {
 			t.Fatalf("CBN phase after openRTGS: %q", got)
 		}
 	})
+}
+
+func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
+	url := installURL(t)
+	today := clock.Date{Y: 2026, M: 11, D: 3}
+	local := DefaultLocal()
+	local.DatabaseURL = url
+	dir := t.TempDir()
+	t.Cleanup(func() {
+		if _, err := Reset(context.Background(), dir, url); err != nil {
+			t.Errorf("drop databases: %v", err)
+		}
+	})
+	if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctl, err := openStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := time.Date(2026, time.November, 12, 10, 30, 15, 0, clock.Lagos)
+	second := first.Add(48 * time.Hour)
+	b := &config.Bank{ID: "bank-g", Name: "Bank G", NIPCode: "999007", NUBANCode: "907", Database: config.DatabaseName(cfg.Dir, "bank-g")}
+	postedAt := func(pool *pgxpool.Pool, key string) (time.Time, int) {
+		t.Helper()
+		var at time.Time
+		var n int
+		err := pool.QueryRow(context.Background(), `SELECT min(posted_at), count(*) FROM journal_entries WHERE idempotency_key = $1`, key).Scan(&at, &n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return at, n
+	}
+	for _, at := range []time.Time{first, second} {
+		ls, err := openLedgerSource(context.Background(), cfg, ctl, clock.New(func() time.Time { return at }), b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, n := postedAt(ls.st.Pool, "genesis"); !got.Equal(first) || n != 1 {
+			t.Fatalf("bank genesis opened at %v: posted at %v, %d entries; want %v, 1", at, got, n, first)
+		}
+		if at == second {
+			if err := ls.Drop(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		ls.Close()
+	}
+	for _, at := range []time.Time{first, second} {
+		r, err := openRTGS(context.Background(), cfg, ctl, clock.New(func() time.Time { return at }))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.member("bank-g", bank.GenesisSettlement, bank.GenesisVault); err != nil {
+			t.Fatal(err)
+		}
+		if got, n := postedAt(r.st.Pool, "genesis:bank-g"); !got.Equal(first) || n != 1 {
+			t.Fatalf("member genesis opened at %v: posted at %v, %d entries; want %v, 1", at, got, n, first)
+		}
+		r.Close()
+	}
 }

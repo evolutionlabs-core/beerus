@@ -23,7 +23,7 @@ var resetToday = clock.Date{Y: 2026, M: 11, D: 3}
 
 func TestResetRefusesTheWrongName(t *testing.T) {
 	dir := t.TempDir()
-	if err := connect.Init(dir, banktest.Spec("lagos", resetToday), connect.DefaultLocal(), resetToday); err != nil {
+	if err := connect.Init(dir, banktest.Spec("lagos"), connect.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -78,7 +78,7 @@ func TestResetClearsAnOldDir(t *testing.T) {
 	if err != nil || ok {
 		t.Fatalf("after reset: %v %v", ok, err)
 	}
-	if err := connect.Init(dir, banktest.Spec(defaultSetupName, resetToday), connect.DefaultLocal(), resetToday); err != nil {
+	if err := connect.Init(dir, banktest.Spec(defaultSetupName), connect.DefaultLocal(), resetToday); err != nil {
 		t.Fatalf("up after reset: %v", err)
 	}
 	if _, err := connect.LoadConfig(dir); err != nil {
@@ -93,7 +93,7 @@ func TestResetDropsOwnedDatabasesOutsideThePrefix(t *testing.T) {
 	}
 	t.Setenv(config.DatabaseURLEnv, url)
 	dir := t.TempDir()
-	if err := connect.Init(dir, banktest.Spec(defaultSetupName, resetToday), connect.DefaultLocal(), resetToday); err != nil {
+	if err := connect.Init(dir, banktest.Spec(defaultSetupName), connect.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	custom := "beerus_custom_" + config.HashKey(dir)[:8]
@@ -131,7 +131,7 @@ func TestResetDropsALeftoverNIBSSSnapshotDatabase(t *testing.T) {
 	t.Setenv(config.DatabaseURLEnv, url)
 	ctx := context.Background()
 	dir := t.TempDir()
-	if err := connect.Init(dir, banktest.Spec(defaultSetupName, resetToday), connect.DefaultLocal(), resetToday); err != nil {
+	if err := connect.Init(dir, banktest.Spec(defaultSetupName), connect.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	live := config.DatabaseName(dir, setup.SystemNIBSS)

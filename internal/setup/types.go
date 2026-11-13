@@ -104,7 +104,6 @@ type Metadata struct {
 }
 
 type Body struct {
-	Start    string       `yaml:"start" json:"start"`
 	NIP      NIP          `yaml:"nip,omitempty" json:"nip,omitempty"`
 	Holidays Holidays     `yaml:"holidays,omitempty" json:"holidays,omitempty"`
 	Connect  ConnectLegal `yaml:"connect,omitempty" json:"connect,omitempty"`
@@ -169,7 +168,6 @@ type Partner struct {
 type Local struct {
 	DatabaseURL string                  `yaml:"database_url"`
 	Bind        string                  `yaml:"bind,omitempty"`
-	Pace        float64                 `yaml:"pace,omitempty"`
 	Ports       Ports                   `yaml:"ports,omitempty"`
 	Connect     LocalConnect            `yaml:"connect,omitempty"`
 	Partners    map[string]PartnerLocal `yaml:"partners,omitempty"`

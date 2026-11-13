@@ -24,7 +24,6 @@ kind: Setup
 metadata:
   name: story
 spec:
-  start: 2026-11-04T00:00:00+01:00
   nip:
     sessions: 1
     tsq_after: 2m
