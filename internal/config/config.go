@@ -143,12 +143,8 @@ func (c *Config) Calendar() clock.Calendar {
 	return c.calendar
 }
 
-func (c *Config) buildFees(pack *countrypack.Pack) error {
-	var err error
-	if c.fees, err = charges.New(pack.Fees); err != nil {
-		return fmt.Errorf("build fee schedule: %w", err)
-	}
-	return nil
+func (c *Config) buildFees(pack *countrypack.Pack) {
+	c.fees = charges.New(pack.Fees)
 }
 
 func (c *Config) buildCalendar(pack *countrypack.Pack) error {
@@ -279,9 +275,7 @@ func (c *Config) Finish() error {
 	if err != nil {
 		return fmt.Errorf("load country pack: %w", err)
 	}
-	if err := c.buildFees(pack); err != nil {
-		return err
-	}
+	c.buildFees(pack)
 	return c.buildCalendar(pack)
 }
 

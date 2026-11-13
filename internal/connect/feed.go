@@ -16,8 +16,6 @@ import (
 var (
 	reTradIn    = regexp.MustCompile(`^NIP TRF FRM (.+?)/`)
 	reTradOut   = regexp.MustCompile(`^NIP TRF TO (.+?)/`)
-	reSMS       = regexp.MustCompile(`^SMS ALERT CHARGES (.+)$`)
-	reMaint     = regexp.MustCompile(`^ACCOUNT MAINT FEE (.+)$`)
 	reSalary    = regexp.MustCompile(`^SALARY CREDIT (.+)$`)
 	reRenarrate = regexp.MustCompile(` /RENARRATED$`)
 )
@@ -45,22 +43,10 @@ func Normalise(raw string) string {
 		return "Transfer fee"
 	case strings.HasPrefix(s, "VAT ON NIP CHARGE"):
 		return "VAT on transfer fee"
-	case strings.HasPrefix(s, "VAT ON SMS ALERT CHARGES"), s == "VAT on SMS notification fee":
-		return "VAT on SMS alert charges"
-	case strings.HasPrefix(s, "VAT ON ACCOUNT MAINT FEE"), s == "VAT on account maintenance fee":
-		return "VAT on account maintenance fee"
 	case strings.HasPrefix(s, "VAT"):
 		return "VAT"
 	case strings.HasPrefix(s, "STAMP DUTY"), s == "Stamp duty":
 		return "Stamp duty"
-	case strings.HasPrefix(s, "EMTL"), s == "Electronic money transfer levy":
-		return "Electronic money transfer levy"
-	case strings.HasPrefix(s, "SMS notification fee "):
-		return "SMS alert charges " + strings.TrimPrefix(s, "SMS notification fee ")
-	case reSMS.MatchString(s):
-		return "SMS alert charges " + titleCase(reSMS.FindStringSubmatch(s)[1])
-	case reMaint.MatchString(s):
-		return "Account maintenance fee " + titleCase(reMaint.FindStringSubmatch(s)[1])
 	case reSalary.MatchString(s):
 		return "Salary from " + titleCase(reSalary.FindStringSubmatch(s)[1])
 	case s == "TRF TO SAVINGS":

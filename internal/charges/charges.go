@@ -1,114 +1,30 @@
 package charges
 
-import (
-	"fmt"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/countrypack"
-)
-
-const (
-	CategoryFee   = "fee"
-	CategoryVAT   = "vat"
-	CategoryStamp = "stamp"
-	CategoryLevy  = "levy"
-)
-
-type nipRule struct {
-	from  clock.Date
-	bands []countrypack.Band
-}
-
-type levyRule struct {
-	from      clock.Date
-	threshold int64
-	amount    int64
-}
+import "github.com/evolutionlabs-core/beerus/internal/countrypack"
 
 type Schedule struct {
-	nip                 []nipRule
-	stamp               []levyRule
-	emtl                []levyRule
-	vatRateBasisPoints  int64
-	smsAlertFee         int64
-	smsMonthlyCap       int64
-	maintenancePerMille int64
+	bands              []countrypack.Band
+	stampThreshold     int64
+	stampAmount        int64
+	vatRateBasisPoints int64
 }
 
-func New(f countrypack.Fees) (*Schedule, error) {
-	s := &Schedule{
-		vatRateBasisPoints:  f.VATRateBasisPoints.Value,
-		smsAlertFee:         f.SMSAlertFee.Value,
-		smsMonthlyCap:       f.SMSMonthlyCap.Value,
-		maintenancePerMille: f.MaintenancePerMille.Value,
+func New(f countrypack.Fees) *Schedule {
+	return &Schedule{
+		bands:              f.NIP.Bands,
+		stampThreshold:     f.StampDuty.Threshold,
+		stampAmount:        f.StampDuty.Amount,
+		vatRateBasisPoints: f.VATRateBasisPoints.Value,
 	}
-	for _, r := range f.NIP {
-		from, err := clock.ParseDate(r.From)
-		if err != nil {
-			return nil, fmt.Errorf("parse nip rule date: %w", err)
-		}
-		s.nip = append(s.nip, nipRule{from: from, bands: r.Bands})
-	}
-	var err error
-	if s.stamp, err = levyRules(f.StampDuty); err != nil {
-		return nil, fmt.Errorf("parse stamp duty: %w", err)
-	}
-	if s.emtl, err = levyRules(f.EMTL); err != nil {
-		return nil, fmt.Errorf("parse emtl: %w", err)
-	}
-	return s, nil
-}
-
-func levyRules(in []countrypack.Levy) ([]levyRule, error) {
-	out := []levyRule{}
-	for _, l := range in {
-		from, err := clock.ParseDate(l.From)
-		if err != nil {
-			return nil, fmt.Errorf("parse rule date: %w", err)
-		}
-		out = append(out, levyRule{from: from, threshold: l.Threshold, amount: l.Amount})
-	}
-	return out, nil
-}
-
-func pick[T any](rules []T, d clock.Date, from func(T) clock.Date) T {
-	r := rules[0]
-	for _, x := range rules {
-		if !d.Before(from(x)) {
-			r = x
-		}
-	}
-	return r
-}
-
-func levyOn(rules []levyRule, amount int64, d clock.Date) int64 {
-	r := pick(rules, d, func(x levyRule) clock.Date { return x.from })
-	if r.amount == 0 || amount < r.threshold {
-		return 0
-	}
-	return r.amount
 }
 
 func (s *Schedule) VATRateBasisPoints() int64 {
 	return s.vatRateBasisPoints
 }
 
-func (s *Schedule) SMSAlertFee() int64 {
-	return s.smsAlertFee
-}
-
-func (s *Schedule) SMSMonthlyCap() int64 {
-	return s.smsMonthlyCap
-}
-
-func (s *Schedule) MaintenancePerMille() int64 {
-	return s.maintenancePerMille
-}
-
-func (s *Schedule) NIPFeeOn(amount int64, d clock.Date) int64 {
-	bands := pick(s.nip, d, func(x nipRule) clock.Date { return x.from }).bands
-	for i, b := range bands {
-		if i == len(bands)-1 || amount <= b.UpTo {
+func (s *Schedule) nipFee(amount int64) int64 {
+	for i, b := range s.bands {
+		if i == len(s.bands)-1 || amount <= b.UpTo {
 			return b.Fee
 		}
 	}
@@ -126,15 +42,11 @@ func (s *Schedule) VAT(base int64) int64 {
 	return res
 }
 
-func (s *Schedule) StampDuty(amount int64, d clock.Date, exempt bool) int64 {
-	if exempt {
+func (s *Schedule) StampDuty(amount int64) int64 {
+	if amount < s.stampThreshold {
 		return 0
 	}
-	return levyOn(s.stamp, amount, d)
-}
-
-func (s *Schedule) EMTL(amount int64, d clock.Date) int64 {
-	return levyOn(s.emtl, amount, d)
+	return s.stampAmount
 }
 
 type Transfer struct {
@@ -147,7 +59,7 @@ func (t Transfer) Total() int64 {
 	return t.Fee + t.VAT + t.StampDuty
 }
 
-func (s *Schedule) ForTransfer(amount int64, d clock.Date, stampExempt bool) Transfer {
-	fee := s.NIPFeeOn(amount, d)
-	return Transfer{Fee: fee, VAT: s.VAT(fee), StampDuty: s.StampDuty(amount, d, stampExempt)}
+func (s *Schedule) ForTransfer(amount int64) Transfer {
+	fee := s.nipFee(amount)
+	return Transfer{Fee: fee, VAT: s.VAT(fee), StampDuty: s.StampDuty(amount)}
 }

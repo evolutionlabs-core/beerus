@@ -100,9 +100,5 @@ func Fees(t testing.TB) *charges.Schedule {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := charges.New(pack.Fees)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
+	return charges.New(pack.Fees)
 }

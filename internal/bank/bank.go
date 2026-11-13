@@ -228,7 +228,7 @@ func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.T
 	}
 	c := charges.Transfer{}
 	if !s.NoCharges {
-		c = b.fees.ForTransfer(s.Amount, clock.DateOf(s.At), false)
+		c = b.fees.ForTransfer(s.Amount)
 	}
 	short := s.SessionID[18:]
 	to := s.To
@@ -311,7 +311,7 @@ func (b *Bank) ReverseNIP(ctx context.Context, entryID int64, sessionID string, 
 	return p, nil
 }
 
-func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int64, from Counterparty, narration string, closure bool, at time.Time) (ledger.Posted, error) {
+func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int64, from Counterparty, narration string, at time.Time) (ledger.Posted, error) {
 	if err := positive(amount); err != nil {
 		return ledger.Posted{}, err
 	}
@@ -320,9 +320,6 @@ func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int6
 	}
 	narr := withNarration(fmt.Sprintf("NIP TRF FRM %s/%s/%s", from.Name, from.BankName, sessionID[18:]), narration)
 	lines := []ledger.Line{dr(NIPInward, amount, narr), via(cr(CustomerAccount(to), amount, narr), "nip", &from)}
-	if levy := b.fees.EMTL(amount, clock.DateOf(at)); levy > 0 && !closure {
-		lines = append(lines, via(dr(CustomerAccount(to), levy, "EMTL "+sessionID[18:]), "charge", nil), cr(StampPayable, levy, "EMTL "+sessionID[18:]))
-	}
 	e := entry("nip-in:"+sessionID, "nip_inward", at, narr, lines...)
 	e.SessionID = sessionID
 	return b.L.Post(ctx, e)
@@ -364,27 +361,4 @@ func (b *Bank) Settlements(ctx context.Context) (map[string]int64, error) {
 		return nil, fmt.Errorf("read settlements: %w", err)
 	}
 	return out, nil
-}
-
-func (b *Bank) RemitTaxes(ctx context.Context, key string, at time.Time) (ledger.Posted, error) {
-	vat, err := b.L.Balance(ctx, VATPayable)
-	if err != nil {
-		return ledger.Posted{}, err
-	}
-	stamp, err := b.L.Balance(ctx, StampPayable)
-	if err != nil {
-		return ledger.Posted{}, err
-	}
-	lines := []ledger.Line{}
-	if vat > 0 {
-		lines = append(lines, dr(VATPayable, vat, "VAT remittance"))
-	}
-	if stamp > 0 {
-		lines = append(lines, dr(StampPayable, stamp, "Stamp duty remittance"))
-	}
-	if vat+stamp == 0 {
-		return ledger.Posted{}, nil
-	}
-	lines = append(lines, cr(Settlement, vat+stamp, "Tax remittance to government"))
-	return b.L.Post(ctx, entry(key, "tax_remittance", at, "Monthly tax remittance", lines...))
 }

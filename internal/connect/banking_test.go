@@ -91,7 +91,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q.ToName != "Ada Obi" || q.Fee != 2500 || q.VAT != 188 || q.StampDuty != 5000 || q.TotalDebit != 1_007_688 || q.BalanceAfter != 3_992_312 || q.SessionID != "" {
+	if q.ToName != "Ada Obi" || q.Fee != 1000 || q.VAT != 75 || q.StampDuty != 5000 || q.TotalDebit != 1_006_075 || q.BalanceAfter != 3_993_925 || q.SessionID != "" {
 		t.Fatalf("quote %+v", q)
 	}
 

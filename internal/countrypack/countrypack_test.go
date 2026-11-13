@@ -104,13 +104,12 @@ func TestFeesCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Fees.NIP) != 1 || len(p.Fees.NIP[0].Bands) != 3 || p.Fees.VATRateBasisPoints.Value != 750 {
+	if len(p.Fees.NIP.Bands) != 3 || p.Fees.StampDuty.Amount != 5000 || p.Fees.VATRateBasisPoints.Value != 750 {
 		t.Errorf("fees = %+v", p.Fees)
 	}
 	bad := func(edit func(f *Fees)) error {
 		f := p.Fees
-		f.NIP = append([]NIPRule(nil), f.NIP...)
-		f.EMTL = append([]Levy(nil), f.EMTL...)
+		f.NIP.Bands = append([]Band(nil), f.NIP.Bands...)
 		edit(&f)
 		return f.check()
 	}
@@ -118,13 +117,14 @@ func TestFeesCheck(t *testing.T) {
 		edit func(f *Fees)
 		want string
 	}{
-		"no nip source":   {func(f *Fees) { f.NIP[0].Source = "" }, "fees.nip[0]: no source"},
-		"last band bound": {func(f *Fees) { f.NIP[0].Bands = []Band{{UpTo: 5, Fee: 1}} }, "fees.nip[0]: the last band must have no up_to_minor, not 5"},
-		"bands descend":   {func(f *Fees) { f.NIP[0].Bands = []Band{{UpTo: 9, Fee: 1}, {UpTo: 3, Fee: 2}, {Fee: 3}} }, "fees.nip[0]: band 1 up_to_minor 3 must be above 9"},
-		"bad date":        {func(f *Fees) { f.EMTL[0].From = "soon" }, "fees.emtl[0] from \"soon\" must be a date like 2020-01-31"},
-		"dates repeat":    {func(f *Fees) { f.EMTL[1].From = f.EMTL[0].From }, "fees.emtl[1] from 2020-01-01 must be later than 2020-01-01"},
+		"no nip source":   {func(f *Fees) { f.NIP.Source = "" }, "fees.nip: no source"},
+		"last band bound": {func(f *Fees) { f.NIP.Bands = []Band{{UpTo: 5, Fee: 1}} }, "fees.nip: the last band must have no up_to_minor, not 5"},
+		"bands descend":   {func(f *Fees) { f.NIP.Bands = []Band{{UpTo: 9, Fee: 1}, {UpTo: 3, Fee: 2}, {Fee: 3}} }, "fees.nip: band 1 up_to_minor 3 must be above 9"},
+		"no stamp source": {func(f *Fees) { f.StampDuty.Source = "" }, "fees.stamp_duty: no source"},
+		"no nip bands":    {func(f *Fees) { f.NIP.Bands = nil }, "fees.nip: needs at least one band"},
+		"negative stamp":  {func(f *Fees) { f.StampDuty.Amount = -1 }, "fees.stamp_duty: threshold_minor and amount_minor must not be negative, and amount_minor must be at most 2305843009213693951"},
 		"vat too high":    {func(f *Fees) { f.VATRateBasisPoints.Value = 10001 }, "fees.vat_rate_basis_points must be from 0 to 10000, not 10001"},
-		"no sms source":   {func(f *Fees) { f.SMSAlertFee.Source = "" }, "fees.sms_alert_fee_minor has no source"},
+		"no vat source":   {func(f *Fees) { f.VATRateBasisPoints.Source = "" }, "fees.vat_rate_basis_points has no source"},
 	}
 	for name, c := range cases {
 		if err := bad(c.edit); err == nil || err.Error() != c.want {

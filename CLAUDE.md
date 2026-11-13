@@ -93,7 +93,7 @@ Beerus is a copy of Nigeria's banking infrastructure in one Go binary: banks, NI
 ## Money
 - **`int64` minor units (kobo) everywhere.** No floats. Parse naira once, at the edge.
 - **Check every sum and product for overflow.**
-- **Rates are integers,** such as basis points. A dated rule gets a new entry; an old one is never edited.
+- **Rates are integers,** such as basis points. Only the current rule exists; change it in place. Beerus runs on real time and keeps no fee history.
 - **Every posting has both sides,** and every settlement check balances.
 - **Classify from structured fields** (channel, category), never from narration text.
 - **Every retryable write carries a deterministic idempotency key.** There is one idempotency mechanism, and it covers every branch.
