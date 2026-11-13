@@ -59,9 +59,8 @@ Beerus is a copy of Nigeria's banking infrastructure in one Go binary: banks, NI
 - **A change that cannot be saved is undone** in memory before the error is returned.
 
 ## Concurrency
-- **Lock order:** `applyMu` → `stepMu` → `gate` → `recMu` → `lifeMu` → `sendLock` → `mu` → `regMu` → `ctlMu`. Never take an earlier lock while holding a later one.
+- **Lock order:** `applyMu` → `stepMu` → `recMu` → `lifeMu` → `sendLock` → `mu` → `regMu` → `ctlMu`. Never take an earlier lock while holding a later one.
 - **`sendLock`** is per sending bank. It is the one lock allowed across the bank and NIBSS DB calls for the cap check and debit.
-- **`gate`** is the write gate. Every outermost write to bank, CBN or NIBSS data holds `gate.RLock`; a snapshot or restore holds `gate.Lock`. Never take `gate.RLock` twice on one goroutine; call the ungated inner function instead.
 - **Leaf locks** (`idemMu`, `pullMu`) are taken last and never held while taking another lock.
 - **No lock across slow work,** `sendLock` aside: no network call, DB query, file write, sleep or `writeJSON` under a shared lock. Copy what you need, unlock, do the I/O, relock and apply.
 - **`defer mu.Unlock()`** right after `Lock()` unless the function has to release early.
@@ -84,7 +83,7 @@ Beerus is a copy of Nigeria's banking infrastructure in one Go binary: banks, NI
 - **Atomic writes.** Temp file, then rename, mode 0600. Never `os.WriteFile` a state or key file directly, and never delete the old copy first.
 - **Create only when missing.** Check `errors.Is(err, os.ErrNotExist)`. Any other read error is returned, never papered over with a new file.
 - **Reject bad input at the edge.** Never replace it with a default.
-- **Secrets** never go into YAML, JSON state, snapshots or logs. They come from `crypto/rand`.
+- **Secrets** never go into YAML, JSON state or logs. They come from `crypto/rand`.
 - **Anything that grows is swept with a TTL:** maps, tables, lock sets.
 - **Steps are idempotent ensures.** A provisioning or finalizer step can run twice and give the same result. Retries back off using real time from `clock`.
 - **Nothing moves on its own.** Money and data change only when a user, their app or the clock makes them. No generated history and no background activity.
@@ -111,7 +110,7 @@ Beerus is a copy of Nigeria's banking infrastructure in one Go binary: banks, NI
 - **Style:** snake_case, `bigint` money, `timestamptz`, `CHECK` enums.
 - **Migrations** are numbered goose files, never edited once shipped, safe to re-run.
 - **Database names come only from `config.DatabaseName`.**
-- **Claim what you create** (database, port, snapshot) in the status store, and release it when you drop it.
+- **Claim what you create** (database, port) in the status store, and release it when you drop it.
 
 ## Tests
 - **Few, broad tests.** One table-driven test covers a whole rule: the normal path, the edges and the failure message.
