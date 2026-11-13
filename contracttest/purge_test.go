@@ -253,6 +253,9 @@ func TestPurgeRules(t *testing.T) {
 	if consentEvents("bank-b") == 0 || consentEvents(retired) != oldEvents {
 		t.Fatalf("a consent of the recreated bank was dropped: %d under bank-b, %d under %s (was %d)", consentEvents("bank-b"), consentEvents(retired), retired, oldEvents)
 	}
+	if imp := s.ctl("GET", "/banks/bank-b/purge", nil); imp["connections"] != float64(1) {
+		t.Fatalf("the recreated bank counts %v connections, want only its own: %v", imp["connections"], imp)
+	}
 	fresh, err := s.app.Resource(setup.KindBank, "bank-b")
 	if err != nil {
 		t.Fatal(err)

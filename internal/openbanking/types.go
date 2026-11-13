@@ -170,6 +170,6 @@ type Data interface {
 	Account(nuban string) (AccountInfo, error)
 	Balance(nuban string) (Balance, error)
 	BalanceOn(nuban string, d clock.Date) (int64, error)
-	Transactions(ctx context.Context, nuban string, from, to clock.Date) ([]Txn, error)
+	Transactions(nuban string, from, to clock.Date) ([]Txn, error)
 	Ping() error
 }

@@ -48,7 +48,11 @@ func backoff(attempts int) time.Duration {
 func newStatus(b *config.Bank, done bool) *BankStatus {
 	st := &BankStatus{ID: b.ID, Name: b.Name, Phase: PhaseProvisioning, URL: b.URL()}
 	for _, s := range bankSteps {
-		st.Steps = append(st.Steps, BankStep{ID: s.id, Name: s.name, Done: done})
+		name := s.name
+		if s.id == setup.StepAllocate && b.NIPCode != "" {
+			name += " (NIP " + b.NIPCode + ", NUBAN " + b.NUBANCode + ")"
+		}
+		st.Steps = append(st.Steps, BankStep{ID: s.id, Name: name, Done: done})
 	}
 	if done {
 		st.Phase = runningPhase(b)
@@ -214,11 +218,7 @@ func (a *App) provision(b *config.Bank) {
 	st := a.status[b.ID]
 	a.lifeMu.Unlock()
 	ok := a.step(st, setup.StepAllocate, func() error {
-		if err := a.claimBank(b); err != nil {
-			return err
-		}
-		a.nameStep(st, setup.StepAllocate, "NIP "+b.NIPCode+", NUBAN "+b.NUBANCode)
-		return nil
+		return a.claimBank(b)
 	}) && a.step(st, setup.StepDirectory, func() error {
 		return a.registerMember(b)
 	}) && a.step(st, setup.StepDatabase, func() error {

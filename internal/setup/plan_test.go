@@ -119,7 +119,7 @@ func run(t *testing.T, cases []planCase) {
 			if c.desired != nil {
 				c.desired(&desired)
 			}
-			p := Build(desired, st, c.dir, today)
+			p := Build(realPack(t), desired, st, c.dir, today)
 			if p.Setup != desired.Metadata.Name {
 				t.Fatalf("setup = %q, want %q", p.Setup, desired.Metadata.Name)
 			}
@@ -230,7 +230,7 @@ func TestBuildNoChanges(t *testing.T) {
 
 func TestBuildNoChangesRendersNoChanges(t *testing.T) {
 	s := spec()
-	p := Build(s, status(s), nil, today)
+	p := Build(realPack(t), s, status(s), nil, today)
 	if got := Render(p); got != "No changes.\n" {
 		t.Fatalf("render = %q", got)
 	}
@@ -847,7 +847,7 @@ func TestBuildAllocation(t *testing.T) {
 			if c.small {
 				use = smallPack()
 			}
-			p := build(use, desired, status(spec()), c.dir, today)
+			p := Build(use, desired, status(spec()), c.dir, today)
 			got := []string{}
 			for _, err := range p.Errors {
 				got = append(got, err.Error())
@@ -870,13 +870,13 @@ func TestBuildRejectsAStartAfterToday(t *testing.T) {
 	clearCodes(&desired)
 	desired.Spec.Start = "2026-11-06T00:00:00+01:00"
 	dir := []nibss.Institution{member("bank-a", "Bank A", "999001", "901"), member("bank-b", "Bank B", "999002", "902")}
-	p := Build(desired, Status{}, dir, today)
+	p := Build(realPack(t), desired, Status{}, dir, today)
 	want := "start 2026-11-06T00:00:00+01:00 is after today, 2026-11-05. Beerus runs on real time; use today or an earlier date."
 	if len(p.Errors) != 1 || p.Errors[0].Error() != want || !errors.Is(p.Errors[0], ErrFutureStart) {
 		t.Fatalf("errors = %v, want %q", p.Errors, want)
 	}
 	desired.Spec.Start = "2026-11-05T23:59:00+01:00"
-	if p := Build(desired, Status{}, dir, today); len(p.Errors) > 0 {
+	if p := Build(realPack(t), desired, Status{}, dir, today); len(p.Errors) > 0 {
 		t.Fatalf("a start later today: %v", p.Errors)
 	}
 }
@@ -885,7 +885,7 @@ func TestBuildFirstApply(t *testing.T) {
 	desired := spec()
 	clearCodes(&desired)
 	dir := []nibss.Institution{member("bank-a", "Bank A", "999001", "901"), member("bank-z", "Bank Z", "999002", "902")}
-	p := Build(desired, Status{}, dir, today)
+	p := Build(realPack(t), desired, Status{}, dir, today)
 	want := []Action{
 		{Op: OpCreate, Kind: KindBank, ID: "bank-a", Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{{Path: "type", To: "commercial"}, {Path: "nip_code", To: "000001"}, {Path: "nuban_code", To: "001"}}},
 		{Op: OpCreate, Kind: KindBank, ID: "bank-b", Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{{Path: "type", To: "digital"}, {Path: "nip_code", To: "000002"}, {Path: "nuban_code", To: "002"}}},
@@ -984,8 +984,8 @@ func TestBuildIsPure(t *testing.T) {
 	desired.Spec.Banks = append(desired.Spec.Banks, Bank{ID: "bank-c", Name: "Bank C", Type: "commercial"})
 	st := status(spec())
 	before := status(spec())
-	a := Build(desired, st, nil, today)
-	b := Build(desired, st, nil, today)
+	a := Build(realPack(t), desired, st, nil, today)
+	b := Build(realPack(t), desired, st, nil, today)
 	if !reflect.DeepEqual(a, b) || !reflect.DeepEqual(st, before) {
 		t.Fatal("Build is not deterministic or changed its input")
 	}
@@ -995,4 +995,13 @@ func clearCodes(s *Spec) {
 	for i := range s.Spec.Banks {
 		s.Spec.Banks[i].NIPCode, s.Spec.Banks[i].NUBANCode = "", ""
 	}
+}
+
+func realPack(t *testing.T) *countrypack.Pack {
+	t.Helper()
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pack
 }

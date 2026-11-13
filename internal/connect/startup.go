@@ -14,6 +14,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -108,7 +109,11 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	if errs := setup.Validate(spec); len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	plan := setup.Build(spec, setup.Status{}, nil, today)
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return fmt.Errorf("load the country pack: %w", err)
+	}
+	plan := setup.Build(pack, spec, setup.Status{}, nil, today)
 	if len(plan.Errors) > 0 {
 		return errors.Join(plan.Errors...)
 	}

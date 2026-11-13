@@ -111,6 +111,8 @@ type BankRequest struct {
 	Name           string `json:"name"`
 	ID             string `json:"id"`
 	Type           string `json:"type"`
+	NIPCode        string `json:"nip_code"`
+	NUBANCode      string `json:"nuban_code"`
 	HistoryDays    int    `json:"history_days"`
 	SettlesThrough string `json:"settles_through"`
 }
@@ -154,12 +156,12 @@ func (a *App) postgresRoom(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) removedBanks() ([]nibss.Institution, error) {
+func (a *App) removedBanks(ctx context.Context) ([]nibss.Institution, error) {
 	s := a.nibssStore()
 	if s == nil {
 		return nil, errors.New("the NIBSS directory is not open yet, so the codes of removed banks cannot be checked; try again soon")
 	}
-	all, err := s.Directory(context.Background())
+	all, err := s.Directory(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -172,11 +174,11 @@ func (a *App) removedBanks() ([]nibss.Institution, error) {
 	return out, nil
 }
 
-func (a *App) freeID(slug string) (string, error) {
+func (a *App) freeID(ctx context.Context, slug string) (string, error) {
 	if slug == "" {
 		return slug, nil
 	}
-	removed, err := a.removedBanks()
+	removed, err := a.removedBanks(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -191,7 +193,10 @@ func (a *App) freeID(slug string) (string, error) {
 	return id, nil
 }
 
-func (a *App) CreateBank(req BankRequest) (BankStatus, error) {
+func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, error) {
+	if req.NIPCode != "" || req.NUBANCode != "" {
+		return BankStatus{}, invalid("nip_code and nuban_code are assigned by Beerus; leave them out")
+	}
 	if req.HistoryDays != 0 {
 		return BankStatus{}, invalid("history_days can no longer be set; it follows the bank type")
 	}
@@ -199,7 +204,7 @@ func (a *App) CreateBank(req BankRequest) (BankStatus, error) {
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
 		var err error
-		if id, err = a.freeID(strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")); err != nil {
+		if id, err = a.freeID(ctx, strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")); err != nil {
 			return BankStatus{}, err
 		}
 	}
@@ -341,20 +346,12 @@ func (a *App) bankStatus(id string) (BankStatus, bool) {
 }
 
 func (a *App) ctlCreateBank(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		BankRequest
-		NIPCode   string `json:"nip_code"`
-		NUBANCode string `json:"nuban_code"`
-	}
+	var req BankRequest
 	if err := decodeBody(r, &req); err != nil {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"...","type":"commercial"}.`)
 		return
 	}
-	if req.NIPCode != "" || req.NUBANCode != "" {
-		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", "nip_code and nuban_code are assigned by Beerus; leave them out")
-		return
-	}
-	st, err := a.CreateBank(req.BankRequest)
+	st, err := a.CreateBank(r.Context(), req)
 	if err != nil {
 		a.bankError(w, r, err)
 		return

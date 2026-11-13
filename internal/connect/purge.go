@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -165,6 +166,18 @@ func (a *App) dropBankRows(id, retired string) {
 	for cid, c := range a.st.Connections {
 		if c.Institution == id {
 			a.vaultDrop(cid)
+			c.Institution = retired
+		}
+	}
+	prefix := id + ":"
+	for _, rec := range a.st.Accounts {
+		if strings.HasPrefix(rec.Key, prefix) {
+			rec.Key = acctKey(retired, strings.TrimPrefix(rec.Key, prefix))
+		}
+	}
+	for i := range a.st.Access {
+		if strings.HasPrefix(a.st.Access[i].Key, prefix) {
+			a.st.Access[i].Key = acctKey(retired, strings.TrimPrefix(a.st.Access[i].Key, prefix))
 		}
 	}
 	for lid, l := range a.st.LinkSessions {

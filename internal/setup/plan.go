@@ -59,15 +59,7 @@ type planner struct {
 	pack       *countrypack.Pack
 }
 
-func Build(desired Spec, st Status, dir []nibss.Institution, today clock.Date) Plan {
-	pack, err := countrypack.Nigeria()
-	if err != nil {
-		return Plan{Setup: desired.Metadata.Name, Errors: []error{fmt.Errorf("load code ranges: %w", err)}}
-	}
-	return build(pack, desired, st, dir, today)
-}
-
-func build(pack *countrypack.Pack, desired Spec, st Status, dir []nibss.Institution, today clock.Date) Plan {
+func Build(pack *countrypack.Pack, desired Spec, st Status, dir []nibss.Institution, today clock.Date) Plan {
 	p := newPlanner(desired, st, dir, today)
 	p.pack = pack
 	p.checkStart()
@@ -250,10 +242,7 @@ func (p *planner) allocate() map[string]codes {
 			continue
 		}
 		p.assigned(b)
-		c, ok := p.nextCodes(b, func(nip, nuban string) bool {
-			n, _ := world.NormaliseBankCode(nuban)
-			return usedNIP[nip] || usedNUBAN[n]
-		})
+		c, ok := p.nextCodes(b, usedNIP, usedNUBAN)
 		if !ok {
 			continue
 		}
@@ -273,13 +262,18 @@ func (p *planner) assigned(b Bank) {
 	}
 }
 
-func (p *planner) nextCodes(b Bank, used func(nip, nuban string) bool) (codes, bool) {
+func (p *planner) nextCodes(b Bank, usedNIP, usedNUBAN map[string]bool) (codes, bool) {
 	category, tiers := p.pack.CodeTiers(b.Type)
 	total := 0
 	for _, t := range tiers {
 		for n := t.First; n <= t.Last; n++ {
 			nip, nuban := t.NIP(n), t.NUBAN(n)
-			if !used(nip, nuban) {
+			normal, err := world.NormaliseBankCode(nuban)
+			if err != nil {
+				p.fail("banks["+b.ID+"]", nil, "banks[%s]: country pack makes a bad NUBAN code: %v", b.ID, err)
+				return codes{}, false
+			}
+			if !usedNIP[nip] && !usedNUBAN[normal] {
 				return codes{nip: nip, nuban: nuban, allocated: []string{fieldNIPCode, fieldNUBANCode}}, true
 			}
 		}

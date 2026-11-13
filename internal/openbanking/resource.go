@@ -276,7 +276,7 @@ func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, g grant
 		}
 		after = &c
 	}
-	rows, err := s.cfg.Data.Transactions(r.Context(), info.ID, from, to)
+	rows, err := s.cfg.Data.Transactions(info.ID, from, to)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
 		return

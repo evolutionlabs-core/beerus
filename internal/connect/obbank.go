@@ -315,7 +315,7 @@ func (d bankData) BalanceOn(nuban string, day clock.Date) (int64, error) {
 	return l.EndOfDay(nuban, day)
 }
 
-func (d bankData) Transactions(_ context.Context, nuban string, from, to clock.Date) ([]openbanking.Txn, error) {
+func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking.Txn, error) {
 	_, l, err := d.find(nuban)
 	if err != nil {
 		return nil, err

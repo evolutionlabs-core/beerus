@@ -614,7 +614,7 @@ func (a *App) roomCreateBank(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f := r.PostForm
-	b, err := a.CreateBank(BankRequest{Name: f.Get("name"), Type: f.Get("type"), SettlesThrough: f.Get("settles_through")})
+	b, err := a.CreateBank(r.Context(), BankRequest{Name: f.Get("name"), Type: f.Get("type"), SettlesThrough: f.Get("settles_through")})
 	if err != nil {
 		msg := err.Error()
 		if errors.Is(err, ErrBankInvalid) {

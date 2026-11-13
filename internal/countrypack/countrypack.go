@@ -6,6 +6,8 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -176,7 +178,17 @@ const (
 	nipCodeLength = 6
 )
 
-var nubanCodeLengths = []int{3, 5, 6}
+func nubanCodeLengths() []int { return []int{3, 5, 6} }
+
+func validNUBANLength(n int) bool { return slices.Contains(nubanCodeLengths(), n) }
+
+func nubanLengthWords() string {
+	words := []string{}
+	for _, n := range nubanCodeLengths() {
+		words = append(words, strconv.Itoa(n))
+	}
+	return strings.Join(words[:len(words)-1], ", ") + " or " + words[len(words)-1]
+}
 
 const maxFeeMinor = math.MaxInt64 / 4
 
@@ -281,7 +293,7 @@ func (c BankCodes) check(bankTypes map[string]string) error {
 	if c.Source == "" {
 		return fmt.Errorf("bank_codes has no source")
 	}
-	for _, category := range bankTypes {
+	for _, category := range slices.Sorted(maps.Values(bankTypes)) {
 		if len(c.Categories[category]) == 0 {
 			return fmt.Errorf("bank_codes has no tiers for %s", category)
 		}
@@ -305,8 +317,8 @@ func checkTiers(category string, tiers []CodeTier) error {
 			return fmt.Errorf("%s starts at %d, but the tier before it ends at %d", name, t.First, prev)
 		case len(t.NIPPrefix)+t.NIPDigits != nipCodeLength:
 			return fmt.Errorf("%s must make NIP codes of %d digits", name, nipCodeLength)
-		case !slices.Contains(nubanCodeLengths, len(t.NUBANPrefix)+t.NUBANDigits):
-			return fmt.Errorf("%s must make NUBAN codes of 3, 5 or 6 digits", name)
+		case !validNUBANLength(len(t.NUBANPrefix) + t.NUBANDigits):
+			return fmt.Errorf("%s must make NUBAN codes of %s digits", name, nubanLengthWords())
 		case t.Last >= pow10(t.NIPDigits) || t.Last >= pow10(t.NUBANDigits):
 			return fmt.Errorf("%s ends at %d, which does not fit its digits", name, t.Last)
 		}
