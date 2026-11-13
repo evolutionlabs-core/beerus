@@ -92,10 +92,22 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 	if err := store.DropDatabases(ctx, c.DatabaseURL, rep.Orphans); err != nil {
 		return rep, err
 	}
-	if len(rep.StaleOwned) > 0 {
+	var claimed []string
+	for name := range owned(st, ownedSnapshot) {
+		if slices.Contains(rep.Orphans, name) {
+			claimed = append(claimed, name)
+		}
+	}
+	sort.Strings(claimed)
+	if len(claimed)+len(rep.StaleOwned) > 0 {
 		ctl, err := openStore(c.Dir)
 		if err != nil {
 			return rep, err
+		}
+		for _, name := range claimed {
+			if err := ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name}); err != nil {
+				return rep, err
+			}
 		}
 		for _, bank := range rep.StaleOwned {
 			if err := ctl.forget(setup.KindBank, bank); err != nil {

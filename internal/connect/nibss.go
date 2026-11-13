@@ -100,7 +100,7 @@ func (a *App) syncDirectory(s *nibss.Store) error {
 	return a.refreshDirectory(ctx)
 }
 
-func (a *App) dropNIBSS() error {
+func (a *App) dropNIBSS(ctx context.Context) error {
 	a.mu.Lock()
 	s := a.nibss
 	a.nibss = nil
@@ -110,12 +110,7 @@ func (a *App) dropNIBSS() error {
 	}
 	s.Close()
 	name := config.DatabaseName(a.cfg.Dir, setup.SystemNIBSS)
-	ctx := context.Background()
-	leftovers, err := store.List(ctx, a.cfg.DatabaseURL, name+"_snap_")
-	if err != nil {
-		return fmt.Errorf("list leftover NIBSS databases: %w", err)
-	}
-	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, append(leftovers, name)); err != nil {
+	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{name}); err != nil {
 		return fmt.Errorf("drop the NIBSS database: %w", err)
 	}
 	return a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})

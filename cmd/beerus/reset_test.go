@@ -158,8 +158,9 @@ func TestResetDropsALeftoverNIBSSSnapshotDatabase(t *testing.T) {
 	if err := cmdReset([]string{defaultSetupName, "--dir", dir}, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), leftover) {
-		t.Fatalf("output: %s", out.String())
+	want := "Dropped databases:\n  " + live + "\n  " + leftover + "\nCleared " + dir + " (kept " + connect.LocalFile + "). Run beerus init to start again.\n"
+	if out.String() != want {
+		t.Fatalf("output: %q, want %q", out.String(), want)
 	}
 	left, err := store.List(ctx, url, strings.TrimSuffix(config.DatabaseName(dir, "x"), "x"))
 	if err != nil || len(left) != 0 {
