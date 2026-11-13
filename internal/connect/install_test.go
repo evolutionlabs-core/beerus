@@ -69,7 +69,7 @@ func TestInstall(t *testing.T) {
 	freshLines := func(dir string) []string {
 		return []string{
 			"Checking Postgres||ok",
-			"Writing config to " + dir + "||ok",
+			"Writing config||ok",
 			"Creating CBN database||ok",
 			"Migrating CBN ledger|" + migrations(ledgerN) + "|ok",
 			"Opening CBN settlement ledger||ok",
@@ -91,14 +91,14 @@ func TestInstall(t *testing.T) {
 		},
 		{
 			name:        "resume after Creating CBN database fails",
-			cancelAfter: "Writing config to ",
+			cancelAfter: "Writing config",
 			wantFirst: func(dir string) []string {
-				return []string{"Checking Postgres||ok", "Writing config to " + dir + "||ok", "Creating CBN database||failed"}
+				return []string{"Checking Postgres||ok", "Writing config||ok", "Creating CBN database||failed"}
 			},
 			wantFirstEr: "context canceled",
 			wantResume: func(dir string) []string {
 				lines := freshLines(dir)
-				lines[1] = "Writing config to " + dir + "|already written|ok"
+				lines[1] = "Writing config|already written|ok"
 				return lines
 			},
 		},
@@ -108,7 +108,7 @@ func TestInstall(t *testing.T) {
 			wantFirst: func(dir string) []string {
 				return []string{
 					"Checking Postgres||ok",
-					"Writing config to " + dir + "||ok",
+					"Writing config||ok",
 					"Creating CBN database||ok",
 					"Migrating CBN ledger|" + migrations(ledgerN) + "|ok",
 					"Opening CBN settlement ledger||failed",
@@ -117,7 +117,7 @@ func TestInstall(t *testing.T) {
 			wantFirstEr: "context canceled",
 			wantResume: func(dir string) []string {
 				lines := freshLines(dir)
-				lines[1] = "Writing config to " + dir + "|already written|ok"
+				lines[1] = "Writing config|already written|ok"
 				lines[3] = "Migrating CBN ledger|no new migrations|ok"
 				return lines
 			},

@@ -25,7 +25,7 @@ const postgresTimeout = 5 * time.Second
 
 const (
 	stepNamePostgres   = "Checking Postgres"
-	stepNameConfig     = "Writing config to "
+	stepNameConfig     = "Writing config"
 	stepNameCBNCreate  = "Creating CBN database"
 	stepNameCBNMigrate = "Migrating CBN ledger"
 	stepNameCBNOpen    = "Opening CBN settlement ledger"
@@ -40,9 +40,9 @@ type InstallStep struct {
 	Err      error
 }
 
-func InstallLabels(dir string) []string {
+func InstallLabels() []string {
 	longest := " (" + migrationCount(0) + ")"
-	return []string{stepNamePostgres, stepNameConfig + dir + longest, stepNameCBNCreate, stepNameCBNMigrate + longest, stepNameCBNOpen, stepNameNIBSSMake, stepNameNIBSSMigr + longest}
+	return []string{stepNamePostgres, stepNameConfig + longest, stepNameCBNCreate, stepNameCBNMigrate + longest, stepNameCBNOpen, stepNameNIBSSMake, stepNameNIBSSMigr + longest}
 }
 
 func CheckStart(dir string) error {
@@ -116,7 +116,7 @@ func Install(ctx context.Context, dir string, spec setup.Spec, local setup.Local
 	if err := in.run(stepNamePostgres, func() (string, error) { return "", checkPostgres(ctx, url) }); err != nil {
 		return err
 	}
-	err = in.run(stepNameConfig+dir, func() (string, error) {
+	err = in.run(stepNameConfig, func() (string, error) {
 		if found {
 			return "already written", nil
 		}

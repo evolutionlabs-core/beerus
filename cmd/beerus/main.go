@@ -56,7 +56,7 @@ func cmdInit(args []string) error {
 		return err
 	}
 	width := 0
-	for _, n := range connect.InstallLabels(p.dir) {
+	for _, n := range connect.InstallLabels() {
 		width = max(width, len(n))
 	}
 	clk := clock.New(nil)
@@ -67,7 +67,7 @@ func cmdInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("\nBeerus is ready (%s). Start it with beerus up, then add a bank with beerus bank create --name NAME.\n", seconds(clk.Real().Sub(start)))
+	fmt.Printf("\nBeerus is ready in %s (%s). Start it with beerus up, then add a bank with beerus bank create --name NAME.\n", p.dir, seconds(clk.Real().Sub(start)))
 	return nil
 }
 
