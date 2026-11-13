@@ -334,7 +334,6 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 			HealthPort:   ln.HealthPort,
 			SyncInterval: ln.SyncInterval,
 			RefreshEvery: ln.RefreshEvery,
-			PauseLease:   ln.PauseLease,
 			LegalName:    orDefault(spec.Connect.LegalName, defaultLegalName),
 			BrandName:    orDefault(spec.Connect.BrandName, defaultBrandName),
 			RegistryID:   orDefault(spec.Connect.RegistryID, defaultRegistryID),

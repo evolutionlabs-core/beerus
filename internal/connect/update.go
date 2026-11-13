@@ -7,8 +7,6 @@ import (
 )
 
 func (a *App) reconcileNow() {
-	a.gate.RLock()
-	defer a.gate.RUnlock()
 	a.recMu.Lock()
 	defer a.recMu.Unlock()
 	a.reconcileChanges()

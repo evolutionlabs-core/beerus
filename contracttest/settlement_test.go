@@ -43,13 +43,6 @@ func TestNIPSettlement(t *testing.T) {
 	if c, err := s.app.VerifyBank(); err != nil || !c.OK() {
 		t.Fatalf("bank ledgers: %v %v", err, c)
 	}
-	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "settled"})
-	s.advance("48h")
-	checkSettled(t, s.app)
-	s.ctl("POST", "/snapshots/"+snap["id"].(string)+"/restore", nil)
-	if c := checkSettled(t, s.app); c.Sessions != later.Sessions {
-		t.Fatalf("after restore: %d sessions, want %d", c.Sessions, later.Sessions)
-	}
 }
 
 func TestNIPSessionsCannotChangeOnALiveSetup(t *testing.T) {
@@ -116,36 +109,4 @@ func TestSettlementRunsAlongsideTheApp(t *testing.T) {
 	}
 	wg.Wait()
 	checkSettled(t, s.app)
-	from, to := s.persona("adaeze").Accounts[0], s.persona("ngozi").Accounts[0]
-	stop := make(chan struct{})
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-stop:
-					return
-				default:
-				}
-				if _, err := s.app.Transfer(connect.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 100}); err != nil {
-					t.Errorf("transfer: %v", err)
-					return
-				}
-			}
-		}()
-	}
-	snap, err := s.app.TakeSnapshot(t.Context(), "while paying")
-	close(stop)
-	wg.Wait()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.app.RestoreSnapshot(snap.ID); err != nil {
-		t.Fatal(err)
-	}
-	checkSettled(t, s.app)
-	if c, err := s.app.VerifyBank(); err != nil || !c.OK() {
-		t.Fatalf("bank ledgers after restore: %v %v", err, c)
-	}
 }

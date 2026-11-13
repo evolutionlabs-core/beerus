@@ -175,7 +175,7 @@ func cmdInfo(args []string) error {
 func cmdDoctor(args []string) error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	fix := fs.Bool("fix", false, "drop leftover databases, delete snapshots that can no longer be restored and forget banks that no longer exist")
+	fix := fs.Bool("fix", false, "drop leftover databases and forget banks that no longer exist")
 	if _, err := parseAfter("doctor", fs, args, 0); err != nil {
 		return err
 	}
@@ -198,9 +198,8 @@ func cmdDoctor(args []string) error {
 	}
 	fmt.Printf("%d databases belong to %s.\n", len(rep.Databases), c.Dir)
 	list("Leftover databases:", rep.Orphans)
-	list("Snapshots that can no longer be restored:", rep.DeadSnapshots)
 	list("Status entries for banks that no longer exist:", rep.StaleOwned)
-	list("Missing databases (beerus up recreates bank databases; missing snapshot copies cannot be restored):", rep.Missing)
+	list("Missing databases (beerus up recreates bank databases):", rep.Missing)
 	switch {
 	case rep.Fixed:
 		fmt.Println("Fixed.")
@@ -306,38 +305,6 @@ func cmdWebhooks(args []string) error {
 		return printControl("POST", "/webhooks/deliveries/"+url.PathEscape(pos[1])+"/replay")
 	}
 	return usageError("webhooks")
-}
-
-func cmdSnapshot(args []string) error {
-	if len(args) == 0 {
-		return cmdSnapshot([]string{"list"})
-	}
-	switch args[0] {
-	case "list":
-		if _, err := noFlags("snapshot list", args, 1); err != nil {
-			return err
-		}
-		return printControl("GET", "/snapshots")
-	case "take":
-		if helpRequested(args[1:]) {
-			return leafHelp("snapshot take", flag.NewFlagSet("snapshot take", flag.ContinueOnError))
-		}
-		if len(args) > 2 {
-			return usageError("snapshot take")
-		}
-		name := ""
-		if len(args) == 2 {
-			name = args[1]
-		}
-		return printControlBody("POST", "/snapshots", map[string]string{"name": name})
-	case "restore":
-		pos, err := noFlags("snapshot restore", args, 2)
-		if err != nil {
-			return err
-		}
-		return printControl("POST", "/snapshots/"+url.PathEscape(pos[1])+"/restore")
-	}
-	return usageError("snapshot")
 }
 
 func printControl(method, path string) error {

@@ -69,7 +69,7 @@ func (a *App) settleMoves(ctx context.Context, r setup.Resource) (*setup.Conditi
 
 func (a *App) settleWait(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	if a.wantsSettleNow(r) {
-		if _, err := a.settleGated(a.clock.Now(), true); err != nil {
+		if _, err := a.settle(a.clock.Now(), true); err != nil {
 			return nil, fmt.Errorf("run the extra settlement session: %w", err)
 		}
 	}

@@ -186,12 +186,11 @@ beerus webhooks
 
 ```
 beerus doctor [--fix]
-beerus snapshot take
 beerus reset <setup-name>
 beerus trust
 ```
 
-`doctor` finds leftover databases and snapshots. `reset` drops the setup's databases and state, and needs the setup's name as a check. `trust` adds the Beerus root certificate to your system.
+`doctor` finds leftover databases. `reset` drops the setup's databases and state, and needs the setup's name as a check. `trust` adds the Beerus root certificate to your system.
 
 ## Standards
 

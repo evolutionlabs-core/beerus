@@ -102,7 +102,6 @@ func TestOpenBanking(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newBankStack(t)
-	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "before consent"})["id"].(string)
 	bank := s.cfg.Bank("bank-a")
 	o := &obClient{t: t, s: s, issuer: bank.APIURL(), c: s.mtls(s.cfg.Path("connect", "client.crt"), s.cfg.Path("connect", "client.key"))}
 
@@ -301,17 +300,13 @@ func TestOpenBanking(t *testing.T) {
 	if _, err := s.ctlTry("POST", "/registry/clients", insecure); err == nil || !strings.Contains(err.Error(), "https") {
 		t.Fatalf("http redirect on a public host: %v", err)
 	}
-	s.ctl("POST", "/snapshots/"+snap+"/restore", nil)
-	if got := s.ctl("GET", "/registry/clients", nil)["data"].([]any); len(got) != 2 {
-		t.Fatalf("registry after restore: %v", got)
-	}
 	kept := map[string]bool{}
 	for _, e := range s.ctl("GET", "/registry/consents?bank=bank-a", nil)["data"].([]any) {
 		m := e.(map[string]any)
 		kept[fmt.Sprint(m["status"])+"/"+fmt.Sprint(m["consent_id"])] = true
 	}
 	if !kept["Authorised/"+consentID] || !kept["Revoked/"+consentID] {
-		t.Fatalf("the consent ledger lost events to a restore: %v", kept)
+		t.Fatalf("the consent ledger lost events: %v", kept)
 	}
 }
 

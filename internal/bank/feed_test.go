@@ -9,7 +9,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 type feedRow struct {
@@ -135,24 +134,6 @@ func TestFeedComesFromPostings(t *testing.T) {
 	tot, err := a.Totals(ctx)
 	if err != nil || tot.Customers != 2 || tot.Accounts != 2 || tot.Deposits != 100000000 {
 		t.Fatalf("totals %+v %v", tot, err)
-	}
-	serial, err := a.NUBANSerial(ctx)
-	if err != nil || serial != 2 {
-		t.Fatalf("serial %d %v", serial, err)
-	}
-	if err := a.RaiseNUBANSerial(ctx, 1); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.RaiseNUBANSerial(ctx, 7); err != nil {
-		t.Fatal(err)
-	}
-	c2, err := a.CreateCustomer(ctx, "c9", "Late Joiner", "+2348030000002", clock.Date{Y: 1990, M: 1, D: 1}, "22912345679", "", "", at)
-	if err != nil {
-		t.Fatal(err)
-	}
-	acc, err := a.OpenAccount(ctx, "a9", c2.ID, bank.ProductCurrent, at)
-	if err != nil || acc.NUBAN != world.NUBAN("901", 8) {
-		t.Fatalf("the account after a raise is %s, want serial 8: %v", acc.NUBAN, err)
 	}
 }
 

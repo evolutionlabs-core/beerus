@@ -100,43 +100,7 @@ func (a *App) syncDirectory(s *nibss.Store) error {
 	return a.refreshDirectory(ctx)
 }
 
-func nibssSnapshot(cfg *config.Config, id string) string {
-	return config.DatabaseName(cfg.Dir, setup.SystemNIBSS) + "_snap_" + snapID(id)
-}
-
-func (a *App) snapshotNIBSS(sw *nibss.Store, id string) error {
-	if sw == nil {
-		return errors.New("the NIBSS directory is not open, so a snapshot would miss its NIP sessions; try again soon")
-	}
-	name := nibssSnapshot(a.cfg, id)
-	if err := a.ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: ownedSnapshot, Name: name}); err != nil {
-		return err
-	}
-	if err := sw.Snapshot(context.Background(), a.cfg.DatabaseURL, name); err != nil {
-		return fmt.Errorf("snapshot NIBSS: %w", err)
-	}
-	return nil
-}
-
-func (a *App) restoreNIBSS(sw *nibss.Store, id string) error {
-	if sw == nil {
-		return errors.New("the NIBSS directory is not open, so its NIP sessions cannot be restored; try again soon")
-	}
-	if err := sw.Restore(context.Background(), a.cfg.DatabaseURL, nibssSnapshot(a.cfg, id)); err != nil {
-		return fmt.Errorf("restore NIBSS: %w", err)
-	}
-	return nil
-}
-
-func (a *App) dropNIBSSSnapshot(id string) error {
-	name := nibssSnapshot(a.cfg, id)
-	if err := store.DropDatabases(context.Background(), a.cfg.DatabaseURL, []string{name}); err != nil {
-		return fmt.Errorf("drop the NIBSS snapshot %s: %w", name, err)
-	}
-	return a.ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name})
-}
-
-func (a *App) dropNIBSS() error {
+func (a *App) dropNIBSS(ctx context.Context) error {
 	a.mu.Lock()
 	s := a.nibss
 	a.nibss = nil
@@ -146,7 +110,7 @@ func (a *App) dropNIBSS() error {
 	}
 	s.Close()
 	name := config.DatabaseName(a.cfg.Dir, setup.SystemNIBSS)
-	if err := store.DropDatabases(context.Background(), a.cfg.DatabaseURL, []string{name}); err != nil {
+	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{name}); err != nil {
 		return fmt.Errorf("drop the NIBSS database: %w", err)
 	}
 	return a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})

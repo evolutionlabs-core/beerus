@@ -280,38 +280,6 @@ func TestConsentEventsAreKeptAndRetried(t *testing.T) {
 	}
 }
 
-func TestRestoreAsksForANewConsent(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	s := newBankStack(t)
-	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
-	id := fmt.Sprint(accountAt(t, conn, "current")["id"])
-	snap := s.ctl("POST", "/snapshots", map[string]string{"name": "linked"})["id"].(string)
-	raw, err := os.ReadFile(s.cfg.Path("snapshots", snap+".json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "oba_") || strings.Contains(string(raw), "obr_") || strings.Contains(string(raw), `"vault"`) {
-		t.Fatal("a snapshot holds bank tokens")
-	}
-	s.ctl("POST", "/snapshots/"+snap+"/restore", nil)
-	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "reauth_required" {
-		t.Fatalf("status after a restore: %v", got.JSON["status"])
-	}
-	s.syncNow()
-	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "reauth_required" {
-		t.Fatalf("status after a sync: %v", got.JSON["status"])
-	}
-	again := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
-	if fmt.Sprint(accountAt(t, again, "current")["id"]) != id {
-		t.Fatal("account ID changed across the reconnect")
-	}
-	if clients := s.ctl("GET", "/registry/clients", nil)["data"].([]any); len(clients) != 1 || clients[0].(map[string]any)["id"] != s.cfg.Connect.RegistryID {
-		t.Fatalf("registry after a restore: %v", clients)
-	}
-}
-
 func TestBankLedgerOutboxInPostgres(t *testing.T) {
 	s := newBankStack(t)
 	ctx := context.Background()

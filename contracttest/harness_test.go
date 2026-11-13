@@ -36,6 +36,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -84,6 +85,7 @@ type Stack struct {
 	violations []string
 	skew       atomic.Int64
 	origin     time.Time
+	base       time.Time
 	people     map[string]persona
 }
 
@@ -91,7 +93,7 @@ func (s *Stack) realNow() time.Time {
 	if s.external {
 		return time.Now()
 	}
-	return stackBase().Add(time.Since(s.origin)).Add(time.Duration(s.skew.Load()))
+	return s.base.Add(time.Since(s.origin)).Add(time.Duration(s.skew.Load()))
 }
 
 func (s *Stack) skewReal(by time.Duration) {
@@ -174,28 +176,25 @@ const (
 	stackWeekday   = time.Thursday
 )
 
-var (
-	baseOnce sync.Once
-	baseTime time.Time
-)
-
-func stackBase() time.Time {
-	baseOnce.Do(func() {
-		for d := clock.DateOf(time.Now()).AddDays(1); ; d = d.AddDays(1) {
-			if d.Weekday() != stackWeekday || d.D < stackFirstDay || d.D > stackLastDay {
-				continue
-			}
-			quiet := true
-			for i := 0; i <= stackQuietDays; i++ {
-				quiet = quiet && !clock.IsHoliday(d.AddDays(i))
-			}
-			if quiet {
-				baseTime = d.Start().Add(stackHour * time.Hour)
-				return
-			}
+func stackBase(t *testing.T) time.Time {
+	t.Helper()
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cal := clock.NewCalendar(pack.Fixed.Days, nil, nil)
+	for d := clock.DateOf(time.Now()).AddDays(1); ; d = d.AddDays(1) {
+		if d.Weekday() != stackWeekday || d.D < stackFirstDay || d.D > stackLastDay {
+			continue
 		}
-	})
-	return baseTime
+		quiet := true
+		for i := 0; i <= stackQuietDays; i++ {
+			quiet = quiet && !cal.IsHoliday(d.AddDays(i))
+		}
+		if quiet {
+			return d.Start().Add(stackHour * time.Hour)
+		}
+	}
 }
 
 func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
@@ -209,7 +208,7 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 		local.DatabaseURL = u
 	}
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort = ports[0], ports[1], ports[2], ports[3]
-	today := clock.DateOf(stackBase())
+	today := clock.DateOf(stackBase(t))
 	spec := banktest.Spec("contract", today)
 	spec.Spec.Partners = []setup.Partner{{
 		ID:           "balance",
@@ -241,7 +240,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}
-	s := &Stack{t: t, people: map[string]persona{}, origin: time.Now()}
+	s := &Stack{t: t, people: map[string]persona{}, origin: time.Now(), base: stackBase(t)}
 	if opts.Real == nil {
 		opts.Real = s.realNow
 	}
@@ -613,12 +612,6 @@ func parseSpan(s string) (time.Duration, error) {
 		return time.Duration(n) * 24 * time.Hour, err
 	}
 	return time.ParseDuration(s)
-}
-
-func (s *Stack) restoreSnapshot() {
-	s.t.Helper()
-	id := fmt.Sprint(s.ctl("POST", "/snapshots", map[string]string{"name": "reauth"})["id"])
-	s.ctl("POST", "/snapshots/"+id+"/restore", nil)
 }
 
 func (s *Stack) today() clock.Date {

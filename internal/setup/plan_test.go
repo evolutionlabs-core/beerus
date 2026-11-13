@@ -544,11 +544,9 @@ func TestBuildRemoval(t *testing.T) {
 			want:    []Action{removeB},
 		},
 		{
-			name: "removal shows the money target and snapshots",
+			name: "removal shows the money target",
 			status: func(st *Status) {
 				bank(&st.Applied, "bank-b").OnRemove = &Removal{Money: MoneyTransfer, To: "bank-a"}
-				r := res(st, KindBank, "bank-b")
-				r.Owned = append(r.Owned, Owned{Kind: ownedSnapshot, Name: "snapshots/bank-b.json"})
 			},
 			desired: func(s *Spec) {
 				dropBank(s, "bank-b")
@@ -558,7 +556,7 @@ func TestBuildRemoval(t *testing.T) {
 				{Op: OpUpdate, Kind: KindBank, ID: "bank-a", Fields: []FieldChange{{Path: "name", From: "Bank A", To: "Zenith Bank"}}},
 				{Op: OpRemove, Kind: KindBank, ID: "bank-b", Destructive: true,
 					Fields: []FieldChange{{Path: "on_remove.money", To: MoneyTransfer}, {Path: "on_remove.to", To: "Zenith Bank"}},
-					Impact: &Impact{Databases: []string{"beerus_x_bank_b"}, Snapshots: []string{"snapshots/bank-b.json"}}},
+					Impact: &Impact{Databases: []string{"beerus_x_bank_b"}}},
 			},
 		},
 		{

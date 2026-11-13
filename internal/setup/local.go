@@ -95,7 +95,6 @@ func (l Local) check(pos map[string]Pos) []specProblem {
 	c.port("connect.health_port", cn.HealthPort)
 	c.duration("connect.sync_interval", cn.SyncInterval)
 	c.duration("connect.refresh_min_interval", cn.RefreshEvery)
-	c.duration("connect.pause_lease", cn.PauseLease)
 	ids := make([]string, 0, len(l.Partners))
 	for id := range l.Partners {
 		ids = append(ids, id)

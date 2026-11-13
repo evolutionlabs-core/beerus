@@ -288,7 +288,6 @@ func TestStory(t *testing.T) {
 	s.people["adaeze@bank-b"] = persona{ID: "adaeze", Bank: "bank-b", Name: "Adaeze Okafor", Username: "adaeze", Password: "beerus-test-adaeze", Customer: adaB, BVN: bvn, Accounts: []string{nubAdaB}}
 	conn := s.connect("adaeze", "bank-b", s.today().AddDays(-3))
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
-	snapshot := fmt.Sprint(c.printedJSON("snapshot", "take", "before-removal")["id"])
 
 	sh.expect("beerus transfer --from "+nubA+" --to "+nubChidi+" --to-bank bank-b --amount 2000", `Sending ₦2,000\.00 to Chidi Okafor at Bank B\.\nSession \d+: success at `+hm+` WAT\nTotal debit ₦2,010\.75: fee ₦10\.00, VAT ₦0\.75 and stamp duty ₦0\.00\. Balance ₦487,957\.00\.\n`)
 	sh.expect("beerus fault timeout --bank bank-b --outcome credited", `Fault flt_\w+ on bank-b: the next transfer times out \(outcome credited\)\.\n`+at)
@@ -300,7 +299,7 @@ func TestStory(t *testing.T) {
 	}
 	settlePending := "SettlementPending: Waiting for the 00:00 NIP session to settle 2 transfers (net ₦2,300.00). Wait for it, or run beerus nip settle-now."
 	out2, err2, code2 := c.run("apply", "--prune", "--wait", "1s")
-	wantPlanB := "Setup story\n\n  - bank bank-b      remove   DESTRUCTIVE\n        stop routing; revoke 1 connection; settle 2 open transfers (net ₦2,300.00);\n        ₦8,300.00 for 2 customers needs a money decision: add on_remove or run with --money;\n        drop 1 database and 1 snapshot. Its ID and codes stay reserved.\n\nPlan: 1 to remove.\n"
+	wantPlanB := "Setup story\n\n  - bank bank-b      remove   DESTRUCTIVE\n        stop routing; revoke 1 connection; settle 2 open transfers (net ₦2,300.00);\n        ₦8,300.00 for 2 customers needs a money decision: add on_remove or run with --money;\n        drop 1 database. Its ID and codes stay reserved.\n\nPlan: 1 to remove.\n"
 	if code2 != 3 || out2 != wantPlanB || !regexp.MustCompile(`^(bank bank-b: `+quote(settlePending)+`\n)?beerus: bank bank-b: `+quote(settlePending)+`$`).MatchString(err2) {
 		t.Fatalf("removing bank-b with --prune --wait 1s: exit %d, output %q, error %q", code2, out2, err2)
 	}
@@ -308,7 +307,6 @@ func TestStory(t *testing.T) {
 	unavailable := `\{\n  "account_number": "` + nubChidi + `",\n  "bank_code": "000002",\n  "bank_name": "Bank B",\n  "message": "Bank B is not available right now\.",\n  "response_code": "91"\n\}\n`
 	sh.expect("beerus nip name-enquiry 000002 "+nubChidi, unavailable)
 	sh.refuse("beerus transfer --from "+nubA+" --to "+nubChidi+" --to-bank bank-b --amount 10", "beerus: Bank B is not available right now, so nothing was debited.")
-	sh.refuse("beerus snapshot restore "+snapshot, "beerus: Bank B is terminating, so a snapshot cannot be restored until that finishes")
 	revoked := func() []map[string]any {
 		return s.eventsOf("connection.status_changed", func(d map[string]any) bool {
 			return d["connection_id"] == conn.ConnectionID && d["status"] == "revoked"
@@ -368,9 +366,6 @@ func TestStory(t *testing.T) {
 			}
 			l.Close()
 		}
-	}
-	if _, err := os.Stat(filepath.Join(dir, "snapshots", snapshot+".json")); !os.IsNotExist(err) {
-		t.Errorf("the snapshot that held bank-b: %v", err)
 	}
 	if err := os.WriteFile(readd, []byte(fmt.Sprintf(storySpec, sink.srv.URL+"/webhooks")), 0o600); err != nil {
 		t.Fatal(err)

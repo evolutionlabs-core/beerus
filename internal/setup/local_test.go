@@ -24,7 +24,6 @@ connect:
   health_port: 7490
   sync_interval: 30s
   refresh_min_interval: 5m
-  pause_lease: 2m
 partners:
   balance: {redirect_uris: [http://localhost:3000/callback], webhook_url: http://localhost:3000/webhooks}
 `
@@ -111,7 +110,7 @@ func TestLoadLocalRejects(t *testing.T) {
 		{"zero window", "window: 300", "window: 0", "local.yaml:4:25: ports.window 0 must be more than zero. Leave it out for the default."},
 		{"bad duration", "sync_interval: 30s", "sync_interval: soon", `local.yaml:12:3: connect.sync_interval "soon" is not a duration longer than zero. Use a duration such as 30s.`},
 		{"tls as text", "widget_tls: true", "widget_tls: maybe", "local.yaml:9:15: connect.widget_tls maybe is not true or false. Write true or false."},
-		{"bad webhook", "webhook_url: http://localhost:3000/webhooks", "webhook_url: ftp://x", `local.yaml:16:62: partners[balance].webhook_url "ftp://x" is not an http or https URL. Use a full URL such as http://localhost:3000/webhooks.`},
+		{"bad webhook", "webhook_url: http://localhost:3000/webhooks", "webhook_url: ftp://x", `local.yaml:15:62: partners[balance].webhook_url "ftp://x" is not an http or https URL. Use a full URL such as http://localhost:3000/webhooks.`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

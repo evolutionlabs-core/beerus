@@ -29,7 +29,7 @@ var reservedIDs = map[string]bool{cbnID: true, "nibss": true}
 
 type schedule struct {
 	per int
-	cal *clock.Calendar
+	cal clock.Calendar
 }
 
 func (s schedule) every() time.Duration {
@@ -171,53 +171,6 @@ func (r *rtgs) Balance(member string) (int64, error) {
 	return r.l.Balance(r.ctx, settlementAccount(member))
 }
 
-func (r *rtgs) Snapshot(id string) error {
-	name := r.st.Name() + "_snap_" + snapID(id)
-	if err := r.ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: ownedSnapshot, Name: name}); err != nil {
-		return err
-	}
-	if err := r.st.Snapshot(r.ctx, snapID(id)); err != nil {
-		return err
-	}
-	r.l = ledger.New(r.st.Pool, nil)
-	return nil
-}
-
-func (r *rtgs) Restore(id string) error {
-	ok, err := r.st.HasSnapshot(r.ctx, snapID(id))
-	if err != nil {
-		return err
-	}
-	if ok {
-		if err := r.st.Restore(r.ctx, snapID(id)); err != nil {
-			return err
-		}
-		return r.setup()
-	}
-	return r.rebuild()
-}
-
-func (r *rtgs) rebuild() error {
-	r.st.Close()
-	if err := store.DropDatabases(r.ctx, r.st.URL(), []string{r.st.Name()}); err != nil {
-		return err
-	}
-	st, err := store.Open(r.ctx, r.cfg.DatabaseURL, r.st.Name())
-	if err != nil {
-		return err
-	}
-	r.st = st
-	return r.setup()
-}
-
-func (r *rtgs) DropSnapshot(id string) error {
-	name := r.st.Name() + "_snap_" + snapID(id)
-	if err := store.DropDatabases(r.ctx, r.st.URL(), []string{name}); err != nil {
-		return err
-	}
-	return r.ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name})
-}
-
 func (r *rtgs) Drop() error {
 	if err := r.st.Drop(r.ctx); err != nil {
 		return err
@@ -296,12 +249,6 @@ func addMinor(a, b int64) (int64, bool) {
 }
 
 func (a *App) settle(now time.Time, adhoc bool) (int, error) {
-	a.gate.RLock()
-	defer a.gate.RUnlock()
-	return a.settleGated(now, adhoc)
-}
-
-func (a *App) settleGated(now time.Time, adhoc bool) (int, error) {
 	a.mu.Lock()
 	for a.settling {
 		a.settleDone.Wait()

@@ -135,12 +135,6 @@ func (a *App) route(req TransferRequest, session bool) (transferRoute, error) {
 	return rt, nil
 }
 
-func (a *App) Transfer(req TransferRequest) (TransferResult, error) {
-	a.gate.RLock()
-	defer a.gate.RUnlock()
-	return a.transfer(req)
-}
-
 const maxNarrationRunes = 100
 
 func checkNarration(n string) error {
@@ -155,7 +149,7 @@ func checkNarration(n string) error {
 	return nil
 }
 
-func (a *App) transfer(req TransferRequest) (TransferResult, error) {
+func (a *App) Transfer(req TransferRequest) (TransferResult, error) {
 	if req.Amount <= 0 {
 		return TransferResult{}, refused(http.StatusBadRequest, nip.SystemError, "invalid_request", errors.New("amount must be above zero"))
 	}
@@ -521,8 +515,6 @@ func (a *App) bankByCode(code string) *ledgerSource {
 }
 
 func (a *App) checkSessions(now time.Time) error {
-	a.gate.RLock()
-	defer a.gate.RUnlock()
 	sw := a.nibssStore()
 	if sw == nil {
 		return nil
@@ -566,9 +558,7 @@ func (a *App) QuerySession(id string) (nibss.Session, error) {
 		return x, err
 	}
 	sw := a.nibssStore()
-	a.gate.RLock()
 	err = a.checkSession(sw, x, a.clock.Now())
-	a.gate.RUnlock()
 	if err != nil {
 		return nibss.Session{}, fmt.Errorf("query session %s: %w", id, err)
 	}

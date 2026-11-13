@@ -17,29 +17,15 @@ import (
 //go:embed ng.yaml
 var ng []byte
 
+type Day struct {
+	Name  string `yaml:"name"`
+	Month int    `yaml:"month"`
+	Day   int    `yaml:"day"`
+}
+
 type Fixed struct {
-	Name  string `yaml:"name"`
-	Month int    `yaml:"month"`
-	Day   int    `yaml:"day"`
-}
-
-type Easter struct {
-	Name   string `yaml:"name"`
-	Offset int    `yaml:"offset"`
-}
-
-type Islamic struct {
-	Name  string `yaml:"name"`
-	Month int    `yaml:"month"`
-	Day   int    `yaml:"day"`
-	Days  int    `yaml:"days"`
-}
-
-type Declared struct {
-	Year   int      `yaml:"year"`
-	Add    []string `yaml:"add"`
-	Remove []string `yaml:"remove"`
-	Source string   `yaml:"source"`
+	Days   []Day  `yaml:"days"`
+	Source string `yaml:"source"`
 }
 
 type CodeTier struct {
@@ -134,12 +120,9 @@ type Fees struct {
 }
 
 type Pack struct {
-	Country  string     `yaml:"country"`
-	Version  string     `yaml:"version"`
-	Fixed    []Fixed    `yaml:"fixed"`
-	Easter   []Easter   `yaml:"easter"`
-	Islamic  []Islamic  `yaml:"islamic"`
-	Declared []Declared `yaml:"declared"`
+	Country string `yaml:"country"`
+	Version string `yaml:"version"`
+	Fixed   Fixed  `yaml:"fixed"`
 
 	BankCodes        BankCodes        `yaml:"bank_codes"`
 	Phone            Phone            `yaml:"phone"`
@@ -154,11 +137,6 @@ func Nigeria() (*Pack, error) {
 	}
 	if p.Version == "" {
 		return nil, fmt.Errorf("country pack NG: no version")
-	}
-	for _, d := range p.Declared {
-		if d.Source == "" {
-			return nil, fmt.Errorf("country pack NG: declared %d has no source", d.Year)
-		}
 	}
 	if err := p.BankCodes.check(p.DepositInsurance.BankTypes); err != nil {
 		return nil, fmt.Errorf("country pack NG: %w", err)

@@ -437,7 +437,7 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	h := ob.Handler()
 	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.freshen()
-		if (a.role == RoleBank && (!a.synced.Load() || a.paused.Load())) || a.bankPhase(b.ID) == PhaseSuspended || a.obLedger(b.ID) == nil || a.bankDown(b.ID, a.clock.Now()) {
+		if (a.role == RoleBank && !a.synced.Load()) || a.bankPhase(b.ID) == PhaseSuspended || a.obLedger(b.ID) == nil || a.bankDown(b.ID, a.clock.Now()) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "30")
 			w.WriteHeader(http.StatusServiceUnavailable)

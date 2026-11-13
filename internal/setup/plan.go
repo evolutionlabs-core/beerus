@@ -536,10 +536,8 @@ func ownedImpact(r Resource) *Impact {
 	im := &Impact{}
 	for _, o := range r.Owned {
 		switch o.Kind {
-		case ownedDatabase:
+		case ownedDatabase, ownedSnapshot:
 			im.Databases = append(im.Databases, o.Name)
-		case ownedSnapshot:
-			im.Snapshots = append(im.Snapshots, o.Name)
 		}
 	}
 	return im

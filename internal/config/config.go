@@ -51,7 +51,6 @@ type Connect struct {
 	CACNumber    string `yaml:"cac_number"`
 	SyncInterval string `yaml:"sync_interval"`
 	RefreshEvery string `yaml:"refresh_min_interval"`
-	PauseLease   string `yaml:"pause_lease,omitempty"`
 }
 
 type Bank struct {
@@ -130,7 +129,7 @@ type Config struct {
 	Holidays    *Holidays     `yaml:"holidays,omitempty"`
 	Dir         string        `yaml:"-"`
 	Start       time.Time     `yaml:"-"`
-	calendar    *clock.Calendar
+	calendar    clock.Calendar
 	fees        *charges.Schedule
 }
 
@@ -140,47 +139,45 @@ func (c *Config) Fees() *charges.Schedule {
 	return c.fees
 }
 
-func (c *Config) buildFees() error {
-	pack, err := countrypack.Nigeria()
-	if err != nil {
-		return fmt.Errorf("load country pack: %w", err)
-	}
+func (c *Config) Calendar() clock.Calendar {
+	return c.calendar
+}
+
+func (c *Config) buildFees(pack *countrypack.Pack) error {
+	var err error
 	if c.fees, err = charges.New(pack.Fees); err != nil {
 		return fmt.Errorf("build fee schedule: %w", err)
 	}
 	return nil
 }
 
-func (c *Config) Calendar() *clock.Calendar {
-	return c.calendar
+func (c *Config) buildCalendar(pack *countrypack.Pack) error {
+	var h Holidays
+	if c.Holidays != nil {
+		h = *c.Holidays
+	}
+	add, err := parseHolidays("add", h.Add)
+	if err != nil {
+		return err
+	}
+	remove, err := parseHolidays("remove", h.Remove)
+	if err != nil {
+		return err
+	}
+	c.calendar = clock.NewCalendar(pack.Fixed.Days, add, remove)
+	return nil
 }
 
-func (c *Config) buildCalendar() error {
-	c.calendar = nil
-	if c.Holidays == nil {
-		return nil
-	}
-	parse := func(name string, list []string) ([]clock.Date, error) {
-		var out []clock.Date
-		for _, s := range list {
-			d, err := clock.ParseDate(s)
-			if err != nil {
-				return nil, fmt.Errorf("holidays.%s: %q is not a date (use YYYY-MM-DD)", name, s)
-			}
-			out = append(out, d)
+func parseHolidays(name string, list []string) ([]clock.Date, error) {
+	var out []clock.Date
+	for _, s := range list {
+		d, err := clock.ParseDate(s)
+		if err != nil {
+			return nil, fmt.Errorf("holidays.%s: %q is not a date (use YYYY-MM-DD)", name, s)
 		}
-		return out, nil
+		out = append(out, d)
 	}
-	add, err := parse("add", c.Holidays.Add)
-	if err != nil {
-		return err
-	}
-	remove, err := parse("remove", c.Holidays.Remove)
-	if err != nil {
-		return err
-	}
-	c.calendar = clock.NewCalendar(add, remove)
-	return nil
+	return out, nil
 }
 
 const DefaultNIPSessions = 4
@@ -210,10 +207,6 @@ func (c *Config) SyncInterval() time.Duration {
 
 func (c *Config) RefreshMinInterval() time.Duration {
 	return dur(c.Connect.RefreshEvery, time.Minute)
-}
-
-func (c *Config) PauseLease() time.Duration {
-	return dur(c.Connect.PauseLease, 2*time.Minute)
 }
 
 func dur(s string, def time.Duration) time.Duration {
@@ -282,10 +275,14 @@ func (c *Config) Finish() error {
 	if err := c.validatePorts(); err != nil {
 		return err
 	}
-	if err := c.buildFees(); err != nil {
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return fmt.Errorf("load country pack: %w", err)
+	}
+	if err := c.buildFees(pack); err != nil {
 		return err
 	}
-	return c.buildCalendar()
+	return c.buildCalendar(pack)
 }
 
 func randomToken(prefix string, n int) (string, error) {
@@ -297,7 +294,7 @@ func randomToken(prefix string, n int) (string, error) {
 }
 
 func Prepare(c *Config, now time.Time) error {
-	for _, sub := range []string{"ca", "connect", "partners", "webhook", "snapshots"} {
+	for _, sub := range []string{"ca", "connect", "partners", "webhook"} {
 		if err := os.MkdirAll(c.Path(sub), 0o700); err != nil {
 			return fmt.Errorf("create %s: %w", sub, err)
 		}

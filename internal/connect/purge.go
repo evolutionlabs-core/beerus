@@ -7,9 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
-	"sort"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -20,7 +18,6 @@ import (
 type PurgeImpact struct {
 	Bank        BankStatus `json:"bank"`
 	Database    string     `json:"database"`
-	Snapshots   []string   `json:"snapshots"`
 	Connections int        `json:"connections"`
 	Blockers    []string   `json:"blockers"`
 }
@@ -32,11 +29,7 @@ func (a *App) PurgeImpact(ctx context.Context, id string) (PurgeImpact, error) {
 	if !ok || b == nil {
 		return PurgeImpact{}, errNotFound
 	}
-	snaps, err := a.snapshotsWith(id)
-	if err != nil {
-		return PurgeImpact{}, err
-	}
-	out := PurgeImpact{Bank: st, Database: b.Database, Snapshots: snaps, Blockers: []string{}}
+	out := PurgeImpact{Bank: st, Database: b.Database, Blockers: []string{}}
 	for _, other := range banks {
 		if other.SettlesThrough == id {
 			out.Blockers = append(out.Blockers, other.Name+" settles through this bank; purge it first")
@@ -56,21 +49,6 @@ func (a *App) PurgeImpact(ctx context.Context, id string) (PurgeImpact, error) {
 		}
 	}
 	a.mu.Unlock()
-	return out, nil
-}
-
-func (a *App) snapshotsWith(id string) ([]string, error) {
-	metas, err := a.snapshotMetas()
-	if err != nil {
-		return nil, err
-	}
-	out := []string{}
-	for _, m := range metas {
-		if slices.Contains(m.Banks, id) {
-			out = append(out, m.ID)
-		}
-	}
-	sort.Strings(out)
 	return out, nil
 }
 
@@ -99,10 +77,6 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 		return a.blocked(setup.ReasonSettlementPending, "%s", waiting), nil
 	}
 	b := a.bankByID(id)
-	snaps, err := a.snapshotsWith(id)
-	if err != nil {
-		return nil, err
-	}
 	a.sendLocks.Delete(id)
 	var ls *ledgerSource
 	if b != nil {
@@ -119,9 +93,6 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	case r.Allocated.Database != "":
 		errs = append(errs, store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{r.Allocated.Database}))
 	}
-	for _, snap := range snaps {
-		errs = append(errs, a.dropSnapshotEverywhere(snap))
-	}
 	a.obMu.Lock()
 	delete(a.obs, id)
 	a.obMu.Unlock()
@@ -129,6 +100,22 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	a.dropBankRows(id)
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("purge %s: %w", id, err)
+	}
+	var snapshots []string
+	for _, o := range r.Owned {
+		if o.Kind == ownedSnapshot {
+			snapshots = append(snapshots, o.Name)
+		}
+	}
+	if len(snapshots) > 0 {
+		if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, snapshots); err != nil {
+			return nil, fmt.Errorf("drop snapshot databases of %s: %w", id, err)
+		}
+		for _, name := range snapshots {
+			if err := a.ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name}); err != nil {
+				return nil, fmt.Errorf("release snapshot database %s of %s: %w", name, id, err)
+			}
+		}
 	}
 	tomb, err := a.readBackPurge(ctx, r)
 	if err != nil {
@@ -197,25 +184,6 @@ func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nibss.Instit
 		return nibss.Institution{}, fmt.Errorf("NIBSS shows %s as %s, not %s", id, in.Status, nibss.StatusRemoved)
 	}
 	return in, nil
-}
-
-func (a *App) dropSnapshotEverywhere(snap string) error {
-	a.mu.Lock()
-	others := slices.Clone(a.ledgers)
-	r := a.rtgs
-	a.mu.Unlock()
-	var errs []error
-	for _, l := range others {
-		errs = append(errs, l.DropSnapshot(snap))
-	}
-	if r != nil {
-		errs = append(errs, r.DropSnapshot(snap))
-	}
-	errs = append(errs, a.dropNIBSSSnapshot(snap))
-	if err := os.Remove(filepath.Join(a.snapshotDir(), snap+".json")); err != nil && !os.IsNotExist(err) {
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
 }
 
 func (a *App) purgePartner(_ context.Context, r setup.Resource) (*setup.Condition, error) {
