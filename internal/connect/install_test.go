@@ -196,4 +196,39 @@ func TestInstall(t *testing.T) {
 			t.Fatalf("up on nothing: %v", err)
 		}
 	})
+
+	t.Run("opening the CBN ledger activates CBN", func(t *testing.T) {
+		today := clock.Date{Y: 2026, M: 11, D: 3}
+		local := DefaultLocal()
+		local.DatabaseURL = url
+		dir := t.TempDir()
+		t.Cleanup(func() {
+			if _, err := Reset(context.Background(), dir, url); err != nil {
+				t.Errorf("drop databases: %v", err)
+			}
+		})
+		if err := Init(dir, banktest.Spec("beerus", today), local, today); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctl, err := openStore(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := openRTGS(context.Background(), cfg, ctl, cfg.Start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Close()
+		st, err := ctl.status()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := systemPhase(st, setup.SystemCBN); got != setup.PhaseActive {
+			t.Fatalf("CBN phase after openRTGS: %q", got)
+		}
+	})
 }
