@@ -187,6 +187,8 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 	var removed []nibss.Institution
 	if id == "" {
 		slug = strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
+	}
+	if slug != "" {
 		var err error
 		if removed, err = a.removedBanks(ctx); err != nil {
 			return BankStatus{}, err
@@ -207,6 +209,11 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 			}
 			for _, in := range removed {
 				taken[in.ID] = true
+			}
+			for _, r := range stored.Resources {
+				if r.Kind == setup.KindBank {
+					taken[r.ID] = true
+				}
 			}
 			for _, b := range a.bankList() {
 				taken[b.ID] = true
