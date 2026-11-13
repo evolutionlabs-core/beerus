@@ -89,30 +89,32 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 	if !fix || rep.Clean() {
 		return rep, nil
 	}
-	if err := store.DropDatabases(ctx, c.DatabaseURL, rep.Orphans); err != nil {
-		return rep, err
-	}
+	claims := owned(st, ownedSnapshot)
 	var claimed []string
-	for name := range owned(st, ownedSnapshot) {
-		if slices.Contains(rep.Orphans, name) {
+	for _, name := range rep.Orphans {
+		if _, ok := claims[name]; ok {
 			claimed = append(claimed, name)
 		}
 	}
-	sort.Strings(claimed)
+	var ctl *ctlStore
 	if len(claimed)+len(rep.StaleOwned) > 0 {
-		ctl, err := openStore(c.Dir)
+		var err error
+		ctl, err = openStore(c.Dir)
 		if err != nil {
 			return rep, err
 		}
-		for _, name := range claimed {
-			if err := ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name}); err != nil {
-				return rep, err
-			}
+	}
+	for _, name := range claimed {
+		if err := ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name}); err != nil {
+			return rep, err
 		}
-		for _, bank := range rep.StaleOwned {
-			if err := ctl.forget(setup.KindBank, bank); err != nil {
-				return rep, err
-			}
+	}
+	if err := store.DropDatabases(ctx, c.DatabaseURL, rep.Orphans); err != nil {
+		return rep, err
+	}
+	for _, bank := range rep.StaleOwned {
+		if err := ctl.forget(setup.KindBank, bank); err != nil {
+			return rep, err
 		}
 	}
 	rep.Fixed = true

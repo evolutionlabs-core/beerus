@@ -107,12 +107,14 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 			snapshots = append(snapshots, o.Name)
 		}
 	}
-	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, snapshots); err != nil {
-		return nil, fmt.Errorf("drop snapshot databases of %s: %w", id, err)
-	}
-	for _, name := range snapshots {
-		if err := a.ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name}); err != nil {
-			return nil, fmt.Errorf("release snapshot database %s of %s: %w", name, id, err)
+	if len(snapshots) > 0 {
+		if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, snapshots); err != nil {
+			return nil, fmt.Errorf("drop snapshot databases of %s: %w", id, err)
+		}
+		for _, name := range snapshots {
+			if err := a.ctl.Release(setup.Owned{Kind: ownedSnapshot, Name: name}); err != nil {
+				return nil, fmt.Errorf("release snapshot database %s of %s: %w", name, id, err)
+			}
 		}
 	}
 	tomb, err := a.readBackPurge(ctx, r)

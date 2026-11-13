@@ -3,7 +3,6 @@ package connect
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -322,7 +321,7 @@ func TestLeftoverSnapshotDatabasesAreDroppedAndReleased(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fmt.Sprint(rep.Orphans); got != "["+leftover.Name+"]" || !rep.Fixed {
+	if !slices.Equal(rep.Orphans, []string{leftover.Name}) || !rep.Fixed {
 		t.Fatalf("doctor: %+v", rep)
 	}
 	names, err := store.List(t.Context(), cfg.DatabaseURL, leftover.Name)
