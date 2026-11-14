@@ -39,10 +39,10 @@ func bankDirConfig(t *testing.T, banks ...*config.Bank) *config.Config {
 }
 
 func TestWishGeneration(t *testing.T) {
-	down := func(ids ...string) []Fault {
-		out := []Fault{}
+	down := func(ids ...string) []server.Fault {
+		out := []server.Fault{}
 		for _, id := range ids {
-			out = append(out, Fault{ID: id, Kind: FaultDown})
+			out = append(out, server.Fault{ID: id, Kind: server.FaultDown})
 		}
 		return out
 	}

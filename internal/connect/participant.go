@@ -1,8 +1,6 @@
 package connect
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"slices"
@@ -10,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -60,18 +59,13 @@ type participantFault struct {
 	CreatedAt time.Time  `json:"created_at"`
 }
 
-func faultView(f Fault) participantFault {
+func faultView(f server.Fault) participantFault {
 	v := participantFault{ID: f.ID, Kind: f.Kind, Outcome: f.Outcome, Left: f.Left, CreatedAt: f.At.In(clock.Lagos)}
 	if f.Until != nil {
 		until := f.Until.In(clock.Lagos)
 		v.UntilAt = &until
 	}
 	return v
-}
-
-func faultIDFor(key string) string {
-	sum := sha256.Sum256([]byte(key))
-	return "flt_" + hex.EncodeToString(sum[:])[:faultIDHexChars]
 }
 
 func (a *App) participantAPI() http.Handler {
@@ -182,7 +176,7 @@ func (a *App) listParticipantFaults(w http.ResponseWriter, r *http.Request) {
 	live := a.Faults()
 	start := 0
 	if cursor != "" {
-		i := slices.IndexFunc(live, func(f Fault) bool { return f.ID == cursor })
+		i := slices.IndexFunc(live, func(f server.Fault) bool { return f.ID == cursor })
 		if i < 0 {
 			web.WriteError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")
 			return
@@ -202,18 +196,18 @@ func (a *App) listParticipantFaults(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) setParticipantFault(w http.ResponseWriter, r *http.Request) {
-	var req FaultRequest
+	var req server.FaultRequest
 	if err := web.DecodeBody(r, &req); err != nil || req.Bank != "" {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"kind":"down","for":"1h"} or {"kind":"timeout","outcome":"credited"}.`)
 		return
 	}
 	now := a.clock.Now()
-	f, err := newFault(req, now)
+	f, err := server.NewFault(req, now)
 	if err != nil {
-		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 		return
 	}
-	f.ID, f.Bank = faultIDFor(r.Header.Get("Idempotency-Key")), a.bankID
+	f.ID, f.Bank = server.FaultID(r.Header.Get("Idempotency-Key")), a.bankID
 	a.mu.Lock()
 	a.pruneFaultsLocked(now)
 	a.st.Faults = append(a.st.Faults, &f)

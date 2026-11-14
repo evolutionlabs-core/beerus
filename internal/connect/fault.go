@@ -7,95 +7,21 @@ import (
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
-const (
-	FaultDown    = "down"
-	FaultTimeout = "timeout"
-)
-
-type Fault struct {
-	ID      string     `json:"id"`
-	Kind    string     `json:"kind"`
-	Bank    string     `json:"bank"`
-	Outcome string     `json:"outcome,omitempty"`
-	Left    int        `json:"left,omitempty"`
-	Until   *time.Time `json:"until,omitempty"`
-	At      time.Time  `json:"created_at"`
-}
-
-func (f *Fault) live(now time.Time) bool {
-	switch f.Kind {
-	case FaultDown:
-		return f.Until == nil || now.Before(*f.Until)
-	case FaultTimeout:
-		return f.Left > 0
-	}
-	return false
-}
-
-type FaultRequest struct {
-	Kind    string `json:"kind"`
-	Bank    string `json:"bank"`
-	Outcome string `json:"outcome"`
-	Count   *int   `json:"count"`
-	For     string `json:"for"`
-}
-
-const maxFaultFor = 24 * time.Hour
-
-func newFault(req FaultRequest, now time.Time) (Fault, error) {
-	f := Fault{Kind: req.Kind, At: now}
-	switch req.Kind {
-	case FaultDown:
-		if req.Outcome != "" || req.Count != nil {
-			return Fault{}, invalid("a down fault takes only bank and for")
-		}
-		if req.For != "" {
-			d, err := time.ParseDuration(req.For)
-			if err != nil || d <= 0 {
-				return Fault{}, invalid("for %q is not a duration above zero, such as 1h", req.For)
-			}
-			if d > maxFaultFor {
-				return Fault{}, invalid("for %q is above the limit of %dh", req.For, int(maxFaultFor.Hours()))
-			}
-			until := now.Add(d)
-			f.Until = &until
-		}
-	case FaultTimeout:
-		if !slices.Contains([]string{nibss.OutcomeCredited, nibss.OutcomeFailed, nibss.OutcomeUnknown}, req.Outcome) {
-			return Fault{}, invalid("outcome %q must be credited, failed or unknown", req.Outcome)
-		}
-		if req.For != "" {
-			return Fault{}, invalid("a timeout fault takes a count, not for")
-		}
-		left := 1
-		if req.Count != nil {
-			if *req.Count < 1 {
-				return Fault{}, invalid("count %d must be 1 or more", *req.Count)
-			}
-			left = *req.Count
-		}
-		f.Outcome, f.Left = req.Outcome, left
-	default:
-		return Fault{}, invalid("kind %q must be down or timeout", req.Kind)
-	}
-	return f, nil
-}
-
-func (a *App) AddFault(req FaultRequest) (Fault, error) {
+func (a *App) AddFault(req server.FaultRequest) (server.Fault, error) {
 	if a.bankByID(req.Bank) == nil {
-		return Fault{}, errNotFound
+		return server.Fault{}, errNotFound
 	}
-	f, err := newFault(req, a.clock.Now())
+	f, err := server.NewFault(req, a.clock.Now())
 	if err != nil {
-		return Fault{}, err
+		return server.Fault{}, err
 	}
 	f.Bank = req.Bank
-	f.ID = faultIDFor(fmt.Sprintf("%s|%s|%d", f.Bank, f.Kind, f.At.UnixNano()))
+	f.ID = server.FaultID(fmt.Sprintf("%s|%s|%d", f.Bank, f.Kind, f.At.UnixNano()))
 	a.mu.Lock()
 	a.st.Faults = append(a.st.Faults, &f)
 	a.dirty()
@@ -104,16 +30,16 @@ func (a *App) AddFault(req FaultRequest) (Fault, error) {
 	return f, nil
 }
 
-func (a *App) Faults() []Fault {
+func (a *App) Faults() []server.Fault {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.faultsLocked(a.clock.Now())
 }
 
-func (a *App) faultsLocked(now time.Time) []Fault {
-	out := []Fault{}
+func (a *App) faultsLocked(now time.Time) []server.Fault {
+	out := []server.Fault{}
 	for _, f := range a.st.Faults {
-		if f.live(now) {
+		if f.Live(now) {
 			out = append(out, *f)
 		}
 	}
@@ -128,7 +54,7 @@ func (a *App) ClearFaults(bank string) int {
 	n := 0
 	for _, f := range a.st.Faults {
 		switch {
-		case !f.live(now):
+		case !f.Live(now):
 		case bank == "" || f.Bank == bank:
 			n++
 		default:
@@ -148,20 +74,20 @@ func (a *App) bankDown(id string, at time.Time) bool {
 }
 
 func (a *App) bankDownLocked(id string, at time.Time) bool {
-	return slices.ContainsFunc(a.st.Faults, func(f *Fault) bool { return f.Kind == FaultDown && f.Bank == id && f.live(at) })
+	return slices.ContainsFunc(a.st.Faults, func(f *server.Fault) bool { return f.Kind == server.FaultDown && f.Bank == id && f.Live(at) })
 }
 
 func (a *App) bankFaulty(id string, at time.Time) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return slices.ContainsFunc(a.st.Faults, func(f *Fault) bool { return f.Bank == id && f.live(at) })
+	return slices.ContainsFunc(a.st.Faults, func(f *server.Fault) bool { return f.Bank == id && f.Live(at) })
 }
 
 func (a *App) takeTimeout(bank string) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, f := range a.st.Faults {
-		if f.Kind == FaultTimeout && f.Bank == bank && f.Left > 0 {
+		if f.Kind == server.FaultTimeout && f.Bank == bank && f.Left > 0 {
 			f.Left--
 			a.dirty()
 			return f.Outcome
@@ -173,7 +99,7 @@ func (a *App) takeTimeout(bank string) string {
 func (a *App) pruneFaultsLocked(now time.Time) {
 	keep := a.st.Faults[:0]
 	for _, f := range a.st.Faults {
-		if f.live(now) {
+		if f.Live(now) {
 			keep = append(keep, f)
 		}
 	}
@@ -185,7 +111,7 @@ func (a *App) ctlFaults(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlAddFault(w http.ResponseWriter, r *http.Request) {
-	var req FaultRequest
+	var req server.FaultRequest
 	if err := web.DecodeBody(r, &req); err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"kind":"down","bank":"bank-b","for":"1h"} or {"kind":"timeout","bank":"bank-b","outcome":"credited"}.`)
 		return

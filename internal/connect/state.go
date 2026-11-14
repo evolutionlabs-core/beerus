@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -200,7 +201,7 @@ type State struct {
 	ConsentLedger  []ConsentRecord                        `json:"consent_ledger"`
 	Access         []AccessEvent                          `json:"access"`
 	WorldID        string                                 `json:"world_id"`
-	Faults         []*Fault                               `json:"faults"`
+	Faults         []*server.Fault                        `json:"faults"`
 	LinkSessions   map[string]*LinkSession                `json:"link_sessions"`
 	WidgetSessions map[string]*WidgetSession              `json:"widget_sessions"`
 	Connections    map[string]*Connection                 `json:"connections"`

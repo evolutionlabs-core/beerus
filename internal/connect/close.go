@@ -259,7 +259,7 @@ func (a *App) CloseBank(id string, req CloseRequest) (setup.Resource, error) {
 		}
 		b := &sp.Spec.Banks[i]
 		if b.State == setup.StateClosed {
-			return invalid("%s is already closed", b.Name)
+			return server.Invalid("%s is already closed", b.Name)
 		}
 		b.State = setup.StateClosed
 		if req.Money != "" || req.To != "" || len(req.Customers) > 0 {

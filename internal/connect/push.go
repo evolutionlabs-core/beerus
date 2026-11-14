@@ -28,7 +28,7 @@ type bankWish struct {
 	phase  string
 	reason string
 	config string
-	downs  []Fault
+	downs  []server.Fault
 }
 
 type remoteFaults struct {
@@ -55,7 +55,7 @@ func (a *App) wishFor(id string) (bankWish, error) {
 	}
 	w.phase, w.reason = a.bankPhaseReason(id)
 	for _, f := range a.Faults() {
-		if f.Kind == FaultDown && f.Bank == id {
+		if f.Kind == server.FaultDown && f.Bank == id {
 			w.downs = append(w.downs, f)
 		}
 	}
@@ -213,14 +213,14 @@ func (a *App) heldFaults(ctx context.Context, base string) ([]string, error) {
 	}
 }
 
-func (a *App) syncFaults(ctx context.Context, id, base string, downs []Fault) error {
+func (a *App) syncFaults(ctx context.Context, id, base string, downs []server.Fault) error {
 	held, err := a.heldFaults(ctx, base)
 	if err != nil {
 		return fmt.Errorf("list faults of %s: %w", id, err)
 	}
 	wanted := make([]string, 0, len(downs))
 	for _, f := range downs {
-		wanted = append(wanted, faultIDFor(f.ID))
+		wanted = append(wanted, server.FaultID(f.ID))
 	}
 	if slices.ContainsFunc(held, func(h string) bool { return !slices.Contains(wanted, h) }) {
 		if _, err := a.link.Request(ctx, base, http.MethodDelete, "/v1/faults", nil, nil, nil); err != nil {
@@ -233,13 +233,13 @@ func (a *App) syncFaults(ctx context.Context, id, base string, downs []Fault) er
 		if slices.Contains(held, wanted[i]) {
 			continue
 		}
-		req := FaultRequest{Kind: FaultDown}
+		req := server.FaultRequest{Kind: server.FaultDown}
 		if f.Until != nil {
 			left := f.Until.Sub(now).Round(time.Second)
 			if left <= 0 {
 				continue
 			}
-			req.For = min(left, maxFaultFor).String()
+			req.For = min(left, server.MaxFaultFor).String()
 		}
 		header := http.Header{"Idempotency-Key": {f.ID}}
 		_, err := a.link.Request(ctx, base, http.MethodPost, "/v1/faults", header, req, nil)

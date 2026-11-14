@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
@@ -133,7 +134,7 @@ func (a *App) dropBankRows(id string) {
 			a.vaultDrop(cid)
 		}
 	}
-	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *Fault) bool { return f.Bank == id })
+	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *server.Fault) bool { return f.Bank == id })
 	for lid, l := range a.st.LinkSessions {
 		if l.Institution == id {
 			delete(a.st.LinkSessions, lid)

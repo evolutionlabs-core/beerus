@@ -529,7 +529,7 @@ func (a *App) allocatePorts(ad *admission) error {
 		return nil
 	}
 	if err := a.postgresRoom(context.Background()); err != nil {
-		return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+		return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 	}
 	c := a.cfg.Connect
 	used := map[int]bool{c.PartnerPort: true, c.WidgetPort: true, c.ControlPort: true, c.HealthPort: true, c.NIBSSPort: true}
@@ -853,8 +853,8 @@ func (a *App) writeApplyError(w http.ResponseWriter, r *http.Request, err error)
 	switch {
 	case errors.As(err, &ae):
 		web.WriteError(w, r, ae.status, ae.code, ae.message)
-	case errors.Is(err, ErrBankInvalid):
-		web.WriteError(w, r, http.StatusUnprocessableEntity, codeInvalidSpec, strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+	case errors.Is(err, server.ErrInvalid):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, codeInvalidSpec, strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 	default:
 		return false
 	}

@@ -174,7 +174,7 @@ func sessionBanner(c *ctl, st connect.BankStatus) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	faults, err := decodeList[connect.Fault](out)
+	faults, err := decodeList[server.Fault](out)
 	if err != nil {
 		return "", err
 	}

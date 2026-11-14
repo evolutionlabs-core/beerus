@@ -612,8 +612,8 @@ func (a *App) roomCreateBank(w http.ResponseWriter, r *http.Request) {
 	b, err := a.CreateBank(r.Context(), BankRequest{Name: f.Get("name"), Type: f.Get("type"), SettlesThrough: f.Get("settles_through")})
 	if err != nil {
 		msg := err.Error()
-		if errors.Is(err, ErrBankInvalid) {
-			msg = strings.TrimPrefix(msg, ErrBankInvalid.Error()+": ")
+		if errors.Is(err, server.ErrInvalid) {
+			msg = strings.TrimPrefix(msg, server.ErrInvalid.Error()+": ")
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -720,7 +720,7 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 		}
 		var err error
 		if strings.TrimSpace(f.Get("confirm")) != id {
-			err = invalid("type %s to confirm", id)
+			err = server.Invalid("type %s to confirm", id)
 		} else {
 			_, err = a.CloseBank(id, req)
 		}
@@ -729,7 +729,7 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !errors.Is(err, errNotFound) {
-			status, msg = http.StatusUnprocessableEntity, strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": ")
+			status, msg = http.StatusUnprocessableEntity, strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": ")
 			msg = strings.ToUpper(msg[:1]) + msg[1:] + "."
 		}
 	}
@@ -774,7 +774,7 @@ func (a *App) roomPurgeBank(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		var err error
 		if strings.TrimSpace(r.PostForm.Get("confirm")) != id {
-			err = invalid("type %s to confirm", id)
+			err = server.Invalid("type %s to confirm", id)
 		} else {
 			_, err = a.PurgeBank(id, false)
 		}
@@ -786,7 +786,7 @@ func (a *App) roomPurgeBank(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/ui/banks?state=closed", http.StatusSeeOther)
 			return
 		case !errors.Is(err, errNotFound):
-			status, msg = http.StatusUnprocessableEntity, strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": ")
+			status, msg = http.StatusUnprocessableEntity, strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": ")
 			msg = strings.ToUpper(msg[:1]) + msg[1:] + "."
 		}
 	}

@@ -16,7 +16,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
@@ -516,14 +515,14 @@ func printTransfer(c *ctl, r server.TransferResult) error {
 	return nil
 }
 
-func describeFault(f connect.Fault) string {
+func describeFault(f server.Fault) string {
 	switch f.Kind {
-	case connect.FaultDown:
+	case server.FaultDown:
 		if f.Until == nil {
 			return "down until cleared"
 		}
 		return "down until " + stamp(*f.Until)
-	case connect.FaultTimeout:
+	case server.FaultTimeout:
 		if f.Left == 1 {
 			return fmt.Sprintf("the next transfer times out (outcome %s)", f.Outcome)
 		}
@@ -565,7 +564,7 @@ func cmdFault(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			fl, err := decodeMap[connect.Fault](out)
+			fl, err := decodeMap[server.Fault](out)
 			if err != nil {
 				return err
 			}
@@ -585,7 +584,7 @@ func cmdFault(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			rows, err := decodeList[connect.Fault](out)
+			rows, err := decodeList[server.Fault](out)
 			if err != nil {
 				return err
 			}

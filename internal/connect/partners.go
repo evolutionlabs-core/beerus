@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -24,16 +25,16 @@ type PartnerRequest struct {
 	WebhookURL   string   `json:"webhook_url"`
 }
 
-var errPartnerBusy = invalid("another partner change is running; try again")
+var errPartnerBusy = server.Invalid("another partner change is running; try again")
 
 func (a *App) AddPartner(req PartnerRequest) (string, error) {
 	o := config.PartnerOptions{ID: req.ID, Name: req.Name, LegalName: req.LegalName, Purpose: req.Purpose, RedirectURIs: req.RedirectURIs, WebhookURL: req.WebhookURL}
 	if err := o.Check(); err != nil {
-		return "", invalid("%s", err.Error())
+		return "", server.Invalid("%s", err.Error())
 	}
 	err := a.applyEdit(func(sp *setup.Spec) error {
 		if _, ok := partnerIn(*sp, o.ID); ok {
-			return invalid("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
+			return server.Invalid("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
 		}
 		sp.Spec.Partners = append(sp.Spec.Partners, setup.Partner{ID: o.ID, Name: orDefault(o.Name, o.ID), LegalName: o.LegalName, Purpose: o.Purpose, RedirectURIs: o.RedirectURIs, WebhookURL: o.WebhookURL})
 		return nil
@@ -186,8 +187,8 @@ func (a *App) partnerError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	switch {
-	case errors.Is(err, ErrBankInvalid):
-		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+	case errors.Is(err, server.ErrInvalid):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 	case errors.Is(err, errNotFound):
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such partner.")
 	default:

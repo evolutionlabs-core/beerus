@@ -127,7 +127,7 @@ func TestParticipantControlContract(t *testing.T) {
 	bankFile := config.BankFilePath(cfg.Dir, "bank-a")
 	renamed := *cfg.Bank("bank-a")
 	renamed.Name, renamed.State = "Bank A Renamed", "suspended"
-	first, second := faultIDFor("flt_one"), faultIDFor("flt_two")
+	first, second := server.FaultID("flt_one"), server.FaultID("flt_two")
 	down := `{"kind":"down","for":"1h"}`
 	timeout := `{"kind":"timeout","outcome":"credited","count":2}`
 	downFault := fmt.Sprintf(`{"id":%q,"kind":"down","until_at":"2026-11-14T11:00:00+01:00","created_at":"2026-11-14T10:00:00+01:00"}`, first)

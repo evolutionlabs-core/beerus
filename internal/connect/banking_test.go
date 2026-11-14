@@ -143,7 +143,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.AddFault(FaultRequest{Kind: FaultTimeout, Bank: "bank-b", Outcome: nibss.OutcomeCredited}); err != nil {
+	if _, err := a.AddFault(server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nibss.OutcomeCredited}); err != nil {
 		t.Fatal(err)
 	}
 	held, err := a.Transfer(server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 200_000, Key: "held-1"})
@@ -164,7 +164,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatalf("a transfer past the cap with a pending session: %v", err)
 	}
 
-	if _, err := a.AddFault(FaultRequest{Kind: FaultTimeout, Bank: "bank-b", Outcome: nibss.OutcomeCredited}); err != nil {
+	if _, err := a.AddFault(server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nibss.OutcomeCredited}); err != nil {
 		t.Fatal(err)
 	}
 	bkB, err := bookSource{a}.Book("bank-b")

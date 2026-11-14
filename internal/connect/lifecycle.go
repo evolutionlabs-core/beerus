@@ -35,7 +35,6 @@ const (
 
 var (
 	typeHistoryDays = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
-	ErrBankInvalid  = errors.New("invalid bank")
 	slugRe          = regexp.MustCompile(`[^a-z0-9]+`)
 	idRe            = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
 	databaseRe      = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
@@ -129,10 +128,6 @@ type BankRequest struct {
 	SettlesThrough string `json:"settles_through"`
 }
 
-func invalid(format string, args ...any) error {
-	return fmt.Errorf("%w: %s", ErrBankInvalid, fmt.Sprintf(format, args...))
-}
-
 func portFree(p int) bool {
 	for _, host := range []string{"127.0.0.1", "::1"} {
 		l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(p)))
@@ -163,7 +158,7 @@ func (a *App) postgresRoom(ctx context.Context) error {
 		return err
 	}
 	if used+connectionsPerBank+5 > max {
-		return invalid("Postgres has %d of %s in use; another bank needs up to %s", used, plural(max, "connection", "connections"), plural(connectionsPerBank, "connection", "connections"))
+		return server.Invalid("Postgres has %d of %s in use; another bank needs up to %s", used, plural(max, "connection", "connections"), plural(connectionsPerBank, "connection", "connections"))
 	}
 	return nil
 }
@@ -188,10 +183,10 @@ func (a *App) removedBanks(ctx context.Context) ([]nibss.Institution, error) {
 
 func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, error) {
 	if req.NIPCode != "" || req.NUBANCode != "" {
-		return BankStatus{}, invalid("nip_code and nuban_code are assigned by Beerus; leave them out")
+		return BankStatus{}, server.Invalid("nip_code and nuban_code are assigned by Beerus; leave them out")
 	}
 	if req.HistoryDays != 0 {
-		return BankStatus{}, invalid("history_days can no longer be set; it follows the bank type")
+		return BankStatus{}, server.Invalid("history_days can no longer be set; it follows the bank type")
 	}
 	name := strings.TrimSpace(req.Name)
 	id := strings.TrimSpace(req.ID)
@@ -262,7 +257,7 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 		}
 		b := &sp.Spec.Banks[i]
 		if b.State == setup.StateClosed {
-			return invalid("%s is closed; a closed bank cannot be suspended or resumed", b.Name)
+			return server.Invalid("%s is closed; a closed bank cannot be suspended or resumed", b.Name)
 		}
 		b.State = ""
 		if suspended {
@@ -344,8 +339,8 @@ func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	switch {
-	case errors.Is(err, ErrBankInvalid):
-		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+	case errors.Is(err, server.ErrInvalid):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 	case errors.Is(err, errNotFound):
 		a.noSuchBank(w, r)
 	default:
