@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,7 +17,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/web"
-	"log/slog"
 )
 
 type Book struct {
@@ -37,10 +37,6 @@ type Banking struct {
 	Clock *clock.Clock
 	Log   *slog.Logger
 	ID    string
-
-	nipMu   sync.Mutex
-	nipBank *bank.Bank
-	nip     http.Handler
 }
 
 var ErrBankNotFound = errors.New("no such bank")
@@ -319,11 +315,12 @@ func (s *Banking) Error(w http.ResponseWriter, r *http.Request, err error) {
 	var de *bank.DailyLimitError
 	var ue *UnavailableError
 	switch {
+	case errors.Is(err, context.Canceled):
 	case errors.As(err, &te):
 		web.WriteError(w, r, te.Status, te.ErrCode, web.Sentence(te.Error()))
 	case errors.Is(err, ErrBankNotFound):
 		s.noSuchBank(w, r)
-	case errors.Is(err, ErrBankNotActive):
+	case errors.Is(err, errBankNotActive):
 		web.WriteError(w, r, http.StatusConflict, "bank_not_active", web.Sentence(err.Error()))
 	case errors.Is(err, bank.ErrUnknownCustomer):
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such customer.")
@@ -496,6 +493,18 @@ func (s *Banking) HandleCash(kind string) http.HandlerFunc {
 }
 
 func (s *Banking) NIP(id string) http.Handler {
+	var mu sync.Mutex
+	var cached *bank.Bank
+	var handler http.Handler
+	serve := func(b *bank.Bank) http.Handler {
+		mu.Lock()
+		defer mu.Unlock()
+		if cached != b {
+			cached = b
+			handler = inbound.New(b, s.Clock.Now, inbound.Caller{CommonName: config.NIBSSCN, Role: config.NIBSSRole}, s.Log)
+		}
+		return handler
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bk, err := s.Src.Book(id)
 		if err == nil && bk.Phase == config.PhaseClosed {
@@ -507,16 +516,6 @@ func (s *Banking) NIP(id string) http.Handler {
 			inbound.WriteUnavailable(w)
 			return
 		}
-		s.nipFor(bk.Bank).ServeHTTP(w, r)
+		serve(bk.Bank).ServeHTTP(w, r)
 	})
-}
-
-func (s *Banking) nipFor(b *bank.Bank) http.Handler {
-	s.nipMu.Lock()
-	defer s.nipMu.Unlock()
-	if s.nipBank != b {
-		s.nipBank = b
-		s.nip = inbound.New(b, s.Clock.Now, inbound.Caller{CommonName: config.NIBSSCN, Role: config.NIBSSRole}, s.Log)
-	}
-	return s.nip
 }

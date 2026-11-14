@@ -19,7 +19,13 @@ const (
 	FaultPageMax     = 500
 )
 
-var participantPhases = []string{config.PhaseProvisioning, config.PhaseActive, config.PhaseSuspended, config.PhaseRepairing, config.PhaseClosing, config.PhaseClosed, config.PhaseTerminating}
+func validPhase(p string) bool {
+	switch p {
+	case config.PhaseProvisioning, config.PhaseActive, config.PhaseSuspended, config.PhaseRepairing, config.PhaseClosing, config.PhaseClosed, config.PhaseTerminating:
+		return true
+	}
+	return false
+}
 
 type State struct {
 	ParticipantID      string `json:"participant_id"`
@@ -72,7 +78,7 @@ func (r replayStore) Commit(scope string, rec *web.Record) error {
 	return nil
 }
 
-func ViewFault(f Fault) FaultView {
+func viewFault(f Fault) FaultView {
 	v := FaultView{ID: f.ID, Kind: f.Kind, Outcome: f.Outcome, Left: f.Left, CreatedAt: f.At.In(clock.Lagos)}
 	if f.Until != nil {
 		until := f.Until.In(clock.Lagos)
@@ -158,16 +164,16 @@ func (s *Server) reload() error {
 	s.bank.Name, s.bank.State, s.bank.NetDebitCap, s.bank.Collateral, s.bank.API = want.Name, want.State, want.NetDebitCap, want.Collateral, want.API
 	own := s.bank
 	s.mu.Unlock()
+	s.reloaded(own)
 	if changed {
 		s.stale.Store(true)
 	}
-	s.reloaded(own)
 	return nil
 }
 
 func (s *Server) setPhase(w http.ResponseWriter, r *http.Request) {
 	var req PhaseRequest
-	if err := web.DecodeBody(r, &req); err != nil || !slices.Contains(participantPhases, req.Phase) || req.Generation < 0 || req.WorldID == "" {
+	if err := web.DecodeBody(r, &req); err != nil || !validPhase(req.Phase) || req.Generation < 0 || req.WorldID == "" {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"phase":"active","generation":1,"world_id":"wld_..."} with a phase, a generation and a world ID.`)
 		return
 	}
@@ -234,7 +240,7 @@ func (s *Server) listFaults(w http.ResponseWriter, r *http.Request) {
 	end := min(start+limit, len(live))
 	data := make([]FaultView, 0, end-start)
 	for _, f := range live[start:end] {
-		data = append(data, ViewFault(f))
+		data = append(data, viewFault(f))
 	}
 	page := map[string]any{"data": data}
 	if end < len(live) {
@@ -260,7 +266,7 @@ func (s *Server) setFault(w http.ResponseWriter, r *http.Request) {
 	s.pruneFaultsLocked(now)
 	s.faults = append(s.faults, &f)
 	s.mu.Unlock()
-	web.WriteJSON(w, http.StatusCreated, ViewFault(f))
+	web.WriteJSON(w, http.StatusCreated, viewFault(f))
 }
 
 func (s *Server) clearFaults(w http.ResponseWriter, r *http.Request) {

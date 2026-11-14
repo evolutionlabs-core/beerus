@@ -1,7 +1,10 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -29,8 +32,25 @@ func WriteError(w http.ResponseWriter, r *http.Request, status int, code, msg st
 	WriteJSON(w, status, map[string]APIError{"error": {Code: code, Message: msg, RequestID: RequestID(r)}})
 }
 
+var ErrBodyTooLarge = errors.New("the request body is larger than 1 MiB")
+
+func readBody(r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, BodyLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > BodyLimit {
+		return nil, ErrBodyTooLarge
+	}
+	return body, nil
+}
+
 func DecodeBody(r *http.Request, v any) error {
-	dec := json.NewDecoder(r.Body)
+	body, err := readBody(r)
+	if err != nil {
+		return err
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
 }
@@ -54,7 +74,7 @@ func ListPage(data any, next string) map[string]any {
 
 func IdempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 	key := r.Header.Get("Idempotency-Key")
-	if len(key) > IdempotencyKeyMax {
+	if len(key) > idempotencyKeyMax {
 		WriteError(w, r, http.StatusBadRequest, "invalid_request", "The Idempotency-Key header must be 1 to 255 characters.")
 		return "", false
 	}

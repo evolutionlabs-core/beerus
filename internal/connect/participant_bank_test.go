@@ -200,7 +200,7 @@ func TestParticipantBankContract(t *testing.T) {
 		if err := core.cfg.EnsureBankDir(&renamed, participantNow); err != nil {
 			t.Fatal(err)
 		}
-		if got := call("PUT", "/v1/phase", "", `{"phase":"suspended","reason":"Suspended by the operator.","generation":2,"world_id":"wld_1"}`, tok, false); got.status != 200 {
+		if got := call("PUT", "/v1/phase", "", `{"phase":"active","generation":2,"world_id":"wld_1"}`, tok, false); got.status != 200 {
 			t.Fatalf("reload: %d %s", got.status, got.body)
 		}
 	}

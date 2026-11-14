@@ -51,7 +51,7 @@ type TransferResult struct {
 
 var (
 	ErrSameAccount   = errors.New("the from and to accounts are the same")
-	ErrBankNotActive = errors.New("bank is not active")
+	errBankNotActive = errors.New("bank is not active")
 )
 
 type NotActiveError struct {
@@ -64,7 +64,7 @@ func (e NotActiveError) Error() string {
 }
 
 func (NotActiveError) Is(target error) bool {
-	return target == ErrBankNotActive
+	return target == errBankNotActive
 }
 
 type TransferError struct {
@@ -153,14 +153,14 @@ func TotalDebit(amount int64, c charges.Transfer) (int64, error) {
 	return total, nil
 }
 
-type Enquirer interface {
+type enquirer interface {
 	Enquire(ctx context.Context, rt Route, nuban string) (string, error)
 }
 
 type Quoter struct {
 	Fees     *charges.Schedule
 	Clock    *clock.Clock
-	Enquirer Enquirer
+	Enquirer enquirer
 }
 
 func (q Quoter) Quote(ctx context.Context, b *bank.Bank, rt Route, req TransferRequest) (TransferResult, error) {

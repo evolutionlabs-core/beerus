@@ -25,8 +25,6 @@ const (
 	cbnCurrency = "CURRENCY_IN_CIRCULATION"
 )
 
-var reservedIDs = map[string]bool{cbnID: true, "nibss": true}
-
 type schedule struct {
 	per int
 	cal clock.Calendar

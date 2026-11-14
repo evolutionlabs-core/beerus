@@ -2,7 +2,6 @@ package connect
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
@@ -15,15 +14,16 @@ type bookSource struct {
 func (s bookSource) Book(id string) (server.Book, error) {
 	s.a.mu.Lock()
 	b := s.a.cfg.Bank(id)
+	var name string
 	var ls *ledgerSource
 	if b != nil {
-		ls = s.a.ledgerFor(id)
+		name, ls = b.Name, s.a.ledgerFor(id)
 	}
 	s.a.mu.Unlock()
 	if b == nil {
-		return server.Book{}, fmt.Errorf("%w: %s", server.ErrBankNotFound, id)
+		return server.Book{Name: id, Phase: PhaseClosed}, nil
 	}
-	bk := server.Book{Name: s.a.bankCopy(id).Name, Phase: s.a.bankPhase(id)}
+	bk := server.Book{Name: name, Phase: s.a.bankPhase(id)}
 	if ls != nil {
 		bk.Bank = ls.Bank()
 	}

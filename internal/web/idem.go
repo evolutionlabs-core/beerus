@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,7 +15,7 @@ import (
 
 const (
 	IdempotencyTTL    = 24 * time.Hour
-	IdempotencyKeyMax = 255
+	idempotencyKeyMax = 255
 	ControlOwner      = "control"
 )
 
@@ -89,11 +90,15 @@ func (rec *recorder) Write(b []byte) (int, error) {
 func (i *Idempotency) Wrap(store Store, owner func(*http.Request) string, log *slog.Logger, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("Idempotency-Key")
-		if key == "" || len(key) > IdempotencyKeyMax {
+		if key == "" || len(key) > idempotencyKeyMax {
 			WriteError(w, r, http.StatusBadRequest, "invalid_request", "An Idempotency-Key header of 1 to 255 characters is required on writes.")
 			return
 		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, BodyLimit))
+		body, err := readBody(r)
+		if errors.Is(err, ErrBodyTooLarge) {
+			WriteError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Bodies over 1 MiB are refused.")
+			return
+		}
 		if err != nil {
 			WriteError(w, r, http.StatusBadRequest, "invalid_request", "The request body could not be read.")
 			return

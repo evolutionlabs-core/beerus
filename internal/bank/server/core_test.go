@@ -16,13 +16,7 @@ import (
 )
 
 func registryServer(now *time.Time, transport roundTrip) *Server {
-	return New(Settings{
-		Bank:    config.Bank{ID: "bank-a", Name: "Bank A"},
-		CoreURL: "http://core.invalid",
-		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:   clock.New(func() time.Time { return *now }),
-		Link:    Link{Client: &http.Client{Transport: transport}},
-	})
+	return New("", config.Bank{ID: "bank-a", Name: "Bank A"}, nil, nil, 0, "http://core.invalid", Link{Client: &http.Client{Transport: transport}}, slog.New(slog.NewTextHandler(io.Discard, nil)), clock.New(func() time.Time { return *now }), "", nil, func(config.Bank) {})
 }
 
 func TestRegistryRefreshServesStaleThenFailsClosed(t *testing.T) {
@@ -109,7 +103,7 @@ func TestDirectoryOffersOnlyBanksThatTakeTransfers(t *testing.T) {
 	now := time.Date(2026, 11, 14, 10, 0, 0, 0, clock.Lagos)
 	s := registryServer(&now, nil)
 	for _, in := range []struct{ id, status string }{{"bank-a", "active"}, {"bank-b", "suspended"}, {"bank-c", "terminating"}, {"bank-d", "active"}} {
-		s.dirBanks = append(s.dirBanks, DirectoryBank(nip.Institution{ID: in.id, Name: in.id, Status: in.status}))
+		s.dirBanks = append(s.dirBanks, directoryBank(nip.Institution{ID: in.id, Name: in.id, Status: in.status}))
 	}
 	var got []string
 	for _, b := range s.Directory() {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -26,21 +28,6 @@ type Step struct {
 	Error       string     `json:"error,omitempty"`
 	StartedAt   *time.Time `json:"started_at,omitempty"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
-}
-
-type Settings struct {
-	Dir       string
-	Bank      config.Bank
-	Books     *bank.Bank
-	Fees      *charges.Schedule
-	NIBSSPort int
-	CoreURL   string
-	Link      Link
-	Log       *slog.Logger
-	Clock     *clock.Clock
-	Phase     string
-	Steps     []Step
-	Reloaded  func(config.Bank)
 }
 
 type Server struct {
@@ -84,26 +71,26 @@ type Server struct {
 	dirRefresh refresher
 }
 
-func New(st Settings) *Server {
+func New(dir string, bank config.Bank, books *bank.Bank, fees *charges.Schedule, nibssPort int, coreURL string, link Link, log *slog.Logger, clk *clock.Clock, phase string, steps []Step, reloaded func(config.Bank)) *Server {
 	s := &Server{
-		id:        st.Bank.ID,
-		dir:       st.Dir,
-		coreURL:   st.CoreURL,
-		nibssPort: st.NIBSSPort,
-		link:      st.Link,
-		log:       st.Log,
-		clock:     st.Clock,
-		fees:      st.Fees,
-		books:     st.Books,
-		reloaded:  st.Reloaded,
-		phase:     st.Phase,
-		steps:     st.Steps,
-		bank:      st.Bank,
+		id:        bank.ID,
+		dir:       dir,
+		coreURL:   coreURL,
+		nibssPort: nibssPort,
+		link:      link,
+		log:       log,
+		clock:     clk,
+		fees:      fees,
+		books:     books,
+		reloaded:  reloaded,
+		phase:     phase,
+		steps:     steps,
+		bank:      bank,
 		worldID:   web.NewID("wld"),
 		replays:   map[string]*web.Record{},
 		registry:  map[string]*openbanking.RegistryClient{},
 	}
-	s.banking = &Banking{Src: s, Clock: st.Clock, Log: st.Log, ID: s.id}
+	s.banking = &Banking{Src: s, Clock: clk, Log: log, ID: s.id}
 	return s
 }
 
@@ -127,7 +114,7 @@ func (s *Server) Phase() (string, string) {
 	return s.phase, s.reason
 }
 
-func (s *Server) PhaseOf(id string) string {
+func (s *Server) phaseOf(id string) string {
 	if id != s.id {
 		return config.PhaseActive
 	}
@@ -150,7 +137,7 @@ func (s *Server) MarkStale() {
 }
 
 func (s *Server) Refusing(id string) bool {
-	if s.PhaseOf(id) == config.PhaseSuspended {
+	if s.phaseOf(id) == config.PhaseSuspended {
 		return true
 	}
 	s.mu.Lock()
@@ -213,14 +200,17 @@ func (s *Server) Quote(ctx context.Context, req TransferRequest) (TransferResult
 	from, to := s.Lookup(req.FromBank), s.Lookup(req.ToBank)
 	var fromPhase, toPhase string
 	if from != nil {
-		fromPhase = s.PhaseOf(from.ID)
+		fromPhase = s.phaseOf(from.ID)
 	}
 	if to != nil {
-		toPhase = s.PhaseOf(to.ID)
+		toPhase = s.phaseOf(to.ID)
 	}
 	rt, err := NewRoute(req, from, to, fromPhase, toPhase)
 	if err != nil {
 		return TransferResult{}, err
+	}
+	if rt.FromBank != s.id {
+		return TransferResult{}, Refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("the books of %s are not open yet", rt.FromName))
 	}
 	return Quoter{Fees: s.fees, Clock: s.clock, Enquirer: s}.Quote(ctx, s.books, rt, req)
 }

@@ -1,10 +1,14 @@
 package connect
 
 import (
-	"testing"
-
 	"context"
 	"crypto/tls"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"testing"
+
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -12,10 +16,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"io"
-	"log/slog"
-	"net"
-	"net/http"
 )
 
 func TestNIBSSPortDefaultAndConflicts(t *testing.T) {
@@ -80,16 +80,7 @@ func TestBankRoleDirectoryComesFromNIBSS(t *testing.T) {
 		_ = hs.Close()
 		<-served
 	})
-	srv := server.New(server.Settings{
-		Dir:       cfg.Dir,
-		Bank:      *cfg.Bank("bank-a"),
-		NIBSSPort: ln.Addr().(*net.TCPAddr).Port,
-		CoreURL:   "http://127.0.0.1:1",
-		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:     clock.New(nil),
-		Phase:     PhaseActive,
-		Reloaded:  func(config.Bank) {},
-	})
+	srv := server.New(cfg.Dir, *cfg.Bank("bank-a"), nil, nil, ln.Addr().(*net.TCPAddr).Port, "http://127.0.0.1:1", server.Link{}, slog.New(slog.NewTextHandler(io.Discard, nil)), clock.New(nil), PhaseActive, nil, func(config.Bank) {})
 	a := &App{role: RoleBank, bankID: "bank-a", cfg: cfg, srv: srv}
 	if err := a.refreshBanks(t.Context()); err != nil {
 		t.Fatal(err)

@@ -36,8 +36,6 @@ const (
 var (
 	typeHistoryDays = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
 	slugRe          = regexp.MustCompile(`[^a-z0-9]+`)
-	idRe            = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
-	databaseRe      = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 )
 
 type BankStep struct {
