@@ -548,7 +548,7 @@ func (a *App) roomNotFound(w http.ResponseWriter, r *http.Request) {
 	a.roomRender(w, r, "notfound", http.StatusNotFound, "", roomPage{"Title": "Not found"})
 }
 
-var roomPages = template.Must(template.New("").Funcs(view.Funcs).Funcs(template.FuncMap{
+var roomPages = template.Must(template.New("").Funcs(view.Funcs()).Funcs(template.FuncMap{
 	"logo":  func() template.HTML { return template.HTML(logoSVG) },
 	"pathq": url.PathEscape,
 	"amtClass": func(v int64) string {

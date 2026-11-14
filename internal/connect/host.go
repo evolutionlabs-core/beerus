@@ -16,7 +16,7 @@ type bankHost struct {
 	id string
 }
 
-func (a *App) BankHandler(id string) http.Handler {
+func (a *App) bankHandler(id string) http.Handler {
 	a.mu.Lock()
 	b := a.cfg.Bank(id)
 	have := a.ledgerFor(id) != nil

@@ -137,7 +137,7 @@ func (s *site) fail(w http.ResponseWriter, r *http.Request, err error) {
 	http.Error(w, "Something went wrong at the bank. Try again soon.", http.StatusInternalServerError)
 }
 
-var pages = template.Must(template.New("").Funcs(view.Funcs).Funcs(template.FuncMap{
+var pages = template.Must(template.New("").Funcs(view.Funcs()).Funcs(template.FuncMap{
 	"amtClass": func(v int64) string {
 		if v > 0 {
 			return "text-pos"

@@ -281,7 +281,7 @@ func (a *App) startBankSite(b *config.Bank) error {
 		return nil
 	}
 	a.forgetOpenBanking(b.ID)
-	h := a.BankHandler(b.ID)
+	h := a.bankHandler(b.ID)
 	if h == nil {
 		return fmt.Errorf("no ledger for %s", b.ID)
 	}

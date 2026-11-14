@@ -692,6 +692,6 @@ func (a *App) RevokeAtBank(ctx context.Context, connID string) error {
 	if err := ob.RevokeByBank(ctx, consent, "bank"); err != nil {
 		return err
 	}
-	a.sender.Events(ctx)
+	a.sender.Events(context.WithoutCancel(ctx))
 	return nil
 }
