@@ -116,6 +116,22 @@ func TestSupervisorRestartsABankAndStopsEverything(t *testing.T) {
 		return aCode == 0 && sCode == 0 && aErr == "" && sErr == "" && a == accounts && s == statement
 	})
 
+	bankPID, oldCore := processesIn(t, dir)["bank-a"], processesIn(t, dir)["core"]
+	if err := syscall.Kill(oldCore, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill core: %v", err)
+	}
+	waitFor(t, "core to come back", func() bool {
+		pid := processesIn(t, dir)["core"]
+		return pid != 0 && pid != oldCore
+	})
+	waitFor(t, "a deposit to work after the core restart", func() bool {
+		got, _, code := c.run("deposit", account, "--bank", "bank-a", "--amount", "1")
+		return code == 0 && strings.Contains(got, "Balance ₦5,001.50.")
+	})
+	if got := processesIn(t, dir)["bank-a"]; got != bankPID {
+		t.Fatalf("bank-a restarted when core was killed: pid %d, then %d", bankPID, got)
+	}
+
 	if err := up.Process.Signal(syscall.SIGINT); err != nil {
 		t.Fatalf("interrupt beerus up: %v", err)
 	}

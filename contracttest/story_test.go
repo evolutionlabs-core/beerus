@@ -3,6 +3,7 @@ package contracttest
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -356,7 +357,12 @@ func TestStory(t *testing.T) {
 			t.Errorf("banks/%s after its removal: %v", b.ID, err)
 		}
 		for _, port := range []int{b.Port, b.APIPort} {
-			waitFor(t, fmt.Sprintf("port %d of %s to be free", port, b.ID), func() bool { return portOpen(port) })
+			l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+			if err != nil {
+				t.Errorf("port %d of %s is still taken: %v", port, b.ID, err)
+				continue
+			}
+			l.Close()
 		}
 	}
 	if err := os.WriteFile(readd, []byte(fmt.Sprintf(storySpec, sink.srv.URL+"/webhooks")), 0o600); err != nil {
