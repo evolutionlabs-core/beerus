@@ -445,36 +445,43 @@ func (c *Config) EnsureBankCertificates(root *pki.Authority, now time.Time) erro
 		}
 	}
 	for _, b := range c.Banks {
-		dir := c.Path("banks", b.ID)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("create bank dir %s: %w", dir, err)
+		if err := c.ensureBankCerts(root, b, now); err != nil {
+			return err
 		}
-		if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
-			leaf, err := root.IssueServer([]string{b.ID + ".localhost", "localhost"}, leafLife)
-			if err != nil {
-				return fmt.Errorf("issue server certificate for bank %s: %w", b.ID, err)
-			}
-			if err := leaf.Save(dir, "server"); err != nil {
-				return fmt.Errorf("save server certificate for bank %s: %w", b.ID, err)
-			}
+	}
+	return nil
+}
+
+func (c *Config) ensureBankCerts(root *pki.Authority, b *Bank, now time.Time) error {
+	dir := c.Path("banks", b.ID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create bank dir %s: %w", dir, err)
+	}
+	if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
+		leaf, err := root.IssueServer([]string{b.ID + ".localhost", "localhost"}, leafLife)
+		if err != nil {
+			return fmt.Errorf("issue server certificate for bank %s: %w", b.ID, err)
 		}
-		if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
-			leaf, err := root.IssueClient(b.ID, BankRole, leafLife)
-			if err != nil {
-				return fmt.Errorf("issue client certificate for bank %s: %w", b.ID, err)
-			}
-			if err := leaf.Save(dir, "client"); err != nil {
-				return fmt.Errorf("save client certificate for bank %s: %w", b.ID, err)
-			}
+		if err := leaf.Save(dir, "server"); err != nil {
+			return fmt.Errorf("save server certificate for bank %s: %w", b.ID, err)
 		}
-		if pki.NeedsRenewal(filepath.Join(dir, EventSignerName+".crt"), now) {
-			leaf, err := root.IssueSigner(b.ID+"-events", EventSignerRole, leafLife)
-			if err != nil {
-				return fmt.Errorf("issue event signer for bank %s: %w", b.ID, err)
-			}
-			if err := leaf.Save(dir, EventSignerName); err != nil {
-				return fmt.Errorf("save event signer for bank %s: %w", b.ID, err)
-			}
+	}
+	if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
+		leaf, err := root.IssueClient(b.ID, BankRole, leafLife)
+		if err != nil {
+			return fmt.Errorf("issue client certificate for bank %s: %w", b.ID, err)
+		}
+		if err := leaf.Save(dir, "client"); err != nil {
+			return fmt.Errorf("save client certificate for bank %s: %w", b.ID, err)
+		}
+	}
+	if pki.NeedsRenewal(filepath.Join(dir, EventSignerName+".crt"), now) {
+		leaf, err := root.IssueSigner(b.ID+"-events", EventSignerRole, leafLife)
+		if err != nil {
+			return fmt.Errorf("issue event signer for bank %s: %w", b.ID, err)
+		}
+		if err := leaf.Save(dir, EventSignerName); err != nil {
+			return fmt.Errorf("save event signer for bank %s: %w", b.ID, err)
 		}
 	}
 	return nil
