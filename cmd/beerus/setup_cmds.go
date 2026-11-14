@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +22,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -1079,10 +1079,14 @@ func (e *cli) startApply(ctx context.Context, c *ctl, req applyRequest, served <
 func cmdUp(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runUp(ctx, newCLI(), args)
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("find beerus binary: %w", err)
+	}
+	return runUp(ctx, newCLI(), exe, args)
 }
 
-func runUp(ctx context.Context, e *cli, args []string) error {
+func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	file := fs.String("f", "", "setup `FILE` to start from or apply")
@@ -1113,45 +1117,35 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 	if err := c.EnsureCertificates(time.Now()); err != nil {
 		return err
 	}
-	log := slog.New(slog.NewTextHandler(e.errOut, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	app, err := connect.New(c, connect.Options{Logger: log})
+	cl, err := newCtlFor(c)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(e.out, "Beerus is running. %s.\n\n", stamp(app.Clock().Now()))
+	fmt.Fprintf(e.out, "Beerus is running. %s.\n\n", stamp(clock.New(nil).Now()))
 	if err := printInfo(c); err != nil {
 		return err
 	}
-	fmt.Fprintf(e.out, "\nControl room        %s\n", app.RoomURL())
-	serveCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	served := make(chan struct{})
-	var serveErr error
-	go func() {
-		serveErr = app.Serve(serveCtx)
-		close(served)
-	}()
+	fmt.Fprintf(e.out, "\nControl room        %s\n", connect.RoomURL(c, cl.token))
+	sup := newSupervisor(exe, *dir, c.ControlURL(), cl, e.errOut)
+	sup.startCore(ctx)
+	defer sup.shutdown()
+	if err := sup.awaitCore(ctx); err != nil {
+		return err
+	}
+	sup.watch(ctx)
 	if *file == "" {
 		if req, err = specRequest(*dir, ""); err != nil {
-			cancel()
-			<-served
-			return errors.Join(err, serveErr)
+			return err
 		}
 	}
 	req.Prune = *prune
-	cl, err := newCtlFor(c)
-	if err == nil {
-		err = e.startApply(serveCtx, cl, req, served)
-	}
-	if err != nil {
-		cancel()
-		<-served
-		return errors.Join(err, serveErr)
+	if err := e.startApply(ctx, cl, req, sup.core.firstExit); err != nil {
+		return err
 	}
 	if len(c.Banks) == 0 {
 		fmt.Fprintln(e.out, "\n"+upNoBanks)
 	}
 	fmt.Fprintln(e.out, "\nPress Ctrl+C to stop.")
-	<-served
-	return serveErr
+	<-ctx.Done()
+	return nil
 }

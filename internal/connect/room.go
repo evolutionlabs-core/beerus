@@ -21,8 +21,8 @@ import (
 
 const roomCookie = "beerus_room"
 
-func (a *App) RoomURL() string {
-	return a.cfg.ControlURL() + "/ui/login?token=" + url.QueryEscape(a.ctlToken)
+func RoomURL(cfg *config.Config, token string) string {
+	return cfg.ControlURL() + "/ui/login?token=" + url.QueryEscape(token)
 }
 
 func (a *App) roomOnly(next http.Handler) http.Handler {
