@@ -735,10 +735,11 @@ components:
       description: Too many requests. Retry after the number of seconds in `Retry-After`.
       headers:
         Retry-After:
-          description: Seconds to wait, in real time.
+          description: Seconds to wait.
           schema:
             type: integer
             minimum: 0
+          example: 30
       content:
         application/json:
           schema:
@@ -763,10 +764,11 @@ components:
       description: The bank cannot be reached. Retry later.
       headers:
         Retry-After:
-          description: Seconds to wait, in real time.
+          description: Seconds to wait.
           schema:
             type: integer
             minimum: 0
+          example: 30
       content:
         application/json:
           schema:
