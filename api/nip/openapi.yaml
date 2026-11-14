@@ -8,10 +8,11 @@ info:
 
     ## Who serves what
 
-    - Tag `nibss`: served by the NIBSS participant. Banks call it for a name enquiry, a funds transfer, a status query, a BVN lookup and the bank directory.
+    - Tag `nibss`: served by the NIBSS participant. Banks call it for a name enquiry, a funds transfer, a status query and the bank directory.
     - Tag `bank`: served by every bank participant. NIBSS calls it to look up an account name, to credit an account and to ask whether a credit happened.
+    - Tag `control`: served by the NIBSS participant to the control plane only. It registers banks, as NIBSS operations onboard banks in the real world. It uses the bearer token of the participant control API and not mTLS.
 
-    Both directions run over mTLS. The server authorises the caller by the identity in its client certificate, not only by a valid chain. NIBSS accepts a transfer only from the bank named in `from_code`.
+    The `nibss` and `bank` directions run over mTLS. The server authorises the caller by the identity in its client certificate, not only by a valid chain. NIBSS accepts a transfer only from the bank named in `from_code`.
 
     ## Flow
 
@@ -19,12 +20,12 @@ info:
     2. The sending bank debits its customer, then sends the funds transfer to NIBSS. The session ID is made by the sending bank and is the idempotency key of the transfer.
     3. NIBSS records the session and calls the destination bank's credit endpoint.
     4. The destination bank credits once per session ID and answers `00`. A repeat of the same session ID returns the first result.
-    5. If the sending bank gets no answer, it sends a status query. If the session failed, the sending bank reverses the debit.
+    5. If the sending bank gets no answer, it sends a status query. If the session failed, the sending bank reverses its own customer. NIBSS is not told about the reversal.
     6. At each settlement session, NIBSS posts the net positions to the CBN. See the settlement API.
 
     ## Response codes
 
-    NIP outcomes are carried in `response_code` and `status`, in a 200 body. The error body is only for bad requests, failed authorisation and an unavailable participant. The codes below come from `internal/nip` in Beerus. The repo holds no NIBSS source for them, so treat every code as a Beerus placeholder and not as a NIBSS fact.
+    NIP outcomes are carried in `response_code` and `status`, in a 200 body. The error body is only for bad requests, failed authorisation, a refused request and an unavailable participant. The codes below come from `internal/nip` in Beerus. The repo holds no NIBSS source for them, so treat every code as a Beerus placeholder and not as a NIBSS fact.
 
     - `00`: successful.
     - `07`: invalid account.
@@ -37,13 +38,34 @@ info:
 
     A session `status` is `pending` or one of these codes. `pending` is not a response code.
 
+    ## Session states
+
+    A session has a `status` and an `outcome`. These are the states it can hold.
+
+    - `pending` with no `outcome`: NIBSS has not heard from the destination bank.
+    - `pending` with `outcome` `unknown`: the destination bank gave no answer. NIBSS will ask it.
+    - `pending` with `outcome` `credited`: the destination bank credited, but NIBSS has not recorded the answer yet. It becomes `00`.
+    - `pending` with `outcome` `failed`: the destination bank refused or never credited, but NIBSS has not recorded the answer yet. It becomes a failure code.
+    - `00` with `outcome` `credited`: final. The money moved.
+    - Any other code, such as `61` or `91`, with `outcome` `failed`: final. The money did not move.
+
+    NIBSS never records a reversal. The sending bank reverses its own customer, and the session stays `failed`.
+
+    ## Status queries
+
+    - While a session is `pending`, the sending bank keeps sending status queries at `next_tsq_at`. Every query counts in `tsq_attempts`.
+    - After the last attempt NIBSS gives a final answer. The number of attempts and the spacing between them are Beerus placeholders, set in the Beerus config.
+    - `00` is final. Every other code that is not `pending` is final too, `61` included. On a final failure the sending bank may reverse straight away.
+    - `404` means NIBSS never received the transfer. The sending bank sends `POST /v1/transfers` again with the same `session_id`.
+    - Once a destination bank answers `25` to a status query for a session, it refuses any later credit for that session with `25`, so a late retry can never pay twice.
+
     ## Idempotency
 
-    A funds transfer and a credit are keyed by `session_id`. A repeat with the same details returns the first result with the header `Idempotent-Replayed: true`. The same `session_id` with different details returns `422 idempotency_key_reused`.
+    A funds transfer and a credit are keyed by `session_id`. A repeat with the same details returns the first result with the header `Idempotent-Replayed: true`. The same `session_id` with different details returns `422 idempotency_key_reused`, and the message says which fields differ. A bank registration is keyed by `bank_id`.
 
     ## Time and money
 
-    Amounts are integers in minor units (kobo for NGN). Times are RFC 3339 strings and end in `_at`. Session IDs are 30 digits. Account numbers are 10 digits.
+    Amounts are integers in minor units (kobo for NGN). Times are RFC 3339 strings and end in `_at`. Session IDs are 30 digits. Account numbers are 10 digits. The narration limit of 100 characters and the page cap of 500 are Beerus placeholders, not NIBSS facts.
 
     ## Errors
 
@@ -64,6 +86,8 @@ tags:
     description: Calls a bank makes to NIBSS. Served by the NIBSS participant.
   - name: bank
     description: Calls NIBSS makes to a bank. Served by each bank participant.
+  - name: control
+    description: Calls the control plane makes to NIBSS. It uses the control token.
 security:
   - mutualTLS: []
 paths:
@@ -102,7 +126,7 @@ paths:
       operationId: nibssFundsTransfer
       tags: [nibss]
       summary: Send a funds transfer
-      description: Records a NIP session and credits the destination bank. The sending bank has already debited its customer. The idempotency key is `session_id`. A repeat with the same details returns the first result, and the same `session_id` with different details returns `422 idempotency_key_reused`. If the destination bank gives no answer the session stays `pending`, and the sending bank sends a status query. If the sending bank is over its net debit cap, NIBSS answers with status `61` and outcome `failed`, and the sending bank reverses its debit. This cap answer is a Beerus placeholder.
+      description: Records a NIP session and credits the destination bank. The sending bank has already debited its customer. The idempotency key is `session_id`. A repeat with the same details returns the first result, and the same `session_id` with different details returns `422 idempotency_key_reused`. If the destination bank gives no answer the session stays `pending`, and the sending bank sends a status query. If the sending bank is over its net debit cap, NIBSS answers with status `61` and outcome `failed`. That is final, and the sending bank reverses its own customer at once. This cap answer is a Beerus placeholder. `closure` is honoured only when the control plane has marked the sending bank `terminating`. Otherwise NIBSS answers `422 closure_not_allowed`.
       requestBody:
         required: true
         content:
@@ -147,7 +171,26 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '422':
-          $ref: '#/components/responses/Unprocessable'
+          description: The request is well formed but cannot be done. The code is `idempotency_key_reused` when the session ID was used with different details, or `closure_not_allowed` when `closure` is true and the sending bank is not `terminating`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                reused:
+                  summary: The session ID was used with different details.
+                  value:
+                    error:
+                      code: idempotency_key_reused
+                      message: 'Session 000014261114103000123456789012 was first sent with amount_minor 2500000, and this request has 3000000. Send a new session_id, or repeat the first request.'
+                      request_id: req_01JBC8A5T3ZK
+                closure:
+                  summary: A closure transfer from a bank that is not terminating.
+                  value:
+                    error:
+                      code: closure_not_allowed
+                      message: 'Bank 000014 is active, so it cannot send a closure transfer. Close the bank first, and send it again when the bank is terminating.'
+                      request_id: req_01JBC8A5T3ZK
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/transfers/{session_id}/status-queries:
@@ -155,7 +198,7 @@ paths:
       operationId: nibssStatusQuery
       tags: [nibss]
       summary: Ask for the status of a transfer
-      description: Asks NIBSS where a session stands. NIBSS counts the query in `tsq_attempts`. For a pending session it asks the destination bank, then resolves the session as credited or failed. It is safe to repeat. Only the sending bank of the session may ask. If the session failed, the sending bank reverses its debit.
+      description: Asks NIBSS where a session stands. NIBSS counts the query in `tsq_attempts`. For a pending session it asks the destination bank, then resolves the session as credited or failed. It is safe to repeat, and each query counts in `tsq_attempts`. Only the sending bank of the session may ask. Keep asking at `next_tsq_at` while the status is `pending`. After the last attempt, which is a Beerus placeholder, NIBSS gives a final answer. `00` and every other code that is not `pending` are final. On a final failure the sending bank reverses its own customer and NIBSS is not told. A `404` means NIBSS never received the transfer. Send `POST /v1/transfers` again with the same `session_id`.
       parameters:
         - $ref: '#/components/parameters/SessionIdPath'
       responses:
@@ -174,39 +217,26 @@ paths:
                 amount_minor: 2500000
                 narration: Rent for November
                 status: '91'
-                outcome: reversed
+                outcome: failed
                 tsq_attempts: 2
                 created_at: '2026-11-14T10:30:00+01:00'
                 resolved_at: '2026-11-14T10:35:00+01:00'
                 closure: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          $ref: '#/components/responses/NotFound'
-        '503':
-          $ref: '#/components/responses/Unavailable'
-  /v1/bvns/{bvn}:
-    get:
-      operationId: nibssBVNLookup
-      tags: [nibss]
-      summary: Look up a BVN
-      description: Tells a bank whether a BVN exists at NIBSS. Beerus enrols a BVN from a name, phone and date of birth and has no lookup by BVN today, so this operation and its `status` values are Beerus placeholders.
-      parameters:
-        - $ref: '#/components/parameters/BVNPath'
-      responses:
-        '200':
-          description: The BVN exists.
+          description: NIBSS never received this transfer. Send `POST /v1/transfers` again with the same `session_id`. The code is `not_found`.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BVNRecord'
+                $ref: '#/components/schemas/Error'
               example:
-                bvn: '22912345678'
-                status: linked
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
+                error:
+                  code: not_found
+                  message: NIBSS has no session 000014261114103000123456789012. Send the transfer again with the same session_id.
+                  request_id: req_01JBC8A5T3ZK
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/banks:
@@ -214,7 +244,7 @@ paths:
       operationId: nibssBankDirectory
       tags: [nibss]
       summary: List the banks in the NIBSS directory
-      description: Lists the banks NIBSS knows, ordered by NIP code. Removed banks are left out. Use `next_cursor` as `cursor` to read the next page.
+      description: Lists the banks NIBSS knows, ordered by NIP code. Removed banks are left out. It never shows a bank's URL or certificate identity. Use `next_cursor` as `cursor` to read the next page.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
@@ -268,7 +298,7 @@ paths:
       operationId: bankCredit
       tags: [bank]
       summary: Credit an account for a NIP session
-      description: NIBSS asks the destination bank to credit a customer. The idempotency key is `session_id`. The bank credits once per session ID. A repeat with the same details returns the first result with `Idempotent-Replayed`. The same `session_id` with different details returns `422 idempotency_key_reused`. The bank answers `00` when it credited, and a refusal code such as `07`, `25` or `57` when it did not.
+      description: NIBSS asks the destination bank to credit a customer. The idempotency key is `session_id`. The bank credits once per session ID. A repeat with the same details returns the first result with `Idempotent-Replayed`. The same `session_id` with different details returns `422 idempotency_key_reused`. The bank answers `00` when it credited, and a refusal code such as `07`, `25` or `57` when it did not. Once the bank has answered `25` to a status query for a session, it refuses any later credit for that session with `25`, so a late retry can never pay twice.
       requestBody:
         required: true
         content:
@@ -287,7 +317,7 @@ paths:
               created_at: '2026-11-14T10:30:00+01:00'
       responses:
         '200':
-          description: The credit was applied, refused, or is a replay. A replay carries `Idempotent-Replayed`.
+          description: The credit was applied, refused, or is a replay. A replay carries `Idempotent-Replayed`. A session the bank already answered `25` for is refused with `25`.
           headers:
             Idempotent-Replayed:
               $ref: '#/components/headers/IdempotentReplayed'
@@ -295,15 +325,32 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CreditResult'
-              example:
-                session_id: '000014261114103000123456789012'
-                response_code: '00'
+              examples:
+                credited:
+                  summary: The bank credited the account.
+                  value:
+                    session_id: '000014261114103000123456789012'
+                    response_code: '00'
+                refused_after_25:
+                  summary: The bank already answered 25 for this session, so a late credit is refused.
+                  value:
+                    session_id: '000014261114103000123456789012'
+                    response_code: '25'
         '400':
           $ref: '#/components/responses/BadRequest'
         '403':
           $ref: '#/components/responses/Forbidden'
         '422':
-          $ref: '#/components/responses/Unprocessable'
+          description: The request is well formed but cannot be done. The code is `idempotency_key_reused` when the session ID was used with different details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: idempotency_key_reused
+                  message: 'Session 000014261114103000123456789012 was first credited with amount_minor 2500000, and this request has 3000000. Repeat the first request.'
+                  request_id: req_01JBC8A5T3ZK
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/nip/credits/{session_id}:
@@ -311,7 +358,7 @@ paths:
       operationId: bankCreditStatus
       tags: [bank]
       summary: Ask whether a session was credited
-      description: NIBSS asks the destination bank whether it credited a session. The bank answers `00` if it did, and `25` if it holds no credit for that session ID.
+      description: NIBSS asks the destination bank whether it credited a session. The bank answers `00` if it did, and `25` if it holds no credit for that session ID. A `25` is final. Once the bank has answered `25` for a session, it refuses any later credit for that session with `25`, so a late retry can never pay twice.
       parameters:
         - $ref: '#/components/parameters/SessionIdPath'
       responses:
@@ -324,8 +371,63 @@ paths:
               example:
                 session_id: '000014261114103000123456789012'
                 response_code: '25'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/control/banks/{bank_id}:
+    put:
+      operationId: registerBank
+      tags: [control]
+      summary: Register a bank with NIBSS
+      description: The control plane registers a bank in the NIBSS directory, as NIBSS operations onboard banks in the real world. It is an idempotent ensure keyed by `bank_id`. A repeat with the same details returns the same registration. The same `bank_id` with a different NIP code, URL or certificate identity returns `422 registration_conflict`, and the message says which fields differ. NIBSS keeps `credit_url` and `certificate_identity` to call the bank, and never shows them in the directory.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BankIDPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterBank'
+            example:
+              nip_code: '000014'
+              name: Bank A
+              type: commercial
+              credit_url: https://bank-a.localhost:7451
+              certificate_identity: bank-a
+      responses:
+        '200':
+          description: The bank is registered. It is the directory entry, without the URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bank'
+              example:
+                id: bank-a
+                name: Bank A
+                nip_code: '000014'
+                nuban_code: '014'
+                type: commercial
+                status: active
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          description: The bank is already registered with other details. The code is `registration_conflict`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: registration_conflict
+                  message: 'Bank bank-a is registered with nip_code 000014 and credit_url https://bank-a.localhost:7451, and this request has credit_url https://bank-a.localhost:7499. Send the registered details.'
+                  request_id: req_01JBC8A5T3ZK
         '503':
           $ref: '#/components/responses/Unavailable'
 components:
@@ -333,6 +435,10 @@ components:
     mutualTLS:
       type: mutualTLS
       description: The caller presents a client certificate issued by the Beerus CA. The server authorises the caller by the certificate's identity, not only by a valid chain.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The control token, from the `control-token` file of the Beerus directory. Only the control plane has it.
   headers:
     IdempotentReplayed:
       description: Set to `true` when this response is a replay of the first result for the same idempotency key.
@@ -340,6 +446,14 @@ components:
         type: string
         enum: ['true']
   parameters:
+    BankIDPath:
+      name: bank_id
+      in: path
+      required: true
+      description: The Beerus ID of the bank.
+      schema:
+        type: string
+      example: bank-a
     BankCodeQuery:
       name: bank_code
       in: query
@@ -375,20 +489,11 @@ components:
       schema:
         $ref: '#/components/schemas/SessionID'
       example: '000014261114103000123456789012'
-    BVNPath:
-      name: bvn
-      in: path
-      required: true
-      description: The 11 digit BVN. It starts with `229`.
-      schema:
-        type: string
-        pattern: '^229[0-9]{8}$'
-      example: '22912345678'
     Limit:
       name: limit
       in: query
       required: false
-      description: The page size, from 1 to 500. The default is 50.
+      description: The page size, from 1 to 500. The default is 50. The cap of 500 is a Beerus placeholder.
       schema:
         type: integer
         minimum: 1
@@ -483,11 +588,11 @@ components:
           minimum: 1
         narration:
           type: string
-          description: The payer's note. It has at most 100 characters and no control characters.
+          description: The payer's note. It has at most 100 characters and no control characters. The limit is a Beerus placeholder.
           maxLength: 100
         closure:
           type: boolean
-          description: True for a transfer that moves money out of a closing bank. It skips the net debit cap. Beerus uses this today, and it is not a NIBSS field.
+          description: True for a transfer that moves money out of a closing bank. It skips the net debit cap. NIBSS honours it only when the control plane has marked the sending bank `terminating`. It is a Beerus field, not a NIBSS one.
     Session:
       type: object
       description: One NIP session as NIBSS records it.
@@ -520,16 +625,16 @@ components:
           pattern: '^(pending|[0-9]{2})$'
         outcome:
           type: string
-          description: 'What the session did. `credited` after a `00`, `failed` when it failed and the sender has not reversed yet, `reversed` after the sender reversed, and `unknown` while the destination bank has not answered. It is absent while a pending session has no known outcome.'
-          enum: [credited, failed, unknown, reversed]
+          description: 'What the session did. `credited` when the destination bank credited, `failed` when it did not, and `unknown` while the destination bank has not answered. It is absent while a pending session has no known outcome. NIBSS never records a reversal, because the sending bank reverses its own customer.'
+          enum: [credited, failed, unknown]
         tsq_attempts:
           type: integer
-          description: How many status queries NIBSS has run for this session.
+          description: How many status queries NIBSS has run for this session. Every status query counts.
           minimum: 0
         next_tsq_at:
           type: string
           format: date-time
-          description: When NIBSS will next query a pending session.
+          description: When the sending bank should send the next status query for a pending session. The spacing is a Beerus placeholder.
         created_at:
           type: string
           format: date-time
@@ -544,18 +649,6 @@ components:
         closure:
           type: boolean
           description: True for a transfer that moves money out of a closing bank.
-    BVNRecord:
-      type: object
-      description: A BVN that exists at NIBSS. It is a Beerus placeholder.
-      required: [bvn, status]
-      properties:
-        bvn:
-          type: string
-          description: The 11 digit BVN.
-        status:
-          type: string
-          description: Whether the BVN is linked to a customer at a bank. The values are Beerus placeholders.
-          enum: [linked, not_linked]
     Bank:
       type: object
       description: One bank in the NIBSS directory.
@@ -581,6 +674,29 @@ components:
           type: string
           description: '`active` takes transfers. `suspended` and `terminating` do not.'
           enum: [active, suspended, terminating]
+    RegisterBank:
+      type: object
+      description: What the control plane tells NIBSS about a bank.
+      required: [nip_code, name, type, credit_url, certificate_identity]
+      properties:
+        nip_code:
+          type: string
+          description: The 6 digit NIP code the bank was given.
+          pattern: '^[0-9]{6}$'
+        name:
+          type: string
+          description: The bank name.
+        type:
+          type: string
+          description: The category of the bank.
+          enum: [commercial, digital, microfinance]
+        credit_url:
+          type: string
+          format: uri
+          description: The base URL where NIBSS calls the bank's `bank` operations.
+        certificate_identity:
+          type: string
+          description: The identity in the bank's client certificate. NIBSS accepts calls for this NIP code only from this identity.
     BankPage:
       type: object
       description: One page of the bank directory.
@@ -626,7 +742,7 @@ components:
           minimum: 1
         narration:
           type: string
-          description: The payer's note.
+          description: The payer's note. The limit of 100 characters is a Beerus placeholder.
           maxLength: 100
         created_at:
           type: string
@@ -683,27 +799,16 @@ components:
               code: forbidden
               message: This certificate may not send transfers for bank 090201.
               request_id: req_01JBC8A5T3ZK
-    NotFound:
-      description: Nothing has that ID. The code is `not_found`.
+    Unauthenticated:
+      description: The control token is missing or wrong. The code is `unauthenticated`.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
           example:
             error:
-              code: not_found
-              message: No NIP session has that ID.
-              request_id: req_01JBC8A5T3ZK
-    Unprocessable:
-      description: The request is well formed but cannot be done. The code is `idempotency_key_reused` when the session ID was used with different details.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            error:
-              code: idempotency_key_reused
-              message: That session ID was used with different details.
+              code: unauthenticated
+              message: A valid control token is required.
               request_id: req_01JBC8A5T3ZK
     Unavailable:
       description: The participant cannot answer now. The code is `unavailable`. Try again soon.
