@@ -16,13 +16,6 @@ type bankHost struct {
 	id string
 }
 
-func (a *App) hostOf(id string) server.Host {
-	if a.srv != nil {
-		return a.srv
-	}
-	return bankHost{a, id}
-}
-
 func (a *App) BankHandler(id string) http.Handler {
 	a.mu.Lock()
 	b := a.cfg.Bank(id)
@@ -32,11 +25,7 @@ func (a *App) BankHandler(id string) http.Handler {
 	if b == nil || !have {
 		return nil
 	}
-	var api http.Handler
-	if a.role == RoleBank {
-		api = a.srv.API()
-	}
-	return site.New(site.Config{Host: a.hostOf(id), Open: a.openBanking(id), Sender: a.sender, Link: a.link, Clock: a.clock, Log: a.log, Brand: brand, API: api})
+	return site.New(site.Config{Host: bankHost{a, id}, Open: a.openBanking(id), Sender: a.sender, Link: a.link, Clock: a.clock, Log: a.log, Brand: brand})
 }
 
 func (h bankHost) Bank() config.Bank {

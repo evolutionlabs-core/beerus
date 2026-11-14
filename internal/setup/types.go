@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
@@ -57,15 +58,15 @@ const (
 	FinalizerSettleMoves       = "settle-moves"
 	FinalizerPurgeOwned        = "purge-owned"
 
-	StepAllocate          = "allocate"
-	StepDirectory         = "directory"
-	StepDatabase          = "database"
-	StepLedgerSchema      = "ledger_schema"
-	StepOpenBankingSchema = "openbanking_schema"
-	StepCerts             = "certs"
-	StepCBN               = "cbn"
-	StepSite              = "site"
-	StepAPI               = "api"
+	StepAllocate          = config.StepAllocate
+	StepDirectory         = config.StepDirectory
+	StepDatabase          = config.StepDatabase
+	StepLedgerSchema      = config.StepLedgerSchema
+	StepOpenBankingSchema = config.StepOpenBankingSchema
+	StepCerts             = config.StepCerts
+	StepCBN               = config.StepCBN
+	StepSite              = config.StepSite
+	StepAPI               = config.StepAPI
 	StepSettlement        = "settlement"
 	StepSchema            = "schema"
 

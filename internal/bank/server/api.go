@@ -162,9 +162,7 @@ func (s *Server) reload() error {
 	s.mu.Lock()
 	changed := s.bank.Name != want.Name || s.bank.API != want.API
 	s.bank.Name, s.bank.State, s.bank.NetDebitCap, s.bank.Collateral, s.bank.API = want.Name, want.State, want.NetDebitCap, want.Collateral, want.API
-	own := s.bank
 	s.mu.Unlock()
-	s.reloaded(own)
 	if changed {
 		s.stale.Store(true)
 	}

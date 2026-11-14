@@ -9,7 +9,6 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
-	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -27,16 +26,6 @@ func userFixable(err error) bool {
 	return errors.As(err, &te) || errors.Is(err, view.ErrBadAmount) || errors.Is(err, errChooseAccount) || errors.Is(err, errChooseOwn) || errors.Is(err, errTenDigits)
 }
 
-func (s *site) openBanks() []*config.Bank {
-	out := []*config.Bank{}
-	for _, b := range s.Host.Directory() {
-		if !b.Closed() {
-			out = append(out, b)
-		}
-	}
-	return out
-}
-
 func (s *site) transferPage(ctx context.Context, sess *session, d data) (data, error) {
 	if err := s.Host.RefreshBanks(ctx); err != nil {
 		return nil, err
@@ -48,7 +37,7 @@ func (s *site) transferPage(ctx context.Context, sess *session, d data) (data, e
 	d["Title"] = "Send money"
 	d["Nav"] = "transfer"
 	d["Accounts"] = accts
-	d["Banks"] = s.openBanks()
+	d["Banks"] = server.OpenBanks(s.Host.Directory())
 	return d, nil
 }
 

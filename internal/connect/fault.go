@@ -146,8 +146,5 @@ func (m member) NameEnquiry(ctx context.Context, nuban string) (string, error) {
 }
 
 func (a *App) bankRefusing(id string) bool {
-	if a.srv != nil {
-		return a.srv.Refusing(id)
-	}
 	return a.bankPhase(id) == PhaseSuspended || a.bankDown(id, a.clock.Now())
 }

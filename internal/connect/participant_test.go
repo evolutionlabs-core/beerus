@@ -115,15 +115,13 @@ func newContractCall(t *testing.T, handler http.Handler) contractCall {
 
 func TestParticipantControlContract(t *testing.T) {
 	cfg := bankDirConfig(t, &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1, APIPort: 2, Database: "db"})
-	a := &App{cfg: cfg}
 	srv := server.New(server.Config{
-		Dir:      cfg.Dir,
-		Bank:     *cfg.Bank("bank-a"),
-		Link:     server.Link{Token: participantTok},
-		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:    clock.New(func() time.Time { return participantNow }),
-		Phase:    PhaseActive,
-		Reloaded: a.bankReloaded,
+		Dir:   cfg.Dir,
+		Bank:  *cfg.Bank("bank-a"),
+		Link:  server.Link{Token: participantTok},
+		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock: clock.New(func() time.Time { return participantNow }),
+		Phase: PhaseActive,
 	})
 	call := newContractCall(t, srv.API())
 	bankFile := config.BankFilePath(cfg.Dir, "bank-a")
@@ -190,7 +188,7 @@ func TestParticipantControlContract(t *testing.T) {
 			}
 		})
 	}
-	if stale, b := srv.TakeStale(), a.cfg.Bank("bank-a"); !stale || b.Name != renamed.Name || !b.Suspended() {
+	if stale, b := srv.TakeStale(), srv.Bank(); !stale || b.Name != renamed.Name || !b.Suspended() {
 		t.Fatalf("after the reload the bank is %q, suspended %v; want %q, true, with the site marked stale", b.Name, b.Suspended(), renamed.Name)
 	}
 }

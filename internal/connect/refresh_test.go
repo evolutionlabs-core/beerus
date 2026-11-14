@@ -49,7 +49,7 @@ func TestNIBSSPortDefaultAndConflicts(t *testing.T) {
 	}
 }
 
-func TestBankRoleDirectoryComesFromNIBSS(t *testing.T) {
+func TestBankDirectoryComesFromNIBSS(t *testing.T) {
 	cfg := bankDirConfig(t, &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1, APIPort: 2, Database: "db"})
 	cert, err := tls.LoadX509KeyPair(cfg.Path("nibss", "server.crt"), cfg.Path("nibss", "server.key"))
 	if err != nil {
@@ -88,23 +88,21 @@ func TestBankRoleDirectoryComesFromNIBSS(t *testing.T) {
 		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:     clock.New(nil),
 		Phase:     PhaseActive,
-		Reloaded:  func(config.Bank) {},
 	})
-	a := &App{role: RoleBank, bankID: "bank-a", cfg: cfg, srv: srv}
-	if err := a.refreshBanks(t.Context()); err != nil {
+	if err := srv.RefreshBanks(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	var got []string
-	for _, b := range a.openInstitutions() {
+	for _, b := range server.OpenBanks(srv.Directory()) {
 		got = append(got, b.ID)
 	}
 	if len(got) != 3 || got[0] != "bank-a" || got[1] != "bank-b" || got[2] != "bank-d" {
 		t.Fatalf("offered %v, want bank-a, bank-b and bank-d without the terminating bank-c", got)
 	}
-	if own := a.bankLocked("bank-a"); own == nil || own.Name != "Bank A" {
+	if own := srv.Lookup("bank-a"); own == nil || own.Name != "Bank A" {
 		t.Fatalf("a bank's own entry must come from its own config, got %+v", own)
 	}
-	if other := a.bankLocked("bank-b"); other == nil || other.Name != "bank-b" || !other.Suspended() {
+	if other := srv.Lookup("bank-b"); other == nil || other.Name != "bank-b" || !other.Suspended() {
 		t.Fatalf("another bank must come from the directory, got %+v", other)
 	}
 }

@@ -195,16 +195,10 @@ func (a *App) bankByID(id string) *config.Bank {
 }
 
 func (a *App) banksLocked() []*config.Bank {
-	if a.srv == nil {
-		return a.cfg.Banks
-	}
-	return a.srv.Directory()
+	return a.cfg.Banks
 }
 
 func (a *App) bankLocked(id string) *config.Bank {
-	if a.srv != nil {
-		return a.srv.Lookup(id)
-	}
 	for _, b := range a.banksLocked() {
 		if b.ID == id {
 			return b
@@ -214,13 +208,7 @@ func (a *App) bankLocked(id string) *config.Bank {
 }
 
 func (a *App) openInstitutions() []*config.Bank {
-	out := []*config.Bank{}
-	for _, b := range a.banksLocked() {
-		if !b.Closed() {
-			out = append(out, b)
-		}
-	}
-	return out
+	return server.OpenBanks(a.banksLocked())
 }
 
 type CloseRequest struct {

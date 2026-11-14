@@ -80,9 +80,6 @@ func (a *App) Transfer(req server.TransferRequest) (server.TransferResult, error
 }
 
 func (a *App) Quote(ctx context.Context, req server.TransferRequest) (server.TransferResult, error) {
-	if a.srv != nil {
-		return a.srv.Quote(ctx, req)
-	}
 	if err := server.CheckRequest(req); err != nil {
 		return server.TransferResult{}, err
 	}

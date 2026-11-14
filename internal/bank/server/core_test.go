@@ -17,12 +17,11 @@ import (
 
 func registryServer(now *time.Time, transport roundTrip) *Server {
 	return New(Config{
-		Bank:     config.Bank{ID: "bank-a", Name: "Bank A"},
-		CoreURL:  "http://core.invalid",
-		Link:     Link{Client: &http.Client{Transport: transport}},
-		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:    clock.New(func() time.Time { return *now }),
-		Reloaded: func(config.Bank) {},
+		Bank:    config.Bank{ID: "bank-a", Name: "Bank A"},
+		CoreURL: "http://core.invalid",
+		Link:    Link{Client: &http.Client{Transport: transport}},
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:   clock.New(func() time.Time { return *now }),
 	})
 }
 

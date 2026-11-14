@@ -65,7 +65,7 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 		a.reloadSite(b.ID)
 		return
 	}
-	phase := runningPhase(b)
+	phase := b.RunningPhase()
 	a.lifeMu.Lock()
 	if st := a.status[r.ID]; st != nil {
 		if st.Phase == PhaseClosing || st.Phase == PhaseTerminating {

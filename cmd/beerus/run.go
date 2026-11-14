@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
@@ -46,7 +47,7 @@ func envNumber(key string, positive bool) (int64, error) {
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	participant := fs.String("participant", "", "what to run: cbn, core or a bank ID")
+	which := fs.String("participant", "", "what to run: cbn, core or a bank ID")
 	bind := fs.String("bind", envOr("BEERUS_BIND", "127.0.0.1"), "`address` to listen on")
 	supervised := fs.Bool("supervised", false, "stop when standard input closes")
 	core := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "`URL` of the core participant's control API, for banks")
@@ -62,7 +63,7 @@ func cmdRun(args []string) error {
 			stop()
 		}()
 	}
-	switch *participant {
+	switch *which {
 	case "":
 		return usageError("run")
 	case "cbn":
@@ -79,14 +80,9 @@ func cmdRun(args []string) error {
 		log.Info("core running", "world", app.WorldID())
 		return app.Serve(ctx)
 	case "connect", "nibss":
-		return fmt.Errorf("%s runs inside the core participant; start --participant core", *participant)
+		return fmt.Errorf("%s runs inside the core participant; start --participant core", *which)
 	}
-	app, err := connect.NewBank(ctx, *dir, connect.Options{Logger: log, BankID: *participant, CoreURL: *core, Bind: *bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
-	if err != nil {
-		return err
-	}
-	log.Info("bank running", "bank", *participant)
-	return app.ServeBank(ctx)
+	return participant.Run(ctx, *dir, participant.Options{Logger: log, BankID: *which, CoreURL: *core, Bind: *bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
 }
 
 func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {

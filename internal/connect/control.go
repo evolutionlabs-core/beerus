@@ -191,9 +191,6 @@ func (a *App) ctlDeliveries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) SyncAll(ctx context.Context) {
-	if a.role == RoleBank {
-		return
-	}
 	a.mu.Lock()
 	now := a.clock.Now()
 	due := make([]*Connection, 0, len(a.st.Connections))

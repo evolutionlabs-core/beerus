@@ -6,12 +6,15 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -44,15 +47,16 @@ func TestParticipantBankContract(t *testing.T) {
 	fixed := Options{Real: func() time.Time { return participantNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	core := newTestApp(t, fixed)
 	coreURL := startCore(t, core)
-	o := fixed
-	o.BankID, o.CoreURL, o.Bind, o.DatabaseURL = "bank-a", coreURL, "127.0.0.1", core.cfg.DatabaseURL
-	a, err := NewBank(t.Context(), core.cfg.Dir, o)
+	a, err := participant.New(t.Context(), core.cfg.Dir, participant.Options{Real: fixed.Real, Logger: fixed.Logger, BankID: "bank-a", CoreURL: coreURL, Bind: "127.0.0.1", DatabaseURL: core.cfg.DatabaseURL})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(a.closeLedgers)
-	tok := a.link.Token
-	call := newContractCall(t, a.srv.API())
+	t.Cleanup(a.Close)
+	tok, err := config.ReadSecret(filepath.Join(config.BankDir(core.cfg.Dir, "bank-a"), config.BankTokenFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := newContractCall(t, a.Server().API())
 	norm := func(s string) string { return stampedField.ReplaceAllString(s, `"$1":"T"`) }
 	run := func(validate bool) func(name, method, path, key, body string, status int, want string) controlReply {
 		return func(name, method, path, key, body string, status int, want string) controlReply {
@@ -161,7 +165,11 @@ func TestParticipantBankContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	site := &http.Server{Handler: a.BankHandler(a.bankID), ReadHeaderTimeout: probeLimit}
+	handler, err := a.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := &http.Server{Handler: handler, ReadHeaderTimeout: probeLimit}
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
@@ -171,7 +179,7 @@ func TestParticipantBankContract(t *testing.T) {
 		_ = site.Close()
 		<-served
 	})
-	host := fmt.Sprintf("bank-a.localhost:%d", a.cfg.Bank(a.bankID).Port)
+	host := fmt.Sprintf("bank-a.localhost:%d", a.Server().Bank().Port)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	failures := make(chan error, 30)
@@ -195,7 +203,7 @@ func TestParticipantBankContract(t *testing.T) {
 		}
 	}()
 	for i := range 30 {
-		renamed := *core.cfg.Bank(a.bankID)
+		renamed := *core.cfg.Bank("bank-a")
 		renamed.Name = fmt.Sprintf("Bank A %d", i)
 		if err := core.cfg.EnsureBankDir(&renamed, participantNow); err != nil {
 			t.Fatal(err)

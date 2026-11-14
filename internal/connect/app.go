@@ -80,12 +80,10 @@ type App struct {
 	vault        *vault
 	obHTTP       *http.Client
 	role         string
-	bankID       string
 	coreURL      string
 	pushWake     chan struct{}
 	link         server.Link
 	banking      *server.Banking
-	srv          *server.Server
 	probeHTTP    *http.Client
 	sender       *consent.Sender
 	obKey        *ecdsa.PrivateKey
@@ -94,15 +92,13 @@ type App struct {
 }
 
 type Options struct {
-	Real        func() time.Time
-	Logger      *slog.Logger
-	Client      *http.Client
-	Role        string
-	BankID      string
-	CoreURL     string
-	Bind        string
-	DatabaseURL string
-	BankWrap    func(http.RoundTripper) http.RoundTripper
+	Real     func() time.Time
+	Logger   *slog.Logger
+	Client   *http.Client
+	Role     string
+	CoreURL  string
+	Bind     string
+	BankWrap func(http.RoundTripper) http.RoundTripper
 }
 
 func New(cfg *config.Config, o Options) (*App, error) {

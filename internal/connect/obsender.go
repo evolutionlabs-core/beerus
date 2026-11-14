@@ -1,28 +1,15 @@
 package connect
 
-import (
-	"context"
-	"net/http"
-
-	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
-	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-)
+import "github.com/evolutionlabs-core/beerus/internal/bank/consent"
 
 func (a *App) newSender() *consent.Sender {
-	s := &consent.Sender{
+	return &consent.Sender{
 		Log:       a.log,
 		Clock:     a.clock,
 		Dir:       a.cfg.Dir,
 		WidgetURL: a.cfg.WidgetURL(),
-		CA:        a.rootCertPath(),
+		CA:        a.cfg.Path("ca", "root.crt"),
 		Servers:   a.obServers,
 		Bank:      a.bankConfig,
 	}
-	if a.role == RoleBank {
-		s.Core = func(ctx context.Context, e openbanking.ConsentEvent) error {
-			_, err := a.srv.CoreDo(ctx, http.MethodPost, "/internal/consents", e, nil)
-			return err
-		}
-	}
-	return s
 }

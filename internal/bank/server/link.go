@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
+	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -117,4 +120,44 @@ func (l Link) Request(ctx context.Context, base, method, path string, header htt
 		return resp.StatusCode, json.Unmarshal(raw, out)
 	}
 	return resp.StatusCode, nil
+}
+
+func (l Link) Listen(port int) ([]net.Listener, error) {
+	if l.Multi() {
+		ln, err := net.Listen("tcp", net.JoinHostPort(l.Bind, strconv.Itoa(port)))
+		if err != nil {
+			return nil, fmt.Errorf("listen on port %d: %w", port, err)
+		}
+		return []net.Listener{ln}, nil
+	}
+	out := []net.Listener{}
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if err != nil {
+			if host == "::1" {
+				continue
+			}
+			for _, x := range out {
+				x.Close()
+			}
+			return nil, fmt.Errorf("listen on port %d: %w", port, err)
+		}
+		out = append(out, ln)
+	}
+	return out, nil
+}
+
+type quietTLS struct {
+	log *slog.Logger
+}
+
+func (q quietTLS) Write(p []byte) (int, error) {
+	if !bytes.Contains(p, []byte("TLS handshake error")) {
+		q.log.Warn(string(bytes.TrimSpace(p)))
+	}
+	return len(p), nil
+}
+
+func ErrorLog(l *slog.Logger) *log.Logger {
+	return log.New(quietTLS{l}, "", 0)
 }

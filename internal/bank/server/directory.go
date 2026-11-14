@@ -46,6 +46,16 @@ func (s *Server) Directory() []*config.Bank {
 	return s.dirBanks
 }
 
+func OpenBanks(all []*config.Bank) []*config.Bank {
+	out := []*config.Bank{}
+	for _, b := range all {
+		if !b.Closed() {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
 func (s *Server) directoryClient() (*http.Client, error) {
 	s.dirMu.Lock()
 	have := s.dirClient

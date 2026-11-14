@@ -1,17 +1,14 @@
 package connect
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
-	"log"
 	"net"
 	"net/http"
-	"strconv"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/nibss/gateway"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
@@ -34,31 +31,6 @@ func (a *App) WidgetTLS() (*tls.Config, error) {
 		return nil, err
 	}
 	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
-}
-
-func (a *App) listenLocal(port int) ([]net.Listener, error) {
-	if a.link.Multi() {
-		l, err := net.Listen("tcp", net.JoinHostPort(a.link.Bind, strconv.Itoa(port)))
-		if err != nil {
-			return nil, fmt.Errorf("listen on port %d: %w", port, err)
-		}
-		return []net.Listener{l}, nil
-	}
-	out := []net.Listener{}
-	for _, host := range []string{"127.0.0.1", "::1"} {
-		l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
-		if err != nil {
-			if host == "::1" {
-				continue
-			}
-			for _, x := range out {
-				x.Close()
-			}
-			return nil, fmt.Errorf("listen on port %d: %w", port, err)
-		}
-		out = append(out, l)
-	}
-	return out, nil
 }
 
 func (a *App) Serve(ctx context.Context) error {
@@ -93,7 +65,7 @@ func (a *App) Serve(ctx context.Context) error {
 	}
 	servers := []srv{}
 	for _, sp := range specs {
-		ls, err := a.listenLocal(sp.port)
+		ls, err := a.link.Listen(sp.port)
 		if err != nil {
 			for _, s := range servers {
 				for _, l := range s.ls {
@@ -102,7 +74,7 @@ func (a *App) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		servers = append(servers, srv{s: &http.Server{Handler: sp.h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: log.New(quietTLS{a}, "", 0)}, tls: sp.tls, ls: ls})
+		servers = append(servers, srv{s: &http.Server{Handler: sp.h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: server.ErrorLog(a.log)}, tls: sp.tls, ls: ls})
 	}
 	a.lifeMu.Lock()
 	a.serving = true
@@ -164,15 +136,4 @@ func (a *App) Serve(ctx context.Context) error {
 	<-pushDone
 	a.closeLedgers()
 	return serr
-}
-
-type quietTLS struct {
-	a *App
-}
-
-func (q quietTLS) Write(p []byte) (int, error) {
-	if !bytes.Contains(p, []byte("TLS handshake error")) {
-		q.a.log.Warn(string(bytes.TrimSpace(p)))
-	}
-	return len(p), nil
 }

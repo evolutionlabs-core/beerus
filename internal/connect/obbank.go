@@ -9,7 +9,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"log"
 	"maps"
 	"net"
 	"net/http"
@@ -228,13 +227,6 @@ func (r memRegistry) RegistryClientByCert(cn string) (*openbanking.RegistryClien
 	return nil, false
 }
 
-func (a *App) registrar() server.Registrar {
-	if a.srv != nil {
-		return a.srv
-	}
-	return memRegistry{a}
-}
-
 func (a *App) obBooks(id string) func() *store.Books {
 	return func() *store.Books {
 		if l := a.obLedger(id); l != nil {
@@ -255,7 +247,7 @@ func (a *App) openBanking(id string) *openbanking.Server {
 	if b == nil || a.obLedger(id) == nil {
 		return nil
 	}
-	s, err := server.NewOpenBanking(server.OpenConfig{Bank: *b, Books: a.obBooks(id), Registry: a.registrar(), Ledger: consentLedger{a}, Outbox: a.role == RoleBank, Clock: a.clock})
+	s, err := server.NewOpenBanking(server.OpenConfig{Bank: *b, Books: a.obBooks(id), Registry: memRegistry{a}, Ledger: consentLedger{a}, Clock: a.clock})
 	if err != nil {
 		a.log.Error("open banking not built", "bank", id, "err", err)
 		return nil
@@ -285,13 +277,6 @@ func (a *App) obServers() map[string]*openbanking.Server {
 	return maps.Clone(a.obs)
 }
 
-func (a *App) rootCertPath() string {
-	if a.role == RoleBank {
-		return a.cfg.Path("banks", a.bankID, config.BankCAFile)
-	}
-	return a.cfg.Path("ca", "root.crt")
-}
-
 func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	if b.APIPort == 0 {
 		return nil, fmt.Errorf("%s has no API port", b.ID)
@@ -300,15 +285,15 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	if ob == nil {
 		return nil, fmt.Errorf("no ledger for %s", b.ID)
 	}
-	tc, err := server.OpenAPITLS(a.cfg.Dir, b.ID, a.rootCertPath())
+	tc, err := server.OpenAPITLS(a.cfg.Dir, b.ID, a.cfg.Path("ca", "root.crt"))
 	if err != nil {
 		return nil, err
 	}
-	ls, err := a.listenLocal(b.APIPort)
+	ls, err := a.link.Listen(b.APIPort)
 	if err != nil {
 		return nil, err
 	}
-	srv := &http.Server{Handler: server.OpenAPI(a.hostOf(b.ID), ob, a.log), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 2 * time.Minute, ErrorLog: log.New(quietTLS{a}, "", 0)}
+	srv := &http.Server{Handler: server.OpenAPI(bankHost{a, b.ID}, ob, a.log), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 2 * time.Minute, ErrorLog: server.ErrorLog(a.log)}
 	for _, l := range ls {
 		go func(l net.Listener) { _ = srv.Serve(tls.NewListener(l, tc)) }(l)
 	}

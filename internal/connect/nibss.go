@@ -43,7 +43,7 @@ func openNIBSS(ctx context.Context, cfg *config.Config, ctl *ctlStore) (*nibss.S
 
 func (a *App) nibssStore() *nibss.Store {
 	a.mu.Lock()
-	if a.nibss != nil || a.role == RoleBank || a.nibssOpening || a.clock.Real().Sub(a.nibssTried) < nibssRetry {
+	if a.nibss != nil || a.nibssOpening || a.clock.Real().Sub(a.nibssTried) < nibssRetry {
 		s := a.nibss
 		a.mu.Unlock()
 		return s

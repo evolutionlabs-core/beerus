@@ -41,7 +41,6 @@ type Server struct {
 	fees      *charges.Schedule
 	books     *bank.Bank
 	banking   *Banking
-	reloaded  func(config.Bank)
 	idem      web.Idempotency
 	phaseGen  atomic.Int64
 	stale     atomic.Bool
@@ -83,7 +82,6 @@ type Config struct {
 	Clock     *clock.Clock
 	Phase     string
 	Steps     []Step
-	Reloaded  func(config.Bank)
 }
 
 func New(c Config) *Server {
@@ -97,7 +95,6 @@ func New(c Config) *Server {
 		clock:     c.Clock,
 		fees:      c.Fees,
 		books:     c.Books,
-		reloaded:  c.Reloaded,
 		phase:     c.Phase,
 		steps:     c.Steps,
 		bank:      c.Bank,

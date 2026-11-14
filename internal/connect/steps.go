@@ -21,20 +21,8 @@ const (
 	backoffMax   = 5 * time.Minute
 )
 
-var bankSteps = []struct{ id, name string }{
-	{setup.StepAllocate, "Allocating codes"},
-	{setup.StepDirectory, "Registering with NIBSS"},
-	{setup.StepDatabase, "Creating the bank database"},
-	{setup.StepLedgerSchema, "Migrating bank ledger"},
-	{setup.StepOpenBankingSchema, "Migrating open banking"},
-	{setup.StepCerts, "Issuing certificates"},
-	{setup.StepCBN, "Opening the CBN settlement account"},
-	{setup.StepSite, "Starting online banking"},
-	{setup.StepAPI, "Starting the open banking API"},
-}
-
 func stepIndex(id string) int {
-	return slices.IndexFunc(bankSteps, func(s struct{ id, name string }) bool { return s.id == id })
+	return slices.IndexFunc(config.BankSteps(), func(s config.BankStep) bool { return s.ID == id })
 }
 
 func backoff(attempts int) time.Duration {
@@ -47,27 +35,20 @@ func backoff(attempts int) time.Duration {
 
 func newStatus(b *config.Bank, done bool) *BankStatus {
 	st := &BankStatus{ID: b.ID, Name: b.Name, Phase: PhaseProvisioning, URL: b.URL()}
-	for _, s := range bankSteps {
-		name := s.name
-		if s.id == setup.StepAllocate && b.NIPCode != "" {
+	for _, s := range config.BankSteps() {
+		name := s.Name
+		if s.ID == setup.StepAllocate && b.NIPCode != "" {
 			name += " (NIP " + b.NIPCode + ", NUBAN " + b.NUBANCode + ")"
 		}
-		st.Steps = append(st.Steps, BankStep{ID: s.id, Name: name, Done: done})
+		st.Steps = append(st.Steps, BankStep{ID: s.ID, Name: name, Done: done})
 	}
 	if done {
-		st.Phase = runningPhase(b)
+		st.Phase = b.RunningPhase()
 	}
 	if b.Closed() {
 		st.Phase = PhaseClosed
 	}
 	return st
-}
-
-func runningPhase(b *config.Bank) string {
-	if b.Suspended() {
-		return PhaseSuspended
-	}
-	return PhaseActive
 }
 
 func (a *App) initLifecycle(unready map[string]bool) []*config.Bank {
@@ -275,7 +256,7 @@ func (a *App) provision(b *config.Bank) {
 	if !ok {
 		return
 	}
-	phase := runningPhase(b)
+	phase := b.RunningPhase()
 	a.lifeMu.Lock()
 	if st.Phase == PhaseClosing || st.Phase == PhaseTerminating {
 		a.lifeMu.Unlock()
@@ -290,7 +271,7 @@ func (a *App) nameStep(st *BankStatus, id, detail string) {
 	i := stepIndex(id)
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
-	st.Steps[i].Name = bankSteps[i].name + " (" + detail + ")"
+	st.Steps[i].Name = config.BankSteps()[i].Name + " (" + detail + ")"
 }
 
 func migrationCount(n int) string {
