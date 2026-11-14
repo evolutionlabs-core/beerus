@@ -309,7 +309,7 @@ func (a *App) settle(now time.Time, adhoc bool) (int, error) {
 		todo = append(todo, nibss.Settlement{Key: key, CutoffAt: c, Sessions: groups[c]})
 	}
 	for _, x := range todo {
-		if err := postSettlement(r, ledgers, x); err != nil {
+		if err := postSettlement(ctx, r, ledgers, x); err != nil {
 			return 0, err
 		}
 		if err := sw.MarkPosted(ctx, x.Key, x.CutoffAt); err != nil {
@@ -319,7 +319,7 @@ func (a *App) settle(now time.Time, adhoc bool) (int, error) {
 	return len(todo), nil
 }
 
-func postSettlement(r *rtgs, ledgers []*ledgerSource, x nibss.Settlement) error {
+func postSettlement(ctx context.Context, r *rtgs, ledgers []*ledgerSource, x nibss.Settlement) error {
 	byCode := map[string]*ledgerSource{}
 	for _, l := range ledgers {
 		byCode[l.Inst.NIPCode] = l
@@ -346,7 +346,7 @@ func postSettlement(r *rtgs, ledgers []*ledgerSource, x nibss.Settlement) error 
 		if p == nil {
 			continue
 		}
-		if _, err := l.Bank().Settle(l.Ctx(), x.Key, p.outward, p.inward, x.CutoffAt); err != nil {
+		if _, err := l.Bank().Settle(ctx, x.Key, p.outward, p.inward, x.CutoffAt); err != nil {
 			return fmt.Errorf("settle %s at %s: %w", x.Key, l.Inst.ID, err)
 		}
 	}

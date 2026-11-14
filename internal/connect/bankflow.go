@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
@@ -45,12 +46,12 @@ func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSess
 	http.Redirect(w, r, b.URL()+"/authorize?"+q.Encode(), http.StatusSeeOther)
 }
 
-func (a *App) accountOwner(bankID, nuban string) (string, error) {
+func (a *App) accountOwner(ctx context.Context, bankID, nuban string) (string, error) {
 	l := a.obLedger(bankID)
 	if l == nil {
 		return "", fmt.Errorf("the books of %s are not open", bankID)
 	}
-	acc, err := l.Account(nuban)
+	acc, err := l.Account(ctx, nuban)
 	if err != nil {
 		return "", fmt.Errorf("look up the owner of %s: %w", nuban, err)
 	}
@@ -94,7 +95,7 @@ func (a *App) bankCallbackBeginLocked(w http.ResponseWriter, r *http.Request) (b
 	return bankCallbackInput{ls: ls, bank: b, vid: linkVaultPrefix + ls.ID, code: q.Get("code"), verifier: verifier}, true
 }
 
-func (a *App) bankSignIn(in bankCallbackInput) (bankToken, bankGrant, string, error) {
+func (a *App) bankSignIn(ctx context.Context, in bankCallbackInput) (bankToken, bankGrant, string, error) {
 	var g bankGrant
 	tok, err := a.bankExchange(in.bank, in.code, in.verifier)
 	if err != nil {
@@ -112,7 +113,7 @@ func (a *App) bankSignIn(in bankCallbackInput) (bankToken, bankGrant, string, er
 	if len(g.Accounts) == 0 {
 		return tok, g, "", nil
 	}
-	owner, err := a.accountOwner(in.bank.ID, g.Accounts[0].ID)
+	owner, err := a.accountOwner(ctx, in.bank.ID, g.Accounts[0].ID)
 	return tok, g, owner, err
 }
 
@@ -123,7 +124,7 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tok, g, owner, err := a.bankSignIn(in)
+	tok, g, owner, err := a.bankSignIn(r.Context(), in)
 	a.mu.Lock()
 	if err != nil {
 		defer a.mu.Unlock()

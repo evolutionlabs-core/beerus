@@ -15,7 +15,6 @@ import (
 
 type Books struct {
 	mu   sync.Mutex
-	ctx  context.Context
 	st   *Store
 	b    *bank.Bank
 	Inst bank.Profile
@@ -35,11 +34,7 @@ func OpenBooks(ctx context.Context, url, name string, inst bank.Profile, fees *c
 		st.Close()
 		return nil, err
 	}
-	return &Books{ctx: ctx, st: st, b: b, Inst: inst}, nil
-}
-
-func (s *Books) Ctx() context.Context {
-	return s.ctx
+	return &Books{st: st, b: b, Inst: inst}, nil
 }
 
 func (s *Books) Pool() *pgxpool.Pool {
@@ -56,20 +51,20 @@ func (s *Books) Bank() *bank.Bank {
 	return s.b
 }
 
-func (s *Books) Fetch(nuban string, at time.Time, from clock.Date) ([]bank.FeedLine, error) {
-	return s.Bank().Feed(s.ctx, nuban, at, from)
+func (s *Books) Fetch(ctx context.Context, nuban string, at time.Time, from clock.Date) ([]bank.FeedLine, error) {
+	return s.Bank().Feed(ctx, nuban, at, from)
 }
 
-func (s *Books) LedgerAt(nuban string, at time.Time) (int64, error) {
-	return s.Bank().BalanceAt(s.ctx, nuban, at)
+func (s *Books) LedgerAt(ctx context.Context, nuban string, at time.Time) (int64, error) {
+	return s.Bank().BalanceAt(ctx, nuban, at)
 }
 
-func (s *Books) EndOfDay(nuban string, d clock.Date) (int64, error) {
-	return s.LedgerAt(nuban, d.End().Add(-time.Nanosecond))
+func (s *Books) EndOfDay(ctx context.Context, nuban string, d clock.Date) (int64, error) {
+	return s.LedgerAt(ctx, nuban, d.End().Add(-time.Nanosecond))
 }
 
-func (s *Books) Account(nuban string) (ledger.Account, error) {
-	return s.Bank().L.Account(s.ctx, bank.CustomerAccount(nuban))
+func (s *Books) Account(ctx context.Context, nuban string) (ledger.Account, error) {
+	return s.Bank().L.Account(ctx, bank.CustomerAccount(nuban))
 }
 
 func (s *Books) Ping(ctx context.Context) error {

@@ -281,7 +281,7 @@ func (a *App) roomAccountOf(w http.ResponseWriter, r *http.Request) (book, ledge
 	var acc ledger.Account
 	var err error
 	if ok {
-		acc, err = bk.ls.Account(nuban)
+		acc, err = bk.ls.Account(r.Context(), nuban)
 		ok = err == nil && acc.Customer
 	}
 	if !ok && err != nil && !errors.Is(err, ledger.ErrUnknownAccount) {
@@ -697,7 +697,7 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 			msg = strings.ToUpper(msg[:1]) + msg[1:] + "."
 		}
 	}
-	imp, err := a.CloseImpact(id)
+	imp, err := a.CloseImpact(r.Context(), id)
 	if errors.Is(err, errNotFound) {
 		a.mu.Lock()
 		defer a.mu.Unlock()

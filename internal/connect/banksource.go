@@ -54,13 +54,13 @@ func (a *App) DropBankDatabases(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (a *App) VerifyBank() (ledger.Check, error) {
+func (a *App) VerifyBank(ctx context.Context) (ledger.Check, error) {
 	a.mu.Lock()
 	ledgers := slices.Clone(a.ledgers)
 	a.mu.Unlock()
 	var out ledger.Check
 	for _, l := range ledgers {
-		c, err := l.Bank().L.Verify(l.Ctx())
+		c, err := l.Bank().L.Verify(ctx)
 		if err != nil {
 			return out, fmt.Errorf("verify the books of %s: %w", l.Inst.ID, err)
 		}

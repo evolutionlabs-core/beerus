@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"context"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -116,7 +117,7 @@ func TestOnlineBanking(t *testing.T) {
 	if !found {
 		t.Fatal("the online banking transfer did not reach the partner feed")
 	}
-	c, err := s.app.VerifyBank()
+	c, err := s.app.VerifyBank(context.Background())
 	if err != nil || !c.OK() {
 		t.Fatalf("bank ledger after online transfer: %v %v", err, c)
 	}

@@ -497,7 +497,7 @@ func TestCloseBank(t *testing.T) {
 	if got := balance(opened["tunde"]); got != 1_000_000 {
 		t.Fatalf("left account has %d", got)
 	}
-	if c, err := s.app.VerifyBank(); err != nil || !c.OK() {
+	if c, err := s.app.VerifyBank(context.Background()); err != nil || !c.OK() {
 		t.Fatalf("bank ledgers after the close: %v %v", err, c)
 	}
 	if got := s.eventsOf("connection.status_changed", func(d map[string]any) bool {

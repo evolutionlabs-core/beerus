@@ -397,13 +397,13 @@ func (a *App) buildPlan(desired setup.Spec, st setup.Status, opt ApplyOptions) (
 		return planned{}, planFailure(plan.Errors)
 	}
 	pl := planned{plan: plan, desired: desired, st: st}
-	if err := a.fillImpact(&pl); err != nil {
+	if err := a.fillImpact(context.Background(), &pl); err != nil {
 		return planned{}, err
 	}
 	return pl, nil
 }
 
-func (a *App) fillImpact(pl *planned) error {
+func (a *App) fillImpact(ctx context.Context, pl *planned) error {
 	for i := range pl.plan.Actions {
 		act := &pl.plan.Actions[i]
 		if act.Impact == nil {
@@ -412,7 +412,7 @@ func (a *App) fillImpact(pl *planned) error {
 		var err error
 		switch act.Kind {
 		case setup.KindBank:
-			err = a.bankImpact(act, pl.st)
+			err = a.bankImpact(ctx, act, pl.st)
 		case setup.KindPartner:
 			act.Impact.Connections = a.partnerConnections(act.ID)
 		}
@@ -435,13 +435,13 @@ func (a *App) partnerConnections(id string) int {
 	return n
 }
 
-func (a *App) bankImpact(act *setup.Action, st setup.Status) error {
+func (a *App) bankImpact(ctx context.Context, act *setup.Action, st setup.Status) error {
 	im := act.Impact
 	a.mu.Lock()
 	open := a.ledgerFor(act.ID) != nil
 	a.mu.Unlock()
 	if open {
-		ci, err := a.CloseImpact(act.ID)
+		ci, err := a.CloseImpact(ctx, act.ID)
 		if err != nil && !errors.Is(err, errNotFound) {
 			return err
 		}

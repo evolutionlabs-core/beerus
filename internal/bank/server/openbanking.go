@@ -104,12 +104,12 @@ func (d bankData) ledger() (*store.Books, error) {
 	return nil, errors.New("the bank ledger is not open")
 }
 
-func (d bankData) find(nuban string) (ledger.Account, *store.Books, error) {
+func (d bankData) find(ctx context.Context, nuban string) (ledger.Account, *store.Books, error) {
 	l, err := d.ledger()
 	if err != nil {
 		return ledger.Account{}, nil, err
 	}
-	acc, err := l.Account(nuban)
+	acc, err := l.Account(ctx, nuban)
 	if errors.Is(err, ledger.ErrUnknownAccount) {
 		return ledger.Account{}, nil, openbanking.ErrNotFound
 	}
@@ -124,11 +124,12 @@ func accountInfo(acc ledger.Account) openbanking.AccountInfo {
 }
 
 func (d bankData) Accounts(customer string) ([]openbanking.AccountInfo, error) {
+	ctx := context.Background()
 	l, err := d.ledger()
 	if err != nil {
 		return nil, err
 	}
-	accs, err := l.Bank().CustomerAccounts(l.Ctx(), customer)
+	accs, err := l.Bank().CustomerAccounts(ctx, customer)
 	if errors.Is(err, bank.ErrUnknownCustomer) {
 		return []openbanking.AccountInfo{}, nil
 	}
@@ -143,16 +144,18 @@ func (d bankData) Accounts(customer string) ([]openbanking.AccountInfo, error) {
 }
 
 func (d bankData) Account(nuban string) (openbanking.AccountInfo, error) {
-	acc, _, err := d.find(nuban)
+	ctx := context.Background()
+	acc, _, err := d.find(ctx, nuban)
 	return accountInfo(acc), err
 }
 
 func (d bankData) Balance(nuban string) (openbanking.Balance, error) {
-	acc, l, err := d.find(nuban)
+	ctx := context.Background()
+	acc, l, err := d.find(ctx, nuban)
 	if err != nil {
 		return openbanking.Balance{}, err
 	}
-	bal, err := l.LedgerAt(nuban, d.clock.Now())
+	bal, err := l.LedgerAt(ctx, nuban, d.clock.Now())
 	if err != nil {
 		return openbanking.Balance{}, err
 	}
@@ -160,19 +163,21 @@ func (d bankData) Balance(nuban string) (openbanking.Balance, error) {
 }
 
 func (d bankData) BalanceOn(nuban string, day clock.Date) (int64, error) {
-	_, l, err := d.find(nuban)
+	ctx := context.Background()
+	_, l, err := d.find(ctx, nuban)
 	if err != nil {
 		return 0, err
 	}
-	return l.EndOfDay(nuban, day)
+	return l.EndOfDay(ctx, nuban, day)
 }
 
 func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking.Txn, error) {
-	_, l, err := d.find(nuban)
+	ctx := context.Background()
+	_, l, err := d.find(ctx, nuban)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := l.Fetch(nuban, d.clock.Now(), from)
+	rows, err := l.Fetch(ctx, nuban, d.clock.Now(), from)
 	if err != nil {
 		return nil, err
 	}

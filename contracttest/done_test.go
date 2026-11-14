@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"context"
 )
 
 func postedKeys(t *testing.T, st *feedState) map[string]string {
@@ -249,7 +251,7 @@ func TestDoneStory(t *testing.T) {
 	step(10, "the settlement and the bank ledgers still balance")
 	if s.app != nil {
 		checkSettled(t, s.app)
-		if c, err := s.app.VerifyBank(); err != nil || !c.OK() {
+		if c, err := s.app.VerifyBank(context.Background()); err != nil || !c.OK() {
 			t.Fatalf("bank ledgers at the end: %v %v", err, c)
 		}
 	}

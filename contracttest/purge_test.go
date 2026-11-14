@@ -170,7 +170,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if rep, err := connect.Doctor(context.Background(), c, false); err != nil || !rep.Clean() {
 		t.Fatalf("doctor after --fix: %+v %v", rep, err)
 	}
-	if ck, err := s.app.VerifyBank(); err != nil || !ck.OK() {
+	if ck, err := s.app.VerifyBank(context.Background()); err != nil || !ck.OK() {
 		t.Fatalf("bank ledgers after the purge: %v %v", err, ck)
 	}
 	s.advance("72h")
@@ -424,7 +424,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	if ck, err := r.app.CheckSettlement(); err != nil || len(ck.Problems) != 0 {
 		t.Fatalf("settlement after the restarts: %+v %v", ck, err)
 	}
-	if ck, err := r.app.VerifyBank(); err != nil || !ck.OK() {
+	if ck, err := r.app.VerifyBank(context.Background()); err != nil || !ck.OK() {
 		t.Fatalf("bank ledgers after the restarts: %v %v", err, ck)
 	}
 	final, err := connect.LoadConfig(cfg.Dir)

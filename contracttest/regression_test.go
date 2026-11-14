@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"context"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
@@ -138,7 +139,7 @@ func TestBankLedgerStaysConsistent(t *testing.T) {
 	s.connect("adaeze", "bank-a", s.today().AddDays(-40))
 	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "20000")
 	s.advance("40d")
-	c, err := s.app.VerifyBank()
+	c, err := s.app.VerifyBank(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
