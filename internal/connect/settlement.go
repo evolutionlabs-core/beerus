@@ -322,14 +322,14 @@ func (a *App) settle(now time.Time, adhoc bool) (int, error) {
 func postSettlement(r *rtgs, ledgers []*ledgerSource, x nibss.Settlement) error {
 	byCode := map[string]*ledgerSource{}
 	for _, l := range ledgers {
-		byCode[l.inst.NIPCode] = l
+		byCode[l.Inst.NIPCode] = l
 	}
 	nets := map[string]*position{}
 	side := func(l *ledgerSource) *position {
-		p := nets[l.inst.ID]
+		p := nets[l.Inst.ID]
 		if p == nil {
 			p = &position{}
-			nets[l.inst.ID] = p
+			nets[l.Inst.ID] = p
 		}
 		return p
 	}
@@ -342,12 +342,12 @@ func postSettlement(r *rtgs, ledgers []*ledgerSource, x nibss.Settlement) error 
 		side(to).inward += s.Amount
 	}
 	for _, l := range ledgers {
-		p := nets[l.inst.ID]
+		p := nets[l.Inst.ID]
 		if p == nil {
 			continue
 		}
-		if _, err := l.Bank().Settle(l.ctx, x.Key, p.outward, p.inward, x.CutoffAt); err != nil {
-			return fmt.Errorf("settle %s at %s: %w", x.Key, l.inst.ID, err)
+		if _, err := l.Bank().Settle(l.Ctx(), x.Key, p.outward, p.inward, x.CutoffAt); err != nil {
+			return fmt.Errorf("settle %s at %s: %w", x.Key, l.Inst.ID, err)
 		}
 	}
 	if err := r.settle(x.Key, x.CutoffAt, nets); err != nil {
@@ -483,7 +483,7 @@ func (a *App) settlementBooks() (settlementBooks, error) {
 func (s settlementBooks) check(l *ledgerSource) ([]string, error) {
 	var out []string
 	ctx := s.ctx
-	code, id := l.inst.NIPCode, l.inst.ID
+	code, id := l.Inst.NIPCode, l.Inst.ID
 	b := l.Bank()
 	posted, err := b.Settlements(ctx)
 	if err != nil {

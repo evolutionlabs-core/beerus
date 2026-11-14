@@ -306,7 +306,7 @@ func (a *App) customerLogin(w http.ResponseWriter, r *http.Request) {
 		if l == nil {
 			return bank.Customer{}, bank.ErrBadLogin
 		}
-		return l.Bank().Authenticate(l.ctx, r.PostForm.Get("username"), r.PostForm.Get("password"))
+		return l.Bank().Authenticate(l.Ctx(), r.PostForm.Get("username"), r.PostForm.Get("password"))
 	}
 	cust, err := login()
 	a.mu.Lock()

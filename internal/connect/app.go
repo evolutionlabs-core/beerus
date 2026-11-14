@@ -207,7 +207,7 @@ func (a *App) addLedger(ls *ledgerSource) {
 	if a.pools == nil {
 		a.pools = map[string]*ledgerSource{}
 	}
-	a.pools[ls.inst.ID] = ls
+	a.pools[ls.Inst.ID] = ls
 	a.poolMu.Unlock()
 }
 
@@ -219,7 +219,7 @@ func (a *App) obLedger(id string) *ledgerSource {
 
 func (a *App) ledgerFor(institution string) *ledgerSource {
 	for _, l := range a.ledgers {
-		if l.inst.ID == institution {
+		if l.Inst.ID == institution {
 			return l
 		}
 	}

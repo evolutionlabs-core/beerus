@@ -338,7 +338,7 @@ func (a *App) bankByCode(code string) *ledgerSource {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, l := range a.ledgers {
-		if l.inst.NIPCode == code {
+		if l.Inst.NIPCode == code {
 			return l
 		}
 	}

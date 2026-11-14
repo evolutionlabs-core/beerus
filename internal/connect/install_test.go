@@ -276,7 +276,7 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, n := postedAt(ls.st.Pool, "genesis"); !got.Equal(first) || n != 1 {
+		if got, n := postedAt(ls.Pool(), "genesis"); !got.Equal(first) || n != 1 {
 			t.Fatalf("bank genesis opened at %v: posted at %v, %d entries; want %v, 1", at, got, n, first)
 		}
 		if at == second {

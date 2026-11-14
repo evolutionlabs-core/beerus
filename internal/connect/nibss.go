@@ -162,7 +162,7 @@ func (a *App) attachMember(ls *ledgerSource) {
 	s := a.nibss
 	a.mu.Unlock()
 	if s != nil && ls != nil {
-		s.Attach(ls.inst.ID, member{a, ls})
+		s.Attach(ls.Inst.ID, member{a, ls})
 	}
 }
 

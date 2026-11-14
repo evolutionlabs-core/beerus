@@ -484,7 +484,7 @@ func (a *App) detach(b *config.Bank, from string) {
 		a.mu.Lock()
 		var ls *ledgerSource
 		for i, l := range a.ledgers {
-			if l.inst.ID == b.ID {
+			if l.Inst.ID == b.ID {
 				ls = l
 				a.ledgers = append(a.ledgers[:i:i], a.ledgers[i+1:]...)
 				a.poolMu.Lock()

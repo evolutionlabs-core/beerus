@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
@@ -18,15 +16,8 @@ import (
 )
 
 type ledgerSource struct {
-	mu      sync.Mutex
-	ctx     context.Context
-	st      *store.Store
-	b       *bank.Bank
-	inst    bank.Profile
-	clock   *clock.Clock
-	cfg     *config.Config
-	ctl     *ctlStore
-	settled time.Time
+	*store.Books
+	ctl *ctlStore
 }
 
 func profileOf(b *config.Bank) bank.Profile {
@@ -34,54 +25,19 @@ func profileOf(b *config.Bank) bank.Profile {
 }
 
 func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, clk *clock.Clock, b *config.Bank) (*ledgerSource, error) {
-	st, err := store.Open(ctx, cfg.DatabaseURL, b.Database, openbanking.Migrate)
+	books, err := store.OpenBooks(ctx, cfg.DatabaseURL, b.Database, profileOf(b), cfg.Fees(), clk.Now(), openbanking.Migrate)
 	if err != nil {
 		return nil, err
 	}
-	s := &ledgerSource{ctx: ctx, st: st, inst: profileOf(b), clock: clk, cfg: cfg, ctl: ctl}
-	if err := s.setup(); err != nil {
-		st.Close()
-		return nil, err
-	}
-	return s, nil
+	return &ledgerSource{Books: books, ctl: ctl}, nil
 }
 
-func (s *ledgerSource) setup() error {
-	s.b = bank.New(ledger.New(s.st.Pool, nil), s.inst, s.cfg.Fees())
-	if err := s.b.Setup(s.ctx); err != nil {
+func (s *ledgerSource) Drop(ctx context.Context) error {
+	name := s.Name()
+	if err := s.Books.Drop(ctx); err != nil {
 		return err
 	}
-	if err := s.b.Genesis(s.ctx, bank.GenesisSettlement, bank.GenesisVault, s.clock.Now()); err != nil {
-		return err
-	}
-	s.settled = time.Time{}
-	return nil
-}
-
-func (s *ledgerSource) Institution() string {
-	return s.inst.ID
-}
-
-func (s *ledgerSource) Bank() *bank.Bank {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b
-}
-
-func (s *ledgerSource) Fetch(nuban string, at time.Time, from clock.Date) ([]bank.FeedLine, error) {
-	return s.Bank().Feed(s.ctx, nuban, at, from)
-}
-
-func (s *ledgerSource) LedgerAt(nuban string, at time.Time) (int64, error) {
-	return s.Bank().BalanceAt(s.ctx, nuban, at)
-}
-
-func (s *ledgerSource) EndOfDay(nuban string, d clock.Date) (int64, error) {
-	return s.LedgerAt(nuban, d.End().Add(-time.Nanosecond))
-}
-
-func (s *ledgerSource) Account(nuban string) (ledger.Account, error) {
-	return s.Bank().L.Account(s.ctx, bank.CustomerAccount(nuban))
+	return s.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
 }
 
 func (a *App) DropBankDatabases(ctx context.Context) error {
@@ -98,33 +54,15 @@ func (a *App) DropBankDatabases(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (s *ledgerSource) Ping(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.st.Pool.Ping(ctx)
-}
-
-func (s *ledgerSource) Close() {
-	s.st.Close()
-}
-
-func (s *ledgerSource) Drop(ctx context.Context) error {
-	name := s.st.Name()
-	if err := s.st.Drop(ctx); err != nil {
-		return err
-	}
-	return s.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
-}
-
 func (a *App) VerifyBank() (ledger.Check, error) {
 	a.mu.Lock()
 	ledgers := slices.Clone(a.ledgers)
 	a.mu.Unlock()
 	var out ledger.Check
 	for _, l := range ledgers {
-		c, err := l.Bank().L.Verify(l.ctx)
+		c, err := l.Bank().L.Verify(l.Ctx())
 		if err != nil {
-			return out, fmt.Errorf("verify the books of %s: %w", l.inst.ID, err)
+			return out, fmt.Errorf("verify the books of %s: %w", l.Inst.ID, err)
 		}
 		out.TrialBalance += c.TrialBalance
 		out.BalanceMismatch = append(out.BalanceMismatch, c.BalanceMismatch...)

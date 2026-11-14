@@ -291,7 +291,7 @@ func (d bankData) Accounts(customer string) ([]openbanking.AccountInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	accs, err := l.Bank().CustomerAccounts(l.ctx, customer)
+	accs, err := l.Bank().CustomerAccounts(l.Ctx(), customer)
 	if errors.Is(err, bank.ErrUnknownCustomer) {
 		return []openbanking.AccountInfo{}, nil
 	}
@@ -375,7 +375,7 @@ func (a *App) openBanking(id string) *openbanking.Server {
 	if b == nil || l == nil {
 		return nil
 	}
-	first := l.st.Pool
+	first := l.Pool()
 	s = openbanking.New(openbanking.Config{
 		BankID:       b.ID,
 		BankName:     b.Name,
@@ -384,7 +384,7 @@ func (a *App) openBanking(id string) *openbanking.Server {
 		HistoryDays:  b.HistoryDays,
 		Store: &openbanking.PGStore{Pool: func() *pgxpool.Pool {
 			if cur := a.obLedger(id); cur != nil {
-				return cur.st.Pool
+				return cur.Pool()
 			}
 			return first
 		}},

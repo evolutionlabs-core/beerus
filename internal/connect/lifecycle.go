@@ -153,7 +153,7 @@ func (a *App) postgresRoom(ctx context.Context) error {
 		a.mu.Unlock()
 		return nil
 	}
-	pool := a.ledgers[0].st.Pool
+	pool := a.ledgers[0].Pool()
 	a.mu.Unlock()
 	var max, used int
 	if err := pool.QueryRow(ctx, `SELECT setting::int FROM pg_settings WHERE name = 'max_connections'`).Scan(&max); err != nil {
