@@ -75,7 +75,22 @@ func dirListing(t *testing.T, root string) []string {
 	return out
 }
 
-func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
+type soloBank struct {
+	ctx     context.Context
+	dbURL   string
+	stage   string
+	own     *config.Bank
+	books   *bank.Bank
+	account ledger.Account
+	solo    string
+	site    string
+	api     string
+	probe   *bankProbe
+	nibss   *http.Client
+}
+
+func startSoloBank(t *testing.T, state string) soloBank {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("starts a bank process; run without -short")
 	}
@@ -91,7 +106,7 @@ func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
 	if err := config.Prepare(cfg, now); err != nil {
 		t.Fatal(err)
 	}
-	own := &config.Bank{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: ports[0], APIPort: ports[1], Database: config.DatabaseName(stage, "bank-a")}
+	own := &config.Bank{State: state, ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: ports[0], APIPort: ports[1], Database: config.DatabaseName(stage, "bank-a")}
 	if err := cfg.EnsureBankDir(own, now); err != nil {
 		t.Fatal(err)
 	}
@@ -174,11 +189,17 @@ func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
 		code, _ := probe.get(probe.plain, site+"/health", nil)
 		return code == http.StatusOK
 	})
+	nibss := mutualClient(t, clientDir, "nibss", "client")
+	return soloBank{ctx, dbURL, stage, own, books, account, solo, site, api, probe, nibss}
+}
+
+func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
+	s := startSoloBank(t, "")
+	ctx, dbURL, stage, own, books, account, solo, site, api, probe, nibss := s.ctx, s.dbURL, s.stage, s.own, s.books, s.account, s.solo, s.site, s.api, s.probe, s.nibss
 	if code, _ := probe.get(probe.plain, site+"/login", nil); code != http.StatusOK {
 		t.Fatalf("the login page answered %d, want 200", code)
 	}
 
-	nibss := mutualClient(t, clientDir, "nibss", "client")
 	session := func(n int) string { return banktest.Session(own.NIPCode, n) }
 	reply := func(sid, code string) string {
 		return fmt.Sprintf(`{"session_id":%q,"response_code":%q}`, sid, code)
@@ -304,5 +325,45 @@ func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
 	}
 	if !slices.Equal(opened, []string{own.Database}) {
 		t.Fatalf("databases open: %v, want only %s", opened, own.Database)
+	}
+}
+
+func TestClosedSoloBankRefusesEverything(t *testing.T) {
+	s := startSoloBank(t, "closed")
+	rows := []struct {
+		name   string
+		client *http.Client
+		url    string
+		body   string
+		want   string
+	}{
+		{"nip credit", s.nibss, s.api + "/v1/nip/credits", banktest.CreditBody(banktest.Session(s.own.NIPCode, 1), s.account.NUBAN, soloCredit, "Rent"), `{"error":{"code":"bank_closed","message":"Bank A is closed.","request_id":"`},
+		{"site", s.probe.plain, s.site + "/login", "", "Bank A is closed.\n"},
+	}
+	for _, r := range rows {
+		method := http.MethodGet
+		if r.body != "" {
+			method = http.MethodPost
+		}
+		req, err := http.NewRequest(method, r.url, strings.NewReader(r.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := r.client.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", r.name, err)
+		}
+		raw, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", r.name, err)
+		}
+		if resp.StatusCode != http.StatusConflict || !strings.HasPrefix(string(raw), r.want) {
+			t.Fatalf("%s: got %d %s, want 409 %s", r.name, resp.StatusCode, raw, r.want)
+		}
+	}
+	if got, err := s.books.L.Balance(s.ctx, bank.CustomerAccount(s.account.NUBAN)); err != nil || got != soloDeposit {
+		t.Fatalf("balance %d (%v), want %d: a closed bank credited something", got, err, soloDeposit)
 	}
 }

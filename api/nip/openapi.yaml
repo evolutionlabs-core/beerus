@@ -295,6 +295,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          $ref: '#/components/responses/BankClosed'
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/nip/credits:
@@ -359,6 +361,8 @@ paths:
                   code: idempotency_key_reused
                   message: 'Session 000014261114103000123456789012 was first credited with amount_minor 2500000, and this request has 3000000. Repeat the first request.'
                   request_id: req_01JBC8A5T3ZK
+        '409':
+          $ref: '#/components/responses/BankClosed'
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/nip/credits/{session_id}:
@@ -387,6 +391,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          $ref: '#/components/responses/BankClosed'
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/control/banks/{bank_id}:
@@ -851,6 +857,17 @@ components:
             error:
               code: unauthenticated
               message: A valid control token is required.
+              request_id: req_01JBC8A5T3ZK
+    BankClosed:
+      description: The bank is closed and takes no NIP calls. The code is `bank_closed`. Nothing was credited.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: bank_closed
+              message: Bank A is closed.
               request_id: req_01JBC8A5T3ZK
     Unavailable:
       description: The participant cannot answer now. The code is `unavailable`. Try again soon.
