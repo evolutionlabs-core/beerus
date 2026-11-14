@@ -1,0 +1,608 @@
+openapi: 3.1.0
+info:
+  title: Beerus Participant Control API
+  version: 0.1.0
+  summary: The control API every Beerus participant serves to the control plane.
+  description: |
+    Every Beerus participant (a bank, NIBSS, the CBN or Connect) runs as its own process, started with `beerus run --participant <id>`. Each one serves this API to the control plane. `beerus up`, the CLI and the control room use it to start, watch and stop participants. The control plane never touches money. Beerus is a copy of Nigeria's banking infrastructure for building and learning: no real money moves through it.
+
+    ## Authentication
+
+    The control plane sends the control token as `Authorization: Bearer <token>`. The token is the one in the `control-token` file of the Beerus directory. This is how the current control API works, and it stays. The API only accepts loopback connections and a matching `Host` header, and it refuses any request that has an `Origin` header. A missing or wrong token returns `401 unauthenticated`.
+
+    ## Phases
+
+    A participant is in one phase: `provisioning`, `active`, `suspended`, `repairing`, `closing`, `closed` or `terminating`. `reason` says why in a short sentence, for example when a step failed. `generation` is the version of the participant's spec that the control plane wants. `observed_generation` is the version the participant has acted on. They match when the participant has caught up. These two fields come from the control plane's setup resource today and are not on the bank status the CLI reads now, so they are Beerus placeholders for the participant itself.
+
+    ## Idempotency
+
+    Provisioning is a list of steps. Each step is an idempotent ensure: running it twice gives the same result. The key of a step is the participant ID, the step ID and the generation. Faults take an `Idempotency-Key` header, because a repeat would add a second fault. Stop is safe to repeat. Close is safe to repeat with the same body and returns the current status. A close with a different body while a close is running returns `409 close_in_progress`.
+
+    ## Time
+
+    Times are RFC 3339 strings and end in `_at`.
+
+    ## Errors
+
+    Every error is `{"error":{"code","message","request_id"}}` with a snake_case `code`. Branch on `code`, never on `message`.
+  contact:
+    name: Evolution Labs
+    url: https://github.com/evolutionlabs-core/beerus
+  license:
+    name: GNU Affero General Public License v3.0 only
+    identifier: AGPL-3.0-only
+servers:
+  - url: http://127.0.0.1:7447
+    description: A participant's control port on the local machine
+tags:
+  - name: lifecycle
+    description: Watch a participant and move it through its phases.
+  - name: faults
+    description: Make a participant fail on purpose, for testing.
+security:
+  - bearerAuth: []
+paths:
+  /v1/health:
+    get:
+      operationId: participantHealth
+      tags: [lifecycle]
+      summary: Check that the participant is running
+      description: Answers `ok` when the process is up and can serve requests. It says nothing about the phase. Read the status for that.
+      responses:
+        '200':
+          description: The participant is running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: ok
+                participant_id: bank-a
+                world_id: wld_01JBC8A5T3ZK
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/status:
+    get:
+      operationId: participantStatus
+      tags: [lifecycle]
+      summary: Get the phase of the participant
+      description: Returns the phase, the generation, the reason and the provisioning steps. The control plane polls it to watch a participant.
+      responses:
+        '200':
+          description: The participant's status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+              example:
+                participant_id: bank-a
+                kind: bank
+                phase: provisioning
+                reason: 'Step ledger_schema failed. Trying again.'
+                generation: 3
+                observed_generation: 2
+                steps:
+                  - id: database
+                    name: Creating the bank database
+                    done: true
+                    started_at: '2026-11-14T10:00:00+01:00'
+                    completed_at: '2026-11-14T10:00:01+01:00'
+                  - id: ledger_schema
+                    name: Migrating bank ledger
+                    done: false
+                    error: 'connection refused'
+                    started_at: '2026-11-14T10:00:01+01:00'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/steps/{step_id}/ensure:
+    post:
+      operationId: ensureParticipantStep
+      tags: [lifecycle]
+      summary: Run one provisioning step
+      description: Makes one provisioning step true, for example creating the database or migrating the ledger. It is idempotent. Running it twice gives the same result, and a step that is already done returns `done` at once. The key is the participant ID, the step ID and the generation. A step that fails returns 200 with `done` false and an `error`, and the control plane retries with backoff. A step ID the participant does not have returns `404 not_found`.
+      parameters:
+        - $ref: '#/components/parameters/StepIDPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnsureRequest'
+            example:
+              generation: 3
+      responses:
+        '200':
+          description: The state of the step after the attempt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Step'
+              example:
+                id: ledger_schema
+                name: Migrating bank ledger
+                done: true
+                started_at: '2026-11-14T10:00:01+01:00'
+                completed_at: '2026-11-14T10:00:02+01:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/close:
+    post:
+      operationId: closeParticipant
+      tags: [lifecycle]
+      summary: Close a bank
+      description: Starts closing a bank, and says what happens to its customers' money. It is safe to repeat. A repeat returns the current status. Only banks close. The other participants answer `409 not_closable`. A repeat with a different body while the close is running returns `409 close_in_progress`, and the message says which fields differ. The money choice is `transfer` to another bank, `payout` to the customers or `leave`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloseRequest'
+            example:
+              money: transfer
+              to: bank-b
+      responses:
+        '202':
+          description: The bank is closing. Watch the status for the `closed` phase.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+              example:
+                participant_id: bank-a
+                kind: bank
+                phase: closing
+                reason: Moving customer money to bank-b.
+                generation: 4
+                observed_generation: 3
+                steps: []
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          description: The money choice does not fit. The code is `invalid_request`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invalid_request
+                  message: 'Money transfer needs a bank to receive it. Send {"money":"transfer","to":"bank-b"}.'
+                  request_id: req_01JBC8A5T3ZK
+  /v1/stop:
+    post:
+      operationId: stopParticipant
+      tags: [lifecycle]
+      summary: Stop the participant process
+      description: Asks the process to finish its requests and exit. The data stays, and `beerus up` starts it again. It is safe to repeat. The answer comes before the process exits.
+      responses:
+        '202':
+          description: The participant is stopping.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stopping'
+              example:
+                participant_id: bank-a
+                status: stopping
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/faults:
+    get:
+      operationId: listParticipantFaults
+      tags: [faults]
+      summary: List the faults that are live
+      description: Lists the faults that still apply, oldest first. A fault that has ended is not listed. Use `next_cursor` as `cursor` to read the next page.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of faults.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FaultPage'
+              example:
+                data:
+                  - id: flt_01JBC8A5T3ZK
+                    kind: down
+                    until_at: '2026-11-14T11:00:00+01:00'
+                    created_at: '2026-11-14T10:00:00+01:00'
+                next_cursor: flt_01JBC8A5T3ZK
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+    post:
+      operationId: setParticipantFault
+      tags: [faults]
+      summary: Make the participant fail
+      description: Adds a fault. A `down` fault makes the participant answer NIP calls with `91`, for the time in `for` or until it is cleared. A `timeout` fault makes the participant do the work but give no answer, for the next `count` inbound calls, and `outcome` says what it did. It applies to every inbound call the participant serves, the CBN included. This is what `beerus fault` does today. The idempotency key is the `Idempotency-Key` header, and a repeat returns the first fault. Beerus has `down` and `timeout`. It has no `slow` fault.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FaultRequest'
+            example:
+              kind: timeout
+              outcome: credited
+              count: 2
+      responses:
+        '201':
+          description: The fault was added, or this is a replay of the first one.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Fault'
+              example:
+                id: flt_01JBC8A5T3ZK
+                kind: timeout
+                outcome: credited
+                left: 2
+                created_at: '2026-11-14T10:00:00+01:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+    delete:
+      operationId: clearParticipantFaults
+      tags: [faults]
+      summary: Clear every fault
+      description: Removes every live fault and says how many it removed. It is safe to repeat. A repeat clears none.
+      responses:
+        '200':
+          description: The faults were cleared.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cleared'
+              example:
+                cleared: 2
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The control token, from the `control-token` file of the Beerus directory. The API only accepts loopback connections.
+  parameters:
+    StepIDPath:
+      name: step_id
+      in: path
+      required: true
+      description: The provisioning step ID.
+      schema:
+        $ref: '#/components/schemas/StepID'
+      example: ledger_schema
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: A unique key per fault, chosen by the control plane. A replay with the same key and body returns the first response. The same key with a different body returns `422 idempotency_key_reused`.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+      example: 5c0d8a3e-7a1f-4f7e-9d0b-2a4c6e8f1b3d
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: The page size, from 1 to 500. The default is 50. The cap of 500 is a Beerus placeholder.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 50
+      example: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: The `next_cursor` of the last page. A cursor that is not valid returns `400 invalid_cursor`.
+      schema:
+        type: string
+      example: flt_01JBC8A5T3ZK
+  schemas:
+    StepID:
+      type: string
+      description: A provisioning step. A bank has `allocate`, `directory`, `database`, `ledger_schema`, `openbanking_schema`, `certs`, `cbn`, `site` and `api`. NIBSS and the CBN have `database`, `schema` and `settlement`.
+      enum: [allocate, directory, database, ledger_schema, openbanking_schema, certs, cbn, site, api, schema, settlement]
+    Health:
+      type: object
+      description: The answer of the health check.
+      required: [status, participant_id, world_id]
+      properties:
+        status:
+          type: string
+          description: Always `ok` when the process answers.
+          enum: [ok]
+        participant_id:
+          type: string
+          description: The ID the participant was started with.
+        world_id:
+          type: string
+          description: The ID of the Beerus world the participant belongs to.
+    Step:
+      type: object
+      description: One provisioning step.
+      required: [id, name, done]
+      properties:
+        id:
+          $ref: '#/components/schemas/StepID'
+        name:
+          type: string
+          description: A short label for people.
+        done:
+          type: boolean
+          description: True when the step is complete.
+        error:
+          type: string
+          description: Why the last attempt failed. It is absent when the step did not fail.
+        started_at:
+          type: string
+          format: date-time
+          description: When the last attempt started.
+        completed_at:
+          type: string
+          format: date-time
+          description: When the step completed. It is absent until `done` is true. Today's name for this field is `at`.
+    Status:
+      type: object
+      description: The phase of a participant.
+      required: [participant_id, kind, phase, generation, observed_generation, steps]
+      properties:
+        participant_id:
+          type: string
+          description: The ID the participant was started with.
+        kind:
+          type: string
+          description: What the participant is.
+          enum: [bank, nibss, cbn, connect]
+        phase:
+          type: string
+          description: Where the participant is in its life.
+          enum: [provisioning, active, suspended, repairing, closing, closed, terminating]
+        reason:
+          type: string
+          description: A short sentence about why the participant is in this phase. It is absent when there is nothing to say.
+        generation:
+          type: integer
+          format: int64
+          description: The version of the spec the control plane wants.
+          minimum: 0
+        observed_generation:
+          type: integer
+          format: int64
+          description: The version of the spec the participant has acted on.
+          minimum: 0
+        steps:
+          type: array
+          description: The provisioning steps, in order.
+          items:
+            $ref: '#/components/schemas/Step'
+    EnsureRequest:
+      type: object
+      description: Which generation of the spec the step is for.
+      required: [generation]
+      properties:
+        generation:
+          type: integer
+          format: int64
+          description: The generation the control plane wants. The step is keyed by it.
+          minimum: 0
+    CloseRequest:
+      type: object
+      description: What happens to the customers' money when a bank closes.
+      required: [money]
+      properties:
+        money:
+          type: string
+          description: The default choice for every customer.
+          enum: [transfer, payout, leave]
+        to:
+          type: string
+          description: The bank ID that receives the money. It is required when `money` is `transfer`.
+        customers:
+          type: object
+          description: A choice per customer ID that differs from `money`.
+          additionalProperties:
+            type: string
+            enum: [transfer, payout, leave]
+    Stopping:
+      type: object
+      description: The answer of a stop request.
+      required: [participant_id, status]
+      properties:
+        participant_id:
+          type: string
+          description: The ID the participant was started with.
+        status:
+          type: string
+          description: Always `stopping`.
+          enum: [stopping]
+    FaultRequest:
+      type: object
+      description: A fault to add.
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          description: '`down` answers NIP calls with `91`. `timeout` does the work and gives no answer.'
+          enum: [down, timeout]
+        outcome:
+          type: string
+          description: What a `timeout` fault did before it went silent. It is required for `timeout`, and not allowed for `down`.
+          enum: [credited, failed, unknown]
+        count:
+          type: integer
+          description: How many inbound calls a `timeout` fault covers. The default is 1. It is not allowed for `down`.
+          minimum: 1
+        for:
+          type: string
+          examples: ['1h30m']
+          description: How long a `down` fault lasts, in Go duration format, such as `1h30m`. It must be above zero and at most `24h`, which is a Beerus placeholder. Without it the fault lasts until cleared. It is not allowed for `timeout`.
+    Fault:
+      type: object
+      description: A fault that is live.
+      required: [id, kind, created_at]
+      properties:
+        id:
+          type: string
+          description: The fault ID.
+        kind:
+          type: string
+          description: The kind of fault.
+          enum: [down, timeout]
+        outcome:
+          type: string
+          description: What a `timeout` fault did. It is absent for `down`.
+          enum: [credited, failed, unknown]
+        left:
+          type: integer
+          description: How many inbound calls a `timeout` fault still covers. It is absent for `down`.
+          minimum: 1
+        until_at:
+          type: string
+          format: date-time
+          description: When a `down` fault ends. It is absent when the fault lasts until cleared. Today's name for this field is `until`.
+        created_at:
+          type: string
+          format: date-time
+          description: When the fault was added.
+    FaultPage:
+      type: object
+      description: One page of faults.
+      required: [data]
+      properties:
+        data:
+          type: array
+          description: The faults on this page.
+          items:
+            $ref: '#/components/schemas/Fault'
+        next_cursor:
+          type: string
+          description: Pass this as `cursor` to read the next page. It is absent on the last page.
+    Cleared:
+      type: object
+      description: How many faults were cleared.
+      required: [cleared]
+      properties:
+        cleared:
+          type: integer
+          description: The number of faults removed.
+          minimum: 0
+    Error:
+      type: object
+      description: The body of every error.
+      required: [error]
+      properties:
+        error:
+          type: object
+          description: What went wrong.
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              description: A stable snake_case code. Branch on this.
+            message:
+              type: string
+              description: A short sentence for a person. It says what to do.
+            request_id:
+              type: string
+              description: The ID of the request, for support.
+  responses:
+    Unavailable:
+      description: The participant is running but cannot serve yet. The code is `unavailable`. Try again soon.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unavailable
+              message: The participant is still starting. Try again soon.
+              request_id: req_01JBC8A5T3ZK
+    BadRequest:
+      description: The request is not valid. The code is `invalid_request`, or `invalid_cursor` for a cursor that is not valid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invalid_request
+              message: 'Send {"kind":"down","for":"1h"} or {"kind":"timeout","outcome":"credited"}.'
+              request_id: req_01JBC8A5T3ZK
+    Unauthenticated:
+      description: The control token is missing or wrong. The code is `unauthenticated`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unauthenticated
+              message: A valid control token is required.
+              request_id: req_01JBC8A5T3ZK
+    NotFound:
+      description: The participant has no such step. The code is `not_found`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_found
+              message: This participant has no step called site.
+              request_id: req_01JBC8A5T3ZK
+    Conflict:
+      description: The participant cannot do this in its phase or kind. The code is `not_closable`, `phase_conflict`, or `close_in_progress` for a close with a different body while a close is running.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            not_closable:
+              summary: The participant is not a bank.
+              value:
+                error:
+                  code: not_closable
+                  message: Only banks can be closed. nibss is a nibss participant.
+                  request_id: req_01JBC8A5T3ZK
+            close_in_progress:
+              summary: A close with a different body while a close is running.
+              value:
+                error:
+                  code: close_in_progress
+                  message: 'bank-a is already closing with money transfer to bank-b, and this request has money payout. Wait for the close to finish, or repeat the first request.'
+                  request_id: req_01JBC8A5T3ZK
+    Unprocessable:
+      description: The fault cannot be added. The code is `invalid_request` for a fault that does not fit, such as a `for` above `24h`, or `idempotency_key_reused` for a key used with a different body.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: idempotency_key_reused
+              message: 'Key 5c0d8a3e-7a1f-4f7e-9d0b-2a4c6e8f1b3d was first used with kind timeout, outcome credited and count 2, and this request has kind down. Use a new key, or repeat the first request.'
+              request_id: req_01JBC8A5T3ZK
