@@ -33,6 +33,25 @@ func (e *badAnswerError) Unwrap() error {
 	return e.err
 }
 
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(b)
+}
+
 func (a *App) atBank(local http.HandlerFunc) http.HandlerFunc {
 	return a.bankRoute(local, false)
 }
@@ -44,7 +63,11 @@ func (a *App) atBankSyncing(local http.HandlerFunc) http.HandlerFunc {
 func (a *App) bankRoute(local http.HandlerFunc, sync bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if a.role != RoleCore {
-			local(w, r)
+			sw := &statusWriter{ResponseWriter: w}
+			local(sw, r)
+			if sync && sw.status != 0 && sw.status < http.StatusMultipleChoices {
+				a.SyncAll(r.Context())
+			}
 			return
 		}
 		a.forwardToBank(w, r, sync)
