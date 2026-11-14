@@ -31,9 +31,10 @@ type directoryAnswer struct {
 
 func (a *App) directoryClient() (*http.Client, error) {
 	a.dirMu.Lock()
-	defer a.dirMu.Unlock()
-	if a.dirClient != nil {
-		return a.dirClient, nil
+	have := a.dirClient
+	a.dirMu.Unlock()
+	if have != nil {
+		return have, nil
 	}
 	cert, err := tls.LoadX509KeyPair(a.cfg.Path("banks", a.bankID, "client.crt"), a.cfg.Path("banks", a.bankID, "client.key"))
 	if err != nil {
@@ -44,7 +45,11 @@ func (a *App) directoryClient() (*http.Client, error) {
 		return nil, err
 	}
 	tc := &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool, ServerName: config.NIBSSHost, MinVersion: tls.VersionTLS12}
-	a.dirClient = &http.Client{Timeout: directoryTimeout, Transport: &http.Transport{TLSClientConfig: tc, IdleConnTimeout: directoryIdle, MaxIdleConnsPerHost: 1}}
+	a.dirMu.Lock()
+	defer a.dirMu.Unlock()
+	if a.dirClient == nil {
+		a.dirClient = &http.Client{Timeout: directoryTimeout, Transport: &http.Transport{TLSClientConfig: tc, IdleConnTimeout: directoryIdle, MaxIdleConnsPerHost: 1}}
+	}
 	return a.dirClient, nil
 }
 
