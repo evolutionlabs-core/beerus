@@ -51,10 +51,10 @@ func load(t *testing.T) (validator.Validator, map[string]operation) {
 	return v, ops
 }
 
-func exampleBody(t *testing.T, contentType string, mt *v3.MediaType) []byte {
+func exampleBody(t *testing.T, name string, contentType string, mt *v3.MediaType) []byte {
 	t.Helper()
 	if mt == nil || mt.Example == nil {
-		t.Fatalf("no example for %s", contentType)
+		t.Fatalf("%s: no example for %s", name, contentType)
 	}
 	var value any
 	if err := mt.Example.Decode(&value); err != nil {
@@ -74,7 +74,7 @@ func buildRequest(t *testing.T, o operation, target string, headers map[string]s
 	if o.op.RequestBody != nil {
 		pair := o.op.RequestBody.Content.First()
 		contentType = pair.Key()
-		body = bytes.NewReader(exampleBody(t, contentType, pair.Value()))
+		body = bytes.NewReader(exampleBody(t, o.op.OperationId, contentType, pair.Value()))
 	}
 	req, err := http.NewRequest(o.method, target, body)
 	if err != nil {
@@ -89,15 +89,22 @@ func buildRequest(t *testing.T, o operation, target string, headers map[string]s
 	return req
 }
 
-func buildResponse(t *testing.T, o operation, status int) *http.Response {
+func buildResponse(t *testing.T, o operation, status string) *http.Response {
 	t.Helper()
-	r, ok := o.op.Responses.Codes.Get(strconv.Itoa(status))
+	r, ok := o.op.Responses.Codes.Get(status)
 	if !ok {
-		t.Fatalf("no %d response", status)
+		t.Fatalf("%s: no %s response", o.op.OperationId, status)
 	}
-	resp := &http.Response{StatusCode: status, Header: http.Header{}, Body: http.NoBody}
+	code, err := strconv.Atoi(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := &http.Response{StatusCode: code, Header: http.Header{}, Body: http.NoBody}
 	for h := r.Headers.First(); h != nil; h = h.Next() {
 		var value string
+		if h.Value().Example == nil {
+			t.Fatalf("%s %s: header %s has no example", o.op.OperationId, status, h.Key())
+		}
 		if err := h.Value().Example.Decode(&value); err != nil {
 			t.Fatal(err)
 		}
@@ -106,7 +113,7 @@ func buildResponse(t *testing.T, o operation, status int) *http.Response {
 	if r.Content != nil && r.Content.Len() > 0 {
 		pair := r.Content.First()
 		resp.Header.Set("Content-Type", pair.Key())
-		resp.Body = io.NopCloser(bytes.NewReader(exampleBody(t, pair.Key(), pair.Value())))
+		resp.Body = io.NopCloser(bytes.NewReader(exampleBody(t, o.op.OperationId+" "+status, pair.Key(), pair.Value())))
 	}
 	return resp
 }
@@ -115,20 +122,26 @@ func TestOperationExamples(t *testing.T) {
 	v, ops := load(t)
 	const trust = "https://cbn.localhost"
 	const registry = "https://nibss.localhost"
+	operator := map[string]string{"Authorization": "Bearer op_2f9d41c7a0e85b36"}
 	rows := []struct {
-		id     string
-		method string
-		target string
-		status int
+		id      string
+		method  string
+		target  string
+		headers map[string]string
 	}{
-		{"enrolParticipant", http.MethodPost, trust + "/v1/trust/enrolments", 201},
-		{"renewCertificate", http.MethodPost, trust + "/v1/trust/renewals", 201},
-		{"revokeCertificate", http.MethodPost, trust + "/v1/trust/revocations", 200},
-		{"listRevocations", http.MethodGet, trust + "/v1/trust/revocations?limit=100&cursor=cur_eyJzIjoxfQ", 200},
-		{"getTrustBundle", http.MethodGet, trust + "/v1/trust/bundle", 200},
-		{"listParticipants", http.MethodGet, registry + "/v1/registry/participants?limit=100&role=bank&status=active", 200},
-		{"getParticipant", http.MethodGet, registry + "/v1/registry/participants/bank-a", 200},
-		{"listSponsorships", http.MethodGet, registry + "/v1/registry/sponsorships?limit=100&sponsor_id=connect", 200},
+		{"enrolParticipant", http.MethodPost, trust + "/v1/trust/enrolments", nil},
+		{"renewCertificate", http.MethodPost, trust + "/v1/trust/renewals", nil},
+		{"revokeCertificate", http.MethodPost, trust + "/v1/trust/revocations", nil},
+		{"revokeCertificateAsOperator", http.MethodPost, trust + "/v1/trust/operator/revocations", operator},
+		{"listRevocations", http.MethodGet, trust + "/v1/trust/revocations?limit=100&cursor=cur_eyJzIjoxfQ", nil},
+		{"createEnrolmentToken", http.MethodPost, trust + "/v1/trust/enrolment_tokens", operator},
+		{"getTrustBundle", http.MethodGet, trust + "/v1/trust/bundle", nil},
+		{"listParticipants", http.MethodGet, registry + "/v1/registry/participants?limit=100&role=bank&status=active", nil},
+		{"createParticipant", http.MethodPost, registry + "/v1/registry/participants", operator},
+		{"getParticipant", http.MethodGet, registry + "/v1/registry/participants/bank-a", nil},
+		{"publishSigningKey", http.MethodPost, registry + "/v1/registry/participants/bank-a/signing_keys", nil},
+		{"listSponsorships", http.MethodGet, registry + "/v1/registry/sponsorships?limit=100&sponsor_id=connect", nil},
+		{"createSponsorship", http.MethodPost, registry + "/v1/registry/sponsorships", nil},
 	}
 	covered := []string{}
 	for _, row := range rows {
@@ -141,13 +154,15 @@ func TestOperationExamples(t *testing.T) {
 			if o.method != row.method {
 				t.Fatalf("method = %s, want %s", o.method, row.method)
 			}
-			req := buildRequest(t, o, row.target, nil)
+			req := buildRequest(t, o, row.target, row.headers)
 			if ok, errs := v.ValidateHttpRequest(req); !ok {
 				t.Fatalf("request: %v", errs[0])
 			}
-			resp := buildResponse(t, o, row.status)
-			if ok, errs := v.ValidateHttpResponse(req, resp); !ok {
-				t.Fatalf("response: %v", errs[0])
+			for r := o.op.Responses.Codes.First(); r != nil; r = r.Next() {
+				resp := buildResponse(t, o, r.Key())
+				if ok, errs := v.ValidateHttpResponse(req, resp); !ok {
+					t.Errorf("response %s: %v", r.Key(), errs[0])
+				}
 			}
 		})
 	}
