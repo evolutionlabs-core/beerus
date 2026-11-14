@@ -12,6 +12,8 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 )
 
+const errCoreAway = "Beerus core is not reachable, so no BVN can be enrolled; try again soon"
+
 var errNIBSSNotOpen = errors.New("NIBSS is not open yet, so no BVN can be enrolled; try again soon")
 
 type unavailableError struct {
@@ -71,6 +73,10 @@ func (a *App) enrolBVNAtCore(ctx context.Context, name, phone string, dob clock.
 	}
 	if errors.As(err, &pe) && pe.Status == http.StatusServiceUnavailable {
 		return "", "", &unavailableError{msg: pe.Message}
+	}
+	if err != nil && !errors.As(err, &pe) {
+		a.log.Warn("core not reachable for a BVN", "err", err)
+		return "", "", &unavailableError{msg: errCoreAway}
 	}
 	if err != nil {
 		return "", "", fmt.Errorf("enrol a BVN at NIBSS: %w", err)

@@ -215,6 +215,25 @@ func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
 		}
 	}
 
+	token, err := config.ReadSecret(filepath.Join(config.BankDir(solo, own.ID), config.BankTokenFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrol, err := http.NewRequest(http.MethodPost, site+"/v1/customers", strings.NewReader(`{"name":"Bola Ade","phone":"08030000001","dob":"1991-01-01"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrol.Header.Set("Authorization", "Bearer "+token)
+	enrol.Header.Set("Idempotency-Key", "cus-bola")
+	resp, err := probe.plain.Do(enrol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("a customer needs a BVN from core, which is down; got %d, want 503", resp.StatusCode)
+	}
+
 	files := []string{"banks", "banks/bank-a"}
 	for _, f := range []string{"bank.json", "ca.crt", "client.crt", "client.key", "control-token", "events.crt", "events.key", "server.crt", "server.key"} {
 		files = append(files, "banks/bank-a/"+f)
