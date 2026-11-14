@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/inbound"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -435,9 +436,12 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 		return nil, err
 	}
 	h := ob.Handler()
-	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	unavailable := func() bool {
 		a.freshen()
-		if (a.role == RoleBank && !a.synced.Load()) || a.bankPhase(b.ID) == PhaseSuspended || a.obLedger(b.ID) == nil || a.bankDown(b.ID, a.clock.Now()) {
+		return (a.role == RoleBank && !a.synced.Load()) || a.bankPhase(b.ID) == PhaseSuspended || a.obLedger(b.ID) == nil || a.bankDown(b.ID, a.clock.Now())
+	}
+	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if unavailable() {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "30")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -446,7 +450,19 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 		}
 		h.ServeHTTP(w, r)
 	})
-	srv := &http.Server{Handler: guarded, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 2 * time.Minute, ErrorLog: log.New(quietTLS{a}, "", 0)}
+	nipGuarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		l := a.obLedger(b.ID)
+		if unavailable() || l == nil {
+			w.Header().Set("Retry-After", "30")
+			inbound.WriteUnavailable(w)
+			return
+		}
+		inbound.New(l.Bank(), a.clock.Now, inbound.Caller{CommonName: config.NIBSSCN, Role: config.NIBSSRole}, a.log).ServeHTTP(w, r)
+	})
+	mux := http.NewServeMux()
+	mux.Handle("/v1/nip/", nipGuarded)
+	mux.Handle("/", guarded)
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 2 * time.Minute, ErrorLog: log.New(quietTLS{a}, "", 0)}
 	for _, l := range ls {
 		go func(l net.Listener) { _ = srv.Serve(tls.NewListener(l, tc)) }(l)
 	}
