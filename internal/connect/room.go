@@ -469,7 +469,7 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 	f := r.PostForm
 	req := TransferRequest{FromBank: f.Get("from_bank"), From: strings.TrimSpace(f.Get("from")), ToBank: f.Get("to_bank"), To: strings.TrimSpace(f.Get("to")), Narration: strings.TrimSpace(f.Get("narration"))}
-	amount, err := parseNaira(f.Get("amount"))
+	amount, err := bank.ParseNaira(f.Get("amount"))
 	if err != nil {
 		err = errBadAmount
 	} else {

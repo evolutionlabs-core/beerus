@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"math"
 	"slices"
 	"sync"
 	"time"
@@ -229,23 +228,16 @@ func (a *App) openPosition(sw *nibss.Store, code string) (position, error) {
 		var ok bool
 		switch code {
 		case x.FromCode:
-			if p.outward, ok = addMinor(p.outward, x.Amount); !ok {
+			if p.outward, ok = bank.AddMinor(p.outward, x.Amount); !ok {
 				return position{}, fmt.Errorf("add open outward sessions of %s: the total is too large", code)
 			}
 		case x.ToCode:
-			if p.inward, ok = addMinor(p.inward, x.Amount); !ok {
+			if p.inward, ok = bank.AddMinor(p.inward, x.Amount); !ok {
 				return position{}, fmt.Errorf("add open inward sessions of %s: the total is too large", code)
 			}
 		}
 	}
 	return p, nil
-}
-
-func addMinor(a, b int64) (int64, bool) {
-	if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
-		return 0, false
-	}
-	return a + b, true
 }
 
 func (a *App) settle(now time.Time, adhoc bool) (int, error) {

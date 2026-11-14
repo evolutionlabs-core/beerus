@@ -216,7 +216,7 @@ func (a *App) postCash(ctx context.Context, bankID, kind string, req CashRequest
 	if err != nil {
 		return CashResult{}, err
 	}
-	amount, err := parseNaira(req.Amount)
+	amount, err := bank.ParseNaira(req.Amount)
 	if err != nil {
 		return CashResult{}, fmt.Errorf("%w: %w", ledger.ErrInvalid, err)
 	}
@@ -230,7 +230,7 @@ func (a *App) postCash(ctx context.Context, bankID, kind string, req CashRequest
 		p, err = b.CashWithdrawal(ctx, key, req.Account, amount, now)
 	}
 	if err != nil {
-		return CashResult{}, a.cashRefusal(ctx, b, req, amount, err)
+		return CashResult{}, b.CashRefusal(ctx, req.Account, amount, err)
 	}
 	bal, ok := p.Balances[bank.CustomerAccount(req.Account)]
 	if !ok {
@@ -271,8 +271,8 @@ func clean(err error) string {
 
 func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
 	var te *transferError
-	var fe *insufficientFundsError
-	var de *dailyLimitError
+	var fe *bank.InsufficientFundsError
+	var de *bank.DailyLimitError
 	var ue *unavailableError
 	switch {
 	case errors.As(err, &te):
@@ -465,56 +465,4 @@ func (a *App) ctlCash(kind string) http.HandlerFunc {
 		}
 		web.WriteJSON(w, http.StatusCreated, res)
 	}
-}
-
-type insufficientFundsError struct {
-	Account string
-	Balance int64
-	Amount  int64
-}
-
-func (e *insufficientFundsError) Error() string {
-	return ledger.ErrInsufficientFunds.Error()
-}
-
-func (e *insufficientFundsError) Unwrap() error {
-	return ledger.ErrInsufficientFunds
-}
-
-func (e *insufficientFundsError) Message() string {
-	return fmt.Sprintf("Account %s holds %s and %s was asked for; withdraw %s or less.", e.Account, FormatNaira(e.Balance), FormatNaira(e.Amount), FormatNaira(max(e.Balance, 0)))
-}
-
-type dailyLimitError struct {
-	Account string
-	Limit   int64
-	Used    int64
-	Amount  int64
-}
-
-func (e *dailyLimitError) Error() string {
-	return ledger.ErrDailyLimit.Error()
-}
-
-func (e *dailyLimitError) Unwrap() error {
-	return ledger.ErrDailyLimit
-}
-
-func (e *dailyLimitError) Message() string {
-	return fmt.Sprintf("Account %s has used %s of its %s daily limit and %s was asked for; withdraw %s or less today.", e.Account, FormatNaira(e.Used), FormatNaira(e.Limit), FormatNaira(e.Amount), FormatNaira(max(e.Limit-e.Used, 0)))
-}
-
-func (a *App) cashRefusal(ctx context.Context, b *bank.Bank, req CashRequest, amount int64, err error) error {
-	var limit *ledger.DailyLimitError
-	switch {
-	case errors.Is(err, ledger.ErrInsufficientFunds):
-		bal, berr := b.L.Balance(ctx, bank.CustomerAccount(req.Account))
-		if berr != nil {
-			return fmt.Errorf("read balance of %s: %w", req.Account, berr)
-		}
-		return &insufficientFundsError{Account: req.Account, Balance: bal, Amount: amount}
-	case errors.As(err, &limit):
-		return &dailyLimitError{Account: req.Account, Limit: limit.Limit, Used: limit.Used, Amount: amount}
-	}
-	return err
 }

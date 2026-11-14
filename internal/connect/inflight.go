@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -105,7 +106,7 @@ func (a *App) inflightWith(ctx context.Context, code, id string) (string, error)
 	}
 	if transfers > 0 {
 		cutoff := a.schedule().next(a.clock.Now()).In(clock.Lagos).Format("15:04")
-		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Wait for it, or run beerus nip settle-now.", cutoff, plural(transfers, "transfer", "transfers"), naira(max(net, -net))), nil
+		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Wait for it, or run beerus nip settle-now.", cutoff, plural(transfers, "transfer", "transfers"), bank.Naira(max(net, -net))), nil
 	}
 	unposted, err := sw.Unposted(ctx)
 	if err != nil {

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
@@ -136,25 +134,11 @@ func (a *App) route(req TransferRequest, session bool) (transferRoute, error) {
 	return rt, nil
 }
 
-const maxNarrationRunes = 100
-
-func checkNarration(n string) error {
-	if count := utf8.RuneCountInString(n); count > maxNarrationRunes {
-		return fmt.Errorf("narration has %d characters; the limit is %d", count, maxNarrationRunes)
-	}
-	for _, r := range n {
-		if unicode.IsControl(r) {
-			return errors.New("narration must not contain control characters")
-		}
-	}
-	return nil
-}
-
 func (a *App) Transfer(req TransferRequest) (TransferResult, error) {
 	if req.Amount <= 0 {
 		return TransferResult{}, refused(http.StatusBadRequest, nip.SystemError, "invalid_request", errors.New("amount must be above zero"))
 	}
-	if err := checkNarration(req.Narration); err != nil {
+	if err := bank.CheckNarration(req.Narration); err != nil {
 		return TransferResult{}, refused(http.StatusUnprocessableEntity, nip.SystemError, "invalid_request", err)
 	}
 	if req.ToBank == "" {
@@ -176,7 +160,7 @@ func (a *App) Quote(req TransferRequest) (TransferResult, error) {
 	if req.Amount <= 0 {
 		return TransferResult{}, refused(http.StatusBadRequest, nip.SystemError, "invalid_request", errors.New("amount must be above zero"))
 	}
-	if err := checkNarration(req.Narration); err != nil {
+	if err := bank.CheckNarration(req.Narration); err != nil {
 		return TransferResult{}, refused(http.StatusUnprocessableEntity, nip.SystemError, "invalid_request", err)
 	}
 	if req.ToBank == "" {
@@ -219,7 +203,7 @@ func (a *App) Quote(req TransferRequest) (TransferResult, error) {
 	if err != nil {
 		return res, fmt.Errorf("read balance of %s: %w", req.From, err)
 	}
-	if room, ok := addMinor(bal, sender.OverdraftLimit); ok && room < res.TotalDebit {
+	if room, ok := bank.AddMinor(bal, sender.OverdraftLimit); ok && room < res.TotalDebit {
 		return res, postingError(req.From, ledger.ErrInsufficientFunds)
 	}
 	res.BalanceAfter = bal - res.TotalDebit
@@ -306,15 +290,9 @@ func (a *App) sendLock(bankID string) *sync.Mutex {
 }
 
 func totalDebit(amount int64, c charges.Transfer) (int64, error) {
-	total, ok := addMinor(amount, c.Fee)
-	if ok {
-		total, ok = addMinor(total, c.VAT)
-	}
-	if ok {
-		total, ok = addMinor(total, c.StampDuty)
-	}
+	total, ok := bank.TotalDebit(amount, c)
 	if !ok {
-		return 0, refused(http.StatusUnprocessableEntity, nip.SystemError, "amount_too_large", fmt.Errorf("%s is too large to add the transfer charges to. Nothing was debited", naira(amount)))
+		return 0, refused(http.StatusUnprocessableEntity, nip.SystemError, "amount_too_large", fmt.Errorf("%s is too large to add the transfer charges to. Nothing was debited", bank.Naira(amount)))
 	}
 	return total, nil
 }
@@ -375,8 +353,8 @@ func (a *App) beginSend(ctx context.Context, sw *nibss.Store, rt transferRoute, 
 			return nibss.Session{}, false, err
 		}
 		pos := open.netDebit()
-		if need, ok := addMinor(pos, req.Amount); (!ok || need > rt.cap) && !req.Closure {
-			return nibss.Session{}, false, refused(http.StatusUnprocessableEntity, nip.OverCap, "net_debit_cap_exceeded", fmt.Errorf("%s has reached its NIP net debit cap of %s. This transfer needs %s and %s is left. It clears at the next settlement session. Nothing was debited: %w", rt.fromName, naira(rt.cap), naira(req.Amount), naira(max(rt.cap-pos, 0)), errOverCap))
+		if need, ok := bank.AddMinor(pos, req.Amount); (!ok || need > rt.cap) && !req.Closure {
+			return nibss.Session{}, false, refused(http.StatusUnprocessableEntity, nip.OverCap, "net_debit_cap_exceeded", fmt.Errorf("%s has reached its NIP net debit cap of %s. This transfer needs %s and %s is left. It clears at the next settlement session. Nothing was debited: %w", rt.fromName, bank.Naira(rt.cap), bank.Naira(req.Amount), bank.Naira(max(rt.cap-pos, 0)), errOverCap))
 		}
 		sid = a.newSessionID(rt, req, res.At)
 		if sendKey == "" {

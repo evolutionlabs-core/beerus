@@ -152,37 +152,6 @@ func (a *App) WorldID() string {
 	return a.st.WorldID
 }
 
-func parseNaira(s string) (int64, error) {
-	whole, frac, _ := strings.Cut(strings.ReplaceAll(strings.TrimSpace(s), ",", ""), ".")
-	if whole == "" || len(frac) > 2 || strings.Trim(whole, "0123456789") != "" || strings.Trim(frac, "0123456789") != "" {
-		return 0, fmt.Errorf("amount %q must look like 25000 or 25000.50 (naira)", s)
-	}
-	for len(frac) < 2 {
-		frac += "0"
-	}
-	n, err := strconv.ParseInt(whole+frac, 10, 64)
-	if err != nil || n <= 0 {
-		return 0, fmt.Errorf("amount %q must be a positive naira amount", s)
-	}
-	return n, nil
-}
-
-func naira(minor int64) string {
-	sign := ""
-	if minor < 0 {
-		sign, minor = "-", -minor
-	}
-	n := strconv.FormatInt(minor/100, 10)
-	out := ""
-	for i, c := range n {
-		if i > 0 && (len(n)-i)%3 == 0 {
-			out += ","
-		}
-		out += string(c)
-	}
-	return fmt.Sprintf("%s₦%s.%02d", sign, out, minor%100)
-}
-
 func (a *App) ctlConnections(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

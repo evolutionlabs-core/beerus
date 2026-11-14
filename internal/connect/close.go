@@ -340,7 +340,7 @@ func (a *App) closeChoices(r setup.Resource, imp CloseImpact) (map[string]string
 		if total == 0 {
 			return choice, "", nil
 		}
-		return nil, "", a.blocked(setup.ReasonMoneyDecisionNeeded, "%s holds %s for %s. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.", imp.Bank.Name, naira(total), plural(held, "customer", "customers"))
+		return nil, "", a.blocked(setup.ReasonMoneyDecisionNeeded, "%s holds %s for %s. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.", imp.Bank.Name, bank.Naira(total), plural(held, "customer", "customers"))
 	}
 	for _, cu := range imp.Customers {
 		choice[cu.ID] = rm.Money
@@ -411,7 +411,7 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 				continue
 			}
 			if _, err := bk.ClosurePayout(from.ctx, key, acc.NUBAN, amount, now); err != nil {
-				return CloseResult{}, fmt.Errorf("pay out %s from %s: %w", naira(amount), acc.NUBAN, err)
+				return CloseResult{}, fmt.Errorf("pay out %s from %s: %w", bank.Naira(amount), acc.NUBAN, err)
 			}
 			paid[acc.Owner] += amount
 			continue
@@ -425,10 +425,10 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		}
 		tr, err := a.Transfer(TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: key, Closure: true})
 		if err != nil {
-			return CloseResult{}, fmt.Errorf("move %s from %s: %w", naira(bal), acc.NUBAN, err)
+			return CloseResult{}, fmt.Errorf("move %s from %s: %w", bank.Naira(bal), acc.NUBAN, err)
 		}
 		if tr.Status != nip.Success {
-			return CloseResult{}, fmt.Errorf("move %s from %s: session %s is %s", naira(bal), acc.NUBAN, tr.SessionID, tr.Status)
+			return CloseResult{}, fmt.Errorf("move %s from %s: session %s is %s", bank.Naira(bal), acc.NUBAN, tr.SessionID, tr.Status)
 		}
 	}
 	for _, acc := range imp.Accounts {
@@ -526,18 +526,18 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 				return CloseResult{}, err
 			}
 			if status != "frozen" {
-				return CloseResult{}, fmt.Errorf("%s keeps %s as an NDIC claim but is %s, not frozen", acc.NUBAN, naira(bal), status)
+				return CloseResult{}, fmt.Errorf("%s keeps %s as an NDIC claim but is %s, not frozen", acc.NUBAN, bank.Naira(bal), status)
 			}
 			res.Lines = append(res.Lines, line(acc.NUBAN, setup.OutcomeClaim, bal))
 			res.Claims += bal
 		default:
-			return CloseResult{}, fmt.Errorf("%s still holds %s after its money was moved", acc.NUBAN, naira(bal))
+			return CloseResult{}, fmt.Errorf("%s still holds %s after its money was moved", acc.NUBAN, bank.Naira(bal))
 		}
 	}
 	for o, c := range choice {
 		if c == setup.MoneyPayout {
 			if want := min(paid[o]+held[o], imp.InsuredLimit); paid[o] != want {
-				return CloseResult{}, fmt.Errorf("customer %s was paid out %s, but the insured amount is %s", o, naira(paid[o]), naira(want))
+				return CloseResult{}, fmt.Errorf("customer %s was paid out %s, but the insured amount is %s", o, bank.Naira(paid[o]), bank.Naira(want))
 			}
 		}
 	}

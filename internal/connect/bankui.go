@@ -513,7 +513,7 @@ func (a *bankSite) obTransferRequest(ctx context.Context, s *bankSession, f url.
 	if !ok {
 		return TransferRequest{}, errChooseAccount
 	}
-	amount, err := parseNaira(f.Get("amount"))
+	amount, err := bank.ParseNaira(f.Get("amount"))
 	if err != nil {
 		return TransferRequest{}, errBadAmount
 	}

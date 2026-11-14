@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -241,14 +242,14 @@ func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"cap":"5000000","collateral":"5000000"}.`)
 		return
 	}
-	capMinor, err := parseNaira(body.Cap)
+	capMinor, err := bank.ParseNaira(body.Cap)
 	if err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "cap: "+err.Error())
 		return
 	}
 	var collateral int64
 	if body.Collateral != "" {
-		if collateral, err = parseNaira(body.Collateral); err != nil {
+		if collateral, err = bank.ParseNaira(body.Collateral); err != nil {
 			web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "collateral: "+err.Error())
 			return
 		}
@@ -296,7 +297,7 @@ func (a *App) transferReply(r *http.Request, res TransferResult, err error) repl
 }
 
 func (a *App) bankTransfer(r *http.Request, bankID string, body transferBody, key string) reply {
-	amount, err := parseNaira(body.Amount)
+	amount, err := bank.ParseNaira(body.Amount)
 	if err != nil {
 		return errReply(r, http.StatusBadRequest, "invalid_request", err.Error())
 	}
@@ -341,7 +342,7 @@ func (a *App) ctlBankQuote(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"9010000014","to_bank":"bank-b","to":"9020000011","amount":"25000"}.`)
 		return
 	}
-	amount, err := parseNaira(body.Amount)
+	amount, err := bank.ParseNaira(body.Amount)
 	if err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
