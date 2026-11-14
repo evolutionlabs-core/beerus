@@ -52,7 +52,7 @@ func TestCustomerCallsReachTheBankProcess(t *testing.T) {
 			t.Fatalf("beerus %v printed %q, want %q", s.args, got, s.want)
 		}
 	}
-	if got := c.fails("withdraw", account, "--bank", "bank-a", "--amount", "100000"); got != "beerus: The account does not have enough money." {
+	if got := c.fails("withdraw", account, "--bank", "bank-a", "--amount", "100000"); got != "beerus: Account "+account+" holds ₦3,800.00 and ₦100,000.00 was asked for; withdraw ₦3,800.00 or less." {
 		t.Fatalf("overdraw: %q", got)
 	}
 	statement := strings.Join(strings.Fields(c.ok("statement", account, "--bank", "bank-a")), " ")
@@ -100,5 +100,9 @@ func TestCustomerCallsReachTheBankProcess(t *testing.T) {
 	})
 	if got := c.ok("customers", "--bank", "bank-a"); !strings.HasSuffix(got, "1 customer on this page.\n") {
 		t.Errorf("customers after the stop: %q", got)
+	}
+	c.ok("bank", "close", "bank-a", "--money", "leave", "--yes")
+	if got := c.fails("statement", account, "--bank", "bank-a"); got != "beerus: Bank A is closed." {
+		t.Errorf("statement of a closed bank: %q", got)
 	}
 }

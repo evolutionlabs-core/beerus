@@ -155,7 +155,10 @@ func (rec *recorder) Write(b []byte) (int, error) {
 	return rec.buf.Write(b)
 }
 
-const idemTTL = 24 * time.Hour
+const (
+	idemTTL   = 24 * time.Hour
+	bodyLimit = 1 << 20
+)
 
 func (a *App) idemGetLocked(scope string) *IdemRec {
 	rec := a.st.Idem[scope]
@@ -208,7 +211,7 @@ func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "An Idempotency-Key header of 1 to 255 characters is required on writes.")
 			return
 		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		body, err := io.ReadAll(io.LimitReader(r.Body, bodyLimit))
 		if err != nil {
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body could not be read.")
 			return
