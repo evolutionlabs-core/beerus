@@ -105,8 +105,12 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if a.bankPhase(a.bank.ID) == PhaseClosed && !strings.HasPrefix(r.URL.Path, "/assets/") {
+			http.Error(w, a.ownBank().Name+" is closed.", http.StatusConflict)
+			return
+		}
 		if a.bankPhase(a.bank.ID) == PhaseSuspended && !strings.HasPrefix(r.URL.Path, "/assets/") {
-			a.bankRender(w, "bank_unavailable", http.StatusServiceUnavailable, nil, roomPage{"Title": a.bank.Name})
+			a.bankRender(w, "bank_unavailable", http.StatusServiceUnavailable, nil, roomPage{"Title": a.ownBank().Name})
 			return
 		}
 		if r.Method == http.MethodPost {
@@ -127,14 +131,15 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 }
 
 func (a *bankSite) bankRender(w http.ResponseWriter, name string, status int, s *bankSession, data roomPage) {
-	data["Bank"] = a.bank
+	own := a.ownBank()
+	data["Bank"] = &own
 	data["Now"] = a.clock.Now()
 	if s != nil && s.Verified {
 		data["User"] = s.Name
 		data["CSRF"] = s.CSRF
 	}
 	if _, ok := data["Title"]; !ok {
-		data["Title"] = a.bank.Name
+		data["Title"] = own.Name
 	}
 	setPageHeaders(w)
 	w.WriteHeader(status)
@@ -144,6 +149,12 @@ func (a *bankSite) bankRender(w http.ResponseWriter, name string, status int, s 
 }
 
 func (a *bankSite) bankFail(w http.ResponseWriter, r *http.Request, err error) {
+	var ue *unavailableError
+	if errors.As(err, &ue) {
+		a.log.Warn("online banking unavailable", "bank", a.bank.ID, "path", r.URL.Path, "err", ue.err)
+		http.Error(w, ue.msg, http.StatusServiceUnavailable)
+		return
+	}
 	a.log.Error("online banking", "bank", a.bank.ID, "path", r.URL.Path, "err", err)
 	http.Error(w, "Something went wrong at the bank. Try again soon.", http.StatusInternalServerError)
 }
@@ -151,7 +162,7 @@ func (a *bankSite) bankFail(w http.ResponseWriter, r *http.Request, err error) {
 func (a *bankSite) book() (book, error) {
 	bk, ok := a.bookOf(a.bank.ID)
 	if !ok {
-		return book{}, fmt.Errorf("the books of %s are not open", a.bank.Name)
+		return book{}, fmt.Errorf("the books of %s are not open", a.bank.ID)
 	}
 	return bk, nil
 }

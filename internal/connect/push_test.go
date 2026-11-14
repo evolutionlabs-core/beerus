@@ -29,6 +29,7 @@ func bankDirConfig(t *testing.T, banks ...*config.Bank) *config.Config {
 		t.Fatal(err)
 	}
 	for _, b := range banks {
+		b.Database = config.DatabaseName(cfg.Dir, b.ID)
 		if err := cfg.EnsureBankDir(b, clock.New(nil).Real()); err != nil {
 			t.Fatal(err)
 		}

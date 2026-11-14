@@ -301,6 +301,7 @@ func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ledger.ErrInvalid):
 		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", clean(err))
 	case errors.As(err, &ue):
+		a.log.Warn("banking unavailable", "path", r.URL.Path, "err", ue.err)
 		writeError(w, r, http.StatusServiceUnavailable, "unavailable", ue.msg)
 	case errors.As(err, &fe):
 		writeError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", fe.Message())

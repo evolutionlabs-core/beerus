@@ -127,7 +127,7 @@ func (a *App) refreshBanks(ctx context.Context) error {
 		return nil
 	}
 	if err := a.dirRefresh.do(ctx, a.clock.Real, a.fetchDirectory); err != nil {
-		return fmt.Errorf("read the NIBSS directory: %w", err)
+		return a.coreAway(fmt.Errorf("read the NIBSS directory: %w", err))
 	}
 	return nil
 }

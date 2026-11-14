@@ -121,20 +121,20 @@ func LoadBankFile(dir, id string) (BankFile, error) {
 	if err := json.Unmarshal(raw, &bf); err != nil {
 		return BankFile{}, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if err := bf.check(id); err != nil {
+	if err := bf.check(dir, id); err != nil {
 		return BankFile{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return bf, nil
 }
 
-func (f BankFile) check(id string) error {
+func (f BankFile) check(dir, id string) error {
 	switch {
 	case f.ID != id:
 		return fmt.Errorf("id is %q, want %q", f.ID, id)
 	case f.Port <= 0 || f.APIPort <= 0:
 		return errors.New("port and api_port must be above zero")
-	case f.Database == "":
-		return errors.New("database is required")
+	case f.Database != DatabaseName(dir, id):
+		return fmt.Errorf("database is %q, but core names the database of %s %q", f.Database, id, DatabaseName(dir, id))
 	case f.State != stateActive && f.State != "suspended" && f.State != "closed":
 		return fmt.Errorf("state %q is not active, suspended or closed", f.State)
 	}

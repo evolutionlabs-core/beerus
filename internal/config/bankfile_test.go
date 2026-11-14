@@ -13,7 +13,7 @@ func TestBankFileEnsureAndLoad(t *testing.T) {
 	if err := Prepare(c, now); err != nil {
 		t.Fatal(err)
 	}
-	b := &Bank{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: 8001, APIPort: 8011, Database: "db_a", NetDebitCap: 5_000_000, State: "suspended"}
+	b := &Bank{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: 8001, APIPort: 8011, Database: DatabaseName(c.Dir, "bank-a"), NetDebitCap: 5_000_000, State: "suspended"}
 	if err := c.EnsureBankDir(b, now); err != nil {
 		t.Fatal(err)
 	}
@@ -84,5 +84,12 @@ func TestBankFileEnsureAndLoad(t *testing.T) {
 	}
 	if _, err := LoadBankFile(c.Dir, "bank-a"); err == nil || err.Error() != path+`: id is "bank-b", want "bank-a"` {
 		t.Fatalf("another bank's file: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"id":"bank-a","port":1,"api_port":2,"database":"d","state":"active"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := path + `: database is "d", but core names the database of bank-a "` + DatabaseName(c.Dir, "bank-a") + `"`
+	if _, err := LoadBankFile(c.Dir, "bank-a"); err == nil || err.Error() != want {
+		t.Fatalf("another database: %v, want %s", err, want)
 	}
 }

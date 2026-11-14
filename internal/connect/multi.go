@@ -249,16 +249,38 @@ func (a *App) remoteTransfer(ctx context.Context, req TransferRequest) (Transfer
 	body := transferBody{From: req.From, To: req.To, ToBank: req.ToBank, Amount: fmt.Sprintf("%d.%02d", req.Amount/100, req.Amount%100), Narration: req.Narration}
 	var out TransferResult
 	status, err := a.coreDo(ctx, http.MethodPost, "/banks/"+url.PathEscape(req.FromBank)+"/transfers", body, &out)
+	var pe *peerError
+	if err != nil && !errors.As(err, &pe) {
+		return out, a.coreAway(err)
+	}
 	if err != nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
 		return out, refused(status, nip.SystemError, "transfer_refused", err)
 	}
 	return out, err
 }
 
+func (a *App) coreAway(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	return &unavailableError{msg: a.ownBank().Name + " cannot reach NIBSS right now. Try again in a minute.", err: err}
+}
+
+func (a *App) ownBank() config.Bank {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return *a.cfg.Bank(a.bankID)
+}
+
 func (a *App) remoteEnquiry(ctx context.Context, code, nuban string) (string, error) {
 	var out nameEnquiry
 	q := url.Values{"bank_code": {code}, "account_number": {nuban}}
-	if _, err := a.coreDo(ctx, http.MethodGet, "/nip/name-enquiry?"+q.Encode(), nil, &out); err != nil {
+	_, err := a.coreDo(ctx, http.MethodGet, "/nip/name-enquiry?"+q.Encode(), nil, &out)
+	var pe *peerError
+	if err != nil && !errors.As(err, &pe) {
+		return "", a.coreAway(err)
+	}
+	if err != nil {
 		return "", err
 	}
 	if out.Code != nip.OK {

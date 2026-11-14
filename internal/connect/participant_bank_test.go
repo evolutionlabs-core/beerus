@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -156,4 +157,50 @@ func TestParticipantBankContract(t *testing.T) {
 	}
 	step("deposit while suspended", "POST", "/v1/deposits", "cash-6", deposit, 409, apiErr("bank_not_active", "Bank A is suspended, so it cannot do this now."))
 	step("read while suspended", "GET", "/v1/accounts?customer="+bolaID, "", "", 200, `{"data":[]}`)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	site := &http.Server{Handler: a.BankHandler(a.bankID), ReadHeaderTimeout: probeLimit}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		_ = site.Serve(ln)
+	}()
+	t.Cleanup(func() {
+		_ = site.Close()
+		<-served
+	})
+	host := fmt.Sprintf("bank-a.localhost:%d", a.cfg.Bank(a.bankID).Port)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range 30 {
+			renamed := *core.cfg.Bank(a.bankID)
+			renamed.Name = fmt.Sprintf("Bank A %d", i)
+			if err := core.cfg.EnsureBankDir(&renamed, participantNow); err != nil {
+				t.Error(err)
+				return
+			}
+			if err := a.reloadBank(); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	for range 30 {
+		req, err := http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+"/login", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	wg.Wait()
 }

@@ -7,9 +7,12 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -28,37 +31,26 @@ import (
 )
 
 const (
-	soloDeposit = 50_000_000
-	soloCredit  = 2_500_000
-	soloRefused = 1_000_000
-	soloStop    = 30 * time.Second
+	soloDeposit  = 50_000_000
+	soloCredit   = 2_500_000
+	soloRefused  = 1_000_000
+	soloStop     = 30 * time.Second
+	soloPassword = "correct horse battery"
 )
 
-func copyBankDir(t *testing.T, from, to string) {
+func copyBankFiles(t *testing.T, from, to string, names ...string) {
 	t.Helper()
-	err := filepath.WalkDir(from, func(path string, d fs.DirEntry, err error) error {
+	for _, name := range names {
+		raw, err := os.ReadFile(filepath.Join(from, name))
 		if err != nil {
-			return err
+			t.Fatal(err)
 		}
-		rel, err := filepath.Rel(from, path)
-		if err != nil {
-			return err
+		if err := os.MkdirAll(filepath.Join(to, filepath.Dir(name)), 0o700); err != nil {
+			t.Fatal(err)
 		}
-		info, err := d.Info()
-		if err != nil {
-			return err
+		if err := os.WriteFile(filepath.Join(to, name), raw, 0o600); err != nil {
+			t.Fatal(err)
 		}
-		if d.IsDir() {
-			return os.MkdirAll(filepath.Join(to, rel), info.Mode().Perm())
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(filepath.Join(to, rel), raw, info.Mode().Perm())
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -121,7 +113,11 @@ func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
 	if err := books.Genesis(ctx, bank.GenesisSettlement, bank.GenesisVault, now); err != nil {
 		t.Fatal(err)
 	}
-	customer, err := books.CreateCustomer(ctx, "cus-ada", "ADA OBI", "+2348030000001", clock.Date{Y: 1990, M: 1, D: 1}, "22912345678", "", "", now)
+	hash, err := bank.HashPassword(soloPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	customer, err := books.CreateCustomer(ctx, "cus-ada", "ADA OBI", "+2348030000001", clock.Date{Y: 1990, M: 1, D: 1}, "22912345678", "ada", hash, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,8 +129,20 @@ func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	solo := filepath.Join(t.TempDir(), "solo")
-	copyBankDir(t, config.BankDir(stage, own.ID), config.BankDir(solo, own.ID))
+	clientDir := t.TempDir()
+	copyBankFiles(t, stage, clientDir, "ca/root.crt", "nibss/client.crt", "nibss/client.key")
+	entries, err := os.ReadDir(stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "banks" {
+			if err := os.RemoveAll(filepath.Join(stage, e.Name())); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	solo := stage
 	c := newCLIAt(t, solo)
 	run := exec.Command(c.bin, "run", "--participant", own.ID, "--dir", solo)
 	run.Env = c.env(config.DatabaseURLEnv + "=" + dbURL)
@@ -170,7 +178,7 @@ func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
 		t.Fatalf("the login page answered %d, want 200", code)
 	}
 
-	nibss := mutualClient(t, stage, "nibss", "client")
+	nibss := mutualClient(t, clientDir, "nibss", "client")
 	session := func(n int) string { return banktest.Session(own.NIPCode, n) }
 	reply := func(sid, code string) string {
 		return fmt.Sprintf(`{"session_id":%q,"response_code":%q}`, sid, code)
@@ -232,6 +240,39 @@ func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("a customer needs a BVN from core, which is down; got %d, want 503", resp.StatusCode)
+	}
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	browser := &http.Client{Timeout: controlProbeTimeout, Jar: jar}
+	page := func(method, path string, form url.Values) (int, string) {
+		req, err := http.NewRequest(method, site+path, strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := browser.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(raw)
+	}
+	_, verify := page("POST", "/login", url.Values{"username": {"ada"}, "password": {soloPassword}})
+	code := regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`).FindStringSubmatch(verify)
+	if code == nil {
+		t.Fatalf("no code on the verify page: %.300s", verify)
+	}
+	page("POST", "/verify", url.Values{"otp": {code[1]}})
+	status, body := page("GET", "/transfer", nil)
+	if want := "Bank A cannot reach NIBSS right now. Try again in a minute."; status != http.StatusServiceUnavailable || strings.TrimSpace(body) != want {
+		t.Fatalf("the transfer page answered %d %q, want 503 %q", status, strings.TrimSpace(body), want)
 	}
 
 	files := []string{"banks", "banks/bank-a"}

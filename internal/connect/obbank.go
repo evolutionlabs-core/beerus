@@ -461,6 +461,12 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 		return l == nil || a.bankRefusing(b.ID)
 	}
 	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.bankPhase(b.ID) == PhaseClosed {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":"bank_closed","error_description":` + strconv.Quote(a.ownBank().Name+" is closed.") + `}`))
+			return
+		}
 		if unavailable(a.obLedger(b.ID)) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "30")
@@ -481,6 +487,10 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	var nip nipHandlers
 	nipGuarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		l := a.obLedger(b.ID)
+		if a.bankPhase(b.ID) == PhaseClosed {
+			inbound.WriteClosed(w, a.ownBank().Name)
+			return
+		}
 		if unavailable(l) {
 			w.Header().Set("Retry-After", "30")
 			inbound.WriteUnavailable(w)

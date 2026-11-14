@@ -85,6 +85,10 @@ func WriteUnavailable(w http.ResponseWriter) {
 	writeError(w, http.StatusServiceUnavailable, "unavailable", "This bank is not available right now. Try again soon.")
 }
 
+func WriteClosed(w http.ResponseWriter, name string) {
+	writeError(w, http.StatusConflict, "bank_closed", name+" is closed.")
+}
+
 func requestID() string {
 	return "req_" + rand.Text()[:requestIDChars]
 }
