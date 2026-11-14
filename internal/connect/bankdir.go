@@ -2,9 +2,17 @@ package connect
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
+
+const bankEnsureEvery = time.Minute
+
+type bankEnsured struct {
+	digest string
+	at     time.Time
+}
 
 func (a *App) ensureBankDir(id string, force bool) (string, error) {
 	a.bankFileMu.Lock()
@@ -17,22 +25,24 @@ func (a *App) ensureBankDir(id string, force bool) (string, error) {
 	}
 	a.mu.Unlock()
 	if snap == nil {
-		delete(a.bankDigests, id)
+		delete(a.bankEnsures, id)
 		return "", nil
 	}
 	digest, err := a.cfg.BankFileDigest(snap)
 	if err != nil {
 		return "", err
 	}
-	if !force && a.bankDigests[id] == digest {
+	now := a.clock.Real()
+	last, ok := a.bankEnsures[id]
+	if !force && ok && last.digest == digest && now.Sub(last.at) < bankEnsureEvery {
 		return digest, nil
 	}
-	if err := a.cfg.EnsureBankDir(snap, a.clock.Real()); err != nil {
+	if err := a.cfg.EnsureBankDir(snap, now); err != nil {
 		return "", fmt.Errorf("ensure the bank directory of %s: %w", id, err)
 	}
-	if a.bankDigests == nil {
-		a.bankDigests = map[string]string{}
+	if a.bankEnsures == nil {
+		a.bankEnsures = map[string]bankEnsured{}
 	}
-	a.bankDigests[id] = digest
+	a.bankEnsures[id] = bankEnsured{digest: digest, at: now}
 	return digest, nil
 }

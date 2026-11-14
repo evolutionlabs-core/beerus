@@ -29,7 +29,7 @@ type App struct {
 	bind         string
 	applyMu      sync.Mutex
 	bankFileMu   sync.Mutex
-	bankDigests  map[string]string
+	bankEnsures  map[string]bankEnsured
 	mu           sync.Mutex
 	cfg          *config.Config
 	clock        *clock.Clock

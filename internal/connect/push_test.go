@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -131,5 +132,46 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 	case <-done:
 	case <-time.After(pushWait):
 		t.Fatal("runPush did not stop and wait for its goroutines")
+	}
+}
+
+func TestEnsureBankDirRepairsOnATick(t *testing.T) {
+	cfg := bankDirConfig(t, &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1, APIPort: 2, Database: "db"})
+	now := clock.New(nil).Real()
+	at := now
+	a := &App{cfg: cfg, clock: clock.New(func() time.Time { return at })}
+	path := config.BankDir(cfg.Dir, "bank-a") + "/" + config.BankCAFile
+	rows := []struct {
+		name    string
+		advance time.Duration
+		damage  func() error
+		want    bool
+	}{
+		{name: "first ensure writes", want: true},
+		{name: "nothing changed", advance: time.Second, want: true},
+		{name: "deleted file inside the interval", advance: time.Second, damage: func() error { return os.Remove(path) }, want: false},
+		{name: "deleted file after the interval", advance: bankEnsureEvery, want: true},
+		{name: "corrupted file after the interval", advance: bankEnsureEvery, damage: func() error { return os.WriteFile(path, []byte("x"), 0o644) }, want: true},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			at = at.Add(r.advance)
+			if r.damage != nil {
+				if err := r.damage(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := a.ensureBankDir("bank-a", false); err != nil {
+				t.Fatal(err)
+			}
+			root, err := os.ReadFile(cfg.Path("ca", "root.crt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if ok := err == nil && string(got) == string(root); ok != r.want {
+				t.Fatalf("ca.crt intact is %v, want %v", ok, r.want)
+			}
+		})
 	}
 }
