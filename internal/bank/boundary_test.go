@@ -1,6 +1,7 @@
 package bank_test
 
 import (
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
@@ -17,8 +18,12 @@ func TestImportBoundary(t *testing.T) {
 		modulePath + "/internal/connect",
 		modulePath + "/cmd",
 	}
-	out, err := exec.Command("go", "list", "-f", `{{.ImportPath}} {{join .Deps " "}}`, "./...").Output()
+	out, err := exec.Command("go", "list", "-f", `{{.ImportPath}} {{join .Deps " "}} {{join .TestImports " "}} {{join .XTestImports " "}}`, "./...").Output()
 	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			t.Fatalf("list bank packages: %v: %s", err, exit.Stderr)
+		}
 		t.Fatalf("list bank packages: %v", err)
 	}
 	listed := 0
