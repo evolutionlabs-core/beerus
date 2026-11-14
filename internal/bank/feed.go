@@ -125,8 +125,8 @@ func (b *Bank) SessionLines(ctx context.Context, sessionID string) ([]FeedLine, 
 }
 
 type Totals struct {
-	Customers int64
-	Accounts  int64
+	Customers int
+	Accounts  int
 	Deposits  int64
 }
 

@@ -647,7 +647,7 @@ type bankRow struct {
 	*config.Bank
 	Phase     string
 	URL       string
-	Customers int64
+	Customers int
 	Deposits  int64
 }
 
