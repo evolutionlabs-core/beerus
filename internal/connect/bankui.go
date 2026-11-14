@@ -715,7 +715,7 @@ func (a *bankSite) obRevoke(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	a.flushEvents()
+	a.sender.Events(context.WithoutCancel(r.Context()))
 	http.Redirect(w, r, "/apps?revoked=1", http.StatusSeeOther)
 }
 

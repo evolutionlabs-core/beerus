@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -76,7 +77,6 @@ type App struct {
 	regMu        sync.Mutex
 	poolMu       sync.RWMutex
 	pools        map[string]*ledgerSource
-	flushMu      sync.Mutex
 	vault        *vault
 	obHTTP       *http.Client
 	role         string
@@ -87,10 +87,9 @@ type App struct {
 	banking      *server.Banking
 	srv          *server.Server
 	probeHTTP    *http.Client
-	eventMu      sync.Mutex
-	eventHTTP    map[string]*http.Client
-	bankWrap     func(http.RoundTripper) http.RoundTripper
+	sender       *consent.Sender
 	obKey        *ecdsa.PrivateKey
+	bankWrap     func(http.RoundTripper) http.RoundTripper
 	eventJTI     jtiSet
 }
 
@@ -160,6 +159,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	a.st = st
 	a.clock = clock.New(o.Real)
 	a.banking = &server.Banking{Src: bookSource{a}, Clock: a.clock, Log: a.log}
+	a.sender = a.newSender()
 	if err := a.prepareOpenBanking(); err != nil {
 		return nil, err
 	}
@@ -326,7 +326,7 @@ func (a *App) Step(ctx context.Context) {
 	a.sweep()
 	due := a.dueDeliveries()
 	a.mu.Unlock()
-	a.flushEvents()
+	a.sender.Events(ctx)
 	for _, d := range due {
 		go func(d Delivery) {
 			a.sending <- struct{}{}
@@ -696,6 +696,6 @@ func (a *App) RevokeAtBank(ctx context.Context, connID string) error {
 	if err := ob.RevokeByBank(ctx, consent, "bank"); err != nil {
 		return err
 	}
-	a.flushEvents()
+	a.sender.Events(ctx)
 	return nil
 }

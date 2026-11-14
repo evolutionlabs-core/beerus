@@ -60,24 +60,3 @@ func TestConsentLedgerPages(t *testing.T) {
 		}
 	}
 }
-
-func TestEventClientIsSharedPerDestination(t *testing.T) {
-	app := newTestApp(t, Options{})
-	a, err := app.eventClient("https://widget-a.localhost")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 20; i++ {
-		again, err := app.eventClient("https://widget-a.localhost")
-		if err != nil || again != a {
-			t.Fatalf("attempt %d built a new client: %v", i, err)
-		}
-	}
-	b, err := app.eventClient("https://widget-b.localhost")
-	if err != nil || b == a {
-		t.Fatalf("another destination shares a client: %v", err)
-	}
-	if tr, ok := a.Transport.(*http.Transport); !ok || tr.IdleConnTimeout <= 0 {
-		t.Fatalf("idle connections are never closed: %+v", a.Transport)
-	}
-}

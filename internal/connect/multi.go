@@ -84,6 +84,7 @@ func NewBank(ctx context.Context, dir string, o Options) (*App, error) {
 	for _, s := range st.Steps {
 		steps = append(steps, server.Step{ID: s.ID, Name: s.Name, Done: s.Done, Error: s.Error, StartedAt: s.StartedAt, CompletedAt: s.At})
 	}
+	a.sender = a.newSender()
 	a.srv = server.New(server.Config{
 		Dir:       dir,
 		Bank:      *b,
@@ -143,8 +144,8 @@ func (a *App) ServeBank(ctx context.Context) error {
 			a.closeLedgers()
 			return nil
 		case <-tick.C:
-			a.flushEvents()
-			a.flushLedger()
+			a.sender.Events(ctx)
+			a.sender.Ledger(ctx)
 			a.restartSiteIfStale()
 			a.srv.Sweep()
 		}
@@ -177,8 +178,9 @@ func (a *bankSite) internalRevoke(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	a.flushEvents()
-	a.flushLedger()
+	ctx := context.WithoutCancel(r.Context())
+	a.sender.Events(ctx)
+	a.sender.Ledger(ctx)
 	w.WriteHeader(http.StatusNoContent)
 }
 

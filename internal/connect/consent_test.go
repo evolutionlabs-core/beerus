@@ -39,20 +39,6 @@ func TestConsentLedgerAndSaveDoNotRace(t *testing.T) {
 	}
 }
 
-func TestEventBackoffGrowsAndStops(t *testing.T) {
-	last := time.Duration(0)
-	for n := 0; n < 40; n++ {
-		d := eventDelay(n)
-		if d < last || d > eventBackoffAt {
-			t.Fatalf("attempt %d waits %s after %s", n, d, last)
-		}
-		last = d
-	}
-	if eventDelay(0) != eventBackoff || last != eventBackoffAt {
-		t.Fatalf("backoff runs from %s to %s", eventDelay(0), last)
-	}
-}
-
 func TestEventIDsAreTrackedOnceAndBounded(t *testing.T) {
 	var j jtiSet
 	now := time.Now()

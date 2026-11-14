@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,14 +20,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/evolutionlabs-core/beerus/internal/bank"
-	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
-	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -188,52 +185,6 @@ func (a *App) ConsentLedger(bank string, before int64, limit int) ([]ConsentReco
 	return out, 0
 }
 
-type registryView struct {
-	a *App
-}
-
-func (r registryView) convert(c *openbanking.RegistryClient) (*openbanking.Client, bool) {
-	pub, err := c.JWK.Public()
-	if err != nil {
-		return nil, false
-	}
-	return &openbanking.Client{ID: c.ID, Name: c.Name, LegalName: c.LegalName, RegistryID: c.RegistryID, CAC: c.CAC, Role: c.Role, CertCN: c.CertCN, Keys: []*ecdsa.PublicKey{pub}, RedirectURIs: slices.Clone(c.RedirectURIs)}, true
-}
-
-func (r registryView) Client(id string) (*openbanking.Client, bool) {
-	if r.a.srv != nil {
-		c, ok := r.a.srv.RegistryClient(id)
-		if !ok {
-			return nil, false
-		}
-		return r.convert(c)
-	}
-	r.a.regMu.Lock()
-	defer r.a.regMu.Unlock()
-	if c := r.a.st.Registry[id]; c != nil {
-		return r.convert(c)
-	}
-	return nil, false
-}
-
-func (r registryView) ClientByCert(cn string) (*openbanking.Client, bool) {
-	if r.a.srv != nil {
-		c, ok := r.a.srv.RegistryClientByCert(cn)
-		if !ok {
-			return nil, false
-		}
-		return r.convert(c)
-	}
-	r.a.regMu.Lock()
-	defer r.a.regMu.Unlock()
-	for _, c := range r.a.st.Registry {
-		if c.CertCN == cn {
-			return r.convert(c)
-		}
-	}
-	return nil, false
-}
-
 type consentLedger struct {
 	a *App
 }
@@ -255,112 +206,42 @@ func (l consentLedger) Record(e openbanking.ConsentEvent) {
 	l.a.isDirty.Store(true)
 }
 
-type bankData struct {
-	a    *App
-	bank *config.Bank
+type memRegistry struct {
+	a *App
 }
 
-func (d bankData) ledger() (*ledgerSource, error) {
-	if l := d.a.obLedger(d.bank.ID); l != nil {
-		return l, nil
-	}
-	return nil, errors.New("the bank ledger is not open")
+func (r memRegistry) RegistryClient(id string) (*openbanking.RegistryClient, bool) {
+	r.a.regMu.Lock()
+	defer r.a.regMu.Unlock()
+	c := r.a.st.Registry[id]
+	return c, c != nil
 }
 
-func (d bankData) find(nuban string) (ledger.Account, *ledgerSource, error) {
-	l, err := d.ledger()
-	if err != nil {
-		return ledger.Account{}, nil, err
-	}
-	acc, err := l.Account(nuban)
-	if errors.Is(err, ledger.ErrUnknownAccount) {
-		return ledger.Account{}, nil, openbanking.ErrNotFound
-	}
-	if err != nil {
-		return ledger.Account{}, nil, err
-	}
-	return acc, l, nil
-}
-
-func accountInfo(acc ledger.Account) openbanking.AccountInfo {
-	return openbanking.AccountInfo{ID: acc.NUBAN, Name: acc.Name, Type: acc.Product, Currency: acc.Currency}
-}
-
-func (d bankData) Accounts(customer string) ([]openbanking.AccountInfo, error) {
-	l, err := d.ledger()
-	if err != nil {
-		return nil, err
-	}
-	accs, err := l.Bank().CustomerAccounts(l.Ctx(), customer)
-	if errors.Is(err, bank.ErrUnknownCustomer) {
-		return []openbanking.AccountInfo{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	out := make([]openbanking.AccountInfo, 0, len(accs))
-	for _, acc := range accs {
-		out = append(out, accountInfo(acc))
-	}
-	return out, nil
-}
-
-func (d bankData) Account(nuban string) (openbanking.AccountInfo, error) {
-	acc, _, err := d.find(nuban)
-	return accountInfo(acc), err
-}
-
-func (d bankData) Balance(nuban string) (openbanking.Balance, error) {
-	acc, l, err := d.find(nuban)
-	if err != nil {
-		return openbanking.Balance{}, err
-	}
-	bal, err := l.LedgerAt(nuban, d.a.clock.Now())
-	if err != nil {
-		return openbanking.Balance{}, err
-	}
-	return openbanking.Balance{Ledger: bal, Available: bal, Currency: acc.Currency}, nil
-}
-
-func (d bankData) BalanceOn(nuban string, day clock.Date) (int64, error) {
-	_, l, err := d.find(nuban)
-	if err != nil {
-		return 0, err
-	}
-	return l.EndOfDay(nuban, day)
-}
-
-func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking.Txn, error) {
-	_, l, err := d.find(nuban)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := l.Fetch(nuban, d.a.clock.Now(), from)
-	if err != nil {
-		return nil, err
-	}
-	out := []openbanking.Txn{}
-	for _, p := range rows {
-		if p.ValueDate.Before(from) || p.ValueDate.After(to) {
-			continue
+func (r memRegistry) RegistryClientByCert(cn string) (*openbanking.RegistryClient, bool) {
+	r.a.regMu.Lock()
+	defer r.a.regMu.Unlock()
+	for _, c := range r.a.st.Registry {
+		if c.CertCN == cn {
+			return c, true
 		}
-		t := openbanking.Txn{ID: p.Key, Amount: p.Amount, BookedAt: p.BookedAt, ValueDate: p.ValueDate, Narration: p.Narration, SessionID: p.SessionID, BankRef: p.BankRef, Channel: p.Channel, BalanceAfter: p.BalanceAfter, Seq: p.Seq}
-		if p.Counterparty != nil {
-			t.Counterparty = &openbanking.Counterparty{Name: p.Counterparty.Name, AccountNumber: p.Counterparty.AccountNumber, BankCode: p.Counterparty.BankCode, BankName: p.Counterparty.BankName}
-		}
-		out = append(out, t)
 	}
-	return out, nil
+	return nil, false
 }
 
-func (d bankData) Ping() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	l, err := d.ledger()
-	if err != nil {
-		return err
+func (a *App) registrar() server.Registrar {
+	if a.srv != nil {
+		return a.srv
 	}
-	return l.Ping(ctx)
+	return memRegistry{a}
+}
+
+func (a *App) obBooks(id string) func() *store.Books {
+	return func() *store.Books {
+		if l := a.obLedger(id); l != nil {
+			return l.Books
+		}
+		return nil
+	}
 }
 
 func (a *App) openBanking(id string) *openbanking.Server {
@@ -371,34 +252,14 @@ func (a *App) openBanking(id string) *openbanking.Server {
 		return s
 	}
 	b := a.cfg.Bank(id)
-	l := a.obLedger(id)
-	if b == nil || l == nil {
+	if b == nil || a.obLedger(id) == nil {
 		return nil
 	}
-	first := l.Pool()
-	s = openbanking.New(openbanking.Config{
-		BankID:       b.ID,
-		BankName:     b.Name,
-		Issuer:       b.APIURL(),
-		AuthorizeURL: b.URL() + "/authorize",
-		HistoryDays:  b.HistoryDays,
-		Store: &openbanking.PGStore{Pool: func() *pgxpool.Pool {
-			if cur := a.obLedger(id); cur != nil {
-				return cur.Pool()
-			}
-			return first
-		}},
-		Registry:      registryView{a},
-		Data:          bankData{a, b},
-		Ledger:        consentLedger{a},
-		LedgerOutbox:  a.role == RoleBank,
-		Real:          a.clock.Real,
-		Now:           a.clock.Now,
-		ConsentMonths: b.API.ConsentMonths,
-		RefreshDays:   b.API.RefreshDays,
-		DormantDays:   b.API.DormantDays,
-		AssertionLife: time.Duration(b.API.AssertionSeconds) * time.Second,
-	})
+	s, err := server.NewOpenBanking(server.OpenConfig{Bank: *b, Books: a.obBooks(id), Registry: a.registrar(), Ledger: consentLedger{a}, Outbox: a.role == RoleBank, Clock: a.clock})
+	if err != nil {
+		a.log.Error("open banking not built", "bank", id, "err", err)
+		return nil
+	}
 	a.obMu.Lock()
 	if cur := a.obs[id]; cur != nil {
 		a.obMu.Unlock()
@@ -418,23 +279,17 @@ func (a *App) forgetOpenBanking(id string) {
 	a.obMu.Unlock()
 }
 
+func (a *App) obServers() map[string]*openbanking.Server {
+	a.obMu.Lock()
+	defer a.obMu.Unlock()
+	return maps.Clone(a.obs)
+}
+
 func (a *App) rootCertPath() string {
 	if a.role == RoleBank {
 		return a.cfg.Path("banks", a.bankID, config.BankCAFile)
 	}
 	return a.cfg.Path("ca", "root.crt")
-}
-
-func (a *App) bankAPITLS(b *config.Bank) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(a.cfg.Path("banks", b.ID, "server.crt"), a.cfg.Path("banks", b.ID, "server.key"))
-	if err != nil {
-		return nil, err
-	}
-	pool, err := pki.LoadPool(a.rootCertPath())
-	if err != nil {
-		return nil, err
-	}
-	return &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12}, nil
 }
 
 func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
@@ -445,7 +300,7 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	if ob == nil {
 		return nil, fmt.Errorf("no ledger for %s", b.ID)
 	}
-	tc, err := a.bankAPITLS(b)
+	tc, err := server.OpenAPITLS(a.cfg.Dir, b.ID, a.rootCertPath())
 	if err != nil {
 		return nil, err
 	}
@@ -453,38 +308,7 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := ob.Handler()
-	unavailable := func(l *ledgerSource) bool {
-		return l == nil || a.bankRefusing(b.ID)
-	}
-	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.bankPhase(b.ID) == PhaseClosed {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(`{"error":"bank_closed","error_description":` + strconv.Quote(a.bankCopy(b.ID).Name+" is closed.") + `}`))
-			return
-		}
-		if unavailable(a.obLedger(b.ID)) {
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Retry-After", "30")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":"temporarily_unavailable","error_description":"The bank is not available right now."}`))
-			return
-		}
-		if err := a.refreshRegistry(r.Context()); err != nil {
-			a.log.Error("registry not readable", "bank", b.ID, "err", err)
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Retry-After", "30")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":"temporarily_unavailable","error_description":"The bank is not available right now."}`))
-			return
-		}
-		h.ServeHTTP(w, r)
-	})
-	mux := http.NewServeMux()
-	mux.Handle("/v1/nip/", a.banking.NIP(b.ID))
-	mux.Handle("/", guarded)
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 2 * time.Minute, ErrorLog: log.New(quietTLS{a}, "", 0)}
+	srv := &http.Server{Handler: server.OpenAPI(a.hostOf(b.ID), ob, a.log), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 2 * time.Minute, ErrorLog: log.New(quietTLS{a}, "", 0)}
 	for _, l := range ls {
 		go func(l net.Listener) { _ = srv.Serve(tls.NewListener(l, tc)) }(l)
 	}

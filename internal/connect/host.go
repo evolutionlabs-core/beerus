@@ -1,0 +1,87 @@
+package connect
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	"github.com/evolutionlabs-core/beerus/internal/config"
+)
+
+type bankHost struct {
+	a  *App
+	id string
+}
+
+func (a *App) hostOf(id string) server.Host {
+	if a.srv != nil {
+		return a.srv
+	}
+	return bankHost{a, id}
+}
+
+func (h bankHost) Bank() config.Bank {
+	return h.a.bankCopy(h.id)
+}
+
+func (h bankHost) Phase() (string, string) {
+	return h.a.bankPhaseReason(h.id)
+}
+
+func (h bankHost) Books() (*bank.Bank, error) {
+	l := h.a.obLedger(h.id)
+	if l == nil {
+		return nil, fmt.Errorf("the books of %s are not open", h.id)
+	}
+	return l.Bank(), nil
+}
+
+func (h bankHost) Refusing(id string) bool {
+	return h.a.bankRefusing(id)
+}
+
+func (h bankHost) RefreshRegistry(context.Context) error {
+	return nil
+}
+
+func (h bankHost) RefreshBanks(context.Context) error {
+	return nil
+}
+
+func (h bankHost) Directory() []*config.Bank {
+	h.a.mu.Lock()
+	defer h.a.mu.Unlock()
+	out := make([]*config.Bank, 0, len(h.a.cfg.Banks))
+	for _, b := range h.a.cfg.Banks {
+		c := *b
+		out = append(out, &c)
+	}
+	return out
+}
+
+func (h bankHost) Lookup(id string) *config.Bank {
+	for _, b := range h.Directory() {
+		if b.ID == id {
+			return b
+		}
+	}
+	return nil
+}
+
+func (h bankHost) Quote(ctx context.Context, req server.TransferRequest) (server.TransferResult, error) {
+	return h.a.Quote(ctx, req)
+}
+
+func (h bankHost) Transfer(ctx context.Context, req server.TransferRequest) (server.TransferResult, error) {
+	res, err := h.a.Transfer(req)
+	if err != nil {
+		return res, err
+	}
+	h.a.SyncAll(ctx)
+	return res, nil
+}
+
+func (h bankHost) Banking() *server.Banking {
+	return h.a.banking
+}
