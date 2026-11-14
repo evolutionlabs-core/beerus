@@ -1,6 +1,7 @@
 package contracttest
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"context"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 

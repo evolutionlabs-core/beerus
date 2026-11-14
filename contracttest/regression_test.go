@@ -1,10 +1,10 @@
 package contracttest
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
-	"context"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 

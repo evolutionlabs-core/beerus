@@ -1,6 +1,7 @@
 package contracttest
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -8,8 +9,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"context"
 )
 
 func postedKeys(t *testing.T, st *feedState) map[string]string {
