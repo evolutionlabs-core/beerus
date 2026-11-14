@@ -3,11 +3,18 @@ package nip
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+)
+
+var (
+	ErrUnavailable    = errors.New("91 institution unavailable")
+	ErrInvalidAccount = errors.New("07 invalid account")
+	ErrNoRecord       = errors.New("25 no record")
 )
 
 const (

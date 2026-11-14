@@ -79,11 +79,11 @@ func (a *App) NameEnquiry(code, nuban string) (nameEnquiry, error) {
 	switch {
 	case err == nil:
 		out.Code, out.Message, out.AccountName = nip.OK, "Successful.", name
-	case errors.Is(err, nibss.ErrUnavailable):
+	case errors.Is(err, nip.ErrUnavailable):
 		out.Code, out.Message = nip.Unavailable, in.Name+" is not available right now."
-	case errors.Is(err, nibss.ErrInvalidAccount):
+	case errors.Is(err, nip.ErrInvalidAccount):
 		out.Code, out.Message = nip.InvalidAccount, "That is not a valid account number at "+in.Name+"."
-	case errors.Is(err, nibss.ErrNoRecord):
+	case errors.Is(err, nip.ErrNoRecord):
 		out.Code, out.Message = nip.NoRecord, "No such account at "+in.Name+"."
 	default:
 		return out, err
@@ -205,7 +205,7 @@ func (a *App) ctlNIPSessionStatus(w http.ResponseWriter, r *http.Request) {
 func (a *App) writeNIPSession(w http.ResponseWriter, r *http.Request, get func(string) (nibss.Session, error)) {
 	x, err := get(r.PathValue("id"))
 	switch {
-	case errors.Is(err, nibss.ErrNoRecord):
+	case errors.Is(err, nip.ErrNoRecord):
 		writeError(w, r, http.StatusNotFound, "not_found", "No NIP session has that ID.")
 	case err != nil:
 		a.log.Error("NIP session", "err", err)
