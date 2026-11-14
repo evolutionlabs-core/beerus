@@ -35,9 +35,9 @@ func (a *App) WidgetTLS() (*tls.Config, error) {
 	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
 }
 
-func listenLocal(port int) ([]net.Listener, error) {
-	if multiProcess() {
-		l, err := net.Listen("tcp", net.JoinHostPort(bindAddr, strconv.Itoa(port)))
+func (a *App) listenLocal(port int) ([]net.Listener, error) {
+	if a.multiProcess() {
+		l, err := net.Listen("tcp", net.JoinHostPort(a.bind, strconv.Itoa(port)))
 		if err != nil {
 			return nil, fmt.Errorf("listen on port %d: %w", port, err)
 		}
@@ -87,7 +87,7 @@ func (a *App) Serve(ctx context.Context) error {
 	}
 	servers := []srv{}
 	for _, sp := range specs {
-		ls, err := listenLocal(sp.port)
+		ls, err := a.listenLocal(sp.port)
 		if err != nil {
 			for _, s := range servers {
 				for _, l := range s.ls {

@@ -77,9 +77,7 @@ func TestSlowCoreDoesNotQueueEveryRequest(t *testing.T) {
 }
 
 func TestControlHostListInMultiProcessMode(t *testing.T) {
-	SetBind("0.0.0.0")
-	defer SetBind("")
-	a := &App{cfg: testBankConfig(), ctlToken: "ctl_secret", coreURL: "http://sim:7480"}
+	a := &App{bind: "0.0.0.0", cfg: testBankConfig(), ctlToken: "ctl_secret", coreURL: "http://sim:7480"}
 	h := a.localOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	for host, want := range map[string]int{"sim:7480": 204, "127.0.0.1:7480": 204, "localhost:7480": 204, "evil.example:7480": 403, "sim:9999": 403, "sim": 403} {
 		req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -99,15 +97,13 @@ func TestControlAcceptsOnlyLoopbackPeersWhenBoundToLoopback(t *testing.T) {
 		want         int
 	}{{"127.0.0.1", "10.1.2.3:5555", 403}, {"127.0.0.1", "127.0.0.1:5555", 204}, {"0.0.0.0", "10.1.2.3:5555", 204}}
 	for _, c := range cases {
-		SetBind(c.bind)
-		a := &App{cfg: testBankConfig(), ctlToken: "ctl_secret", coreURL: "http://sim:7480"}
+		a := &App{bind: c.bind, cfg: testBankConfig(), ctlToken: "ctl_secret", coreURL: "http://sim:7480"}
 		h := a.localOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 		req := httptest.NewRequest(http.MethodGet, "/health", nil)
 		req.Host, req.RemoteAddr = "sim:7480", c.remote
 		req.Header.Set("Authorization", "Bearer ctl_secret")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
-		SetBind("")
 		if rec.Code != c.want {
 			t.Errorf("bind %s, peer %s answered %d, want %d", c.bind, c.remote, rec.Code, c.want)
 		}

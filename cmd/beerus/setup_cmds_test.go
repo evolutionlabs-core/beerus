@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -200,6 +201,24 @@ func jsonEqual(t *testing.T, a, b string) {
 	}
 }
 
+const logTailBytes = 20000
+
+func tailOf(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
+}
+
+func builtBeerus(t *testing.T) string {
+	t.Helper()
+	exe := filepath.Join(t.TempDir(), "beerus")
+	if out, err := exec.Command("go", "build", "-o", exe, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build beerus: %v\n%s", err, out)
+	}
+	return exe
+}
+
 func until(t *testing.T, what string, ok func() bool) {
 	t.Helper()
 	deadline := time.NewTimer(90 * time.Second)
@@ -235,12 +254,18 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	exe := builtBeerus(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	var upOut, upErr lockedBuffer
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("up stderr:\n%s", tailOf(upErr.String(), logTailBytes))
+		}
+	})
 	died := make(chan error, 1)
 	go func() {
 		e := &cli{in: bufio.NewReader(strings.NewReader("")), out: &upOut, errOut: &upErr}
-		died <- runUp(ctx, e, []string{"--dir", dir, "-f", file})
+		died <- runUp(ctx, e, exe, []string{"--dir", dir, "-f", file})
 	}()
 	stopped := false
 	stop := func() {

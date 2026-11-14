@@ -9,13 +9,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -23,24 +24,26 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 const (
-	exitChanges  = 2
-	exitBlocked  = 3
-	pollEvery    = 500 * time.Millisecond
-	apiTimeout   = 2 * time.Minute
-	startTimeout = 30 * time.Second
-	startRetry   = 200 * time.Millisecond
-	defaultWait  = 5 * time.Minute
-	codeNotReady = "not_ready"
-	opFinish     = "finish"
-	yamlIndent   = 2
-	notRunning   = "Beerus is not running. Start it with beerus up."
-	upNoBanks    = "No banks yet. Add the first one with beerus bank create --name NAME."
+	exitChanges   = 2
+	exitBlocked   = 3
+	pollEvery     = 500 * time.Millisecond
+	apiTimeout    = 2 * time.Minute
+	startTimeout  = 30 * time.Second
+	startRetry    = 200 * time.Millisecond
+	defaultWait   = 5 * time.Minute
+	codeNotReady  = "not_ready"
+	opFinish      = "finish"
+	ownedPortKind = "port"
+	yamlIndent    = 2
+	notRunning    = "Beerus is not running. Start it with beerus up."
+	upNoBanks     = "No banks yet. Add the first one with beerus bank create --name NAME."
 )
 
 var errNotRunning = errors.New(notRunning)
@@ -105,6 +108,10 @@ func (e *cli) client(dir string) (*ctl, error) {
 }
 
 func (c *ctl) send(method, path string, body any) ([]byte, error) {
+	return c.request(context.Background(), method, path, body)
+}
+
+func (c *ctl) request(ctx context.Context, method, path string, body any) ([]byte, error) {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -113,7 +120,7 @@ func (c *ctl) send(method, path string, body any) ([]byte, error) {
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, c.base+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
 	if err != nil {
 		return nil, fmt.Errorf("build request %s %s: %w", method, path, err)
 	}
@@ -449,7 +456,50 @@ func findResource(all []setup.Resource, kind, id string) *setup.Resource {
 	return nil
 }
 
-func (e *cli) wait(c *ctl, p planReply, wait time.Duration, asJSON bool) error {
+func bankPorts(all []setup.Resource) map[string][]int {
+	ports := map[string][]int{}
+	for _, r := range all {
+		if r.Kind != setup.KindBank {
+			continue
+		}
+		for _, o := range r.Owned {
+			if n, err := strconv.Atoi(o.Name); err == nil && o.Kind == ownedPortKind {
+				ports[r.ID] = append(ports[r.ID], n)
+			}
+		}
+	}
+	return ports
+}
+
+func portFree(port int) bool {
+	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	l.Close()
+	return true
+}
+
+func awaitPortsFree(ctx context.Context, id string, ports []int) error {
+	deadline := time.NewTimer(startTimeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(startRetry)
+	defer tick.Stop()
+	for _, port := range ports {
+		for !portFree(port) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-deadline.C:
+				return fmt.Errorf("bank %s is gone but still holds port %d", id, port)
+			case <-tick.C:
+			}
+		}
+	}
+	return nil
+}
+
+func (e *cli) wait(ctx context.Context, c *ctl, p planReply, wait time.Duration, asJSON bool, ports map[string][]int) error {
 	var targets []target
 	for _, a := range p.Actions {
 		if a.Op != setup.OpDrift {
@@ -496,6 +546,16 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration, asJSON bool) error {
 		return pending, blocked, stuck
 	}
 	done := func() error {
+		for _, t := range targets {
+			if !strings.EqualFold(t.kind, setup.KindBank) {
+				continue
+			}
+			if r := findResource(res, t.kind, t.id); r == nil || r.Phase == setup.PhaseClosed {
+				if err := awaitPortsFree(ctx, t.id, ports[t.id]); err != nil {
+					return err
+				}
+			}
+		}
 		shown := e.out
 		if asJSON {
 			shown = e.errOut
@@ -540,7 +600,15 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration, asJSON bool) error {
 	}
 }
 
-func (e *cli) runApply(c *ctl, req applyRequest, wait time.Duration, asJSON bool) error {
+func (e *cli) runApply(ctx context.Context, c *ctl, req applyRequest, wait time.Duration, asJSON bool) error {
+	var ports map[string][]int
+	if wait != 0 {
+		before, err := e.resources(c)
+		if err != nil {
+			return err
+		}
+		ports = bankPorts(before)
+	}
 	raw, err := c.send("POST", "/apply", req)
 	if err != nil {
 		return err
@@ -562,7 +630,7 @@ func (e *cli) runApply(c *ctl, req applyRequest, wait time.Duration, asJSON bool
 	if wait == 0 {
 		return nil
 	}
-	return e.wait(c, p, wait, asJSON)
+	return e.wait(ctx, c, p, wait, asJSON, ports)
 }
 
 func checkWait(wait time.Duration) error {
@@ -602,7 +670,9 @@ func cmdApply(e *cli, args []string) error {
 	if err := e.confirm(c, &req, *asJSON, setup.OpRemove); err != nil {
 		return err
 	}
-	return e.runApply(c, req, *wait, *asJSON)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return e.runApply(ctx, c, req, *wait, *asJSON)
 }
 
 func (e *cli) livePlan(dir string, req applyRequest) ([]byte, planReply, error) {
@@ -1037,7 +1107,9 @@ func cmdBankEnd(e *cli, args []string) error {
 			return err
 		}
 	}
-	return e.runApply(c, req, *wait, *asJSON)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return e.runApply(ctx, c, req, *wait, *asJSON)
 }
 
 func (e *cli) startApply(ctx context.Context, c *ctl, req applyRequest, served <-chan struct{}) error {
@@ -1046,7 +1118,7 @@ func (e *cli) startApply(ctx context.Context, c *ctl, req applyRequest, served <
 	tick := time.NewTicker(startRetry)
 	defer tick.Stop()
 	for {
-		raw, err := c.send("POST", "/apply", req)
+		raw, err := c.request(ctx, "POST", "/apply", req)
 		var ae *apiError
 		if err == nil {
 			p, derr := decode[planReply](raw, "apply reply")
@@ -1079,10 +1151,14 @@ func (e *cli) startApply(ctx context.Context, c *ctl, req applyRequest, served <
 func cmdUp(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runUp(ctx, newCLI(), args)
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("find beerus binary: %w", err)
+	}
+	return runUp(ctx, newCLI(), exe, args)
 }
 
-func runUp(ctx context.Context, e *cli, args []string) error {
+func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 	fs := flag.NewFlagSet("up", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	file := fs.String("f", "", "setup `FILE` to start from or apply")
@@ -1113,45 +1189,35 @@ func runUp(ctx context.Context, e *cli, args []string) error {
 	if err := c.EnsureCertificates(time.Now()); err != nil {
 		return err
 	}
-	log := slog.New(slog.NewTextHandler(e.errOut, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	app, err := connect.New(c, connect.Options{Logger: log})
+	cl, err := newCtlFor(c)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(e.out, "Beerus is running. %s.\n\n", stamp(app.Clock().Now()))
+	fmt.Fprintf(e.out, "Beerus is running. %s.\n\n", stamp(clock.New(nil).Now()))
 	if err := printInfo(c); err != nil {
 		return err
 	}
-	fmt.Fprintf(e.out, "\nControl room        %s\n", app.RoomURL())
-	serveCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	served := make(chan struct{})
-	var serveErr error
-	go func() {
-		serveErr = app.Serve(serveCtx)
-		close(served)
-	}()
+	fmt.Fprintf(e.out, "\nControl room        %s\n", connect.RoomURL(c, cl.token))
+	sup := newSupervisor(exe, *dir, c.ControlURL(), cl, e.errOut)
+	sup.startCore()
+	defer sup.shutdown()
+	if err := sup.awaitCore(ctx); err != nil {
+		return err
+	}
+	sup.watch(ctx)
 	if *file == "" {
 		if req, err = specRequest(*dir, ""); err != nil {
-			cancel()
-			<-served
-			return errors.Join(err, serveErr)
+			return err
 		}
 	}
 	req.Prune = *prune
-	cl, err := newCtlFor(c)
-	if err == nil {
-		err = e.startApply(serveCtx, cl, req, served)
-	}
-	if err != nil {
-		cancel()
-		<-served
-		return errors.Join(err, serveErr)
+	if err := e.startApply(ctx, cl, req, sup.core.firstExit); err != nil {
+		return err
 	}
 	if len(c.Banks) == 0 {
 		fmt.Fprintln(e.out, "\n"+upNoBanks)
 	}
 	fmt.Fprintln(e.out, "\nPress Ctrl+C to stop.")
-	<-served
-	return serveErr
+	<-ctx.Done()
+	return nil
 }

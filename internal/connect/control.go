@@ -106,11 +106,11 @@ func (a *App) ControlHandler() http.Handler {
 func (a *App) localOnly(next http.Handler) http.Handler {
 	port := strconv.Itoa(a.cfg.Connect.ControlPort)
 	hosts := map[string]bool{"127.0.0.1:" + port: true, "localhost:" + port: true, "[::1]:" + port: true}
-	if u, err := url.Parse(a.coreURL); err == nil && multiProcess() && u.Host != "" {
+	if u, err := url.Parse(a.coreURL); err == nil && a.multiProcess() && u.Host != "" {
 		hosts[u.Host] = true
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); !remotePeers() && (err != nil || !net.ParseIP(host).IsLoopback()) {
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); !a.remotePeers() && (err != nil || !net.ParseIP(host).IsLoopback()) {
 			writeError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
 			return
 		}
