@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -27,20 +28,20 @@ func (s *Store) NameEnquiry(ctx context.Context, code, nuban string) (string, er
 		return "", err
 	}
 	if !nubanRe.MatchString(nuban) {
-		return "", fmt.Errorf("an account number has 10 digits: %w", ErrInvalidAccount)
+		return "", fmt.Errorf("an account number has 10 digits: %w", nip.ErrInvalidAccount)
 	}
 	if in.Status != StatusActive {
-		return "", fmt.Errorf("%s is %s: %w", in.Name, in.Status, ErrUnavailable)
+		return "", fmt.Errorf("%s is %s: %w", in.Name, in.Status, nip.ErrUnavailable)
 	}
 	if !world.ValidNUBAN(in.NUBANCode, nuban) {
-		return "", fmt.Errorf("%s is not a valid account number at %s: %w", nuban, in.Name, ErrInvalidAccount)
+		return "", fmt.Errorf("%s is not a valid account number at %s: %w", nuban, in.Name, nip.ErrInvalidAccount)
 	}
 	p := s.participant(in.ID)
 	if p == nil {
-		return "", fmt.Errorf("%s is offline: %w", in.Name, ErrUnavailable)
+		return "", fmt.Errorf("%s is offline: %w", in.Name, nip.ErrUnavailable)
 	}
 	name, err := p.NameEnquiry(ctx, nuban)
-	if errors.Is(err, ErrInvalidAccount) || errors.Is(err, ErrNoRecord) || errors.Is(err, ErrUnavailable) {
+	if errors.Is(err, nip.ErrInvalidAccount) || errors.Is(err, nip.ErrNoRecord) || errors.Is(err, nip.ErrUnavailable) {
 		return "", err
 	}
 	if err != nil {
@@ -62,7 +63,7 @@ func checkBegin(x Session) error {
 	case x.ID == "":
 		return errors.New("a session needs an id")
 	case !nubanRe.MatchString(x.FromNUBAN) || !nubanRe.MatchString(x.ToNUBAN):
-		return fmt.Errorf("session %s: account numbers have 10 digits: %w", x.ID, ErrInvalidAccount)
+		return fmt.Errorf("session %s: account numbers have 10 digits: %w", x.ID, nip.ErrInvalidAccount)
 	case x.Amount <= 0:
 		return fmt.Errorf("session %s: amount must be above zero, not %d", x.ID, x.Amount)
 	case x.CreatedAt.IsZero():
@@ -105,10 +106,10 @@ func (s *Store) Begin(ctx context.Context, x Session) (Session, error) {
 			return err
 		}
 		if from.Status != StatusActive && !(x.Closure && from.Status == StatusTerminating) {
-			return fmt.Errorf("%s is %s: %w", from.Name, from.Status, ErrUnavailable)
+			return fmt.Errorf("%s is %s: %w", from.Name, from.Status, nip.ErrUnavailable)
 		}
 		if to.Status != StatusActive {
-			return fmt.Errorf("%s is %s: %w", to.Name, to.Status, ErrUnavailable)
+			return fmt.Errorf("%s is %s: %w", to.Name, to.Status, nip.ErrUnavailable)
 		}
 		x.Status = SessionPending
 		out, err = scanSession(tx.QueryRow(ctx, `
@@ -166,7 +167,7 @@ func (s *Store) Resolve(ctx context.Context, id, status, outcome string, at time
 		var created time.Time
 		err := tx.QueryRow(ctx, `SELECT status, outcome, created_at FROM nip_sessions WHERE session_id = $1 FOR UPDATE`, id).Scan(&curStatus, &curOutcome, &created)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("session %s: %w", id, ErrNoRecord)
+			return fmt.Errorf("session %s: %w", id, nip.ErrNoRecord)
 		}
 		if err != nil {
 			return fmt.Errorf("look up session %s: %w", id, err)
@@ -224,7 +225,7 @@ RETURNING `+sessionCols, id, next))
 		x, err = scanSession(s.pool.QueryRow(ctx, `SELECT `+sessionCols+` FROM nip_sessions WHERE session_id = $1`, id))
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Session{}, fmt.Errorf("session %s: %w", id, ErrNoRecord)
+		return Session{}, fmt.Errorf("session %s: %w", id, nip.ErrNoRecord)
 	}
 	if err != nil {
 		return Session{}, fmt.Errorf("query session %s: %w", id, err)
@@ -235,7 +236,7 @@ RETURNING `+sessionCols, id, next))
 func (s *Store) Session(ctx context.Context, id string) (Session, error) {
 	x, err := scanSession(s.pool.QueryRow(ctx, `SELECT `+sessionCols+` FROM nip_sessions WHERE session_id = $1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Session{}, fmt.Errorf("session %s: %w", id, ErrNoRecord)
+		return Session{}, fmt.Errorf("session %s: %w", id, nip.ErrNoRecord)
 	}
 	if err != nil {
 		return Session{}, fmt.Errorf("look up session %s: %w", id, err)
@@ -313,7 +314,7 @@ func (s *Store) MarkSettled(ctx context.Context, ids []string, session string, c
 		}
 		switch {
 		case found != len(want):
-			return fmt.Errorf("%d of %d sessions to settle do not exist: %w", len(want)-found, len(want), ErrNoRecord)
+			return fmt.Errorf("%d of %d sessions to settle do not exist: %w", len(want)-found, len(want), nip.ErrNoRecord)
 		case notOK > 0:
 			return fmt.Errorf("%d of %d sessions to settle are not 00", notOK, len(want))
 		case other > 0:
@@ -369,7 +370,7 @@ func (s *Store) MarkPosted(ctx context.Context, session string, at time.Time) er
 		return fmt.Errorf("mark settlement %s posted: %w", session, err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("settlement session %s: %w", session, ErrNoRecord)
+		return fmt.Errorf("settlement session %s: %w", session, nip.ErrNoRecord)
 	}
 	return nil
 }
