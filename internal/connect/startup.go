@@ -207,10 +207,17 @@ func pinCodes(spec setup.Spec, plan setup.Plan) setup.Spec {
 	return out
 }
 
+func nibssPort(ln setup.LocalConnect) int {
+	if ln.NIBSSPort != 0 {
+		return ln.NIBSSPort
+	}
+	return max(ln.PartnerPort, ln.WidgetPort, ln.ControlPort, ln.HealthPort) + 1
+}
+
 func anyPort(int) bool { return true }
 
 func allocateBanks(cfg *config.Config, st *setup.Status) error {
-	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true}
+	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true, cfg.Connect.NIBSSPort: true}
 	next := cfg.Connect.PartnerPort
 	for _, b := range st.Applied.Spec.Banks {
 		port, err := cfg.AllocatePort(next, used, anyPort)
@@ -323,6 +330,7 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 			WidgetTLS:    ln.WidgetTLS,
 			ControlPort:  ln.ControlPort,
 			HealthPort:   ln.HealthPort,
+			NIBSSPort:    nibssPort(ln),
 			SyncInterval: ln.SyncInterval,
 			RefreshEvery: ln.RefreshEvery,
 			LegalName:    orDefault(spec.Connect.LegalName, defaultLegalName),

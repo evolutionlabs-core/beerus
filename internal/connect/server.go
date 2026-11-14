@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/nibss/gateway"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
@@ -71,6 +72,10 @@ func (a *App) Serve(ctx context.Context) error {
 			return err
 		}
 	}
+	ntls, err := a.NIBSSTLS()
+	if err != nil {
+		return err
+	}
 	type srv struct {
 		s   *http.Server
 		tls *tls.Config
@@ -84,9 +89,13 @@ func (a *App) Serve(ctx context.Context) error {
 		{a.cfg.Connect.PartnerPort, a.PartnerHandler(), ptls},
 		{a.cfg.Connect.WidgetPort, a.WidgetHandler(), wtls},
 		{a.cfg.Connect.ControlPort, a.ControlHandler(), nil},
+		{a.cfg.Connect.NIBSSPort, gateway.New(a.listDirectory, a.log), ntls},
 	}
 	servers := []srv{}
 	for _, sp := range specs {
+		if sp.port == 0 {
+			continue
+		}
 		ls, err := a.listenLocal(sp.port)
 		if err != nil {
 			for _, s := range servers {
