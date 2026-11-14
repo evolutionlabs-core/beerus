@@ -1,0 +1,372 @@
+openapi: 3.1.0
+info:
+  title: Beerus Settlement API
+  version: 0.1.0
+  summary: The calls that move bank settlement balances at the CBN in Beerus.
+  description: |
+    The CBN participant holds one settlement balance per bank. NIBSS posts the net positions of each settlement session to it, and the CBN moves each bank's balance. Beerus is a copy of Nigeria's banking infrastructure for building and learning: no real money moves through it.
+
+    ## Who calls it
+
+    The CBN participant serves every operation here over mTLS. NIBSS posts sessions. A bank may read its own balance and postings. The CBN authorises the caller by the identity in its client certificate, not only by a valid chain.
+
+    ## Rules
+
+    - Net positions in one session sum to zero. A positive net raises the bank's settlement balance, and a negative net lowers it. If the sum is not zero, the CBN refuses the session with a 422 that gives the numbers, such as `the session nets to 150, not zero`, and moves nothing.
+    - A session is posted once. The CBN keys the posting by `session_id`. A repeat with the same nets returns the first result with the header `Idempotent-Replayed: true`. The same `session_id` with different nets returns `422 idempotency_key_reused`.
+    - The `Idempotency-Key` header is the retry identity of the request. NIBSS sends `settlement:` and the session ID. The CBN also keys the posting by `session_id`, so two keys for one session still post once. Beerus keys the posting by `session_id` alone today, so the header is a Beerus addition.
+    - Banks are named by `bank_id`, the Beerus bank ID. The CBN keeps its accounts by bank ID today. NIBSS maps NIP codes to bank IDs before it posts.
+    - A session ID is the settlement session key. It is a Lagos time such as `2026-11-14T10:00`, or `adhoc:` and a unique suffix for a session started by hand.
+
+    ## Time and money
+
+    Amounts are signed integers in minor units (kobo for NGN). Times are RFC 3339 strings and end in `_at`.
+
+    ## Errors
+
+    Every error is `{"error":{"code","message","request_id"}}` with a snake_case `code`. Branch on `code`, never on `message`.
+  contact:
+    name: Evolution Labs
+    url: https://github.com/evolutionlabs-core/beerus
+  license:
+    name: GNU Affero General Public License v3.0 only
+    identifier: AGPL-3.0-only
+servers:
+  - url: https://cbn.localhost:7446
+    description: The CBN participant on the local machine
+tags:
+  - name: settlement
+    description: Post settlement sessions and read settlement balances at the CBN.
+security:
+  - mutualTLS: []
+paths:
+  /v1/settlement-sessions:
+    post:
+      operationId: postSettlementSession
+      tags: [settlement]
+      summary: Post the net positions of a settlement session
+      description: NIBSS posts the net position of each bank for one settlement session. The CBN moves every bank's settlement balance in one posting, or none. The nets must sum to zero, or the CBN refuses with `422 settlement_unbalanced` and the numbers. The idempotency key is the `Idempotency-Key` header, and the posting is also keyed by `session_id`. A replay returns the first result with `Idempotent-Replayed`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionPost'
+            example:
+              session_id: '2026-11-14T10:00'
+              cutoff_at: '2026-11-14T10:00:00+01:00'
+              nets:
+                - bank_id: bank-a
+                  net_minor: -2500000
+                - bank_id: bank-b
+                  net_minor: 2500000
+      responses:
+        '200':
+          description: The session was posted, or this is a replay. A replay carries `Idempotent-Replayed`.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Posting'
+              example:
+                key: session:2026-11-14T10:00
+                kind: session
+                session_id: '2026-11-14T10:00'
+                narration: NIP settlement session 2026-11-14T10:00
+                posted_at: '2026-11-14T10:00:05+01:00'
+                nets:
+                  - bank_id: bank-a
+                    net_minor: -2500000
+                  - bank_id: bank-b
+                    net_minor: 2500000
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          description: The CBN refused the session. The code is `settlement_unbalanced` when the nets do not sum to zero, `unknown_bank` when a bank has no settlement account, or `idempotency_key_reused` when the session ID was posted with different nets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: settlement_unbalanced
+                  message: The session nets to 150, not zero. Send nets that sum to zero.
+                  request_id: req_01JBC8A5T3ZK
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/banks/{bank_id}/settlement-balance:
+    get:
+      operationId: getSettlementBalance
+      tags: [settlement]
+      summary: Get a bank's settlement balance
+      description: Returns the settlement balance a bank holds at the CBN. A bank may read only its own balance. A balance that cannot be read is an error, never zero.
+      parameters:
+        - $ref: '#/components/parameters/BankIDPath'
+      responses:
+        '200':
+          description: The balance now.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Balance'
+              example:
+                bank_id: bank-a
+                balance_minor: 997500000
+                read_at: '2026-11-14T10:00:06+01:00'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/settlement-postings:
+    get:
+      operationId: listSettlementPostings
+      tags: [settlement]
+      summary: List settlement postings
+      description: Lists the postings that moved settlement balances, newest first. Use `next_cursor` as `cursor` to read the next page. A bank sees only the postings that touch its own balance.
+      parameters:
+        - $ref: '#/components/parameters/BankIDQuery'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of postings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostingPage'
+              example:
+                data:
+                  - key: session:2026-11-14T10:00
+                    kind: session
+                    session_id: '2026-11-14T10:00'
+                    narration: NIP settlement session 2026-11-14T10:00
+                    posted_at: '2026-11-14T10:00:05+01:00'
+                    nets:
+                      - bank_id: bank-a
+                        net_minor: -2500000
+                      - bank_id: bank-b
+                        net_minor: 2500000
+                next_cursor: 'session:2026-11-14T10:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+components:
+  securitySchemes:
+    mutualTLS:
+      type: mutualTLS
+      description: The caller presents a client certificate issued by the Beerus CA. The CBN authorises the caller by the certificate's identity, not only by a valid chain.
+  headers:
+    IdempotentReplayed:
+      description: Set to `true` when this response is a replay of the first result for the same idempotency key.
+      schema:
+        type: string
+        enum: ['true']
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: A unique key per post, chosen by NIBSS. A replay with the same key and body returns the first response. The same key with a different body returns `422 idempotency_key_reused`.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+      example: 'settlement:2026-11-14T10:00'
+    BankIDPath:
+      name: bank_id
+      in: path
+      required: true
+      description: The Beerus bank ID.
+      schema:
+        type: string
+      example: bank-a
+    BankIDQuery:
+      name: bank_id
+      in: query
+      required: false
+      description: Only the postings that touch this bank.
+      schema:
+        type: string
+      example: bank-a
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: The page size, from 1 to 500. The default is 50.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 50
+      example: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: The `next_cursor` of the last page. A cursor that is not valid returns `400 invalid_cursor`.
+      schema:
+        type: string
+      example: 'session:2026-11-14T10:00'
+  schemas:
+    Net:
+      type: object
+      description: The net position of one bank in a session.
+      required: [bank_id, net_minor]
+      properties:
+        bank_id:
+          type: string
+          description: The Beerus bank ID.
+        net_minor:
+          type: integer
+          format: int64
+          description: What the bank received minus what it sent, in kobo. A positive net raises its settlement balance.
+    SessionPost:
+      type: object
+      description: The net positions of one settlement session.
+      required: [session_id, cutoff_at, nets]
+      properties:
+        session_id:
+          type: string
+          description: The settlement session key. The posting is keyed by it.
+          minLength: 1
+        cutoff_at:
+          type: string
+          format: date-time
+          description: The cut-off of the session. The posting is dated with it.
+        nets:
+          type: array
+          description: One net per bank. The nets sum to zero.
+          minItems: 2
+          items:
+            $ref: '#/components/schemas/Net'
+    Posting:
+      type: object
+      description: One posting that moved settlement balances.
+      required: [key, kind, narration, posted_at, nets]
+      properties:
+        key:
+          type: string
+          description: The ledger key of the posting, such as `session:` and the session ID.
+        kind:
+          type: string
+          description: '`session` for a settlement session. `genesis` for the funding a bank gets when it joins.'
+          enum: [session, genesis]
+        session_id:
+          type: string
+          description: The settlement session key. It is absent for a genesis posting.
+        narration:
+          type: string
+          description: A short sentence about the posting.
+        posted_at:
+          type: string
+          format: date-time
+          description: When the posting was dated.
+        nets:
+          type: array
+          description: The change to each bank's settlement balance.
+          items:
+            $ref: '#/components/schemas/Net'
+    PostingPage:
+      type: object
+      description: One page of postings.
+      required: [data]
+      properties:
+        data:
+          type: array
+          description: The postings on this page.
+          items:
+            $ref: '#/components/schemas/Posting'
+        next_cursor:
+          type: string
+          description: Pass this as `cursor` to read the next page. It is absent on the last page.
+    Balance:
+      type: object
+      description: A bank's settlement balance at the CBN.
+      required: [bank_id, balance_minor, read_at]
+      properties:
+        bank_id:
+          type: string
+          description: The Beerus bank ID.
+        balance_minor:
+          type: integer
+          format: int64
+          description: The balance in kobo.
+        read_at:
+          type: string
+          format: date-time
+          description: When the balance was read.
+    Error:
+      type: object
+      description: The body of every error.
+      required: [error]
+      properties:
+        error:
+          type: object
+          description: What went wrong.
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              description: A stable snake_case code. Branch on this.
+            message:
+              type: string
+              description: A short sentence for a person. It says what to do.
+            request_id:
+              type: string
+              description: The ID of the request, for support.
+  responses:
+    BadRequest:
+      description: The request is not valid. The code is `invalid_request`, or `invalid_cursor` for a cursor that is not valid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invalid_cursor
+              message: That cursor is not valid. Use the next_cursor value from the last page.
+              request_id: req_01JBC8A5T3ZK
+    Forbidden:
+      description: The caller's certificate identity may not make this call. The code is `forbidden`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: forbidden
+              message: This certificate may not read the balance of bank-b.
+              request_id: req_01JBC8A5T3ZK
+    NotFound:
+      description: The bank has no settlement account. The code is `not_found`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_found
+              message: No settlement account for that bank.
+              request_id: req_01JBC8A5T3ZK
+    Unavailable:
+      description: The CBN cannot answer now. The code is `unavailable`. Try again soon.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unavailable
+              message: The CBN ledger is not open yet. Try again soon.
+              request_id: req_01JBC8A5T3ZK
