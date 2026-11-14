@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -436,7 +438,9 @@ func cmdBankCreate(args []string) error {
 	if err != nil {
 		return err
 	}
-	ready, err := waitBank(c, created, clk)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ready, err := waitBank(ctx, c, created, clk)
 	if err != nil {
 		return err
 	}
@@ -463,7 +467,7 @@ type bankProgress struct {
 	} `json:"steps"`
 }
 
-func waitBank(c *ctl, first bankProgress, clk *clock.Clock) (bankProgress, error) {
+func waitBank(ctx context.Context, c *ctl, first bankProgress, clk *clock.Clock) (bankProgress, error) {
 	width := 0
 	for _, s := range first.Steps {
 		width = max(width, len(s.Name))
@@ -491,11 +495,13 @@ func waitBank(c *ctl, first bankProgress, clk *clock.Clock) (bankProgress, error
 		}
 		if st.Phase != "provisioning" && shown == len(st.Steps) {
 			if st.Phase == setup.PhaseActive {
-				return st, awaitBankSite(st)
+				return st, awaitBankSite(ctx, st)
 			}
 			return st, nil
 		}
 		select {
+		case <-ctx.Done():
+			return st, ctx.Err()
 		case <-deadline.C:
 			return st, stalled
 		case <-tick.C:
@@ -508,7 +514,7 @@ func waitBank(c *ctl, first bankProgress, clk *clock.Clock) (bankProgress, error
 	}
 }
 
-func awaitBankSite(st bankProgress) error {
+func awaitBankSite(ctx context.Context, st bankProgress) error {
 	u, err := url.Parse(st.URL)
 	if err != nil {
 		return fmt.Errorf("read the address of %s: %w", st.ID, err)
@@ -519,14 +525,19 @@ func awaitBankSite(st bankProgress) error {
 	tick := time.NewTicker(startRetry)
 	defer tick.Stop()
 	for {
-		resp, err := apiClient.Get(health)
-		if err == nil {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, health, nil)
+		if err != nil {
+			return fmt.Errorf("build health request of %s: %w", st.ID, err)
+		}
+		if resp, err := apiClient.Do(req); err == nil {
 			resp.Body.Close()
 			if resp.StatusCode < http.StatusMultipleChoices {
 				return nil
 			}
 		}
 		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-deadline.C:
 			return fmt.Errorf("bank %s is active but not answering on port %s", st.ID, u.Port())
 		case <-tick.C:

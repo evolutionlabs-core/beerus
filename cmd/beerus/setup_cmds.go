@@ -480,7 +480,7 @@ func portFree(port int) bool {
 	return true
 }
 
-func awaitPortsFree(id string, ports []int) error {
+func awaitPortsFree(ctx context.Context, id string, ports []int) error {
 	deadline := time.NewTimer(startTimeout)
 	defer deadline.Stop()
 	tick := time.NewTicker(startRetry)
@@ -488,6 +488,8 @@ func awaitPortsFree(id string, ports []int) error {
 	for _, port := range ports {
 		for !portFree(port) {
 			select {
+			case <-ctx.Done():
+				return ctx.Err()
 			case <-deadline.C:
 				return fmt.Errorf("bank %s is gone but still holds port %d", id, port)
 			case <-tick.C:
@@ -497,7 +499,7 @@ func awaitPortsFree(id string, ports []int) error {
 	return nil
 }
 
-func (e *cli) wait(c *ctl, p planReply, wait time.Duration, asJSON bool, ports map[string][]int) error {
+func (e *cli) wait(ctx context.Context, c *ctl, p planReply, wait time.Duration, asJSON bool, ports map[string][]int) error {
 	var targets []target
 	for _, a := range p.Actions {
 		if a.Op != setup.OpDrift {
@@ -549,7 +551,7 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration, asJSON bool, ports m
 				continue
 			}
 			if r := findResource(res, t.kind, t.id); r == nil || r.Phase == setup.PhaseClosed {
-				if err := awaitPortsFree(t.id, ports[t.id]); err != nil {
+				if err := awaitPortsFree(ctx, t.id, ports[t.id]); err != nil {
 					return err
 				}
 			}
@@ -598,7 +600,7 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration, asJSON bool, ports m
 	}
 }
 
-func (e *cli) runApply(c *ctl, req applyRequest, wait time.Duration, asJSON bool) error {
+func (e *cli) runApply(ctx context.Context, c *ctl, req applyRequest, wait time.Duration, asJSON bool) error {
 	var ports map[string][]int
 	if wait != 0 {
 		before, err := e.resources(c)
@@ -628,7 +630,7 @@ func (e *cli) runApply(c *ctl, req applyRequest, wait time.Duration, asJSON bool
 	if wait == 0 {
 		return nil
 	}
-	return e.wait(c, p, wait, asJSON, ports)
+	return e.wait(ctx, c, p, wait, asJSON, ports)
 }
 
 func checkWait(wait time.Duration) error {
@@ -668,7 +670,9 @@ func cmdApply(e *cli, args []string) error {
 	if err := e.confirm(c, &req, *asJSON, setup.OpRemove); err != nil {
 		return err
 	}
-	return e.runApply(c, req, *wait, *asJSON)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return e.runApply(ctx, c, req, *wait, *asJSON)
 }
 
 func (e *cli) livePlan(dir string, req applyRequest) ([]byte, planReply, error) {
@@ -1103,7 +1107,9 @@ func cmdBankEnd(e *cli, args []string) error {
 			return err
 		}
 	}
-	return e.runApply(c, req, *wait, *asJSON)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return e.runApply(ctx, c, req, *wait, *asJSON)
 }
 
 func (e *cli) startApply(ctx context.Context, c *ctl, req applyRequest, served <-chan struct{}) error {
