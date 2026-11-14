@@ -617,7 +617,7 @@ components:
       name: limit
       in: query
       required: false
-      description: The most items to return.
+      description: The most items to return. The maximum of 500 and the default of 100 are Beerus placeholders.
       schema:
         type: integer
         minimum: 1
