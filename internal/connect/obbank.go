@@ -464,7 +464,7 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 		if a.bankPhase(b.ID) == PhaseClosed {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(`{"error":"bank_closed","error_description":` + strconv.Quote(a.ownBank().Name+" is closed.") + `}`))
+			_, _ = w.Write([]byte(`{"error":"bank_closed","error_description":` + strconv.Quote(a.bankCopy(b.ID).Name+" is closed.") + `}`))
 			return
 		}
 		if unavailable(a.obLedger(b.ID)) {
@@ -488,7 +488,7 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	nipGuarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		l := a.obLedger(b.ID)
 		if a.bankPhase(b.ID) == PhaseClosed {
-			inbound.WriteClosed(w, a.ownBank().Name)
+			inbound.WriteClosed(w, a.bankCopy(b.ID).Name)
 			return
 		}
 		if unavailable(l) {

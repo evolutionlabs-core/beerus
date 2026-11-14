@@ -106,11 +106,11 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 			return
 		}
 		if a.bankPhase(a.bank.ID) == PhaseClosed && !strings.HasPrefix(r.URL.Path, "/assets/") {
-			http.Error(w, a.ownBank().Name+" is closed.", http.StatusConflict)
+			http.Error(w, a.bankCopy(a.bank.ID).Name+" is closed.", http.StatusConflict)
 			return
 		}
 		if a.bankPhase(a.bank.ID) == PhaseSuspended && !strings.HasPrefix(r.URL.Path, "/assets/") {
-			a.bankRender(w, "bank_unavailable", http.StatusServiceUnavailable, nil, roomPage{"Title": a.ownBank().Name})
+			a.bankRender(w, "bank_unavailable", http.StatusServiceUnavailable, nil, roomPage{"Title": a.bankCopy(a.bank.ID).Name})
 			return
 		}
 		if r.Method == http.MethodPost {
@@ -131,7 +131,7 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 }
 
 func (a *bankSite) bankRender(w http.ResponseWriter, name string, status int, s *bankSession, data roomPage) {
-	own := a.ownBank()
+	own := a.bankCopy(a.bank.ID)
 	data["Bank"] = &own
 	data["Now"] = a.clock.Now()
 	if s != nil && s.Verified {

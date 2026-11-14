@@ -263,13 +263,13 @@ func (a *App) coreAway(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
-	return &unavailableError{msg: a.ownBank().Name + " cannot reach NIBSS right now. Try again in a minute.", err: err}
+	return &unavailableError{msg: a.bankCopy(a.bankID).Name + " cannot reach NIBSS right now. Try again in a minute.", err: err}
 }
 
-func (a *App) ownBank() config.Bank {
+func (a *App) bankCopy(id string) config.Bank {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return *a.cfg.Bank(a.bankID)
+	return *a.cfg.Bank(id)
 }
 
 func (a *App) remoteEnquiry(ctx context.Context, code, nuban string) (string, error) {
