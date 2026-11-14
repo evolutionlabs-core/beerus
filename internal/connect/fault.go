@@ -77,7 +77,7 @@ func newFault(req FaultRequest, now time.Time) (Fault, error) {
 				return Fault{}, invalid("for %q is not a duration above zero, such as 1h", req.For)
 			}
 			if d > maxFaultFor {
-				return Fault{}, invalid("for %q is above the limit of %s", req.For, maxFaultFor)
+				return Fault{}, invalid("for %q is above the limit of %dh", req.For, int(maxFaultFor.Hours()))
 			}
 			until := now.Add(d)
 			f.Until = &until

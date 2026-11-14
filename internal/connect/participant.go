@@ -200,14 +200,14 @@ func (a *App) setParticipantFault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req FaultRequest
-	if err := decodeBody(r, &req); err != nil {
+	if err := decodeBody(r, &req); err != nil || req.Bank != "" {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"kind":"down","for":"1h"} or {"kind":"timeout","outcome":"credited"}.`)
 		return
 	}
 	now := a.clock.Now()
 	f, err := newFault(req, now)
 	if err != nil {
-		a.bankError(w, r, err)
+		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
 		return
 	}
 	f.ID, f.Bank = faultIDFor(key), a.bankID
