@@ -157,4 +157,4 @@ jobs:
         working-directory: web
         run: npm ci && npm run css
       - name: Compiled CSS is up to date
-        run: git diff --exit-code internal/connect/assets/beerus.css
+        run: git diff --exit-code internal/view/assets/beerus.css

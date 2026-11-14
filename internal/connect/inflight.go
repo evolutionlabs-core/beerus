@@ -12,6 +12,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/view"
 )
 
 func (a *App) markSettleNow(kind, id string) {
@@ -107,7 +108,7 @@ func (a *App) inflightWith(ctx context.Context, code, id string) (string, error)
 	}
 	if transfers > 0 {
 		cutoff := a.schedule().next(a.clock.Now()).In(clock.Lagos).Format("15:04")
-		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Wait for it, or run beerus nip settle-now.", cutoff, plural(transfers, "transfer", "transfers"), bank.Naira(max(net, -net))), nil
+		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Wait for it, or run beerus nip settle-now.", cutoff, view.Plural(transfers, "transfer", "transfers"), bank.Naira(max(net, -net))), nil
 	}
 	unposted, err := sw.Unposted(ctx)
 	if err != nil {
@@ -120,7 +121,7 @@ func (a *App) inflightWith(ctx context.Context, code, id string) (string, error)
 		}
 	}
 	if waiting > 0 {
-		return fmt.Sprintf("Waiting for %s with %s to be posted to the books. Try again soon.", plural(waiting, "settlement", "settlements"), id), nil
+		return fmt.Sprintf("Waiting for %s with %s to be posted to the books. Try again soon.", view.Plural(waiting, "settlement", "settlements"), id), nil
 	}
 	return "", nil
 }

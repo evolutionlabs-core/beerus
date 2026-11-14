@@ -1,16 +1,20 @@
-package connect
+package view
 
 import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 //go:embed assets
@@ -25,7 +29,7 @@ var cssURL = func() string {
 	return "/assets/beerus.css?v=" + hex.EncodeToString(sum[:6])
 }()
 
-func assetHandler() http.Handler {
+func Assets() http.Handler {
 	sub, _ := fs.Sub(assetFS, "assets")
 	files := http.FileServer(http.FS(sub))
 	return http.StripPrefix("/assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,15 +39,58 @@ func assetHandler() http.Handler {
 	}))
 }
 
-const pageCSP = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; form-action 'self' http: https:; frame-ancestors 'none'; base-uri 'none'"
+const csp = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; form-action 'self' http: https:; frame-ancestors 'none'; base-uri 'none'"
 
-func setPageHeaders(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", pageCSP)
-	w.Header().Set("Referrer-Policy", "same-origin")
+func SetHeaders(h http.Header) {
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", csp)
+	h.Set("Referrer-Policy", "same-origin")
+}
+
+func Plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+func PagesOf(rows, size int) int {
+	return max((rows+size-1)/size, 1)
+}
+
+func PageParam(w http.ResponseWriter, r *http.Request, what string, last int) (int, bool) {
+	raw := r.URL.Query().Get("page")
+	if raw == "" {
+		return 1, true
+	}
+	page, err := strconv.Atoi(raw)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		http.Error(w, fmt.Sprintf("The page %q must be a whole number.", raw), http.StatusUnprocessableEntity)
+		return 0, false
+	}
+	page = max(page, 1)
+	if page > last {
+		http.Error(w, fmt.Sprintf("The page %s is too high. The %s allows pages 1 to %d.", raw, what, last), http.StatusUnprocessableEntity)
+		return 0, false
+	}
+	return page, true
+}
+
+var ErrBadAmount = errors.New("enter an amount in naira, like 25000 or 2500.50")
+
+func TransferOutcome(status string) string {
+	switch status {
+	case nip.Success:
+		return "Transfer sent. Both banks have posted it."
+	case nip.Pending:
+		return "Transfer pending. The receiving bank did not answer, so NIBSS will check its status."
+	case nip.Reversed:
+		return "Transfer reversed. The receiving bank could not take it, so the money came back."
+	}
+	return ""
 }
 
 func signedNaira(minor int64) string {
@@ -55,8 +102,8 @@ func signedNaira(minor int64) string {
 
 const themeToggleHTML = `<button type="button" class="theme-toggle" aria-label="Switch theme"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true" class="theme-sun"><circle cx="8" cy="8" r="2.8" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true" class="theme-moon"><path d="M13.2 9.4A5.6 5.6 0 0 1 6.6 2.8a5.6 5.6 0 1 0 6.6 6.6Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></button>`
 
-var uiFuncs = template.FuncMap{
-	"count":       plural,
+var Funcs = template.FuncMap{
+	"count":       Plural,
 	"themeToggle": func() template.HTML { return template.HTML(themeToggleHTML) },
 	"naira":       bank.FormatNaira,
 	"signed":      signedNaira,

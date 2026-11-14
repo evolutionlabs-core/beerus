@@ -13,6 +13,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -36,7 +37,7 @@ func (a *App) render(w http.ResponseWriter, name string, status int, data page) 
 	if _, ok := data["Title"]; !ok {
 		data["Title"] = data["Brand"]
 	}
-	setPageHeaders(w)
+	view.SetHeaders(w.Header())
 	w.WriteHeader(status)
 	if err := pages.ExecuteTemplate(w, name, data); err != nil {
 		a.log.Error("render", "page", name, "err", err)
@@ -49,7 +50,7 @@ func (a *App) message(w http.ResponseWriter, status int, heading, msg string) {
 
 func (a *App) WidgetHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /assets/", assetHandler())
+	mux.Handle("GET /assets/", view.Assets())
 	mux.HandleFunc("GET /link", a.widgetOpen)
 	mux.HandleFunc("GET /link/start", a.widgetStart)
 	mux.HandleFunc("POST /link/institution", a.widgetInstitution)

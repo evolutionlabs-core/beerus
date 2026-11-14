@@ -17,6 +17,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/view"
 )
 
 const (
@@ -122,7 +123,7 @@ func (r *rtgs) keepSchedule() error {
 		return err
 	}
 	if kept != r.cfg.Sessions() {
-		return fmt.Errorf("%w: the CBN has settled with %s a day, so nip_sessions must stay %d", errSessions, plural(kept, "session", "sessions"), kept)
+		return fmt.Errorf("%w: the CBN has settled with %s a day, so nip_sessions must stay %d", errSessions, view.Plural(kept, "session", "sessions"), kept)
 	}
 	return nil
 }

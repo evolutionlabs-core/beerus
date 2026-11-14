@@ -10,6 +10,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/view"
 )
 
 func TestPageNumbersAreBoundedBeforeTheyAreUsed(t *testing.T) {
@@ -43,7 +44,7 @@ func TestPageNumbersAreBoundedBeforeTheyAreUsed(t *testing.T) {
 		t.Run(c.page, func(t *testing.T) {
 			target := "/ui/webhooks?page=" + c.page
 			rec := httptest.NewRecorder()
-			page, ok := pageParam(rec, httptest.NewRequest(http.MethodGet, target, nil), "webhook list", pagesOf(len(st.Deliveries), pageSize))
+			page, ok := view.PageParam(rec, httptest.NewRequest(http.MethodGet, target, nil), "webhook list", view.PagesOf(len(st.Deliveries), pageSize))
 			if c.wantPageErr == 0 {
 				if !ok || page != c.wantPage {
 					t.Fatalf("page %q gave %d, %v", c.page, page, ok)
@@ -60,14 +61,14 @@ func TestPageNumbersAreBoundedBeforeTheyAreUsed(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	pageParam(rec, httptest.NewRequest(http.MethodGet, "/apps?page=300000000000000000", nil), "access history", maxHistoryPages)
+	view.PageParam(rec, httptest.NewRequest(http.MethodGet, "/apps?page=300000000000000000", nil), "access history", maxHistoryPages)
 	if want := "The page 300000000000000000 is too high. The access history allows pages 1 to 1000.\n"; rec.Body.String() != want {
 		t.Fatalf("message %q, want %q", rec.Body.String(), want)
 	}
-	if got := pagesOf(0, 50); got != 1 {
+	if got := view.PagesOf(0, 50); got != 1 {
 		t.Fatalf("an empty list has %d pages, want 1", got)
 	}
-	if got := pagesOf(101, 50); got != 3 {
+	if got := view.PagesOf(101, 50); got != 3 {
 		t.Fatalf("101 rows have %d pages, want 3", got)
 	}
 }

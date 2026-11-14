@@ -17,7 +17,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nip"
+	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -56,7 +56,7 @@ func (a *App) roomOnly(next http.Handler) http.Handler {
 
 func (a *App) roomHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /assets/", assetHandler())
+	mux.Handle("GET /assets/", view.Assets())
 	mux.HandleFunc("GET /ui/login", a.roomLogin)
 	mux.HandleFunc("POST /ui/login", a.roomLogin)
 	mux.HandleFunc("GET /ui", a.roomOverview)
@@ -88,7 +88,7 @@ func (a *App) roomRender(w http.ResponseWriter, r *http.Request, name string, st
 	data["Now"] = a.clock.Now()
 	data["Nav"] = nav
 	data["Banks"] = a.openInstitutions()
-	setPageHeaders(w)
+	view.SetHeaders(w.Header())
 	w.WriteHeader(status)
 	if err := roomPages.ExecuteTemplate(w, name, data); err != nil {
 		a.log.Error("render", "page", name, "err", err)
@@ -120,7 +120,7 @@ func (a *App) roomLogin(w http.ResponseWriter, r *http.Request) {
 	if tok != "" {
 		data["Error"] = "That token is not valid."
 	}
-	setPageHeaders(w)
+	view.SetHeaders(w.Header())
 	if err := roomPages.ExecuteTemplate(w, "room_login", data); err != nil {
 		a.log.Error("render", "page", "room_login", "err", err)
 	}
@@ -180,7 +180,7 @@ type lineView struct {
 }
 
 func newLineView(b *config.Bank, l bank.FeedLine) lineView {
-	return lineView{FeedLine: l, Bank: b, Description: Normalise(l.Narration), Href: "/ui/accounts/" + url.PathEscape(acctKey(b.ID, l.NUBAN)) + "/lines/" + url.PathEscape(l.Key)}
+	return lineView{FeedLine: l, Bank: b, Description: bank.Normalise(l.Narration), Href: "/ui/accounts/" + url.PathEscape(acctKey(b.ID, l.NUBAN)) + "/lines/" + url.PathEscape(l.Key)}
 }
 
 func (a *App) roomFail(w http.ResponseWriter, r *http.Request, err error) {
@@ -352,20 +352,8 @@ func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 		"Next":     next,
 		"First":    cursor != "",
 		"Shares":   recs,
-		"Transfer": transferOutcome(r.URL.Query().Get("transfer")),
+		"Transfer": view.TransferOutcome(r.URL.Query().Get("transfer")),
 	})
-}
-
-func transferOutcome(status string) string {
-	switch status {
-	case nip.Success:
-		return "Transfer sent. Both banks have posted it."
-	case nip.Pending:
-		return "Transfer pending. The receiving bank did not answer, so NIBSS will check its status."
-	case nip.Reversed:
-		return "Transfer reversed. The receiving bank could not take it, so the money came back."
-	}
-	return ""
 }
 
 func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
@@ -473,7 +461,7 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 	req := server.TransferRequest{FromBank: f.Get("from_bank"), From: strings.TrimSpace(f.Get("from")), ToBank: f.Get("to_bank"), To: strings.TrimSpace(f.Get("to")), Narration: strings.TrimSpace(f.Get("narration"))}
 	amount, err := bank.ParseNaira(f.Get("amount"))
 	if err != nil {
-		err = errBadAmount
+		err = view.ErrBadAmount
 	} else {
 		req.Amount = amount
 		var res server.TransferResult
@@ -485,7 +473,7 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var te *server.TransferError
-	if !errors.As(err, &te) && !errors.Is(err, errBadAmount) {
+	if !errors.As(err, &te) && !errors.Is(err, view.ErrBadAmount) {
 		a.roomFail(w, r, err)
 		return
 	}
@@ -493,8 +481,6 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 	defer a.mu.Unlock()
 	a.roomRender(w, r, "transfer", http.StatusUnprocessableEntity, "transfer", roomPage{"Title": "New transfer", "Form": f, "Error": web.Sentence(err.Error())})
 }
-
-var errBadAmount = errors.New("enter an amount in naira, like 25000 or 2500.50")
 
 func (a *App) roomConnections(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
@@ -534,32 +520,10 @@ func (a *App) roomRevoke(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/ui/connections", http.StatusSeeOther)
 }
 
-func pagesOf(rows, size int) int {
-	return max((rows+size-1)/size, 1)
-}
-
-func pageParam(w http.ResponseWriter, r *http.Request, what string, last int) (int, bool) {
-	raw := r.URL.Query().Get("page")
-	if raw == "" {
-		return 1, true
-	}
-	page, err := strconv.Atoi(raw)
-	if err != nil && !errors.Is(err, strconv.ErrRange) {
-		http.Error(w, fmt.Sprintf("The page %q must be a whole number.", raw), http.StatusUnprocessableEntity)
-		return 0, false
-	}
-	page = max(page, 1)
-	if page > last {
-		http.Error(w, fmt.Sprintf("The page %s is too high. The %s allows pages 1 to %d.", raw, what, last), http.StatusUnprocessableEntity)
-		return 0, false
-	}
-	return page, true
-}
-
 func (a *App) roomWebhooks(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	page, ok := pageParam(w, r, "webhook list", pagesOf(len(a.st.Deliveries), pageSize))
+	page, ok := view.PageParam(w, r, "webhook list", view.PagesOf(len(a.st.Deliveries), pageSize))
 	if !ok {
 		return
 	}
@@ -584,7 +548,7 @@ func (a *App) roomNotFound(w http.ResponseWriter, r *http.Request) {
 	a.roomRender(w, r, "notfound", http.StatusNotFound, "", roomPage{"Title": "Not found"})
 }
 
-var roomPages = template.Must(template.New("").Funcs(uiFuncs).Funcs(template.FuncMap{
+var roomPages = template.Must(template.New("").Funcs(view.Funcs).Funcs(template.FuncMap{
 	"logo":  func() template.HTML { return template.HTML(logoSVG) },
 	"pathq": url.PathEscape,
 	"amtClass": func(v int64) string {

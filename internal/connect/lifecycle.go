@@ -18,6 +18,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -162,7 +163,7 @@ func (a *App) postgresRoom(ctx context.Context) error {
 		return err
 	}
 	if used+connectionsPerBank+5 > max {
-		return server.Invalid("Postgres has %d of %s in use; another bank needs up to %s", used, plural(max, "connection", "connections"), plural(connectionsPerBank, "connection", "connections"))
+		return server.Invalid("Postgres has %d of %s in use; another bank needs up to %s", used, view.Plural(max, "connection", "connections"), view.Plural(connectionsPerBank, "connection", "connections"))
 	}
 	return nil
 }

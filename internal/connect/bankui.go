@@ -18,6 +18,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
+	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -65,7 +66,7 @@ func (app *App) BankHandler(id string) http.Handler {
 	}
 	a := &bankSite{App: app, bank: b, ob: app.openBanking(id), auth: &bankAuth{sessions: map[string]*bankSession{}, failures: map[string]bankFailures{}, locked: map[string]time.Time{}}}
 	mux := http.NewServeMux()
-	mux.Handle("GET /assets/", assetHandler())
+	mux.Handle("GET /assets/", view.Assets())
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/accounts", http.StatusSeeOther) })
 	mux.HandleFunc("GET /login", a.obLoginPage)
 	mux.HandleFunc("POST /login", a.obLoginSubmit)
@@ -143,7 +144,7 @@ func (a *bankSite) bankRender(w http.ResponseWriter, name string, status int, s 
 	if _, ok := data["Title"]; !ok {
 		data["Title"] = own.Name
 	}
-	setPageHeaders(w)
+	view.SetHeaders(w.Header())
 	w.WriteHeader(status)
 	if err := bankPages.ExecuteTemplate(w, name, data); err != nil {
 		a.log.Error("render", "page", name, "err", err)
@@ -432,9 +433,9 @@ func (a *bankSite) obStatement(w http.ResponseWriter, r *http.Request) {
 	}
 	lines := []bankLineView{}
 	for _, l := range ls {
-		lines = append(lines, bankLineView{FeedLine: l, Description: Normalise(l.Narration), Href: bankHref(l)})
+		lines = append(lines, bankLineView{FeedLine: l, Description: bank.Normalise(l.Narration), Href: bankHref(l)})
 	}
-	a.bankRender(w, "bank_statement", http.StatusOK, s, roomPage{"Title": acc.Name, "Nav": "accounts", "A": acc, "Lines": lines, "Next": next, "First": cursor != "", "Transfer": transferOutcome(r.URL.Query().Get("transfer"))})
+	a.bankRender(w, "bank_statement", http.StatusOK, s, roomPage{"Title": acc.Name, "Nav": "accounts", "A": acc, "Lines": lines, "Next": next, "First": cursor != "", "Transfer": view.TransferOutcome(r.URL.Query().Get("transfer"))})
 }
 
 func (a *bankSite) obTx(w http.ResponseWriter, r *http.Request) {
@@ -470,11 +471,11 @@ func (a *bankSite) obTx(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, x := range ls {
 			if x.NUBAN == acc.NUBAN && x.Key != l.Key {
-				related = append(related, bankLineView{FeedLine: x, Description: Normalise(x.Narration), Href: bankHref(x)})
+				related = append(related, bankLineView{FeedLine: x, Description: bank.Normalise(x.Narration), Href: bankHref(x)})
 			}
 		}
 	}
-	a.bankRender(w, "bank_tx", http.StatusOK, s, roomPage{"Title": Normalise(l.Narration), "Nav": "accounts", "A": acc, "L": bankLineView{FeedLine: l, Description: Normalise(l.Narration)}, "Related": related})
+	a.bankRender(w, "bank_tx", http.StatusOK, s, roomPage{"Title": bank.Normalise(l.Narration), "Nav": "accounts", "A": acc, "L": bankLineView{FeedLine: l, Description: bank.Normalise(l.Narration)}, "Related": related})
 }
 
 func (a *bankSite) transferPage(ctx context.Context, s *bankSession, data roomPage) (roomPage, error) {
@@ -517,7 +518,7 @@ func (a *bankSite) obTransferRequest(ctx context.Context, s *bankSession, f url.
 	}
 	amount, err := bank.ParseNaira(f.Get("amount"))
 	if err != nil {
-		return server.TransferRequest{}, errBadAmount
+		return server.TransferRequest{}, view.ErrBadAmount
 	}
 	req := server.TransferRequest{FromBank: a.bank.ID, From: acc.NUBAN, Amount: amount, Narration: strings.TrimSpace(f.Get("narration"))}
 	if f.Get("mode") == "own" {
@@ -542,7 +543,7 @@ var (
 
 func userFixable(err error) bool {
 	var te *server.TransferError
-	return errors.As(err, &te) || errors.Is(err, errBadAmount) || errors.Is(err, errChooseAccount) || errors.Is(err, errChooseOwn) || errors.Is(err, errTenDigits)
+	return errors.As(err, &te) || errors.Is(err, view.ErrBadAmount) || errors.Is(err, errChooseAccount) || errors.Is(err, errChooseOwn) || errors.Is(err, errTenDigits)
 }
 
 func (a *bankSite) transferFailed(w http.ResponseWriter, r *http.Request, s *bankSession, err error) {
@@ -626,7 +627,7 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 	if s == nil {
 		return
 	}
-	page, ok := pageParam(w, r, "access history", maxHistoryPages)
+	page, ok := view.PageParam(w, r, "access history", maxHistoryPages)
 	if !ok {
 		return
 	}
@@ -691,7 +692,7 @@ func (a *bankSite) obApps(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.SliceStable(history, func(i, j int) bool { return history[i].At.After(history[j].At) })
 	if len(history) < need {
-		if _, ok := pageParam(w, r, "access history", pagesOf(len(history), historyPageSize)); !ok {
+		if _, ok := view.PageParam(w, r, "access history", view.PagesOf(len(history), historyPageSize)); !ok {
 			return
 		}
 	}
@@ -718,7 +719,7 @@ func (a *bankSite) obRevoke(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/apps?revoked=1", http.StatusSeeOther)
 }
 
-var bankPages = template.Must(template.New("").Funcs(uiFuncs).Funcs(template.FuncMap{
+var bankPages = template.Must(template.New("").Funcs(view.Funcs).Funcs(template.FuncMap{
 	"amtClass": func(v int64) string {
 		if v > 0 {
 			return "text-pos"
