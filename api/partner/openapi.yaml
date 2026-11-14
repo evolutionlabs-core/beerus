@@ -1085,6 +1085,25 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Account'
+      example:
+        data:
+          - id: acc_01JBC8B2N7QX
+            connection_id: con_01JBC8A5T3ZK
+            institution:
+              id: bank-a
+              name: Bank A
+            name: ADAEZE'S BAKERY LTD
+            account_number: '0123456789'
+            type: current
+            currency: NGN
+            balances:
+              current:
+                amount_minor: 125034000
+                currency: NGN
+              available:
+                amount_minor: 124534000
+                currency: NGN
+              as_at: '2026-10-28T12:05:00+01:00'
     BalanceAsOf:
       type: object
       required: [account_id, as_of, ledger_balance, effective_start_date]
@@ -1251,6 +1270,34 @@ components:
         world_id:
           type: string
           description: The world this feed belongs to. It changes when Beerus starts after an unclean shutdown, and after a reset.
+      example:
+        added:
+          - id: txn_01JBCA0H9E2P
+            account_id: acc_01JBC8B2N7QX
+            sequence: 1042
+            amount_minor: -10000000
+            currency: NGN
+            status: posted
+            pending_transaction_id: null
+            booked_at: '2026-10-23T23:50:04+01:00'
+            value_date: '2026-10-23'
+            description_raw: NIP TRF TO CHIDI OKAFOR/BANK B/REF 000001261023235004
+            description: Transfer to Chidi Okafor
+            counterparty:
+              name: CHIDI OKAFOR
+              account_number: '9876543210'
+              bank_code: '999002'
+              bank_name: Bank B
+            references:
+              session_id: '999001261023235004000000000417'
+              bank_reference: FT26296ABC12
+            channel: nip
+            balance_after_minor: 125034000
+        modified: []
+        removed: []
+        next_cursor: cur_eyJ3IjoiMDFKQjAwIiwicyI6MTA0Mn0
+        has_more: false
+        world_id: wld_01JB00K2
     Refresh:
       type: object
       required: [id, account_id, status, requested_at]

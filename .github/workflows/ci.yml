@@ -144,7 +144,7 @@ jobs:
         with:
           node-version: 22
       - name: Spectral
-        run: npx --yes @stoplight/spectral-cli@6 lint api/partner/openapi.yaml --fail-severity warn
+        run: npx --yes @stoplight/spectral-cli@6 lint 'api/*/openapi.yaml' --fail-severity warn
 
   css:
     runs-on: ubuntu-latest
