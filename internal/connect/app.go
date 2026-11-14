@@ -82,19 +82,10 @@ type App struct {
 	role         string
 	bankID       string
 	coreURL      string
-	siteStale    atomic.Bool
-	phaseGen     atomic.Int64
 	pushWake     chan struct{}
-	dirMu        sync.Mutex
-	dirBanks     []*config.Bank
-	dirAt        time.Time
-	dirClient    *http.Client
-	regAt        time.Time
-	regWarned    string
-	regRefresh   refresher
-	dirRefresh   refresher
 	link         server.Link
-	banking      server.Banking
+	banking      *server.Banking
+	srv          *server.Server
 	probeHTTP    *http.Client
 	eventMu      sync.Mutex
 	eventHTTP    map[string]*http.Client
@@ -168,7 +159,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New(o.Real)
-	a.banking = server.Banking{Src: bookSource{a}, Clock: a.clock, Log: a.log}
+	a.banking = &server.Banking{Src: bookSource{a}, Clock: a.clock, Log: a.log}
 	if err := a.prepareOpenBanking(); err != nil {
 		return nil, err
 	}
@@ -248,7 +239,7 @@ func (a *App) closeLedgers() {
 }
 
 func (a *App) Banking() *server.Banking {
-	return &a.banking
+	return a.banking
 }
 
 func (a *App) Config() *config.Config {

@@ -2,14 +2,11 @@ package connect
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"slices"
-	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
@@ -51,17 +48,8 @@ func (p reply) write(w http.ResponseWriter) {
 	_, _ = w.Write(p.body)
 }
 
-type nameEnquiry struct {
-	Code        string `json:"response_code,omitempty"`
-	Message     string `json:"message"`
-	BankCode    string `json:"bank_code"`
-	BankName    string `json:"bank_name,omitempty"`
-	AccountNo   string `json:"account_number"`
-	AccountName string `json:"account_name,omitempty"`
-}
-
-func (a *App) NameEnquiry(code, nuban string) (nameEnquiry, error) {
-	out := nameEnquiry{BankCode: code, AccountNo: nuban}
+func (a *App) NameEnquiry(code, nuban string) (server.NameEnquiry, error) {
+	out := server.NameEnquiry{BankCode: code, AccountNo: nuban}
 	sw := a.nibssStore()
 	if sw == nil {
 		return out, errors.New("NIBSS is not available right now")
@@ -270,19 +258,6 @@ func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
 	web.WriteJSON(w, http.StatusOK, row)
 }
 
-type transferBody struct {
-	From      string `json:"from" yaml:"from"`
-	ToBank    string `json:"to_bank" yaml:"to_bank"`
-	To        string `json:"to" yaml:"to"`
-	Amount    string `json:"amount" yaml:"amount"`
-	Narration string `json:"narration" yaml:"narration"`
-}
-
-func (b transferBody) hash(bank string) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{bank, b.From, b.ToBank, b.To, b.Amount, b.Narration}, "\x00")))
-	return hex.EncodeToString(sum[:])
-}
-
 func (a *App) transferReply(r *http.Request, res server.TransferResult, err error) reply {
 	var te *server.TransferError
 	switch {
@@ -295,7 +270,7 @@ func (a *App) transferReply(r *http.Request, res server.TransferResult, err erro
 	return jsonReply(http.StatusOK, res)
 }
 
-func (a *App) bankTransfer(r *http.Request, bankID string, body transferBody, key string) reply {
+func (a *App) bankTransfer(r *http.Request, bankID string, body server.TransferBody, key string) reply {
 	amount, err := bank.ParseNaira(body.Amount)
 	if err != nil {
 		return errReply(r, http.StatusBadRequest, "invalid_request", err.Error())
@@ -312,7 +287,7 @@ func (a *App) bankTransfer(r *http.Request, bankID string, body transferBody, ke
 		return a.transferReply(r, res, err)
 	}
 	scope := "control POST /banks/" + bankID + "/transfers key " + key
-	hash := body.hash(bankID)
+	hash := body.Hash(bankID)
 	entry := a.idem.Acquire(scope)
 	defer a.idem.Release(scope, entry)
 	a.mu.Lock()
@@ -336,7 +311,7 @@ func (a *App) bankTransfer(r *http.Request, bankID string, body transferBody, ke
 }
 
 func (a *App) ctlBankQuote(w http.ResponseWriter, r *http.Request) {
-	var body transferBody
+	var body server.TransferBody
 	if err := web.DecodeBody(r, &body); err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"9010000014","to_bank":"bank-b","to":"9020000011","amount":"25000"}.`)
 		return
@@ -355,7 +330,7 @@ func (a *App) ctlBankQuote(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlBankTransfer(w http.ResponseWriter, r *http.Request) {
-	var body transferBody
+	var body server.TransferBody
 	if err := web.DecodeBody(r, &body); err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"9010000014","to_bank":"bank-b","to":"9020000011","amount":"25000"}.`)
 		return

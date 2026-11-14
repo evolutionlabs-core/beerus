@@ -32,7 +32,7 @@ type bankWish struct {
 }
 
 type remoteFaults struct {
-	Data       []participantFault `json:"data"`
+	Data       []server.FaultView `json:"data"`
 	NextCursor string             `json:"next_cursor"`
 }
 
@@ -174,7 +174,7 @@ func (a *App) pushBank(ctx context.Context, id, base string, wake <-chan struct{
 func (a *App) syncBank(ctx context.Context, id, base string, gen int64, w bankWish) error {
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
-	var state participantState
+	var state server.State
 	if _, err := a.link.Request(ctx, base, http.MethodGet, "/v1/status", nil, nil, &state); err != nil {
 		return fmt.Errorf("read status of %s: %w", id, err)
 	}
@@ -184,7 +184,7 @@ func (a *App) syncBank(ctx context.Context, id, base string, gen int64, w bankWi
 	if err := a.syncFaults(ctx, id, base, w.downs); err != nil {
 		return err
 	}
-	body := phaseRequest{Phase: w.phase, Reason: w.reason, Generation: gen, WorldID: a.WorldID()}
+	body := server.PhaseRequest{Phase: w.phase, Reason: w.reason, Generation: gen, WorldID: a.WorldID()}
 	if _, err := a.link.Request(ctx, base, http.MethodPut, "/v1/phase", nil, body, nil); err != nil {
 		return fmt.Errorf("send the phase of %s: %w", id, err)
 	}
@@ -195,7 +195,7 @@ func (a *App) heldFaults(ctx context.Context, base string) ([]string, error) {
 	held := []string{}
 	cursor := ""
 	for {
-		path := "/v1/faults?limit=" + strconv.Itoa(faultPageMax)
+		path := "/v1/faults?limit=" + strconv.Itoa(server.FaultPageMax)
 		if cursor != "" {
 			path += "&cursor=" + url.QueryEscape(cursor)
 		}

@@ -17,13 +17,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
-	"github.com/evolutionlabs-core/beerus/internal/bank/inbound"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -203,6 +201,13 @@ func (r registryView) convert(c *openbanking.RegistryClient) (*openbanking.Clien
 }
 
 func (r registryView) Client(id string) (*openbanking.Client, bool) {
+	if r.a.srv != nil {
+		c, ok := r.a.srv.RegistryClient(id)
+		if !ok {
+			return nil, false
+		}
+		return r.convert(c)
+	}
 	r.a.regMu.Lock()
 	defer r.a.regMu.Unlock()
 	if c := r.a.st.Registry[id]; c != nil {
@@ -212,6 +217,13 @@ func (r registryView) Client(id string) (*openbanking.Client, bool) {
 }
 
 func (r registryView) ClientByCert(cn string) (*openbanking.Client, bool) {
+	if r.a.srv != nil {
+		c, ok := r.a.srv.RegistryClientByCert(cn)
+		if !ok {
+			return nil, false
+		}
+		return r.convert(c)
+	}
 	r.a.regMu.Lock()
 	defer r.a.regMu.Unlock()
 	for _, c := range r.a.st.Registry {
@@ -425,22 +437,6 @@ func (a *App) bankAPITLS(b *config.Bank) (*tls.Config, error) {
 	return &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12}, nil
 }
 
-type nipHandlers struct {
-	mu     sync.Mutex
-	ledger *ledgerSource
-	h      http.Handler
-}
-
-func (n *nipHandlers) forLedger(l *ledgerSource, a *App) http.Handler {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if n.ledger != l {
-		n.ledger = l
-		n.h = inbound.New(l.Bank(), a.clock.Now, inbound.Caller{CommonName: config.NIBSSCN, Role: config.NIBSSRole}, a.log)
-	}
-	return n.h
-}
-
 func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	if b.APIPort == 0 {
 		return nil, fmt.Errorf("%s has no API port", b.ID)
@@ -485,22 +481,8 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 		}
 		h.ServeHTTP(w, r)
 	})
-	var nip nipHandlers
-	nipGuarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		l := a.obLedger(b.ID)
-		if a.bankPhase(b.ID) == PhaseClosed {
-			inbound.WriteClosed(w, a.bankCopy(b.ID).Name)
-			return
-		}
-		if unavailable(l) {
-			w.Header().Set("Retry-After", "30")
-			inbound.WriteUnavailable(w)
-			return
-		}
-		nip.forLedger(l, a).ServeHTTP(w, r)
-	})
 	mux := http.NewServeMux()
-	mux.Handle("/v1/nip/", nipGuarded)
+	mux.Handle("/v1/nip/", a.banking.NIP(b.ID))
 	mux.Handle("/", guarded)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 2 * time.Minute, ErrorLog: log.New(quietTLS{a}, "", 0)}
 	for _, l := range ls {

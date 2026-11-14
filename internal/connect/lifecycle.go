@@ -91,6 +91,12 @@ func (a *App) bankPhase(id string) string {
 }
 
 func (a *App) bankPhaseReason(id string) (string, string) {
+	if a.srv != nil {
+		if id != a.srv.ID() {
+			return PhaseActive, ""
+		}
+		return a.srv.Phase()
+	}
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
 	if st := a.status[id]; st != nil {

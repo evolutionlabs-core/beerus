@@ -52,7 +52,7 @@ func TestParticipantBankContract(t *testing.T) {
 	}
 	t.Cleanup(a.closeLedgers)
 	tok := a.link.Token
-	call := newContractCall(t, a.participantAPI())
+	call := newContractCall(t, a.srv.API())
 	norm := func(s string) string { return stampedField.ReplaceAllString(s, `"$1":"T"`) }
 	run := func(validate bool) func(name, method, path, key, body string, status int, want string) controlReply {
 		return func(name, method, path, key, body string, status int, want string) controlReply {
@@ -183,8 +183,8 @@ func TestParticipantBankContract(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			if err := a.reloadBank(); err != nil {
-				t.Error(err)
+			if got := call("PUT", "/v1/phase", "", `{"phase":"suspended","reason":"Suspended by the operator.","generation":2,"world_id":"wld_1"}`, tok, false); got.status != 200 {
+				t.Errorf("reload: %d %s", got.status, got.body)
 				return
 			}
 		}

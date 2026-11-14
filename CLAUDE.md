@@ -59,7 +59,7 @@ Beerus is a copy of Nigeria's banking infrastructure in one Go binary: banks, NI
 - **A change that cannot be saved is undone** in memory before the error is returned.
 
 ## Concurrency
-- **Lock order:** `applyMu` → `stepMu` → `recMu` → `lifeMu` → `sendLock` → `bankFileMu` → `mu` → `regMu` → `dirMu` → `ctlMu`. Never take an earlier lock while holding a later one.
+- **Lock order:** `applyMu` → `stepMu` → `recMu` → `lifeMu` → `sendLock` → `bankFileMu` → `mu` → `regMu` → `dirMu` → `ctlMu`. Never take an earlier lock while holding a later one. `server.Server` keeps its own `lifeMu`, `mu`, `regMu` and `dirMu` in this order. The only call it makes into `connect` is `Reloaded`, and it makes it holding `lifeMu` alone.
 - **`sendLock`** is per sending bank. It is the one lock allowed across the bank and NIBSS DB calls for the cap check and debit.
 - **`bankFileMu`** serialises writes of a bank's own directory (`bank.json`, certificates). It is held across those file writes only. Take it holding no later lock.
 - **Leaf locks** (`idemMu`, and the mutex inside a `refresher`) are taken last and never held while taking another lock.

@@ -13,11 +13,21 @@ type bookSource struct {
 }
 
 func (s bookSource) Book(id string) (server.Book, error) {
-	bk, ok := s.a.bookOf(id)
-	if !ok {
+	s.a.mu.Lock()
+	b := s.a.cfg.Bank(id)
+	var ls *ledgerSource
+	if b != nil {
+		ls = s.a.ledgerFor(id)
+	}
+	s.a.mu.Unlock()
+	if b == nil {
 		return server.Book{}, fmt.Errorf("%w: %s", server.ErrBankNotFound, id)
 	}
-	return server.Book{Name: s.a.bankCopy(id).Name, Phase: s.a.bankPhase(id), Bank: bk.ls.Bank()}, nil
+	bk := server.Book{Name: s.a.bankCopy(id).Name, Phase: s.a.bankPhase(id)}
+	if ls != nil {
+		bk.Bank = ls.Bank()
+	}
+	return bk, nil
 }
 
 func (s bookSource) Enrol(ctx context.Context, name, phone string, dob clock.Date) (string, string, error) {
@@ -26,4 +36,8 @@ func (s bookSource) Enrol(ctx context.Context, name, phone string, dob clock.Dat
 
 func (s bookSource) Empty() bool {
 	return len(s.a.bankList()) == 0
+}
+
+func (s bookSource) Refusing(id string) bool {
+	return s.a.bankRefusing(id)
 }

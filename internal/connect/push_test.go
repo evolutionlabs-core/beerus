@@ -77,7 +77,7 @@ func TestWishGeneration(t *testing.T) {
 }
 
 func TestHungBankDoesNotDelayAnother(t *testing.T) {
-	phases := make(chan phaseRequest, 4)
+	phases := make(chan server.PhaseRequest, 4)
 	transport := roundTrip(func(r *http.Request) (*http.Response, error) {
 		if strings.HasPrefix(r.URL.Host, "bank-a.") {
 			<-r.Context().Done()
@@ -89,7 +89,7 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 		case "GET /v1/faults":
 			return stubReply(200, `{"data":[]}`), nil
 		case "PUT /v1/phase":
-			var body phaseRequest
+			var body server.PhaseRequest
 			raw, _ := io.ReadAll(r.Body)
 			if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&body); err != nil {
 				return nil, err
@@ -117,7 +117,7 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 	}()
 	select {
 	case got := <-phases:
-		want := phaseRequest{Phase: PhaseSuspended, Reason: "Suspended.", WorldID: a.WorldID()}
+		want := server.PhaseRequest{Phase: PhaseSuspended, Reason: "Suspended.", WorldID: a.WorldID()}
 		digest, err := a.cfg.BankFileDigest(a.cfg.Bank("bank-b"))
 		if err != nil {
 			t.Fatal(err)

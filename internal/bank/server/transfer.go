@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
@@ -197,4 +200,17 @@ func (q Quoter) Quote(ctx context.Context, b *bank.Bank, rt Route, req TransferR
 	}
 	res.BalanceAfter = bal - res.TotalDebit
 	return res, nil
+}
+
+type TransferBody struct {
+	From      string `json:"from" yaml:"from"`
+	ToBank    string `json:"to_bank" yaml:"to_bank"`
+	To        string `json:"to" yaml:"to"`
+	Amount    string `json:"amount" yaml:"amount"`
+	Narration string `json:"narration" yaml:"narration"`
+}
+
+func (b TransferBody) Hash(bank string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{bank, b.From, b.ToBank, b.To, b.Amount, b.Narration}, "\x00")))
+	return hex.EncodeToString(sum[:])
 }

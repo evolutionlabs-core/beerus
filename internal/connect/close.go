@@ -197,9 +197,7 @@ func (a *App) banksLocked() []*config.Bank {
 	if a.role != RoleBank {
 		return a.cfg.Banks
 	}
-	a.dirMu.Lock()
-	defer a.dirMu.Unlock()
-	return a.dirBanks
+	return a.srv.Directory()
 }
 
 func (a *App) bankLocked(id string) *config.Bank {

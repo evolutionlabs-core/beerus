@@ -33,3 +33,7 @@ func TestPeerAnswerOverTheLimitFailsClearly(t *testing.T) {
 		t.Fatalf("a broken answer: %v", err)
 	}
 }
+
+func stubReply(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": {"application/json"}}}
+}

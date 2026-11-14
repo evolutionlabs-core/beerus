@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/inbound"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -27,6 +29,7 @@ type Source interface {
 	Book(id string) (Book, error)
 	Enrol(ctx context.Context, name, phone string, dob clock.Date) (string, string, error)
 	Empty() bool
+	Refusing(id string) bool
 }
 
 type Banking struct {
@@ -34,6 +37,10 @@ type Banking struct {
 	Clock *clock.Clock
 	Log   *slog.Logger
 	ID    string
+
+	nipMu   sync.Mutex
+	nipBank *bank.Bank
+	nip     http.Handler
 }
 
 var ErrBankNotFound = errors.New("no such bank")
@@ -57,6 +64,9 @@ func (s *Banking) bankBook(id string) (Book, error) {
 	bk, err := s.Src.Book(id)
 	if err != nil {
 		return Book{}, err
+	}
+	if bk.Bank == nil {
+		return Book{}, fmt.Errorf("%w: %s", ErrBankNotFound, id)
 	}
 	return bk, nil
 }
@@ -483,4 +493,30 @@ func (s *Banking) HandleCash(kind string) http.HandlerFunc {
 		}
 		web.WriteJSON(w, http.StatusCreated, res)
 	}
+}
+
+func (s *Banking) NIP(id string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bk, err := s.Src.Book(id)
+		if err == nil && bk.Phase == config.PhaseClosed {
+			inbound.WriteClosed(w, bk.Name)
+			return
+		}
+		if err != nil || bk.Bank == nil || s.Src.Refusing(id) {
+			w.Header().Set("Retry-After", "30")
+			inbound.WriteUnavailable(w)
+			return
+		}
+		s.nipFor(bk.Bank).ServeHTTP(w, r)
+	})
+}
+
+func (s *Banking) nipFor(b *bank.Bank) http.Handler {
+	s.nipMu.Lock()
+	defer s.nipMu.Unlock()
+	if s.nipBank != b {
+		s.nipBank = b
+		s.nip = inbound.New(b, s.Clock.Now, inbound.Caller{CommonName: config.NIBSSCN, Role: config.NIBSSRole}, s.Log)
+	}
+	return s.nip
 }

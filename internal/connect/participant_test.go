@@ -115,15 +115,17 @@ func newContractCall(t *testing.T, handler http.Handler) contractCall {
 
 func TestParticipantControlContract(t *testing.T) {
 	cfg := bankDirConfig(t, &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1, APIPort: 2, Database: "db"})
-	a := &App{
-		cfg:  cfg,
-		role: RoleBank, bankID: "bank-a", link: server.Link{Token: participantTok}, st: newState(),
-		log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
-		clock:  clock.New(func() time.Time { return participantNow }),
-		status: map[string]*BankStatus{"bank-a": {ID: "bank-a", Phase: PhaseActive}},
-	}
-	a.st.WorldID = "wld_0"
-	call := newContractCall(t, a.participantAPI())
+	a := &App{cfg: cfg}
+	srv := server.New(server.Settings{
+		Dir:      cfg.Dir,
+		Bank:     *cfg.Bank("bank-a"),
+		Link:     server.Link{Token: participantTok},
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:    clock.New(func() time.Time { return participantNow }),
+		Phase:    PhaseActive,
+		Reloaded: a.bankReloaded,
+	})
+	call := newContractCall(t, srv.API())
 	bankFile := config.BankFilePath(cfg.Dir, "bank-a")
 	renamed := *cfg.Bank("bank-a")
 	renamed.Name, renamed.State = "Bank A Renamed", "suspended"
@@ -143,7 +145,7 @@ func TestParticipantControlContract(t *testing.T) {
 		status                  int
 		want                    string
 	}{
-		{name: "health before the phase", method: "GET", path: "/v1/health", token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","status":"ok","world_id":"wld_0"}`},
+		{name: "health before the phase", method: "GET", path: "/v1/health", token: participantTok, validate: true, status: 200, want: fmt.Sprintf(`{"participant_id":"bank-a","status":"ok","world_id":%q}`, srv.WorldID())},
 		{name: "status before the phase", method: "GET", path: "/v1/status", token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","kind":"bank","phase":"active","generation":0,"observed_generation":0,"steps":[]}`},
 		{name: "no token", method: "GET", path: "/v1/status", validate: true, status: 401, want: unauthenticated},
 		{name: "wrong token", method: "GET", path: "/v1/faults", token: "nope", validate: true, status: 401, want: unauthenticated},
@@ -188,7 +190,7 @@ func TestParticipantControlContract(t *testing.T) {
 			}
 		})
 	}
-	if b := a.cfg.Bank("bank-a"); b.Name != renamed.Name || !b.Suspended() || !a.siteStale.Load() {
-		t.Fatalf("after the reload the bank is %q, suspended %v, site stale %v; want %q, true, true", b.Name, b.Suspended(), a.siteStale.Load(), renamed.Name)
+	if b := a.cfg.Bank("bank-a"); b.Name != renamed.Name || !b.Suspended() || !srv.TakeStale() {
+		t.Fatalf("after the reload the bank is %q, suspended %v; want %q, true, with the site marked stale", b.Name, b.Suspended(), renamed.Name)
 	}
 }

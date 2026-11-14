@@ -80,6 +80,9 @@ func (a *App) Transfer(req server.TransferRequest) (server.TransferResult, error
 }
 
 func (a *App) Quote(req server.TransferRequest) (server.TransferResult, error) {
+	if a.srv != nil {
+		return a.srv.Quote(context.Background(), req)
+	}
 	if err := server.CheckRequest(req); err != nil {
 		return server.TransferResult{}, err
 	}
@@ -94,9 +97,6 @@ func (a *App) Quote(req server.TransferRequest) (server.TransferResult, error) {
 }
 
 func (a *App) Enquire(ctx context.Context, rt server.Route, nuban string) (string, error) {
-	if a.role == RoleBank {
-		return a.remoteEnquiry(ctx, rt.ToCode, nuban)
-	}
 	sw := a.nibssStore()
 	if sw == nil {
 		return "", server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "nibss_unavailable", errors.New("NIBSS is not available right now"))

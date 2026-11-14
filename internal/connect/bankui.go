@@ -86,7 +86,7 @@ func (app *App) BankHandler(id string) http.Handler {
 	mux.HandleFunc("GET /authorize/consent", a.obConsentPage)
 	mux.HandleFunc("POST /authorize/consent", a.obConsentSubmit)
 	if app.role == RoleBank {
-		mux.Handle("/v1/", app.participantAPI())
+		mux.Handle("/v1/", app.srv.API())
 	}
 	return a.bankGuard(mux)
 }
@@ -592,7 +592,7 @@ func (a *bankSite) obTransferConfirm(w http.ResponseWriter, r *http.Request) {
 	req, err := a.obTransferRequest(r.Context(), s, r.PostForm)
 	var res server.TransferResult
 	if err == nil && a.role == RoleBank {
-		res, err = a.remoteTransfer(r.Context(), req)
+		res, err = a.srv.Transfer(r.Context(), req)
 	} else if err == nil {
 		res, err = a.Transfer(req)
 	}
