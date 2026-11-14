@@ -13,12 +13,12 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
 	answerCredited = "credited"
 	answerRefused  = "refused"
+	overflowCode   = nip.SystemError
 )
 
 type NIPCredit struct {
@@ -50,6 +50,9 @@ type SessionReusedError struct {
 }
 
 func (e *SessionReusedError) Error() string {
+	if len(e.Fields) == 0 {
+		return fmt.Sprintf("session %s reused with different details", e.SessionID)
+	}
 	names := make([]string, len(e.Fields))
 	for i, f := range e.Fields {
 		names[i] = f.Field
@@ -86,13 +89,13 @@ func refusalCode(err error) (string, bool) {
 	case errors.Is(err, ledger.ErrAccountFrozen):
 		return nip.Restricted, true
 	case errors.Is(err, ledger.ErrOverflow):
-		return nip.SystemError, true
+		return overflowCode, true
 	}
 	return "", false
 }
 
 func (b *Bank) Credit(ctx context.Context, c NIPCredit, now time.Time) (CreditAnswer, error) {
-	entry, err := nipInEntry(c.SessionID, c.ToNUBAN, c.Amount, Counterparty{Name: c.FromName, AccountNumber: c.FromNUBAN, BankCode: c.FromCode, BankName: c.FromBankName}, c.Narration, c.CreatedAt)
+	entry, err := nipInEntry(c.SessionID, c.ToNUBAN, c.Amount, Counterparty{Name: c.FromName, AccountNumber: c.FromNUBAN, BankCode: c.FromCode, BankName: c.FromBankName}, c.Narration, now)
 	if err != nil {
 		return CreditAnswer{}, fmt.Errorf("build credit for session %s: %w", c.SessionID, err)
 	}
@@ -130,9 +133,6 @@ func (b *Bank) Credit(ctx context.Context, c NIPCredit, now time.Time) (CreditAn
 }
 
 func (b *Bank) postCredit(ctx context.Context, tx pgx.Tx, c NIPCredit, entry ledger.Entry) (string, error) {
-	if !world.ValidNUBAN(b.P.NUBANCode, c.ToNUBAN) {
-		return nip.InvalidAccount, nil
-	}
 	sp, err := tx.Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin posting for session %s: %w", c.SessionID, err)
@@ -146,6 +146,9 @@ func (b *Bank) postCredit(ctx context.Context, tx pgx.Tx, c NIPCredit, entry led
 	}
 	if rerr := sp.Rollback(ctx); rerr != nil {
 		return "", fmt.Errorf("undo posting for session %s: %w", c.SessionID, errors.Join(err, rerr))
+	}
+	if errors.Is(err, ledger.ErrIdempotency) {
+		return "", &SessionReusedError{SessionID: c.SessionID}
 	}
 	if code, ok := refusalCode(err); ok {
 		return code, nil
