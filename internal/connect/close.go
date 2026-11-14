@@ -16,6 +16,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 type ImpactAccount struct {
@@ -169,7 +170,7 @@ func (a *App) ctlCloseImpact(w http.ResponseWriter, r *http.Request) {
 		a.bankError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, imp)
+	web.WriteJSON(w, http.StatusOK, imp)
 }
 
 func (a *App) bankList() []*config.Bank {
@@ -574,8 +575,8 @@ func (a *App) closureAccount(from, dest *ledgerSource, acc ImpactAccount, at tim
 
 func (a *App) ctlCloseBank(w http.ResponseWriter, r *http.Request) {
 	var req CloseRequest
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"money":"transfer","to":"bank-a"}.`)
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"money":"transfer","to":"bank-a"}.`)
 		return
 	}
 	res, err := a.CloseBank(r.PathValue("id"), req)
@@ -583,7 +584,7 @@ func (a *App) ctlCloseBank(w http.ResponseWriter, r *http.Request) {
 		a.bankError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, res)
+	web.WriteJSON(w, http.StatusAccepted, res)
 }
 
 func keepClosure(st *setup.Status, c setup.Closure) {
@@ -610,5 +611,5 @@ func (a *App) ctlClosure(w http.ResponseWriter, r *http.Request) {
 		a.applyFailed(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, c)
+	web.WriteJSON(w, http.StatusOK, c)
 }

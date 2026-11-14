@@ -9,6 +9,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -180,13 +181,13 @@ func (a *App) pruneFaultsLocked(now time.Time) {
 }
 
 func (a *App) ctlFaults(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"data": a.Faults()})
+	web.WriteJSON(w, http.StatusOK, map[string]any{"data": a.Faults()})
 }
 
 func (a *App) ctlAddFault(w http.ResponseWriter, r *http.Request) {
 	var req FaultRequest
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"kind":"down","bank":"bank-b","for":"1h"} or {"kind":"timeout","bank":"bank-b","outcome":"credited"}.`)
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"kind":"down","bank":"bank-b","for":"1h"} or {"kind":"timeout","bank":"bank-b","outcome":"credited"}.`)
 		return
 	}
 	f, err := a.AddFault(req)
@@ -194,16 +195,16 @@ func (a *App) ctlAddFault(w http.ResponseWriter, r *http.Request) {
 		a.bankError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, f)
+	web.WriteJSON(w, http.StatusCreated, f)
 }
 
 func (a *App) ctlClearFaults(w http.ResponseWriter, r *http.Request) {
 	bank := r.URL.Query().Get("bank")
 	if bank != "" && a.bankByID(bank) == nil {
-		writeError(w, r, http.StatusNotFound, "not_found", fmt.Sprintf("No bank %q.", bank))
+		web.WriteError(w, r, http.StatusNotFound, "not_found", fmt.Sprintf("No bank %q.", bank))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"cleared": a.ClearFaults(bank)})
+	web.WriteJSON(w, http.StatusOK, map[string]any{"cleared": a.ClearFaults(bank)})
 }
 
 type member struct {

@@ -203,42 +203,6 @@ func newTestApp(t *testing.T, o Options) *App {
 	return a
 }
 
-func TestIdempotencyLocksExcludeAndAreReleased(t *testing.T) {
-	a := &App{}
-	var wg sync.WaitGroup
-	inside := map[string]int{}
-	var mu sync.Mutex
-	for _, scope := range []string{"s1", "s1", "s1", "s2", "s2"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			e := a.idemAcquire(scope)
-			mu.Lock()
-			inside[scope]++
-			if inside[scope] != 1 {
-				t.Errorf("two requests held %s at once", scope)
-			}
-			mu.Unlock()
-			mu.Lock()
-			inside[scope]--
-			mu.Unlock()
-			a.idemRelease(scope, e)
-		}()
-	}
-	wg.Wait()
-	if n := len(a.idemLocks); n != 0 {
-		t.Fatalf("%d locks left after every request finished", n)
-	}
-	e := a.idemAcquire("s3")
-	if len(a.idemLocks) != 1 {
-		t.Fatalf("held lock missing: %d", len(a.idemLocks))
-	}
-	a.idemRelease("s3", e)
-	if len(a.idemLocks) != 0 {
-		t.Fatal("lock not removed on release")
-	}
-}
-
 func TestWriteFilesRestoresExactlyTheSavedSet(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "partner")
 	if err := os.MkdirAll(dir, 0o700); err != nil {

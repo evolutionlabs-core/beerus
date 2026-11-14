@@ -16,9 +16,10 @@ func TestImportBoundary(t *testing.T) {
 	forbidden := []string{
 		modulePath + "/internal/nibss",
 		modulePath + "/internal/connect",
+		modulePath + "/internal/setup",
 		modulePath + "/cmd",
 	}
-	out, err := exec.Command("go", "list", "-f", `{{.ImportPath}} {{join .Deps " "}} {{join .TestImports " "}} {{join .XTestImports " "}}`, "./...").Output()
+	out, err := exec.Command("go", "list", "-f", `{{.ImportPath}} {{join .Deps " "}} {{join .TestImports " "}} {{join .XTestImports " "}}`, "./...", "../web").Output()
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {

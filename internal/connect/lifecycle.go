@@ -17,6 +17,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -333,10 +334,10 @@ const NoBanksMessage = "there are no banks yet. Add one first with beerus bank c
 
 func (a *App) noSuchBank(w http.ResponseWriter, r *http.Request) {
 	if len(a.bankList()) == 0 {
-		writeError(w, r, http.StatusNotFound, "not_found", NoBanksMessage)
+		web.WriteError(w, r, http.StatusNotFound, "not_found", NoBanksMessage)
 		return
 	}
-	writeError(w, r, http.StatusNotFound, "not_found", "No such bank.")
+	web.WriteError(w, r, http.StatusNotFound, "not_found", "No such bank.")
 }
 
 func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
@@ -345,12 +346,12 @@ func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	switch {
 	case errors.Is(err, ErrBankInvalid):
-		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
 	case errors.Is(err, errNotFound):
 		a.noSuchBank(w, r)
 	default:
 		a.log.Error("bank lifecycle", "err", err)
-		writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
 	}
 }
 
@@ -365,8 +366,8 @@ func (a *App) bankStatus(id string) (BankStatus, bool) {
 
 func (a *App) ctlCreateBank(w http.ResponseWriter, r *http.Request) {
 	var req BankRequest
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"...","type":"commercial"}.`)
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"...","type":"commercial"}.`)
 		return
 	}
 	st, err := a.CreateBank(r.Context(), req)
@@ -374,7 +375,7 @@ func (a *App) ctlCreateBank(w http.ResponseWriter, r *http.Request) {
 		a.bankError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, st)
+	web.WriteJSON(w, http.StatusAccepted, st)
 }
 
 func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool) {
@@ -384,7 +385,7 @@ func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool)
 		return
 	}
 	st, _ := a.bankStatus(id)
-	writeJSON(w, http.StatusOK, st)
+	web.WriteJSON(w, http.StatusOK, st)
 }
 
 func CheckPorts(c *config.Config) error {

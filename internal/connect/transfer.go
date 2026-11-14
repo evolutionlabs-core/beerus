@@ -19,6 +19,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 type TransferRequest struct {
@@ -252,7 +253,7 @@ func (a *App) internalTransfer(rt transferRoute, req TransferRequest, res Transf
 	}
 	key := req.Key
 	if key == "" {
-		key = newID("trf")
+		key = web.NewID("trf")
 	}
 	if _, err := b.OwnTransfer(ctx, key, req.From, req.To, req.Amount, req.Narration, res.At); err != nil {
 		return res, postingError(req.From, err)

@@ -2,7 +2,6 @@ package connect
 
 import (
 	"crypto/rand"
-	"encoding/base32"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 type LinkSession struct {
@@ -166,14 +166,6 @@ type Delivery struct {
 	CreatedReal time.Time       `json:"created_real"`
 }
 
-type IdemRec struct {
-	Hash        string    `json:"hash"`
-	Status      int       `json:"status"`
-	ContentType string    `json:"content_type"`
-	Body        []byte    `json:"body"`
-	CreatedReal time.Time `json:"created_real"`
-}
-
 type AccessEvent struct {
 	ConnectionID string    `json:"connection_id"`
 	PartnerID    string    `json:"partner_id"`
@@ -229,7 +221,7 @@ type State struct {
 	Feeds          map[string]*Feed           `json:"feeds"`
 	Refreshes      map[string]*Refresh        `json:"refreshes"`
 	Deliveries     []*Delivery                `json:"deliveries"`
-	Idem           map[string]*IdemRec        `json:"idempotency"`
+	Idem           map[string]*web.Record     `json:"idempotency"`
 	Seq            int64                      `json:"seq"`
 	Vault          map[string]*VaultEntry     `json:"vault,omitempty"`
 	NIP            *NIPState                  `json:"nip,omitempty"`
@@ -237,14 +229,14 @@ type State struct {
 
 func newState() *State {
 	return &State{
-		WorldID:        newID("wld"),
+		WorldID:        web.NewID("wld"),
 		LinkSessions:   map[string]*LinkSession{},
 		WidgetSessions: map[string]*WidgetSession{},
 		Connections:    map[string]*Connection{},
 		Accounts:       map[string]*AccountRec{},
 		Feeds:          map[string]*Feed{},
 		Refreshes:      map[string]*Refresh{},
-		Idem:           map[string]*IdemRec{},
+		Idem:           map[string]*web.Record{},
 		Registry:       map[string]*RegistryClient{},
 		Vault:          map[string]*VaultEntry{},
 		NIP:            &NIPState{},
@@ -271,7 +263,7 @@ func (s *State) fill() {
 		s.Refreshes = map[string]*Refresh{}
 	}
 	if s.Idem == nil {
-		s.Idem = map[string]*IdemRec{}
+		s.Idem = map[string]*web.Record{}
 	}
 	if s.Registry == nil {
 		s.Registry = map[string]*RegistryClient{}
@@ -324,20 +316,10 @@ func saveJSON(path string, v any) error {
 	return pki.WriteFile(path, b, 0o600)
 }
 
-var idEncoding = base32.NewEncoding("0123456789abcdefghjkmnpqrstvwxyz").WithPadding(base32.NoPadding)
-
-func newID(prefix string) string {
-	b := make([]byte, 10)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return prefix + "_" + strings.ToLower(idEncoding.EncodeToString(b))
-}
-
 func newSecret(prefix string, n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
 	}
-	return prefix + strings.ToLower(idEncoding.EncodeToString(b))
+	return prefix + strings.ToLower(web.IDEncoding.EncodeToString(b))
 }

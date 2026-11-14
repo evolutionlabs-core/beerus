@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -13,7 +15,7 @@ const (
 )
 
 func (a *App) ctlInternalRegistry(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"data": a.RegistryClients()})
+	web.WriteJSON(w, http.StatusOK, map[string]any{"data": a.RegistryClients()})
 }
 
 func (a *App) refreshRegistry(ctx context.Context) error {

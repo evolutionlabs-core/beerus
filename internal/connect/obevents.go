@@ -18,6 +18,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const eventType = "application/secevent+jwt"
@@ -254,24 +255,24 @@ func (a *App) bankVerifyKey(id string) (*ecdsa.PublicKey, error) {
 func (a *App) consentEvents(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 16<<10))
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "The event could not be read.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The event could not be read.")
 		return
 	}
 	token := string(bytes.TrimSpace(raw))
 	head, _, err := openbanking.Peek(token)
 	kid, _ := head["kid"].(string)
 	if err != nil || kid == "" {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "The event is not a signed token.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The event is not a signed token.")
 		return
 	}
 	pub, err := a.bankVerifyKey(kid)
 	if err != nil {
-		writeError(w, r, http.StatusUnauthorized, "invalid_signature", "The bank's key could not be checked.")
+		web.WriteError(w, r, http.StatusUnauthorized, "invalid_signature", "The bank's key could not be checked.")
 		return
 	}
 	claims, err := openbanking.Verify(token, []*ecdsa.PublicKey{pub})
 	if err != nil {
-		writeError(w, r, http.StatusUnauthorized, "invalid_signature", "The signature does not match the bank.")
+		web.WriteError(w, r, http.StatusUnauthorized, "invalid_signature", "The signature does not match the bank.")
 		return
 	}
 	b := a.bankConfig(kid)
@@ -281,12 +282,12 @@ func (a *App) consentEvents(w http.ResponseWriter, r *http.Request) {
 	status, _ := claims["status"].(string)
 	now := a.clock.Real()
 	if claims["iss"] != b.APIURL() || claims["aud"] != a.cfg.WidgetURL() || jti == "" || consentID == "" || time.Unix(int64(exp), 0).Before(now) || !knownStatus(status) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "The event is not valid.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The event is not valid.")
 		return
 	}
 	fresh, err := a.eventJTI.first(kid+"|"+jti, time.Unix(int64(exp), 0), now)
 	if err != nil {
-		writeError(w, r, http.StatusTooManyRequests, "rate_limited", "Too many events. Try again shortly.")
+		web.WriteError(w, r, http.StatusTooManyRequests, "rate_limited", "Too many events. Try again shortly.")
 		return
 	}
 	if !fresh {

@@ -11,12 +11,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 func (a *App) ControlHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "world_id": a.WorldID()})
+		web.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "world_id": a.WorldID()})
 	})
 	mux.HandleFunc("GET /nip/name-enquiry", a.ctlNameEnquiry)
 	mux.HandleFunc("GET /nip/participants", a.ctlNIPParticipants)
@@ -34,11 +36,11 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /connections", a.ctlConnections)
 	mux.HandleFunc("POST /connections/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.RevokeAtBank(r.Context(), r.PathValue("id")); err != nil {
-			writeError(w, r, http.StatusNotFound, "not_found", "No such connection.")
+			web.WriteError(w, r, http.StatusNotFound, "not_found", "No such connection.")
 			return
 		}
 		a.poke()
-		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+		web.WriteJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 	})
 	mux.HandleFunc("POST /plan", a.ctlPlan)
 	mux.HandleFunc("POST /apply", a.ctlApply)
@@ -54,10 +56,10 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /webhooks/deliveries", a.ctlDeliveries)
 	mux.HandleFunc("POST /webhooks/deliveries/{id}/replay", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.Replay(r.PathValue("id")); err != nil {
-			writeError(w, r, http.StatusNotFound, "not_found", "No such delivery.")
+			web.WriteError(w, r, http.StatusNotFound, "not_found", "No such delivery.")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "pending"})
+		web.WriteJSON(w, http.StatusOK, map[string]string{"status": "pending"})
 	})
 	mux.HandleFunc("GET /banks", func(w http.ResponseWriter, r *http.Request) {
 		data := []BankStatus{}
@@ -66,7 +68,7 @@ func (a *App) ControlHandler() http.Handler {
 				data = append(data, st)
 			}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"data": data, "warnings": a.BankWarnings()})
+		web.WriteJSON(w, http.StatusOK, map[string]any{"data": data, "warnings": a.BankWarnings()})
 	})
 	mux.HandleFunc("POST /banks", a.ctlCreateBank)
 	mux.HandleFunc("GET /banks/{id}/customers", a.atBank(a.ctlCustomers))
@@ -89,12 +91,12 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("POST /banks/{id}/resume", func(w http.ResponseWriter, r *http.Request) { a.ctlSuspend(w, r, false) })
 	mux.HandleFunc("POST /sync", func(w http.ResponseWriter, r *http.Request) {
 		a.SyncAll(r.Context())
-		writeJSON(w, http.StatusOK, map[string]string{"status": "synced"})
+		web.WriteJSON(w, http.StatusOK, map[string]string{"status": "synced"})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, r, http.StatusNotFound, "not_found", "No such endpoint.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such endpoint.")
 	})
-	api := a.withRequestID(a.localOnly(mux))
+	api := web.WithRequestID(a.localOnly(mux))
 	room := a.roomHandler()
 	top := http.NewServeMux()
 	top.Handle("/ui", room)
@@ -112,19 +114,19 @@ func (a *App) localOnly(next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.peerAllowed(r) {
-			writeError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
+			web.WriteError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
 			return
 		}
 		if !hosts[r.Host] {
-			writeError(w, r, http.StatusForbidden, "forbidden", "Unexpected Host header.")
+			web.WriteError(w, r, http.StatusForbidden, "forbidden", "Unexpected Host header.")
 			return
 		}
 		if o := r.Header.Get("Origin"); o != "" {
-			writeError(w, r, http.StatusForbidden, "forbidden", "Browser requests are refused.")
+			web.WriteError(w, r, http.StatusForbidden, "forbidden", "Browser requests are refused.")
 			return
 		}
 		if !a.tokenOK(r) {
-			writeError(w, r, http.StatusUnauthorized, "unauthenticated", "A valid control token is required.")
+			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "A valid control token is required.")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -193,7 +195,7 @@ func (a *App) ctlConnections(w http.ResponseWriter, r *http.Request) {
 		out = append(out, m)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i]["created_at"].(string) < out[j]["created_at"].(string) })
-	writeJSON(w, http.StatusOK, map[string]any{"data": out})
+	web.WriteJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
 const (
@@ -207,7 +209,7 @@ func (a *App) ctlDeliveries(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > deliveryPageMax {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("limit must be a number from 1 to %d.", deliveryPageMax))
+			web.WriteError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("limit must be a number from 1 to %d.", deliveryPageMax))
 			return
 		}
 		limit = n
@@ -218,7 +220,7 @@ func (a *App) ctlDeliveries(w http.ResponseWriter, r *http.Request) {
 	if cursor := q.Get("cursor"); cursor != "" {
 		from = slices.IndexFunc(a.st.Deliveries, func(d *Delivery) bool { return d.ID == cursor }) - 1
 		if from < -1 {
-			writeError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")
+			web.WriteError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")
 			return
 		}
 	}
@@ -232,7 +234,7 @@ func (a *App) ctlDeliveries(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, map[string]any{"id": d.ID, "type": d.Type, "status": d.Status, "attempts": d.Attempts, "last_status": d.LastStatus, "last_error": d.LastError, "body": d.Body})
 	}
-	writeJSON(w, http.StatusOK, listPage(out, next))
+	web.WriteJSON(w, http.StatusOK, listPage(out, next))
 }
 
 func (a *App) SyncAll(ctx context.Context) {

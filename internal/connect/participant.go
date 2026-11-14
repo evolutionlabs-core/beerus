@@ -12,6 +12,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -91,23 +92,23 @@ func (a *App) participantAPI() http.Handler {
 	mux.HandleFunc("POST /v1/deposits", a.idempotent(a.ctlCash("deposit")))
 	mux.HandleFunc("POST /v1/withdrawals", a.idempotent(a.ctlCash("withdrawal")))
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, r, http.StatusNotFound, "not_found", "A bank does not serve this control call yet.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "A bank does not serve this control call yet.")
 	})
-	return a.withRequestID(a.participantGuard(mux))
+	return web.WithRequestID(a.participantGuard(mux))
 }
 
 func (a *App) participantGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.peerAllowed(r) {
-			writeError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
+			web.WriteError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
 			return
 		}
 		if r.Header.Get("Origin") != "" {
-			writeError(w, r, http.StatusForbidden, "forbidden", "Browser requests are refused.")
+			web.WriteError(w, r, http.StatusForbidden, "forbidden", "Browser requests are refused.")
 			return
 		}
 		if !a.tokenOK(r) {
-			writeError(w, r, http.StatusUnauthorized, "unauthenticated", "A valid control token is required.")
+			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "A valid control token is required.")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -115,7 +116,7 @@ func (a *App) participantGuard(next http.Handler) http.Handler {
 }
 
 func (a *App) participantHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "participant_id": a.bankID, "world_id": a.WorldID()})
+	web.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "participant_id": a.bankID, "world_id": a.WorldID()})
 }
 
 func (a *App) participantState() participantState {
@@ -134,18 +135,18 @@ func (a *App) participantState() participantState {
 }
 
 func (a *App) participantStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, a.participantState())
+	web.WriteJSON(w, http.StatusOK, a.participantState())
 }
 
 func (a *App) setParticipantPhase(w http.ResponseWriter, r *http.Request) {
 	var req phaseRequest
-	if err := decodeBody(r, &req); err != nil || !slices.Contains(participantPhases, req.Phase) || req.Generation < 0 || req.WorldID == "" {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"phase":"active","generation":1,"world_id":"wld_..."} with a phase, a generation and a world ID.`)
+	if err := web.DecodeBody(r, &req); err != nil || !slices.Contains(participantPhases, req.Phase) || req.Generation < 0 || req.WorldID == "" {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"phase":"active","generation":1,"world_id":"wld_..."} with a phase, a generation and a world ID.`)
 		return
 	}
 	if err := a.reloadBank(); err != nil {
 		a.log.Error("bank config not reloaded", "bank", a.bankID, "err", err)
-		writeError(w, r, http.StatusInternalServerError, "config_unreadable", "The bank config could not be read. Fix banks/"+a.bankID+"/"+config.BankFileName+" and send the phase again.")
+		web.WriteError(w, r, http.StatusInternalServerError, "config_unreadable", "The bank config could not be read. Fix banks/"+a.bankID+"/"+config.BankFileName+" and send the phase again.")
 		return
 	}
 	a.lifeMu.Lock()
@@ -157,7 +158,7 @@ func (a *App) setParticipantPhase(w http.ResponseWriter, r *http.Request) {
 	a.st.WorldID = req.WorldID
 	a.mu.Unlock()
 	a.phaseGen.Store(req.Generation)
-	writeJSON(w, http.StatusOK, a.participantState())
+	web.WriteJSON(w, http.StatusOK, a.participantState())
 }
 
 func faultPage(r *http.Request) (limit int, cursor string, ok bool) {
@@ -175,7 +176,7 @@ func faultPage(r *http.Request) (limit int, cursor string, ok bool) {
 func (a *App) listParticipantFaults(w http.ResponseWriter, r *http.Request) {
 	limit, cursor, ok := faultPage(r)
 	if !ok {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("limit must be a number from 1 to %d.", faultPageMax))
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("limit must be a number from 1 to %d.", faultPageMax))
 		return
 	}
 	live := a.Faults()
@@ -183,7 +184,7 @@ func (a *App) listParticipantFaults(w http.ResponseWriter, r *http.Request) {
 	if cursor != "" {
 		i := slices.IndexFunc(live, func(f Fault) bool { return f.ID == cursor })
 		if i < 0 {
-			writeError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")
+			web.WriteError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")
 			return
 		}
 		start = i + 1
@@ -197,19 +198,19 @@ func (a *App) listParticipantFaults(w http.ResponseWriter, r *http.Request) {
 	if end < len(live) {
 		page["next_cursor"] = live[end-1].ID
 	}
-	writeJSON(w, http.StatusOK, page)
+	web.WriteJSON(w, http.StatusOK, page)
 }
 
 func (a *App) setParticipantFault(w http.ResponseWriter, r *http.Request) {
 	var req FaultRequest
-	if err := decodeBody(r, &req); err != nil || req.Bank != "" {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"kind":"down","for":"1h"} or {"kind":"timeout","outcome":"credited"}.`)
+	if err := web.DecodeBody(r, &req); err != nil || req.Bank != "" {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"kind":"down","for":"1h"} or {"kind":"timeout","outcome":"credited"}.`)
 		return
 	}
 	now := a.clock.Now()
 	f, err := newFault(req, now)
 	if err != nil {
-		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
 		return
 	}
 	f.ID, f.Bank = faultIDFor(r.Header.Get("Idempotency-Key")), a.bankID
@@ -218,12 +219,12 @@ func (a *App) setParticipantFault(w http.ResponseWriter, r *http.Request) {
 	a.st.Faults = append(a.st.Faults, &f)
 	a.dirty()
 	a.mu.Unlock()
-	writeJSON(w, http.StatusCreated, faultView(f))
+	web.WriteJSON(w, http.StatusCreated, faultView(f))
 }
 
 func (a *App) clearParticipantFaults(w http.ResponseWriter, r *http.Request) {
 	cleared := a.ClearFaults("")
-	prefix := strings.Join([]string{controlOwner, http.MethodPost, "/v1/faults", ""}, " ")
+	prefix := strings.Join([]string{web.ControlOwner, http.MethodPost, "/v1/faults", ""}, " ")
 	a.mu.Lock()
 	for scope := range a.st.Idem {
 		if strings.HasPrefix(scope, prefix) {
@@ -231,7 +232,7 @@ func (a *App) clearParticipantFaults(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]int{"cleared": cleared})
+	web.WriteJSON(w, http.StatusOK, map[string]int{"cleared": cleared})
 }
 
 func (a *App) bankRefusing(id string) bool {

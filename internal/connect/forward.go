@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -62,7 +63,7 @@ func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 	}
 	phase := a.bankPhase(id)
 	if phase == PhaseClosed || b.Closed() {
-		writeError(w, r, http.StatusConflict, "bank_closed", fmt.Sprintf("%s is closed.", b.Name))
+		web.WriteError(w, r, http.StatusConflict, "bank_closed", fmt.Sprintf("%s is closed.", b.Name))
 		return
 	}
 	write := r.Method != http.MethodGet
@@ -72,16 +73,16 @@ func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 			return
 		}
 		if key == "" {
-			key = newID("idk")
+			key = web.NewID("idk")
 		}
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, bodyLimit+1))
+	body, err := io.ReadAll(io.LimitReader(r.Body, web.BodyLimit+1))
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body could not be read.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The request body could not be read.")
 		return
 	}
-	if len(body) > bodyLimit {
-		writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", fmt.Sprintf("The request body is larger than %d MiB.", bodyLimit>>20))
+	if len(body) > web.BodyLimit {
+		web.WriteError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", fmt.Sprintf("The request body is larger than %d MiB.", web.BodyLimit>>20))
 		return
 	}
 	status, header, out, err := a.callBank(r.Context(), b, r, key, body)
@@ -92,11 +93,11 @@ func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 		var bad *badAnswerError
 		if errors.As(err, &bad) {
 			a.log.Warn("bank answer refused", "bank", id, "err", err)
-			writeError(w, r, http.StatusBadGateway, "bad_gateway", fmt.Sprintf("%s sent an answer that could not be used: %v.", b.Name, bad.err))
+			web.WriteError(w, r, http.StatusBadGateway, "bad_gateway", fmt.Sprintf("%s sent an answer that could not be used: %v.", b.Name, bad.err))
 			return
 		}
 		a.log.Warn("bank not reachable", "bank", id, "err", err)
-		writeError(w, r, http.StatusServiceUnavailable, "unavailable", fmt.Sprintf("%s is not running or cannot be reached. Run beerus get banks to see its state, then try again.", b.Name))
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", fmt.Sprintf("%s is not running or cannot be reached. Run beerus get banks to see its state, then try again.", b.Name))
 		return
 	}
 	for _, name := range []string{"Content-Type", "Idempotent-Replayed"} {

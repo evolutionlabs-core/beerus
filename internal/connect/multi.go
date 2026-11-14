@@ -24,6 +24,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -42,8 +43,8 @@ func (a *App) remotePeers() bool {
 
 func (a *App) ctlConsentRecord(w http.ResponseWriter, r *http.Request) {
 	var e openbanking.ConsentEvent
-	if err := decodeBody(r, &e); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Send a consent event.")
+	if err := web.DecodeBody(r, &e); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send a consent event.")
 		return
 	}
 	consentLedger{a}.Record(e)
@@ -301,7 +302,7 @@ func (a *bankSite) internalRevoke(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ConsentID string `json:"consent_id"`
 	}
-	if err := decodeBody(r, &body); err != nil {
+	if err := web.DecodeBody(r, &body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}

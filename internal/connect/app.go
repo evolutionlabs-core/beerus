@@ -23,6 +23,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 type App struct {
@@ -41,8 +42,7 @@ type App struct {
 	log          *slog.Logger
 	isDirty      atomic.Bool
 	limiters     map[string]*rate.Limiter
-	idemMu       sync.Mutex
-	idemLocks    map[string]*idemEntry
+	idem         web.Idempotency
 	sendLocks    sync.Map
 	client       *http.Client
 	wake         chan struct{}
@@ -161,7 +161,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		st = newState()
 	} else if _, err := os.Stat(a.runningPath()); err == nil {
 		a.log.Warn("the last run did not shut down cleanly; starting a new run so partners resync", "old_run", st.WorldID)
-		st.WorldID = newID("wld")
+		st.WorldID = web.NewID("wld")
 	}
 	for _, d := range st.Deliveries {
 		if d.Status == "sending" {
@@ -359,7 +359,7 @@ func (a *App) sweep() {
 	}
 	a.swept = real
 	for k, rec := range a.st.Idem {
-		if real.Sub(rec.CreatedReal) > idemTTL {
+		if real.Sub(rec.CreatedReal) > web.IdempotencyTTL {
 			delete(a.st.Idem, k)
 		}
 	}
@@ -413,7 +413,7 @@ func (a *App) emit(partner, typ string, data any) {
 		a.log.Error("marshal webhook", "err", err)
 		return
 	}
-	d := &Delivery{ID: newID("msg"), PartnerID: partner, Type: typ, Body: body, Status: "pending", NextReal: a.clock.Real(), CreatedReal: a.clock.Real()}
+	d := &Delivery{ID: web.NewID("msg"), PartnerID: partner, Type: typ, Body: body, Status: "pending", NextReal: a.clock.Real(), CreatedReal: a.clock.Real()}
 	p := a.partnerOf(partner)
 	if p == nil || p.WebhookURL == "" {
 		d.Status = "no_endpoint"

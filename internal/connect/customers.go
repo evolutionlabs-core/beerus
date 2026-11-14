@@ -12,6 +12,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const listDefault = 100
@@ -89,7 +90,7 @@ func (a *App) activeBook(id string) (book, error) {
 
 func writeKey(key, op string) string {
 	if key == "" {
-		return newID(op)
+		return web.NewID(op)
 	}
 	return "api:" + key
 }
@@ -275,47 +276,47 @@ func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
 	var ue *unavailableError
 	switch {
 	case errors.As(err, &te):
-		writeError(w, r, te.status, te.errCode, sentence(te.Error()))
+		web.WriteError(w, r, te.status, te.errCode, sentence(te.Error()))
 	case errors.Is(err, errBankNotFound):
 		a.noSuchBank(w, r)
 	case errors.Is(err, errBankNotActive):
-		writeError(w, r, http.StatusConflict, "bank_not_active", sentence(err.Error()))
+		web.WriteError(w, r, http.StatusConflict, "bank_not_active", sentence(err.Error()))
 	case errors.Is(err, bank.ErrUnknownCustomer):
-		writeError(w, r, http.StatusNotFound, "not_found", "No such customer.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such customer.")
 	case errors.Is(err, ledger.ErrUnknownAccount):
-		writeError(w, r, http.StatusNotFound, "not_found", "No such account.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such account.")
 	case errors.Is(err, bank.ErrBadCursor):
-		writeError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use next_cursor from the last page.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use next_cursor from the last page.")
 	case errors.Is(err, bank.ErrUsernameTaken):
-		writeError(w, r, http.StatusConflict, "username_taken", clean(err))
+		web.WriteError(w, r, http.StatusConflict, "username_taken", clean(err))
 	case errors.Is(err, bank.ErrCustomerClosed):
-		writeError(w, r, http.StatusUnprocessableEntity, "customer_closed", clean(err))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "customer_closed", clean(err))
 	case errors.Is(err, bank.ErrOpenAccounts):
-		writeError(w, r, http.StatusUnprocessableEntity, "open_accounts", clean(err))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "open_accounts", clean(err))
 	case errors.Is(err, bank.ErrBalanceNotZero):
-		writeError(w, r, http.StatusUnprocessableEntity, "balance_not_zero", clean(err))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "balance_not_zero", clean(err))
 	case errors.Is(err, bank.ErrNUBANsUsed):
-		writeError(w, r, http.StatusUnprocessableEntity, "nubans_used", clean(err))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "nubans_used", clean(err))
 	case errors.Is(err, ledger.ErrIdempotency):
-		writeError(w, r, http.StatusUnprocessableEntity, "idempotency_key_reused", "That Idempotency-Key was used for a different request.")
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "idempotency_key_reused", "That Idempotency-Key was used for a different request.")
 	case errors.Is(err, ledger.ErrInvalid):
-		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", clean(err))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", clean(err))
 	case errors.As(err, &ue):
 		a.log.Warn("banking unavailable", "path", r.URL.Path, "err", ue.err)
-		writeError(w, r, http.StatusServiceUnavailable, "unavailable", ue.msg)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", ue.msg)
 	case errors.As(err, &fe):
-		writeError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", fe.Message())
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", fe.Message())
 	case errors.As(err, &de):
-		writeError(w, r, http.StatusUnprocessableEntity, "daily_limit", de.Message())
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "daily_limit", de.Message())
 	case errors.Is(err, ledger.ErrInsufficientFunds):
-		writeError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", "The account does not have enough money.")
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", "The account does not have enough money.")
 	case errors.Is(err, ledger.ErrDailyLimit):
-		writeError(w, r, http.StatusUnprocessableEntity, "daily_limit", "The account has reached its daily limit.")
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "daily_limit", "The account has reached its daily limit.")
 	case errors.Is(err, ledger.ErrAccountClosed), errors.Is(err, ledger.ErrAccountFrozen), errors.Is(err, ledger.ErrPostNoDebit):
-		writeError(w, r, http.StatusUnprocessableEntity, "account_restricted", clean(err))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "account_restricted", clean(err))
 	default:
 		a.log.Error("banking", "path", r.URL.Path, "err", err)
-		writeError(w, r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
 	}
 }
 
@@ -329,7 +330,7 @@ func (a *App) bankIDOf(r *http.Request) string {
 func idemKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 	key := r.Header.Get("Idempotency-Key")
 	if len(key) > 255 {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "The Idempotency-Key header must be 1 to 255 characters.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The Idempotency-Key header must be 1 to 255 characters.")
 		return "", false
 	}
 	return key, true
@@ -346,7 +347,7 @@ func (a *App) ctlCustomers(w http.ResponseWriter, r *http.Request) {
 		a.bankingError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, listPage(data, next))
+	web.WriteJSON(w, http.StatusOK, listPage(data, next))
 }
 
 func (a *App) ctlCreateCustomer(w http.ResponseWriter, r *http.Request) {
@@ -355,8 +356,8 @@ func (a *App) ctlCreateCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req CustomerRequest
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"Ada Obi","phone":"08031234567","dob":"1990-04-21"}, with optional username and password.`)
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"Ada Obi","phone":"08031234567","dob":"1990-04-21"}, with optional username and password.`)
 		return
 	}
 	req.Key = key
@@ -365,7 +366,7 @@ func (a *App) ctlCreateCustomer(w http.ResponseWriter, r *http.Request) {
 		a.bankingError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, c)
+	web.WriteJSON(w, http.StatusCreated, c)
 }
 
 func (a *App) ctlCloseCustomer(w http.ResponseWriter, r *http.Request) {
@@ -374,7 +375,7 @@ func (a *App) ctlCloseCustomer(w http.ResponseWriter, r *http.Request) {
 		a.bankingError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"customer": id, "status": bank.CustomerClosed})
+	web.WriteJSON(w, http.StatusOK, map[string]string{"customer": id, "status": bank.CustomerClosed})
 }
 
 func (a *App) ctlAccounts(w http.ResponseWriter, r *http.Request) {
@@ -388,7 +389,7 @@ func (a *App) ctlAccounts(w http.ResponseWriter, r *http.Request) {
 		a.bankingError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, listPage(data, next))
+	web.WriteJSON(w, http.StatusOK, listPage(data, next))
 }
 
 func (a *App) ctlOpenAccount(w http.ResponseWriter, r *http.Request) {
@@ -397,8 +398,8 @@ func (a *App) ctlOpenAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req AccountRequest
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"customer":"cus_...","type":"current"}.`)
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"customer":"cus_...","type":"current"}.`)
 		return
 	}
 	req.Key = key
@@ -407,7 +408,7 @@ func (a *App) ctlOpenAccount(w http.ResponseWriter, r *http.Request) {
 		a.bankingError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, acc)
+	web.WriteJSON(w, http.StatusCreated, acc)
 }
 
 func (a *App) ctlCloseAccount(w http.ResponseWriter, r *http.Request) {
@@ -416,7 +417,7 @@ func (a *App) ctlCloseAccount(w http.ResponseWriter, r *http.Request) {
 		a.bankingError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"nuban": nuban, "status": "closed"})
+	web.WriteJSON(w, http.StatusOK, map[string]string{"nuban": nuban, "status": "closed"})
 }
 
 func (a *App) ctlStatement(w http.ResponseWriter, r *http.Request) {
@@ -442,7 +443,7 @@ func (a *App) ctlStatement(w http.ResponseWriter, r *http.Request) {
 		a.bankingError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, listPage(data, next))
+	web.WriteJSON(w, http.StatusOK, listPage(data, next))
 }
 
 func (a *App) ctlCash(kind string) http.HandlerFunc {
@@ -452,8 +453,8 @@ func (a *App) ctlCash(kind string) http.HandlerFunc {
 			return
 		}
 		var req CashRequest
-		if err := decodeBody(r, &req); err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"account":"0123456789","amount":"5000.00"}.`)
+		if err := web.DecodeBody(r, &req); err != nil {
+			web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"account":"0123456789","amount":"5000.00"}.`)
 			return
 		}
 		req.Key = key
@@ -462,7 +463,7 @@ func (a *App) ctlCash(kind string) http.HandlerFunc {
 			a.bankingError(w, r, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, res)
+		web.WriteJSON(w, http.StatusCreated, res)
 	}
 }
 

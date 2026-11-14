@@ -29,6 +29,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 func (a *App) prepareOpenBanking() error {
@@ -509,13 +510,13 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 }
 
 func (a *App) ctlRegistryClients(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"data": a.RegistryClients()})
+	web.WriteJSON(w, http.StatusOK, map[string]any{"data": a.RegistryClients()})
 }
 
 func (a *App) ctlRegistryAdd(w http.ResponseWriter, r *http.Request) {
 	var req RegistryRequest
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Send a JSON body with id, cert_cn, public_key_pem and redirect_uris.")
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send a JSON body with id, cert_cn, public_key_pem and redirect_uris.")
 		return
 	}
 	c, err := a.AddRegistryClient(req)
@@ -524,10 +525,10 @@ func (a *App) ctlRegistryAdd(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, ErrRegistry) {
 			status = http.StatusUnprocessableEntity
 		}
-		writeError(w, r, status, "invalid_request", err.Error())
+		web.WriteError(w, r, status, "invalid_request", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, c)
+	web.WriteJSON(w, http.StatusCreated, c)
 }
 
 func (a *App) ctlConsentLedger(w http.ResponseWriter, r *http.Request) {
@@ -536,7 +537,7 @@ func (a *App) ctlConsentLedger(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > consentPageMax {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("limit must be a number from 1 to %d.", consentPageMax))
+			web.WriteError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("limit must be a number from 1 to %d.", consentPageMax))
 			return
 		}
 		limit = n
@@ -544,7 +545,7 @@ func (a *App) ctlConsentLedger(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("cursor"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || n < 1 {
-			writeError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use the next value from the last page.")
+			web.WriteError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use the next value from the last page.")
 			return
 		}
 		before = n
@@ -554,5 +555,5 @@ func (a *App) ctlConsentLedger(w http.ResponseWriter, r *http.Request) {
 	if next > 0 {
 		out["next"] = strconv.FormatInt(next, 10)
 	}
-	writeJSON(w, http.StatusOK, out)
+	web.WriteJSON(w, http.StatusOK, out)
 }

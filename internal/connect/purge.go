@@ -13,6 +13,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 type PurgeImpact struct {
@@ -224,15 +225,15 @@ func (a *App) ctlPurgeImpact(w http.ResponseWriter, r *http.Request) {
 		a.bankError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, imp)
+	web.WriteJSON(w, http.StatusOK, imp)
 }
 
 func (a *App) ctlPurgeBank(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SettleNow bool `json:"settle_now"`
 	}
-	if err := decodeBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send nothing or {"settle_now":true}.`)
+	if err := web.DecodeBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send nothing or {"settle_now":true}.`)
 		return
 	}
 	res, err := a.PurgeBank(r.PathValue("id"), req.SettleNow)
@@ -240,5 +241,5 @@ func (a *App) ctlPurgeBank(w http.ResponseWriter, r *http.Request) {
 		a.bankError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, res)
+	web.WriteJSON(w, http.StatusAccepted, res)
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -41,9 +42,9 @@ func (a *App) PartnerHandler() http.Handler {
 	mux.HandleFunc("GET /v1/accounts/{id}/transactions/sync", a.syncTransactions)
 	mux.HandleFunc("POST /v1/accounts/{id}/refresh", a.idempotent(a.refresh))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, r, http.StatusNotFound, "not_found", "No such endpoint.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such endpoint.")
 	})
-	return a.withRequestID(a.authenticate(mux))
+	return web.WithRequestID(a.authenticate(mux))
 }
 
 func ts(t time.Time) string {
@@ -83,7 +84,7 @@ func (a *App) newLinkSession(p *config.Partner, workspace string, start clock.Da
 	token := newSecret("lt_", 20)
 	real := a.clock.Real()
 	ls := &LinkSession{
-		ID:           newID("lks"),
+		ID:           web.NewID("lks"),
 		PartnerID:    p.ID,
 		WorkspaceID:  workspace,
 		Status:       "created",
@@ -110,35 +111,35 @@ func (a *App) createLinkSession(w http.ResponseWriter, r *http.Request) {
 		RedirectURI string `json:"redirect_uri"`
 		State       string `json:"state"`
 	}
-	if err := decodeBody(r, &body); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object with start_date, workspace_id and redirect_uri.")
+	if err := web.DecodeBody(r, &body); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object with start_date, workspace_id and redirect_uri.")
 		return
 	}
 	start, err := clock.ParseDate(body.StartDate)
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "start_date must be a date in YYYY-MM-DD form.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "start_date must be a date in YYYY-MM-DD form.")
 		return
 	}
 	if body.WorkspaceID == "" || len(body.WorkspaceID) > 128 {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "workspace_id must be 1 to 128 characters.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "workspace_id must be 1 to 128 characters.")
 		return
 	}
 	if len(body.State) > 512 {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "state must be at most 512 characters.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "state must be at most 512 characters.")
 		return
 	}
 	if !slices.Contains(p.RedirectURIs, body.RedirectURI) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "redirect_uri must exactly match a registered redirect URI.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "redirect_uri must exactly match a registered redirect URI.")
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if start.After(a.clock.Today()) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "start_date must not be in the future.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "start_date must not be in the future.")
 		return
 	}
 	ls, token := a.newLinkSession(p, body.WorkspaceID, start, body.RedirectURI, body.State, "", "")
-	writeJSON(w, http.StatusCreated, a.linkSessionJSON(ls, token))
+	web.WriteJSON(w, http.StatusCreated, a.linkSessionJSON(ls, token))
 }
 
 func (a *App) getLinkSession(w http.ResponseWriter, r *http.Request) {
@@ -147,11 +148,11 @@ func (a *App) getLinkSession(w http.ResponseWriter, r *http.Request) {
 	defer a.mu.Unlock()
 	ls := a.st.LinkSessions[r.PathValue("id")]
 	if ls == nil || ls.PartnerID != p.ID {
-		writeError(w, r, http.StatusNotFound, "not_found", "No such link session.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such link session.")
 		return
 	}
 	a.expireSession(ls)
-	writeJSON(w, http.StatusOK, a.linkSessionJSON(ls, ""))
+	web.WriteJSON(w, http.StatusOK, a.linkSessionJSON(ls, ""))
 }
 
 func (a *App) expireSession(ls *LinkSession) {
@@ -166,7 +167,7 @@ func (a *App) expireSession(ls *LinkSession) {
 }
 
 func (a *App) listWebhookKeys(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]string{{"key_id": a.key.ID, "public_key": a.key.PublicWH(), "status": "active"}}})
+	web.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]string{{"key_id": a.key.ID, "public_key": a.key.PublicWH(), "status": "active"}}})
 }
 
 func (a *App) effectiveStart(start clock.Date, institution string) (clock.Date, bool) {
@@ -186,8 +187,8 @@ func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
 		Code          string `json:"code"`
 		LinkSessionID string `json:"link_session_id"`
 	}
-	if err := decodeBody(r, &body); err != nil || body.Code == "" || body.LinkSessionID == "" {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object with code and link_session_id.")
+	if err := web.DecodeBody(r, &body); err != nil || body.Code == "" || body.LinkSessionID == "" {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object with code and link_session_id.")
 		return
 	}
 	a.mu.Lock()
@@ -210,7 +211,7 @@ func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
 	if b != nil && ex.oldConsent != "" && ex.oldConsent != ex.consent {
 		a.revokeOrQueue(b, ex.oldConsent)
 	}
-	writeJSON(w, ex.status, out)
+	web.WriteJSON(w, ex.status, out)
 }
 
 type exchangeGrant struct {
@@ -243,34 +244,34 @@ func (a *App) firstSync(c *Connection, rec *AccountRec, at time.Time) {
 func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *config.Partner, code, linkSessionID string) (exchangeGrant, bool) {
 	ls := a.st.LinkSessions[linkSessionID]
 	if ls == nil {
-		writeError(w, r, http.StatusNotFound, "invalid_code", "The code or link session is unknown.")
+		web.WriteError(w, r, http.StatusNotFound, "invalid_code", "The code or link session is unknown.")
 		return exchangeGrant{}, false
 	}
 	if ls.PartnerID != p.ID {
-		writeError(w, r, http.StatusForbidden, "link_session_mismatch", "The link session belongs to another partner.")
+		web.WriteError(w, r, http.StatusForbidden, "link_session_mismatch", "The link session belongs to another partner.")
 		return exchangeGrant{}, false
 	}
 	h := hashSecret(code)
 	if ls.CodeHash != h {
 		for _, other := range a.st.LinkSessions {
 			if other.CodeHash == h {
-				writeError(w, r, http.StatusForbidden, "link_session_mismatch", "The code belongs to another link session.")
+				web.WriteError(w, r, http.StatusForbidden, "link_session_mismatch", "The code belongs to another link session.")
 				return exchangeGrant{}, false
 			}
 		}
-		writeError(w, r, http.StatusNotFound, "invalid_code", "The code is unknown.")
+		web.WriteError(w, r, http.StatusNotFound, "invalid_code", "The code is unknown.")
 		return exchangeGrant{}, false
 	}
 	if ls.CodeUsed || ls.Status == "exchanged" {
-		writeError(w, r, http.StatusNotFound, "invalid_code", "The code was already used.")
+		web.WriteError(w, r, http.StatusNotFound, "invalid_code", "The code was already used.")
 		return exchangeGrant{}, false
 	}
 	if a.clock.Real().After(ls.CodeExpires) {
-		writeError(w, r, http.StatusNotFound, "invalid_code", "The code has expired.")
+		web.WriteError(w, r, http.StatusNotFound, "invalid_code", "The code has expired.")
 		return exchangeGrant{}, false
 	}
 	if ls.Status != "authorised" {
-		writeError(w, r, http.StatusConflict, "link_session_expired", "The link session is not authorised.")
+		web.WriteError(w, r, http.StatusConflict, "link_session_expired", "The link session is not authorised.")
 		return exchangeGrant{}, false
 	}
 	ls.CodeUsed = true
@@ -280,25 +281,25 @@ func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *con
 	if ls.ConnectionID != "" {
 		c = a.st.Connections[ls.ConnectionID]
 		if c == nil {
-			writeError(w, r, http.StatusNotFound, "not_found", "The connection no longer exists.")
+			web.WriteError(w, r, http.StatusNotFound, "not_found", "The connection no longer exists.")
 			return exchangeGrant{}, false
 		}
 		if c.Status == "revoked" {
 			ls.Status = "expired"
 			a.dirty()
-			writeError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
+			web.WriteError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
 			return exchangeGrant{}, false
 		}
 		status = http.StatusOK
 	} else {
-		c = &Connection{ID: newID("con"), PartnerID: p.ID, WorkspaceID: ls.WorkspaceID, Institution: ls.Institution, CustomerID: ls.CustomerID, StartDate: ls.StartDate, CreatedAt: a.clock.Now()}
+		c = &Connection{ID: web.NewID("con"), PartnerID: p.ID, WorkspaceID: ls.WorkspaceID, Institution: ls.Institution, CustomerID: ls.CustomerID, StartDate: ls.StartDate, CreatedAt: a.clock.Now()}
 		a.st.Connections[c.ID] = c
 		ls.ConnectionID = c.ID
 	}
 	oldConsent := c.ConsentID
 	if err := a.vaultMove(linkVaultPrefix+ls.ID, c.ID); err != nil {
 		a.dirty()
-		writeError(w, r, http.StatusInternalServerError, "internal_error", "The bank tokens could not be stored.")
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The bank tokens could not be stored.")
 		return exchangeGrant{}, false
 	}
 	auth := a.authoriseLocked(c, ls)
@@ -316,7 +317,7 @@ type authorisation struct {
 func (a *App) authoriseLocked(c *Connection, ls *LinkSession) authorisation {
 	now := a.clock.Now()
 	eff, _ := a.effectiveStart(c.StartDate, c.Institution)
-	c.ConsentID = newID("cns")
+	c.ConsentID = web.NewID("cns")
 	c.AuthorisedAt = now
 	c.ExpiresAt = now.AddDate(1, 0, 0)
 	if ls.BankConsentID != "" {
@@ -419,7 +420,7 @@ func (a *App) connectionFor(w http.ResponseWriter, r *http.Request) *Connection 
 	p := partnerFrom(r)
 	c := a.st.Connections[r.PathValue("id")]
 	if c == nil || c.PartnerID != p.ID {
-		writeError(w, r, http.StatusNotFound, "not_found", "No such connection.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such connection.")
 		return nil
 	}
 	return c
@@ -429,7 +430,7 @@ func (a *App) getConnection(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if c := a.connectionFor(w, r); c != nil {
-		writeJSON(w, http.StatusOK, a.connectionJSON(c))
+		web.WriteJSON(w, http.StatusOK, a.connectionJSON(c))
 	}
 }
 
@@ -449,9 +450,9 @@ func (a *App) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	if err := a.revokeConnectionAtBank(c.ID); err != nil {
 		w.Header().Set("Retry-After", "60")
 		if isDown(err) {
-			writeError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached to revoke the consent.")
+			web.WriteError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached to revoke the consent.")
 		} else {
-			writeError(w, r, http.StatusBadGateway, "bank_error", "The bank did not accept the revocation.")
+			web.WriteError(w, r, http.StatusBadGateway, "bank_error", "The bank did not accept the revocation.")
 		}
 		return
 	}
@@ -506,7 +507,7 @@ func (a *App) listAccounts(w http.ResponseWriter, r *http.Request) {
 			out = append(out, a.accountJSON(rec, c.ID))
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": out})
+	web.WriteJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
 func (a *App) reauth(w http.ResponseWriter, r *http.Request) {
@@ -517,13 +518,13 @@ func (a *App) reauth(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body could not be read.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The request body could not be read.")
 		return
 	}
 	if len(raw) > 0 {
 		r.Body = io.NopCloser(bytes.NewReader(raw))
-		if err := decodeBody(r, &body); err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object with optional redirect_uri and state.")
+		if err := web.DecodeBody(r, &body); err != nil {
+			web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object with optional redirect_uri and state.")
 			return
 		}
 	}
@@ -531,11 +532,11 @@ func (a *App) reauth(w http.ResponseWriter, r *http.Request) {
 		body.RedirectURI = p.RedirectURIs[0]
 	}
 	if !slices.Contains(p.RedirectURIs, body.RedirectURI) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "redirect_uri must exactly match a registered redirect URI.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "redirect_uri must exactly match a registered redirect URI.")
 		return
 	}
 	if len(body.State) > 512 {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "state must be at most 512 characters.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "state must be at most 512 characters.")
 		return
 	}
 	a.mu.Lock()
@@ -545,11 +546,11 @@ func (a *App) reauth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.Status == "revoked" {
-		writeError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
+		web.WriteError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
 		return
 	}
 	ls, token := a.newLinkSession(p, c.WorkspaceID, c.StartDate, body.RedirectURI, body.State, c.ID, c.Institution)
-	writeJSON(w, http.StatusCreated, a.linkSessionJSON(ls, token))
+	web.WriteJSON(w, http.StatusCreated, a.linkSessionJSON(ls, token))
 }
 
 func (a *App) grantFor(rec *AccountRec) (*Connection, string) {
@@ -576,15 +577,15 @@ func (a *App) accountFor(w http.ResponseWriter, r *http.Request) (*AccountRec, *
 	p := partnerFrom(r)
 	rec := a.st.Accounts[r.PathValue("id")]
 	if rec == nil || rec.PartnerID != p.ID || rec.Removed {
-		writeError(w, r, http.StatusNotFound, "not_found", "No such account.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such account.")
 		return nil, nil
 	}
 	c, code := a.grantFor(rec)
 	if c == nil {
 		if code == "reauth_required" {
-			writeError(w, r, http.StatusConflict, code, "The customer must consent again.")
+			web.WriteError(w, r, http.StatusConflict, code, "The customer must consent again.")
 		} else {
-			writeError(w, r, http.StatusConflict, code, "The connection was revoked. Create a new link session.")
+			web.WriteError(w, r, http.StatusConflict, code, "The connection was revoked. Create a new link session.")
 		}
 		return nil, nil
 	}
@@ -595,7 +596,7 @@ func (a *App) getAccount(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if rec, c := a.accountFor(w, r); rec != nil {
-		writeJSON(w, http.StatusOK, a.accountJSON(rec, c.ID))
+		web.WriteJSON(w, http.StatusOK, a.accountJSON(rec, c.ID))
 	}
 }
 
@@ -613,13 +614,13 @@ func (a *App) balanceQueryLocked(w http.ResponseWriter, r *http.Request) (balanc
 	}
 	d, err := clock.ParseDate(r.URL.Query().Get("as_of"))
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "as_of must be a date in YYYY-MM-DD form.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "as_of must be a date in YYYY-MM-DD form.")
 		return balanceQuery{}, false
 	}
 	min := rec.From.AddDays(-1)
 	max := a.clock.Today().AddDays(-1)
 	if d.Before(min) || d.After(max) {
-		writeError(w, r, http.StatusUnprocessableEntity, "as_of_out_of_range", "as_of must be between "+min.String()+" and "+max.String()+", the day before the first date Connect holds and the last completed business day.")
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "as_of_out_of_range", "as_of must be between "+min.String()+" and "+max.String()+", the day before the first date Connect holds and the last completed business day.")
 		return balanceQuery{}, false
 	}
 	pull, err := a.bankPullPlanLocked(conn, rec)
@@ -635,7 +636,7 @@ func (a *App) balanceFailedLocked(w http.ResponseWriter, r *http.Request, conn *
 		a.connUnavailable(w, r, conn)
 		return
 	}
-	writeError(w, r, http.StatusInternalServerError, "internal_error", "Something went wrong.")
+	web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "Something went wrong.")
 }
 
 func (a *App) getBalance(w http.ResponseWriter, r *http.Request) {
@@ -656,7 +657,7 @@ func (a *App) getBalance(w http.ResponseWriter, r *http.Request) {
 	if q.rec.Cut {
 		eff = q.rec.From.String()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	web.WriteJSON(w, http.StatusOK, map[string]any{
 		"account_id":           q.rec.ID,
 		"as_of":                q.date.String(),
 		"ledger_balance":       map[string]any{"amount_minor": bal, "currency": q.rec.Currency},
@@ -675,7 +676,7 @@ func (a *App) syncTransactions(w http.ResponseWriter, r *http.Request) {
 	if s := r.URL.Query().Get("limit"); s != "" {
 		n, err := strconv.Atoi(s)
 		if err != nil || n < 1 || n > 500 {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "limit must be an integer from 1 to 500.")
+			web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "limit must be an integer from 1 to 500.")
 			return
 		}
 		limit = n
@@ -684,15 +685,15 @@ func (a *App) syncTransactions(w http.ResponseWriter, r *http.Request) {
 	if s := r.URL.Query().Get("cursor"); s != "" {
 		c, err := decodeCursor(s)
 		if err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_cursor", "The cursor cannot be read.")
+			web.WriteError(w, r, http.StatusBadRequest, "invalid_cursor", "The cursor cannot be read.")
 			return
 		}
 		if c.World != a.st.WorldID {
-			writeError(w, r, http.StatusConflict, "cursor_reset", "The world was replaced after an unclean shutdown or a reset. Start again with no cursor.")
+			web.WriteError(w, r, http.StatusConflict, "cursor_reset", "The world was replaced after an unclean shutdown or a reset. Start again with no cursor.")
 			return
 		}
 		if c.Account != rec.ID || c.Seq > a.st.Seq {
-			writeError(w, r, http.StatusBadRequest, "invalid_cursor", "The cursor belongs to another account.")
+			web.WriteError(w, r, http.StatusBadRequest, "invalid_cursor", "The cursor belongs to another account.")
 			return
 		}
 		from = c.Seq
@@ -724,7 +725,7 @@ func (a *App) syncTransactions(w http.ResponseWriter, r *http.Request) {
 			n++
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	web.WriteJSON(w, http.StatusOK, map[string]any{
 		"added":       added,
 		"modified":    modified,
 		"removed":     removed,
@@ -744,25 +745,25 @@ func (a *App) refresh(w http.ResponseWriter, r *http.Request) {
 	real := a.clock.Real()
 	if wait := a.cfg.RefreshMinInterval() - real.Sub(rec.LastRefresh); !rec.LastRefresh.IsZero() && wait > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
-		writeError(w, r, http.StatusTooManyRequests, "rate_limited", "Too many refresh requests for this account.")
+		web.WriteError(w, r, http.StatusTooManyRequests, "rate_limited", "Too many refresh requests for this account.")
 		return
 	}
 	rec.LastRefresh = real
-	rf := &Refresh{ID: newID("ref"), AccountID: rec.ID, Status: "queued", RequestedAt: a.clock.Now()}
+	rf := &Refresh{ID: web.NewID("ref"), AccountID: rec.ID, Status: "queued", RequestedAt: a.clock.Now()}
 	a.st.Refreshes[rf.ID] = rf
 	a.dirty()
 	a.poke()
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": rf.ID, "account_id": rf.AccountID, "status": "queued", "requested_at": ts(rf.RequestedAt)})
+	web.WriteJSON(w, http.StatusAccepted, map[string]any{"id": rf.ID, "account_id": rf.AccountID, "status": "queued", "requested_at": ts(rf.RequestedAt)})
 }
 
 func (a *App) connUnavailable(w http.ResponseWriter, r *http.Request, c *Connection) {
 	switch c.Status {
 	case "revoked":
-		writeError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
+		web.WriteError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
 	case "institution_down":
 		w.Header().Set("Retry-After", "60")
-		writeError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached.")
+		web.WriteError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached.")
 	default:
-		writeError(w, r, http.StatusConflict, "reauth_required", "The customer must consent again.")
+		web.WriteError(w, r, http.StatusConflict, "reauth_required", "The customer must consent again.")
 	}
 }

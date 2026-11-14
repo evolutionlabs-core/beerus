@@ -10,6 +10,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 var errNIBSSNotOpen = errors.New("NIBSS is not open yet, so no BVN can be enrolled; try again soon")
@@ -88,23 +89,23 @@ func (a *App) enrolBVNAtCore(ctx context.Context, name, phone string, dob clock.
 
 func (a *App) ctlEnrolBVN(w http.ResponseWriter, r *http.Request) {
 	var req bvnRequest
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"Ada Obi","phone":"08031234567","dob":"1990-04-21"}.`)
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"Ada Obi","phone":"08031234567","dob":"1990-04-21"}.`)
 		return
 	}
 	dob, err := clock.ParseDate(req.DOB)
 	if err != nil {
-		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", sentence(fmt.Sprintf("dob %q must be a date like 1990-04-21", req.DOB)))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", sentence(fmt.Sprintf("dob %q must be a date like 1990-04-21", req.DOB)))
 		return
 	}
 	bvn, phone, err := a.enrolBVNLocal(r.Context(), req.Name, req.Phone, dob)
 	if errors.Is(err, errNIBSSNotOpen) {
-		writeError(w, r, http.StatusServiceUnavailable, "unavailable", sentence(err.Error()))
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", sentence(err.Error()))
 		return
 	}
 	if err != nil {
 		a.bankingError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, bvnReply{BVN: bvn, Phone: phone})
+	web.WriteJSON(w, http.StatusOK, bvnReply{BVN: bvn, Phone: phone})
 }

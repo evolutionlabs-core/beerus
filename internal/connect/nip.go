@@ -15,6 +15,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const somethingWentWrong = "Something went wrong. Try again."
@@ -38,7 +39,7 @@ func jsonReply(status int, v any) reply {
 }
 
 func errReply(r *http.Request, status int, code, msg string) reply {
-	return jsonReply(status, map[string]apiError{"error": {Code: code, Message: msg, RequestID: requestID(r)}})
+	return jsonReply(status, map[string]web.APIError{"error": {Code: code, Message: msg, RequestID: web.RequestID(r)}})
 }
 
 func (p reply) write(w http.ResponseWriter) {
@@ -94,28 +95,28 @@ func (a *App) NameEnquiry(code, nuban string) (nameEnquiry, error) {
 func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
 	code, nuban := r.URL.Query().Get("bank_code"), r.URL.Query().Get("account_number")
 	if code == "" || nuban == "" {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "bank_code and account_number are required.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "bank_code and account_number are required.")
 		return
 	}
 	out, err := a.NameEnquiry(code, nuban)
 	if err != nil {
 		a.log.Error("name enquiry", "err", err)
-		writeError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS could not answer the name enquiry. Try again soon.")
+		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS could not answer the name enquiry. Try again soon.")
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	web.WriteJSON(w, http.StatusOK, out)
 }
 
 func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
 	sw := a.nibssStore()
 	if sw == nil {
-		writeError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS is not available right now.")
+		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS is not available right now.")
 		return
 	}
 	list, err := sw.Directory(context.Background())
 	if err != nil {
 		a.log.Error("NIBSS directory", "err", err)
-		writeError(w, r, http.StatusInternalServerError, "internal_error", "The NIBSS directory could not be read.")
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The NIBSS directory could not be read.")
 		return
 	}
 	now := a.clock.Now()
@@ -132,7 +133,7 @@ func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{"nip_code": in.NIPCode, "name": in.Name, "bank_id": in.ID, "status": status})
 	}
 	a.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"data": out})
+	web.WriteJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
 func (a *App) position(b *config.Bank) (map[string]any, error) {
@@ -166,32 +167,32 @@ func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
 		row, err := a.position(b)
 		if err != nil {
 			a.log.Error("NIP positions", "err", err)
-			writeError(w, r, http.StatusInternalServerError, "internal_error", "The positions could not be worked out.")
+			web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The positions could not be worked out.")
 			return
 		}
 		out = append(out, row)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": out})
+	web.WriteJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
 func (a *App) ctlNIPSettlement(w http.ResponseWriter, r *http.Request) {
 	c, err := a.CheckSettlement()
 	if err != nil {
 		a.log.Error("check settlement", "err", err)
-		writeError(w, r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
 		return
 	}
-	writeJSON(w, http.StatusOK, c)
+	web.WriteJSON(w, http.StatusOK, c)
 }
 
 func (a *App) ctlSettleNow(w http.ResponseWriter, r *http.Request) {
 	n, err := a.SettleNow()
 	if err != nil {
 		a.log.Error("settle now", "err", err)
-		writeError(w, r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"settled_sessions": n, "at": ts(a.clock.Now())})
+	web.WriteJSON(w, http.StatusOK, map[string]any{"settled_sessions": n, "at": ts(a.clock.Now())})
 }
 
 func (a *App) ctlNIPSession(w http.ResponseWriter, r *http.Request) {
@@ -206,12 +207,12 @@ func (a *App) writeNIPSession(w http.ResponseWriter, r *http.Request, get func(s
 	x, err := get(r.PathValue("id"))
 	switch {
 	case errors.Is(err, nip.ErrNoRecord):
-		writeError(w, r, http.StatusNotFound, "not_found", "No NIP session has that ID.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No NIP session has that ID.")
 	case err != nil:
 		a.log.Error("NIP session", "err", err)
-		writeError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS could not be asked about the session. Try again soon.")
+		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS could not be asked about the session. Try again soon.")
 	default:
-		writeJSON(w, http.StatusOK, x)
+		web.WriteJSON(w, http.StatusOK, x)
 	}
 }
 
@@ -237,18 +238,18 @@ func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
 		Collateral string `json:"collateral"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"cap":"5000000","collateral":"5000000"}.`)
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"cap":"5000000","collateral":"5000000"}.`)
 		return
 	}
 	capMinor, err := parseNaira(body.Cap)
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "cap: "+err.Error())
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "cap: "+err.Error())
 		return
 	}
 	var collateral int64
 	if body.Collateral != "" {
 		if collateral, err = parseNaira(body.Collateral); err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "collateral: "+err.Error())
+			web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "collateral: "+err.Error())
 			return
 		}
 	}
@@ -263,10 +264,10 @@ func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
 	row, err := a.position(b)
 	if err != nil {
 		a.log.Error("NIP positions", "err", err)
-		writeError(w, r, http.StatusInternalServerError, "internal_error", "The position could not be worked out.")
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The position could not be worked out.")
 		return
 	}
-	writeJSON(w, http.StatusOK, row)
+	web.WriteJSON(w, http.StatusOK, row)
 }
 
 type transferBody struct {
@@ -286,7 +287,7 @@ func (a *App) transferReply(r *http.Request, res TransferResult, err error) repl
 	var te *transferError
 	switch {
 	case errors.As(err, &te):
-		return jsonReply(te.status, map[string]any{"error": apiError{Code: te.errCode, Message: sentence(te.Error()), RequestID: requestID(r)}, "response_code": te.code, "session_id": res.SessionID})
+		return jsonReply(te.status, map[string]any{"error": web.APIError{Code: te.errCode, Message: sentence(te.Error()), RequestID: web.RequestID(r)}, "response_code": te.code, "session_id": res.SessionID})
 	case err != nil:
 		a.log.Error("transfer", "path", r.URL.Path, "err", err)
 		return errReply(r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
@@ -312,8 +313,8 @@ func (a *App) bankTransfer(r *http.Request, bankID string, body transferBody, ke
 	}
 	scope := "control POST /banks/" + bankID + "/transfers key " + key
 	hash := body.hash(bankID)
-	entry := a.idemAcquire(scope)
-	defer a.idemRelease(scope, entry)
+	entry := a.idem.Acquire(scope)
+	defer a.idem.Release(scope, entry)
 	a.mu.Lock()
 	rec := a.idemGetLocked(scope)
 	a.mu.Unlock()
@@ -336,17 +337,17 @@ func (a *App) bankTransfer(r *http.Request, bankID string, body transferBody, ke
 
 func (a *App) ctlBankQuote(w http.ResponseWriter, r *http.Request) {
 	var body transferBody
-	if err := decodeBody(r, &body); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"9010000014","to_bank":"bank-b","to":"9020000011","amount":"25000"}.`)
+	if err := web.DecodeBody(r, &body); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"9010000014","to_bank":"bank-b","to":"9020000011","amount":"25000"}.`)
 		return
 	}
 	amount, err := parseNaira(body.Amount)
 	if err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 	if body.From == "" || body.To == "" {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "from and to are required account numbers.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "from and to are required account numbers.")
 		return
 	}
 	res, err := a.Quote(TransferRequest{FromBank: r.PathValue("id"), From: body.From, ToBank: body.ToBank, To: body.To, Amount: amount, Narration: body.Narration})
@@ -355,8 +356,8 @@ func (a *App) ctlBankQuote(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) ctlBankTransfer(w http.ResponseWriter, r *http.Request) {
 	var body transferBody
-	if err := decodeBody(r, &body); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"9010000014","to_bank":"bank-b","to":"9020000011","amount":"25000"}.`)
+	if err := web.DecodeBody(r, &body); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"9010000014","to_bank":"bank-b","to":"9020000011","amount":"25000"}.`)
 		return
 	}
 	rep := a.bankTransfer(r, r.PathValue("id"), body, r.Header.Get("Idempotency-Key"))

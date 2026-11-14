@@ -18,6 +18,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -850,9 +851,9 @@ func (a *App) writeApplyError(w http.ResponseWriter, r *http.Request, err error)
 	var ae *applyError
 	switch {
 	case errors.As(err, &ae):
-		writeError(w, r, ae.status, ae.code, ae.message)
+		web.WriteError(w, r, ae.status, ae.code, ae.message)
 	case errors.Is(err, ErrBankInvalid):
-		writeError(w, r, http.StatusUnprocessableEntity, codeInvalidSpec, strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, codeInvalidSpec, strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
 	default:
 		return false
 	}
@@ -885,8 +886,8 @@ func (a *App) planBody(p setup.Plan) planBody {
 
 func (a *App) parseRequest(w http.ResponseWriter, r *http.Request) (setup.Spec, ApplyOptions, bool) {
 	var req applyRequest
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"file":"setup.yaml","spec":"<the file's text>"}.`)
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"file":"setup.yaml","spec":"<the file's text>"}.`)
 		return setup.Spec{}, ApplyOptions{}, false
 	}
 	spec, errs := setup.Parse(orDefault(req.File, SpecFile), []byte(req.Spec))
@@ -906,7 +907,7 @@ func (a *App) ctlPlan(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		var pl planned
 		if pl, err = a.buildPlan(spec, st, opt); err == nil {
-			writeJSON(w, http.StatusOK, a.planBody(pl.plan))
+			web.WriteJSON(w, http.StatusOK, a.planBody(pl.plan))
 			return
 		}
 	}
@@ -923,19 +924,19 @@ func (a *App) ctlApply(w http.ResponseWriter, r *http.Request) {
 		a.applyFailed(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.planBody(plan))
+	web.WriteJSON(w, http.StatusOK, a.planBody(plan))
 }
 
 func (a *App) applyFailed(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errNotFound) {
-		writeError(w, r, http.StatusNotFound, "not_found", "No such resource.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such resource.")
 		return
 	}
 	if a.writeApplyError(w, r, err) {
 		return
 	}
 	a.log.Error("apply", "err", err)
-	writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
+	web.WriteError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
 }
 
 func (a *App) ctlResources(w http.ResponseWriter, r *http.Request) {
@@ -946,7 +947,7 @@ func (a *App) ctlResources(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := r.URL.Query().Get("kind")
 	if kind != "" && !slices.ContainsFunc([]string{setup.KindBank, setup.KindPartner, setup.KindSystem}, func(k string) bool { return strings.EqualFold(k, kind) }) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("kind %q is not known. Use bank, partner or system.", kind))
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("kind %q is not known. Use bank, partner or system.", kind))
 		return
 	}
 	data, next, err := a.resources(kind, limit, cursor)
@@ -954,7 +955,7 @@ func (a *App) ctlResources(w http.ResponseWriter, r *http.Request) {
 		a.applyFailed(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, listPage(data, next))
+	web.WriteJSON(w, http.StatusOK, listPage(data, next))
 }
 
 func (a *App) ctlResource(w http.ResponseWriter, r *http.Request) {
@@ -963,5 +964,5 @@ func (a *App) ctlResource(w http.ResponseWriter, r *http.Request) {
 		a.applyFailed(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	web.WriteJSON(w, http.StatusOK, res)
 }
