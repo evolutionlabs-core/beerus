@@ -1,8 +1,8 @@
 package connect
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
