@@ -55,7 +55,6 @@ func cmdRun(args []string) error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	connect.SetBind(*bind)
 	switch *participant {
 	case "":
 		return usageError("run")
@@ -66,7 +65,7 @@ func cmdRun(args []string) error {
 		if err != nil {
 			return err
 		}
-		app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleCore, CoreURL: *core})
+		app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleCore, CoreURL: *core, Bind: *bind})
 		if err != nil {
 			return err
 		}
@@ -82,7 +81,7 @@ func cmdRun(args []string) error {
 	if c.Bank(*participant) == nil {
 		return fmt.Errorf("%q is not a participant; banks in %s are %s", *participant, c.Dir, strings.Join(bankIDs(c), ", "))
 	}
-	app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleBank, BankID: *participant, CoreURL: *core})
+	app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleBank, BankID: *participant, CoreURL: *core, Bind: *bind})
 	if err != nil {
 		return err
 	}

@@ -430,7 +430,7 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	ls, err := listenLocal(b.APIPort)
+	ls, err := a.listenLocal(b.APIPort)
 	if err != nil {
 		return nil, err
 	}

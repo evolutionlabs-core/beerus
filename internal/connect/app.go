@@ -26,6 +26,7 @@ import (
 )
 
 type App struct {
+	bind         string
 	applyMu      sync.Mutex
 	mu           sync.Mutex
 	cfg          *config.Config
@@ -105,6 +106,7 @@ type Options struct {
 	Role     string
 	BankID   string
 	CoreURL  string
+	Bind     string
 	BankWrap func(http.RoundTripper) http.RoundTripper
 }
 
@@ -129,6 +131,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		peers:     &http.Client{Timeout: peerTimeout},
 		probeHTTP: &http.Client{Timeout: probeTimeout},
 		coreURL:   o.CoreURL,
+		bind:      o.Bind,
 		client:    o.Client,
 		bankWrap:  o.BankWrap,
 		role:      o.Role,

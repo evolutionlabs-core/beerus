@@ -278,7 +278,7 @@ func (a *App) startBankSite(b *config.Bank) error {
 	if h == nil {
 		return fmt.Errorf("no ledger for %s", b.ID)
 	}
-	ls, err := listenLocal(b.Port)
+	ls, err := a.listenLocal(b.Port)
 	if err != nil {
 		return err
 	}

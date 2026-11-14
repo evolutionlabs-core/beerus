@@ -30,19 +30,13 @@ const (
 	RoleBank = "bank"
 )
 
-var bindAddr string
-
-func SetBind(addr string) {
-	bindAddr = addr
+func (a *App) multiProcess() bool {
+	return a.bind != ""
 }
 
-func multiProcess() bool {
-	return bindAddr != ""
-}
-
-func remotePeers() bool {
-	ip := net.ParseIP(bindAddr)
-	return multiProcess() && (ip == nil || !ip.IsLoopback())
+func (a *App) remotePeers() bool {
+	ip := net.ParseIP(a.bind)
+	return a.multiProcess() && (ip == nil || !ip.IsLoopback())
 }
 
 type replica struct {
@@ -175,6 +169,7 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 		role:      RoleBank,
 		bankID:    b.ID,
 		coreURL:   o.CoreURL,
+		bind:      o.Bind,
 	}
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
