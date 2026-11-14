@@ -22,6 +22,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -159,7 +160,7 @@ func (a *App) assertion(b *config.Bank) (string, error) {
 		return "", err
 	}
 	id := a.cfg.Connect.RegistryID
-	return openbanking.Sign(key, "connect-1", map[string]any{"iss": id, "sub": id, "aud": b.APIURL(), "jti": newSecret("j_", 12), "exp": a.clock.Real().Add(time.Minute).Unix()})
+	return openbanking.Sign(key, "connect-1", map[string]any{"iss": id, "sub": id, "aud": b.APIURL(), "jti": web.NewSecret("j_", 12), "exp": a.clock.Real().Add(time.Minute).Unix()})
 }
 
 func (a *App) bankCall(b *config.Bank, method, path string, form url.Values, token string, out any) error {
@@ -221,7 +222,7 @@ func (a *App) bankCall(b *config.Bank, method, path string, form url.Values, tok
 }
 
 func pkcePair() (string, string) {
-	verifier := newSecret("", 32)
+	verifier := web.NewSecret("", 32)
 	sum := sha256.Sum256([]byte(verifier))
 	return verifier, base64.RawURLEncoding.EncodeToString(sum[:])
 }

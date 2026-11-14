@@ -1,7 +1,6 @@
 package connect
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -301,12 +300,4 @@ func saveJSON(path string, v any) error {
 		return fmt.Errorf("create directory for %s: %w", path, err)
 	}
 	return pki.WriteFile(path, b, 0o600)
-}
-
-func newSecret(prefix string, n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return prefix + web.Encode(b)
 }

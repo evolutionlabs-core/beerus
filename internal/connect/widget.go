@@ -13,6 +13,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -116,7 +117,7 @@ func (a *App) failSession(w http.ResponseWriter, r *http.Request, ls *LinkSessio
 func (a *App) widgetOpen(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	h := hashSecret(r.URL.Query().Get("token"))
+	h := web.HashSecret(r.URL.Query().Get("token"))
 	var ls *LinkSession
 	for _, s := range a.st.LinkSessions {
 		if subtle.ConstantTimeCompare([]byte(s.TokenHash), []byte(h)) == 1 {
@@ -138,8 +139,8 @@ func (a *App) widgetOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ls.TokenUsed = true
-	raw := newSecret("ws_", 20)
-	ws := &WidgetSession{ID: hashSecret(raw), LinkSessionID: ls.ID, CSRF: newSecret("", 16), ExpiresReal: ls.ExpiresReal}
+	raw := web.NewSecret("ws_", 20)
+	ws := &WidgetSession{ID: web.HashSecret(raw), LinkSessionID: ls.ID, CSRF: web.NewSecret("", 16), ExpiresReal: ls.ExpiresReal}
 	a.st.WidgetSessions[ws.ID] = ws
 	a.dirty()
 	a.setCookie(w, widgetCookie, raw, int(linkSessionLife.Seconds()))
@@ -152,7 +153,7 @@ func (a *App) session(w http.ResponseWriter, r *http.Request) (*WidgetSession, *
 		a.message(w, http.StatusUnauthorized, "Your session has ended", "Go back to the app and start again.")
 		return nil, nil
 	}
-	ws := a.st.WidgetSessions[hashSecret(ck.Value)]
+	ws := a.st.WidgetSessions[web.HashSecret(ck.Value)]
 	if ws == nil || a.clock.Real().After(ws.ExpiresReal) {
 		a.message(w, http.StatusUnauthorized, "Your session has ended", "Go back to the app and start again.")
 		return nil, nil
@@ -250,7 +251,7 @@ func (a *App) customerPage(w http.ResponseWriter, r *http.Request) {
 	ck, err := r.Cookie(customerCookie)
 	var ws *WidgetSession
 	if err == nil {
-		ws = a.st.WidgetSessions[hashSecret(ck.Value)]
+		ws = a.st.WidgetSessions[web.HashSecret(ck.Value)]
 	}
 	if ws == nil || a.clock.Real().After(ws.ExpiresReal) {
 		a.render(w, "customer_login", http.StatusOK, page{"Title": "Your connections", "Banks": a.openInstitutions()})
@@ -316,8 +317,8 @@ func (a *App) customerLogin(w http.ResponseWriter, r *http.Request) {
 		a.render(w, "customer_login", http.StatusUnauthorized, page{"Title": "Your connections", "Banks": a.openInstitutions(), "Error": "The bank, username or password is wrong."})
 		return
 	}
-	raw := newSecret("cs_", 20)
-	ws := &WidgetSession{ID: hashSecret(raw), LinkSessionID: customerKey(bankID, cust.ID), CSRF: newSecret("", 16), ExpiresReal: a.clock.Real().Add(30 * time.Minute)}
+	raw := web.NewSecret("cs_", 20)
+	ws := &WidgetSession{ID: web.HashSecret(raw), LinkSessionID: customerKey(bankID, cust.ID), CSRF: web.NewSecret("", 16), ExpiresReal: a.clock.Real().Add(30 * time.Minute)}
 	a.st.WidgetSessions[ws.ID] = ws
 	a.dirty()
 	a.setCookie(w, customerCookie, raw, 1800)
@@ -331,7 +332,7 @@ func (a *App) customerRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.mu.Lock()
-	ws := a.st.WidgetSessions[hashSecret(ck.Value)]
+	ws := a.st.WidgetSessions[web.HashSecret(ck.Value)]
 	if ws == nil || a.clock.Real().After(ws.ExpiresReal) || r.ParseForm() != nil || subtle.ConstantTimeCompare([]byte(r.PostForm.Get("csrf")), []byte(ws.CSRF)) != 1 {
 		a.mu.Unlock()
 		a.message(w, http.StatusForbidden, "Request refused", "The form expired. Go back and try again.")

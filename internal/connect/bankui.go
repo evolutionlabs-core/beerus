@@ -199,7 +199,7 @@ func (a *bankSite) bankSessionFor(r *http.Request) (*bankSession, string) {
 	ba := a.auth
 	ba.mu.Lock()
 	defer ba.mu.Unlock()
-	h := hashSecret(ck.Value)
+	h := web.HashSecret(ck.Value)
 	s := ba.sessions[h]
 	if s == nil || a.clock.Real().After(s.Expires) {
 		delete(ba.sessions, h)
@@ -279,11 +279,11 @@ func (a *bankSite) obLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		a.bankFail(w, r, err)
 		return
 	}
-	raw := newSecret("bs_", 20)
-	s := &bankSession{Customer: c.ID, Name: c.Name, CSRF: newSecret("", 16), OTP: otp(), OTPExpires: real.Add(otpLife), Expires: real.Add(30 * time.Minute)}
+	raw := web.NewSecret("bs_", 20)
+	s := &bankSession{Customer: c.ID, Name: c.Name, CSRF: web.NewSecret("", 16), OTP: otp(), OTPExpires: real.Add(otpLife), Expires: real.Add(30 * time.Minute)}
 	ba.mu.Lock()
 	delete(ba.failures, user)
-	ba.sessions[hashSecret(raw)] = s
+	ba.sessions[web.HashSecret(raw)] = s
 	ba.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: bankCookie, Value: raw, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 1800})
 	http.Redirect(w, r, "/verify", http.StatusSeeOther)

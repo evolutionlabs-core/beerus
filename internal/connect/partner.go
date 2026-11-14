@@ -2,8 +2,6 @@ package connect
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"net/http"
 	"net/url"
@@ -21,11 +19,6 @@ const (
 	linkSessionLife = 60 * time.Minute
 	codeLife        = 10 * time.Minute
 )
-
-func hashSecret(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
-}
 
 func (a *App) PartnerHandler() http.Handler {
 	mux := http.NewServeMux()
@@ -81,7 +74,7 @@ func (a *App) linkSessionJSON(ls *LinkSession, token string) map[string]any {
 }
 
 func (a *App) newLinkSession(p *config.Partner, workspace string, start clock.Date, redirect, state, connectionID, institution string) (*LinkSession, string) {
-	token := newSecret("lt_", 20)
+	token := web.NewSecret("lt_", 20)
 	real := a.clock.Real()
 	ls := &LinkSession{
 		ID:           web.NewID("lks"),
@@ -93,7 +86,7 @@ func (a *App) newLinkSession(p *config.Partner, workspace string, start clock.Da
 		State:        state,
 		ConnectionID: connectionID,
 		Institution:  institution,
-		TokenHash:    hashSecret(token),
+		TokenHash:    web.HashSecret(token),
 		TokenExpires: real.Add(linkTokenLife),
 		CreatedAt:    a.clock.Now(),
 		ExpiresReal:  real.Add(linkSessionLife),
@@ -251,7 +244,7 @@ func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *con
 		web.WriteError(w, r, http.StatusForbidden, "link_session_mismatch", "The link session belongs to another partner.")
 		return exchangeGrant{}, false
 	}
-	h := hashSecret(code)
+	h := web.HashSecret(code)
 	if ls.CodeHash != h {
 		for _, other := range a.st.LinkSessions {
 			if other.CodeHash == h {

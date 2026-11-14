@@ -191,7 +191,7 @@ func (a *App) sendConsentEvent(b *config.Bank, e openbanking.Event) error {
 	jwt, err := openbanking.Sign(key, b.ID, map[string]any{
 		"iss":        b.APIURL(),
 		"aud":        a.cfg.WidgetURL(),
-		"jti":        newSecret("ev_", 12),
+		"jti":        web.NewSecret("ev_", 12),
 		"iat":        now.Unix(),
 		"exp":        now.Add(eventLife).Unix(),
 		"consent_id": e.ConsentID,

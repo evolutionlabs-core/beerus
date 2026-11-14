@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSession) {
@@ -19,7 +20,7 @@ func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSess
 		return
 	}
 	verifier, challenge := pkcePair()
-	state := newSecret("bs_", 16)
+	state := web.NewSecret("bs_", 16)
 	form := a.parFormLocked(ls, state, challenge)
 	a.mu.Unlock()
 	uri, err := a.bankPAR(b, form)
@@ -165,11 +166,11 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer a.mu.Unlock()
 	slices.Sort(keys)
-	secret := newSecret("oc_", 16)
+	secret := web.NewSecret("oc_", 16)
 	in.ls.CustomerID, in.ls.Accounts, in.ls.BankAccounts = owner, keys, g.Accounts
 	in.ls.BankConsentID, in.ls.ConsentEnds, in.ls.BankFrom = tok.ConsentID, g.Ends, g.From
 	in.ls.Status = "authorised"
-	in.ls.CodeHash = hashSecret(secret)
+	in.ls.CodeHash = web.HashSecret(secret)
 	in.ls.CodeExpires = a.clock.Real().Add(codeLife)
 	if err := a.saveLocked(); err != nil {
 		a.log.Error("save state", "err", err)

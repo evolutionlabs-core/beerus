@@ -46,7 +46,7 @@ func (a *App) roomOnly(next http.Handler) http.Handler {
 			return
 		}
 		ck, err := r.Cookie(roomCookie)
-		if err != nil || subtle.ConstantTimeCompare([]byte(ck.Value), []byte(hashSecret(a.link.Token))) != 1 {
+		if err != nil || subtle.ConstantTimeCompare([]byte(ck.Value), []byte(web.HashSecret(a.link.Token))) != 1 {
 			http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 			return
 		}
@@ -112,7 +112,7 @@ func (a *App) roomLogin(w http.ResponseWriter, r *http.Request) {
 		tok = strings.TrimSpace(r.PostForm.Get("token"))
 	}
 	if tok != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(a.link.Token)) == 1 {
-		http.SetCookie(w, &http.Cookie{Name: roomCookie, Value: hashSecret(a.link.Token), Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 7 * 24 * 3600})
+		http.SetCookie(w, &http.Cookie{Name: roomCookie, Value: web.HashSecret(a.link.Token), Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 7 * 24 * 3600})
 		http.Redirect(w, r, "/ui", http.StatusSeeOther)
 		return
 	}
