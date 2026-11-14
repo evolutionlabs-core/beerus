@@ -32,6 +32,7 @@ type found struct {
 	method, path string
 	op           *v3.Operation
 	item         *v3.PathItem
+	doc          *v3.Document
 }
 
 func load(t *testing.T) (*v3.Document, validator.Validator) {
@@ -63,7 +64,7 @@ func index(t *testing.T, doc *v3.Document) map[string]found {
 			if _, dup := out[op.OperationId]; dup {
 				t.Fatalf("operation ID %s is used twice", op.OperationId)
 			}
-			out[op.OperationId] = found{strings.ToUpper(method), path, op, item}
+			out[op.OperationId] = found{strings.ToUpper(method), path, op, item, doc}
 		}
 	}
 	return out
@@ -114,39 +115,61 @@ func buildRequest(t *testing.T, f found) *http.Request {
 	var body io.Reader
 	if f.op.RequestBody != nil {
 		mt := f.op.RequestBody.Content.GetOrZero("application/json")
-		if mt == nil || mt.Example == nil {
-			t.Fatalf("%s: request body has no example", f.op.OperationId)
+		if mt == nil {
+			t.Fatalf("%s: request body has no JSON content", f.op.OperationId)
 		}
-		body = bytes.NewReader(exampleJSON(t, decode(t, mt.Example)))
+		body = bytes.NewReader(exampleJSON(t, mediaExamples(t, f.op.OperationId, mt)[0]))
 		header.Set("Content-Type", "application/json")
 	}
 	target := "https://example.localhost" + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
+	for _, sec := range f.op.Security {
+		if _, ok := sec.Requirements.Get("bearerAuth"); ok {
+			header.Set("Authorization", "Bearer control-token")
+		}
+	}
+	if len(f.op.Security) == 0 {
+		for _, sec := range f.doc.Security {
+			if _, ok := sec.Requirements.Get("bearerAuth"); ok {
+				header.Set("Authorization", "Bearer control-token")
+			}
+		}
+	}
 	req, err := http.NewRequest(f.method, target, body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	header.Set("Authorization", "Bearer control-token")
 	req.Header = header
 	return req
 }
 
-func buildResponse(t *testing.T, f found, status string, r *v3.Response) *http.Response {
+func mediaExamples(t *testing.T, id string, mt *v3.MediaType) []any {
+	t.Helper()
+	var out []any
+	if mt.Example != nil {
+		out = append(out, decode(t, mt.Example))
+	}
+	for _, ex := range mt.Examples.FromOldest() {
+		out = append(out, decode(t, ex.Value))
+	}
+	if len(out) == 0 {
+		t.Fatalf("%s: media type has no example", id)
+	}
+	return out
+}
+
+func buildResponse(t *testing.T, f found, status string, r *v3.Response, example any) *http.Response {
 	t.Helper()
 	code := 0
 	for _, c := range status {
 		code = code*10 + int(c-'0')
 	}
-	mt := r.Content.GetOrZero("application/json")
-	if mt == nil || mt.Example == nil {
-		t.Fatalf("%s %s: response has no example", f.op.OperationId, status)
-	}
 	resp := &http.Response{
 		StatusCode: code,
 		Header:     http.Header{"Content-Type": {"application/json"}},
-		Body:       io.NopCloser(bytes.NewReader(exampleJSON(t, decode(t, mt.Example)))),
+		Body:       io.NopCloser(bytes.NewReader(exampleJSON(t, example))),
 	}
 	for name, h := range r.Headers.FromOldest() {
 		if h.Schema != nil {
@@ -175,9 +198,15 @@ func TestOperations(t *testing.T) {
 				t.Fatalf("request: %v", errs)
 			}
 			for status, r := range f.op.Responses.Codes.FromOldest() {
-				req := buildRequest(t, f)
-				if ok, errs := v.ValidateHttpResponse(req, buildResponse(t, f, status, r)); !ok {
-					t.Errorf("response %s: %v", status, errs)
+				mt := r.Content.GetOrZero("application/json")
+				if mt == nil {
+					t.Fatalf("%s %s: response has no JSON content", row.id, status)
+				}
+				for _, example := range mediaExamples(t, row.id, mt) {
+					req := buildRequest(t, f)
+					if ok, errs := v.ValidateHttpResponse(req, buildResponse(t, f, status, r, example)); !ok {
+						t.Errorf("response %s: %v", status, errs)
+					}
 				}
 			}
 		})

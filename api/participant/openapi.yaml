@@ -16,7 +16,7 @@ info:
 
     ## Idempotency
 
-    Provisioning is a list of steps. Each step is an idempotent ensure: running it twice gives the same result. The key of a step is the participant ID, the step ID and the generation. Faults take an `Idempotency-Key` header, because a repeat would add a second fault. Close and stop are safe to repeat and return the current state.
+    Provisioning is a list of steps. Each step is an idempotent ensure: running it twice gives the same result. The key of a step is the participant ID, the step ID and the generation. Faults take an `Idempotency-Key` header, because a repeat would add a second fault. Stop is safe to repeat. Close is safe to repeat with the same body and returns the current status. A close with a different body while a close is running returns `409 close_in_progress`.
 
     ## Time
 
@@ -61,6 +61,8 @@ paths:
                 world_id: wld_01JBC8A5T3ZK
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/status:
     get:
       operationId: participantStatus
@@ -92,8 +94,6 @@ paths:
                     done: false
                     error: 'connection refused'
                     started_at: '2026-11-14T10:00:01+01:00'
-                attempts: 2
-                next_attempt_at: '2026-11-14T10:00:05+01:00'
         '401':
           $ref: '#/components/responses/Unauthenticated'
   /v1/steps/{step_id}/ensure:
@@ -138,7 +138,7 @@ paths:
       operationId: closeParticipant
       tags: [lifecycle]
       summary: Close a bank
-      description: Starts closing a bank, and says what happens to its customers' money. It is safe to repeat. A repeat returns the current status. Only banks close. The other participants answer `409 not_closable`. The money choice is `transfer` to another bank, `payout` to the customers or `leave`.
+      description: Starts closing a bank, and says what happens to its customers' money. It is safe to repeat. A repeat returns the current status. Only banks close. The other participants answer `409 not_closable`. A repeat with a different body while the close is running returns `409 close_in_progress`, and the message says which fields differ. The money choice is `transfer` to another bank, `payout` to the customers or `leave`.
       requestBody:
         required: true
         content:
@@ -170,7 +170,16 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
         '422':
-          $ref: '#/components/responses/Unprocessable'
+          description: The money choice does not fit. The code is `invalid_request`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invalid_request
+                  message: 'Money transfer needs a bank to receive it. Send {"money":"transfer","to":"bank-b"}.'
+                  request_id: req_01JBC8A5T3ZK
   /v1/stop:
     post:
       operationId: stopParticipant
@@ -220,7 +229,7 @@ paths:
       operationId: setParticipantFault
       tags: [faults]
       summary: Make the participant fail
-      description: Adds a fault. A `down` fault makes the participant answer NIP calls with `91`, for the time in `for` or until it is cleared. A `timeout` fault makes the participant do the work but give no answer, for the next `count` calls, and `outcome` says what it did. This is what `beerus fault` does today. The idempotency key is the `Idempotency-Key` header, and a repeat returns the first fault. Beerus has `down` and `timeout`. It has no `slow` fault.
+      description: Adds a fault. A `down` fault makes the participant answer NIP calls with `91`, for the time in `for` or until it is cleared. A `timeout` fault makes the participant do the work but give no answer, for the next `count` inbound calls, and `outcome` says what it did. It applies to every inbound call the participant serves, the CBN included. This is what `beerus fault` does today. The idempotency key is the `Idempotency-Key` header, and a repeat returns the first fault. Beerus has `down` and `timeout`. It has no `slow` fault.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -297,7 +306,7 @@ components:
       name: limit
       in: query
       required: false
-      description: The page size, from 1 to 500. The default is 50.
+      description: The page size, from 1 to 500. The default is 50. The cap of 500 is a Beerus placeholder.
       schema:
         type: integer
         minimum: 1
@@ -390,14 +399,6 @@ components:
           description: The provisioning steps, in order.
           items:
             $ref: '#/components/schemas/Step'
-        attempts:
-          type: integer
-          description: How many times the failing step has been tried.
-          minimum: 0
-        next_attempt_at:
-          type: string
-          format: date-time
-          description: When the control plane will try the failing step again.
     EnsureRequest:
       type: object
       description: Which generation of the spec the step is for.
@@ -453,11 +454,12 @@ components:
           enum: [credited, failed, unknown]
         count:
           type: integer
-          description: How many calls a `timeout` fault covers. The default is 1. It is not allowed for `down`.
+          description: How many inbound calls a `timeout` fault covers. The default is 1. It is not allowed for `down`.
           minimum: 1
         for:
           type: string
-          description: How long a `down` fault lasts, such as `1h`. Without it the fault lasts until cleared. It is not allowed for `timeout`.
+          examples: ['1h30m']
+          description: How long a `down` fault lasts, in Go duration format, such as `1h30m`. It must be above zero and at most `24h`, which is a Beerus placeholder. Without it the fault lasts until cleared. It is not allowed for `timeout`.
     Fault:
       type: object
       description: A fault that is live.
@@ -476,7 +478,7 @@ components:
           enum: [credited, failed, unknown]
         left:
           type: integer
-          description: How many calls a `timeout` fault still covers. It is absent for `down`.
+          description: How many inbound calls a `timeout` fault still covers. It is absent for `down`.
           minimum: 1
         until_at:
           type: string
@@ -528,6 +530,17 @@ components:
               type: string
               description: The ID of the request, for support.
   responses:
+    Unavailable:
+      description: The participant is running but cannot serve yet. The code is `unavailable`. Try again soon.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unavailable
+              message: The participant is still starting. Try again soon.
+              request_id: req_01JBC8A5T3ZK
     BadRequest:
       description: The request is not valid. The code is `invalid_request`, or `invalid_cursor` for a cursor that is not valid.
       content:
@@ -562,18 +575,28 @@ components:
               message: This participant has no step called site.
               request_id: req_01JBC8A5T3ZK
     Conflict:
-      description: The participant cannot do this in its phase or kind. The code is `not_closable` or `phase_conflict`.
+      description: The participant cannot do this in its phase or kind. The code is `not_closable`, `phase_conflict`, or `close_in_progress` for a close with a different body while a close is running.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
-          example:
-            error:
-              code: not_closable
-              message: Only banks can be closed.
-              request_id: req_01JBC8A5T3ZK
+          examples:
+            not_closable:
+              summary: The participant is not a bank.
+              value:
+                error:
+                  code: not_closable
+                  message: Only banks can be closed. nibss is a nibss participant.
+                  request_id: req_01JBC8A5T3ZK
+            close_in_progress:
+              summary: A close with a different body while a close is running.
+              value:
+                error:
+                  code: close_in_progress
+                  message: 'bank-a is already closing with money transfer to bank-b, and this request has money payout. Wait for the close to finish, or repeat the first request.'
+                  request_id: req_01JBC8A5T3ZK
     Unprocessable:
-      description: The request is well formed but cannot be done. The code is `invalid_request` for a choice that does not fit, or `idempotency_key_reused` for a key used with a different body.
+      description: The fault cannot be added. The code is `invalid_request` for a fault that does not fit, such as a `for` above `24h`, or `idempotency_key_reused` for a key used with a different body.
       content:
         application/json:
           schema:
@@ -581,5 +604,5 @@ components:
           example:
             error:
               code: idempotency_key_reused
-              message: That Idempotency-Key was used with a different fault.
+              message: 'Key 5c0d8a3e-7a1f-4f7e-9d0b-2a4c6e8f1b3d was first used with kind timeout, outcome credited and count 2, and this request has kind down. Use a new key, or repeat the first request.'
               request_id: req_01JBC8A5T3ZK
