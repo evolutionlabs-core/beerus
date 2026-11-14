@@ -118,3 +118,17 @@ func TestEveryBankTypeHasAHistory(t *testing.T) {
 		t.Fatalf("history days for %v, bank types %v", slices.Sorted(maps.Keys(typeHistoryDays)), setup.BankTypes)
 	}
 }
+
+func TestRecordPhaseNeverReopensALeavingBank(t *testing.T) {
+	for _, phase := range []string{PhaseClosing, PhaseTerminating, PhaseClosed} {
+		a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: phase, Generation: 3, ObservedGeneration: 2})
+		a.recordPhase("bank-b", PhaseActive)
+		st, err := a.ctl.status()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := findResource(&st, setup.KindBank, "bank-b"); r.Phase != phase || r.Generation != 3 || r.ObservedGeneration != 2 {
+			t.Errorf("%s: resource became %s, generation %d, observed %d", phase, r.Phase, r.Generation, r.ObservedGeneration)
+		}
+	}
+}

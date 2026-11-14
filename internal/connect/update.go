@@ -64,12 +64,17 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 		a.reloadSite(b.ID)
 		return
 	}
-	a.recordPhase(r.ID, runningPhase(b))
+	phase := runningPhase(b)
 	a.lifeMu.Lock()
 	if st := a.status[r.ID]; st != nil {
-		st.Phase = runningPhase(b)
+		if st.Phase == PhaseClosing || st.Phase == PhaseTerminating {
+			a.lifeMu.Unlock()
+			return
+		}
+		st.Phase = phase
 	}
 	a.lifeMu.Unlock()
+	a.recordPhase(r.ID, phase)
 }
 
 func (a *App) updateFailed(id string, err error) {
