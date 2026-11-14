@@ -6,20 +6,21 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 const (
-	StatusActive      = "active"
-	StatusSuspended   = "suspended"
-	StatusTerminating = "terminating"
-	StatusRemoved     = "removed"
+	StatusActive      = nip.StatusActive
+	StatusSuspended   = nip.StatusSuspended
+	StatusTerminating = nip.StatusTerminating
+	StatusRemoved     = nip.StatusRemoved
 
 	SessionPending = "pending"
 	SessionOK      = "00"
 
-	OutcomeCredited = "credited"
-	OutcomeFailed   = "failed"
-	OutcomeUnknown  = "unknown"
+	OutcomeCredited = nip.OutcomeCredited
+	OutcomeFailed   = nip.OutcomeFailed
+	OutcomeUnknown  = nip.OutcomeUnknown
 	OutcomeReversed = "reversed"
 )
 
@@ -28,14 +29,7 @@ var (
 	ErrBadDetails         = errors.New("invalid BVN details")
 )
 
-type Institution struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	NIPCode   string `json:"nip_code"`
-	NUBANCode string `json:"nuban_code"`
-	Type      string `json:"type"`
-	Status    string `json:"status"`
-}
+type Institution = nip.Institution
 
 type Session struct {
 	ID          string     `json:"session_id"`

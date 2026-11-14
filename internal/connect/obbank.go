@@ -51,7 +51,7 @@ func (a *App) ensureRegistryLocked() error {
 	if err != nil {
 		return err
 	}
-	c := &RegistryClient{
+	c := &openbanking.RegistryClient{
 		ID:           a.cfg.Connect.RegistryID,
 		Name:         a.cfg.Connect.BrandName,
 		LegalName:    a.cfg.Connect.LegalName,
@@ -96,7 +96,7 @@ type RegistryRequest struct {
 
 var ErrRegistry = errors.New("registry")
 
-func (a *App) AddRegistryClient(req RegistryRequest) (*RegistryClient, error) {
+func (a *App) AddRegistryClient(req RegistryRequest) (*openbanking.RegistryClient, error) {
 	bad := func(format string, args ...any) error {
 		return fmt.Errorf("%w: %s", ErrRegistry, fmt.Sprintf(format, args...))
 	}
@@ -151,20 +151,20 @@ func (a *App) AddRegistryClient(req RegistryRequest) (*RegistryClient, error) {
 			return nil, bad("certificate name %s already belongs to %s", req.CertCN, c.ID)
 		}
 	}
-	c := &RegistryClient{ID: req.ID, Name: req.Name, LegalName: req.LegalName, RegistryID: req.ID, CAC: req.CAC, Role: req.Role, CertCN: req.CertCN, JWK: openbanking.JWKOf(ec, req.ID), RedirectURIs: req.RedirectURIs, RegisteredAt: a.clock.Real()}
+	c := &openbanking.RegistryClient{ID: req.ID, Name: req.Name, LegalName: req.LegalName, RegistryID: req.ID, CAC: req.CAC, Role: req.Role, CertCN: req.CertCN, JWK: openbanking.JWKOf(ec, req.ID), RedirectURIs: req.RedirectURIs, RegisteredAt: a.clock.Real()}
 	a.st.Registry[c.ID] = c
 	a.dirty()
 	return c, nil
 }
 
-func (a *App) RegistryClients() []*RegistryClient {
+func (a *App) RegistryClients() []*openbanking.RegistryClient {
 	a.regMu.Lock()
 	defer a.regMu.Unlock()
-	out := []*RegistryClient{}
+	out := []*openbanking.RegistryClient{}
 	for _, c := range a.st.Registry {
 		out = append(out, c)
 	}
-	slices.SortFunc(out, func(x, y *RegistryClient) int { return x.RegisteredAt.Compare(y.RegisteredAt) })
+	slices.SortFunc(out, func(x, y *openbanking.RegistryClient) int { return x.RegisteredAt.Compare(y.RegisteredAt) })
 	return out
 }
 
@@ -194,7 +194,7 @@ type registryView struct {
 	a *App
 }
 
-func (r registryView) convert(c *RegistryClient) (*openbanking.Client, bool) {
+func (r registryView) convert(c *openbanking.RegistryClient) (*openbanking.Client, bool) {
 	pub, err := c.JWK.Public()
 	if err != nil {
 		return nil, false

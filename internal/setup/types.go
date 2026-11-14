@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 )
 
@@ -31,13 +32,13 @@ const (
 	OutcomeClaim       = "claim"
 	OutcomeLeft        = "left"
 
-	PhaseProvisioning = "provisioning"
-	PhaseActive       = "active"
-	PhaseSuspended    = "suspended"
-	PhaseRepairing    = "repairing"
-	PhaseClosing      = "closing"
-	PhaseClosed       = "closed"
-	PhaseTerminating  = "terminating"
+	PhaseProvisioning = config.PhaseProvisioning
+	PhaseActive       = config.PhaseActive
+	PhaseSuspended    = config.PhaseSuspended
+	PhaseRepairing    = config.PhaseRepairing
+	PhaseClosing      = config.PhaseClosing
+	PhaseClosed       = config.PhaseClosed
+	PhaseTerminating  = config.PhaseTerminating
 
 	OpCreate = "create"
 	OpUpdate = "update"

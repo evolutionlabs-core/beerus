@@ -174,19 +174,6 @@ type AccessEvent struct {
 	At           time.Time `json:"at"`
 }
 
-type RegistryClient struct {
-	ID           string          `json:"id"`
-	Name         string          `json:"name"`
-	LegalName    string          `json:"legal_name"`
-	RegistryID   string          `json:"registry_id"`
-	CAC          string          `json:"cac"`
-	Role         string          `json:"role"`
-	CertCN       string          `json:"cert_cn"`
-	JWK          openbanking.JWK `json:"jwk"`
-	RedirectURIs []string        `json:"redirect_uris"`
-	RegisteredAt time.Time       `json:"registered_at"`
-}
-
 type ConsentRecord struct {
 	Seq       int64     `json:"seq"`
 	SourceSeq int64     `json:"source_seq,omitempty"`
@@ -207,24 +194,24 @@ type PendingRevoke struct {
 }
 
 type State struct {
-	Revokes        []PendingRevoke            `json:"revokes,omitempty"`
-	SettleNow      []string                   `json:"settle_now,omitempty"`
-	Registry       map[string]*RegistryClient `json:"registry"`
-	ConsentLedger  []ConsentRecord            `json:"consent_ledger"`
-	Access         []AccessEvent              `json:"access"`
-	WorldID        string                     `json:"world_id"`
-	Faults         []*Fault                   `json:"faults"`
-	LinkSessions   map[string]*LinkSession    `json:"link_sessions"`
-	WidgetSessions map[string]*WidgetSession  `json:"widget_sessions"`
-	Connections    map[string]*Connection     `json:"connections"`
-	Accounts       map[string]*AccountRec     `json:"accounts"`
-	Feeds          map[string]*Feed           `json:"feeds"`
-	Refreshes      map[string]*Refresh        `json:"refreshes"`
-	Deliveries     []*Delivery                `json:"deliveries"`
-	Idem           map[string]*web.Record     `json:"idempotency"`
-	Seq            int64                      `json:"seq"`
-	Vault          map[string]*VaultEntry     `json:"vault,omitempty"`
-	NIP            *NIPState                  `json:"nip,omitempty"`
+	Revokes        []PendingRevoke                        `json:"revokes,omitempty"`
+	SettleNow      []string                               `json:"settle_now,omitempty"`
+	Registry       map[string]*openbanking.RegistryClient `json:"registry"`
+	ConsentLedger  []ConsentRecord                        `json:"consent_ledger"`
+	Access         []AccessEvent                          `json:"access"`
+	WorldID        string                                 `json:"world_id"`
+	Faults         []*Fault                               `json:"faults"`
+	LinkSessions   map[string]*LinkSession                `json:"link_sessions"`
+	WidgetSessions map[string]*WidgetSession              `json:"widget_sessions"`
+	Connections    map[string]*Connection                 `json:"connections"`
+	Accounts       map[string]*AccountRec                 `json:"accounts"`
+	Feeds          map[string]*Feed                       `json:"feeds"`
+	Refreshes      map[string]*Refresh                    `json:"refreshes"`
+	Deliveries     []*Delivery                            `json:"deliveries"`
+	Idem           map[string]*web.Record                 `json:"idempotency"`
+	Seq            int64                                  `json:"seq"`
+	Vault          map[string]*VaultEntry                 `json:"vault,omitempty"`
+	NIP            *NIPState                              `json:"nip,omitempty"`
 }
 
 func newState() *State {
@@ -237,7 +224,7 @@ func newState() *State {
 		Feeds:          map[string]*Feed{},
 		Refreshes:      map[string]*Refresh{},
 		Idem:           map[string]*web.Record{},
-		Registry:       map[string]*RegistryClient{},
+		Registry:       map[string]*openbanking.RegistryClient{},
 		Vault:          map[string]*VaultEntry{},
 		NIP:            &NIPState{},
 	}
@@ -266,7 +253,7 @@ func (s *State) fill() {
 		s.Idem = map[string]*web.Record{}
 	}
 	if s.Registry == nil {
-		s.Registry = map[string]*RegistryClient{}
+		s.Registry = map[string]*openbanking.RegistryClient{}
 	}
 	if s.Vault == nil {
 		s.Vault = map[string]*VaultEntry{}

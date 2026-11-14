@@ -12,6 +12,7 @@ import (
 	"testing/iotest"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 )
 
 func testBankConfig() *config.Config {
@@ -57,7 +58,7 @@ func TestPeerAnswerOverTheLimitFailsClearly(t *testing.T) {
 	a := &App{coreURL: "http://core.invalid", peers: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(big)), Header: http.Header{}}, nil
 	})}}
-	var out struct{ Data []*RegistryClient }
+	var out struct{ Data []*openbanking.RegistryClient }
 	if _, err := a.coreDo(context.Background(), http.MethodGet, "/internal/registry", nil, &out); err == nil || !strings.Contains(err.Error(), "larger than 16 MiB") {
 		t.Fatalf("an oversized answer: %v", err)
 	}

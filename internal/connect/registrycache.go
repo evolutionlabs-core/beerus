@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -49,12 +50,12 @@ func (a *App) registryFresh() bool {
 
 func (a *App) fetchRegistry(ctx context.Context) error {
 	var out struct {
-		Data []*RegistryClient `json:"data"`
+		Data []*openbanking.RegistryClient `json:"data"`
 	}
 	if _, err := a.peerRequest(ctx, a.coreURL, http.MethodGet, "/internal/registry", nil, nil, &out); err != nil {
 		return err
 	}
-	clients := map[string]*RegistryClient{}
+	clients := map[string]*openbanking.RegistryClient{}
 	for _, c := range out.Data {
 		clients[c.ID] = c
 	}
