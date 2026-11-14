@@ -9,12 +9,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -29,18 +31,19 @@ import (
 )
 
 const (
-	exitChanges  = 2
-	exitBlocked  = 3
-	pollEvery    = 500 * time.Millisecond
-	apiTimeout   = 2 * time.Minute
-	startTimeout = 30 * time.Second
-	startRetry   = 200 * time.Millisecond
-	defaultWait  = 5 * time.Minute
-	codeNotReady = "not_ready"
-	opFinish     = "finish"
-	yamlIndent   = 2
-	notRunning   = "Beerus is not running. Start it with beerus up."
-	upNoBanks    = "No banks yet. Add the first one with beerus bank create --name NAME."
+	exitChanges   = 2
+	exitBlocked   = 3
+	pollEvery     = 500 * time.Millisecond
+	apiTimeout    = 2 * time.Minute
+	startTimeout  = 30 * time.Second
+	startRetry    = 200 * time.Millisecond
+	defaultWait   = 5 * time.Minute
+	codeNotReady  = "not_ready"
+	opFinish      = "finish"
+	ownedPortKind = "port"
+	yamlIndent    = 2
+	notRunning    = "Beerus is not running. Start it with beerus up."
+	upNoBanks     = "No banks yet. Add the first one with beerus bank create --name NAME."
 )
 
 var errNotRunning = errors.New(notRunning)
@@ -105,6 +108,10 @@ func (e *cli) client(dir string) (*ctl, error) {
 }
 
 func (c *ctl) send(method, path string, body any) ([]byte, error) {
+	return c.request(context.Background(), method, path, body)
+}
+
+func (c *ctl) request(ctx context.Context, method, path string, body any) ([]byte, error) {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -113,7 +120,7 @@ func (c *ctl) send(method, path string, body any) ([]byte, error) {
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, c.base+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
 	if err != nil {
 		return nil, fmt.Errorf("build request %s %s: %w", method, path, err)
 	}
@@ -449,7 +456,48 @@ func findResource(all []setup.Resource, kind, id string) *setup.Resource {
 	return nil
 }
 
-func (e *cli) wait(c *ctl, p planReply, wait time.Duration, asJSON bool) error {
+func bankPorts(all []setup.Resource) map[string][]int {
+	ports := map[string][]int{}
+	for _, r := range all {
+		if r.Kind != setup.KindBank {
+			continue
+		}
+		for _, o := range r.Owned {
+			if n, err := strconv.Atoi(o.Name); err == nil && o.Kind == ownedPortKind {
+				ports[r.ID] = append(ports[r.ID], n)
+			}
+		}
+	}
+	return ports
+}
+
+func portFree(port int) bool {
+	l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	l.Close()
+	return true
+}
+
+func awaitPortsFree(id string, ports []int) error {
+	deadline := time.NewTimer(startTimeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(startRetry)
+	defer tick.Stop()
+	for _, port := range ports {
+		for !portFree(port) {
+			select {
+			case <-deadline.C:
+				return fmt.Errorf("bank %s is gone but still holds port %d", id, port)
+			case <-tick.C:
+			}
+		}
+	}
+	return nil
+}
+
+func (e *cli) wait(c *ctl, p planReply, wait time.Duration, asJSON bool, ports map[string][]int) error {
 	var targets []target
 	for _, a := range p.Actions {
 		if a.Op != setup.OpDrift {
@@ -496,6 +544,16 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration, asJSON bool) error {
 		return pending, blocked, stuck
 	}
 	done := func() error {
+		for _, t := range targets {
+			if !strings.EqualFold(t.kind, setup.KindBank) {
+				continue
+			}
+			if r := findResource(res, t.kind, t.id); r == nil || r.Phase == setup.PhaseClosed {
+				if err := awaitPortsFree(t.id, ports[t.id]); err != nil {
+					return err
+				}
+			}
+		}
 		shown := e.out
 		if asJSON {
 			shown = e.errOut
@@ -541,6 +599,14 @@ func (e *cli) wait(c *ctl, p planReply, wait time.Duration, asJSON bool) error {
 }
 
 func (e *cli) runApply(c *ctl, req applyRequest, wait time.Duration, asJSON bool) error {
+	var ports map[string][]int
+	if wait != 0 {
+		before, err := e.resources(c)
+		if err != nil {
+			return err
+		}
+		ports = bankPorts(before)
+	}
 	raw, err := c.send("POST", "/apply", req)
 	if err != nil {
 		return err
@@ -562,7 +628,7 @@ func (e *cli) runApply(c *ctl, req applyRequest, wait time.Duration, asJSON bool
 	if wait == 0 {
 		return nil
 	}
-	return e.wait(c, p, wait, asJSON)
+	return e.wait(c, p, wait, asJSON, ports)
 }
 
 func checkWait(wait time.Duration) error {
@@ -1046,7 +1112,7 @@ func (e *cli) startApply(ctx context.Context, c *ctl, req applyRequest, served <
 	tick := time.NewTicker(startRetry)
 	defer tick.Stop()
 	for {
-		raw, err := c.send("POST", "/apply", req)
+		raw, err := c.request(ctx, "POST", "/apply", req)
 		var ae *apiError
 		if err == nil {
 			p, derr := decode[planReply](raw, "apply reply")
@@ -1127,7 +1193,7 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 	}
 	fmt.Fprintf(e.out, "\nControl room        %s\n", connect.RoomURL(c, cl.token))
 	sup := newSupervisor(exe, *dir, c.ControlURL(), cl, e.errOut)
-	sup.startCore(ctx)
+	sup.startCore()
 	defer sup.shutdown()
 	if err := sup.awaitCore(ctx); err != nil {
 		return err

@@ -29,6 +29,7 @@ type supervisor struct {
 	core      *child
 	banks     map[string]*child
 	order     []string
+	stopping  map[string]*child
 	watchStop context.CancelFunc
 	watchDone chan struct{}
 }
@@ -47,19 +48,20 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 func newSupervisor(exe, dir, coreURL string, c *ctl, out io.Writer) *supervisor {
 	logs := &syncWriter{w: out}
 	return &supervisor{
-		exe:     exe,
-		dir:     dir,
-		coreURL: coreURL,
-		ctl:     c,
-		clock:   clock.New(nil),
-		log:     slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})),
-		logs:    logs,
-		banks:   map[string]*child{},
+		exe:      exe,
+		dir:      dir,
+		coreURL:  coreURL,
+		ctl:      c,
+		clock:    clock.New(nil),
+		log:      slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		logs:     logs,
+		banks:    map[string]*child{},
+		stopping: map[string]*child{},
 	}
 }
 
-func (s *supervisor) startCore(ctx context.Context) {
-	s.core = s.launch(ctx, coreID, []string{"run", "--participant", coreID, "--dir", s.dir, "--supervised"})
+func (s *supervisor) startCore() {
+	s.core = s.launch(coreID, "", []string{"run", "--participant", coreID, "--dir", s.dir, "--supervised"})
 }
 
 func (s *supervisor) awaitCore(ctx context.Context) error {
@@ -68,9 +70,12 @@ func (s *supervisor) awaitCore(ctx context.Context) error {
 	tick := time.NewTicker(startRetry)
 	defer tick.Stop()
 	for {
-		_, err := s.ctl.send("GET", "/health", nil)
+		_, err := s.ctl.request(ctx, "GET", "/health", nil)
 		if err == nil {
 			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 		if !errors.Is(err, errNotRunning) {
 			return fmt.Errorf("check core health: %w", err)
@@ -101,8 +106,14 @@ func (s *supervisor) shutdown() {
 		s.watchStop()
 		<-s.watchDone
 	}
+	for _, id := range s.order {
+		s.banks[id].stop()
+	}
 	for _, id := range slices.Backward(slices.Clone(s.order)) {
-		s.drop(id)
+		<-s.banks[id].done
+	}
+	for _, c := range s.stopping {
+		<-c.done
 	}
 	s.core.stop()
 	<-s.core.done

@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -489,6 +490,9 @@ func waitBank(c *ctl, first bankProgress, clk *clock.Clock) (bankProgress, error
 			fmt.Println(stepLine(s.Name, width, true, stepTime(s.StartedAt, s.At)))
 		}
 		if st.Phase != "provisioning" && shown == len(st.Steps) {
+			if st.Phase == setup.PhaseActive {
+				return st, awaitBankSite(st)
+			}
 			return st, nil
 		}
 		select {
@@ -501,6 +505,32 @@ func waitBank(c *ctl, first bankProgress, clk *clock.Clock) (bankProgress, error
 			return st, err
 		}
 		st = next
+	}
+}
+
+func awaitBankSite(st bankProgress) error {
+	u, err := url.Parse(st.URL)
+	if err != nil {
+		return fmt.Errorf("read the address of %s: %w", st.ID, err)
+	}
+	health := "http://" + net.JoinHostPort("127.0.0.1", u.Port()) + "/health"
+	deadline := time.NewTimer(startTimeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(startRetry)
+	defer tick.Stop()
+	for {
+		resp, err := apiClient.Get(health)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode < http.StatusMultipleChoices {
+				return nil
+			}
+		}
+		select {
+		case <-deadline.C:
+			return fmt.Errorf("bank %s is active but not answering on port %s", st.ID, u.Port())
+		case <-tick.C:
+		}
 	}
 }
 
