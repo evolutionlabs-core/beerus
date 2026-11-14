@@ -24,7 +24,6 @@ type Fault struct {
 	Left    int        `json:"left,omitempty"`
 	Until   *time.Time `json:"until,omitempty"`
 	At      time.Time  `json:"created_at"`
-
 }
 
 func (f *Fault) live(now time.Time) bool {
