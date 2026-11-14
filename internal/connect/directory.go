@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -92,12 +93,27 @@ func (a *App) directoryFetch(ctx context.Context, client *http.Client, cursor st
 		return page, fmt.Errorf("the directory answer is larger than %d MiB", maxPeerBody>>20)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return page, fmt.Errorf("NIBSS answered %s", resp.Status)
+		var e struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(raw, &e)
+		return page, &directoryError{status: resp.StatusCode, code: e.Error.Code}
 	}
 	if err := json.Unmarshal(raw, &page); err != nil {
 		return page, fmt.Errorf("decode the directory answer: %w", err)
 	}
 	return page, nil
+}
+
+type directoryError struct {
+	status int
+	code   string
+}
+
+func (e *directoryError) Error() string {
+	return fmt.Sprintf("NIBSS answered %d %s", e.status, e.code)
 }
 
 func (a *App) refreshBanks(ctx context.Context) error {
@@ -110,29 +126,47 @@ func (a *App) refreshBanks(ctx context.Context) error {
 	if fresh {
 		return nil
 	}
+	if err := a.dirRefresh.do(ctx, a.clock.Real, a.fetchDirectory); err != nil {
+		return fmt.Errorf("read the NIBSS directory: %w", err)
+	}
+	return nil
+}
+
+func (a *App) fetchDirectory(ctx context.Context) error {
 	client, err := a.directoryClient()
 	if err != nil {
 		return err
 	}
-	banks := []*config.Bank{}
-	cursor := ""
-	for {
-		page, err := a.directoryFetch(ctx, client, cursor)
-		if err != nil {
-			return fmt.Errorf("read the NIBSS directory: %w", err)
-		}
-		for _, in := range page.Data {
-			banks = append(banks, directoryBank(in))
-		}
-		if page.NextCursor == "" {
-			break
-		}
-		cursor = page.NextCursor
+	banks, err := a.directoryPages(ctx, client)
+	var bad *directoryError
+	if errors.As(err, &bad) && bad.code == "invalid_cursor" {
+		banks, err = a.directoryPages(ctx, client)
+	}
+	if err != nil {
+		return err
 	}
 	a.dirMu.Lock()
 	a.dirBanks, a.dirAt = banks, a.clock.Real()
 	a.dirMu.Unlock()
 	return nil
+}
+
+func (a *App) directoryPages(ctx context.Context, client *http.Client) ([]*config.Bank, error) {
+	banks := []*config.Bank{}
+	cursor := ""
+	for {
+		page, err := a.directoryFetch(ctx, client, cursor)
+		if err != nil {
+			return nil, err
+		}
+		for _, in := range page.Data {
+			banks = append(banks, directoryBank(in))
+		}
+		if page.NextCursor == "" {
+			return banks, nil
+		}
+		cursor = page.NextCursor
+	}
 }
 
 func directoryBank(in nibss.Institution) *config.Bank {

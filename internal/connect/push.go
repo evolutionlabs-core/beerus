@@ -2,35 +2,30 @@ package connect
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
-	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	pushEvery    = 500 * time.Millisecond
-	pushTimeout  = 5 * time.Second
-	pushRetryMax = 5 * time.Second
+	pushEvery      = 500 * time.Millisecond
+	pushInSync     = 2 * time.Second
+	pushTimeout    = 5 * time.Second
+	pushRetryMax   = 5 * time.Second
+	generationMask = 1<<62 - 1
 )
 
 type bankWish struct {
 	phase  string
 	reason string
 	downs  []Fault
-	print  string
-}
-
-type pushState struct {
-	gen      int64
-	print    string
-	attempts int
-	next     time.Time
-	warned   string
 }
 
 type remoteFaults struct {
@@ -50,73 +45,119 @@ func pushable(phase string) bool {
 }
 
 func (a *App) wishFor(id string) bankWish {
-	w := bankWish{phase: a.bankPhase(id)}
-	a.lifeMu.Lock()
-	if st := a.status[id]; st != nil {
-		w.reason = st.Reason
-	}
-	a.lifeMu.Unlock()
-	ids := []string{}
+	w := bankWish{}
+	w.phase, w.reason = a.bankPhaseReason(id)
 	for _, f := range a.Faults() {
 		if f.Kind == FaultDown && f.Bank == id {
 			w.downs = append(w.downs, f)
-			ids = append(ids, f.ID)
 		}
 	}
-	w.print = strings.Join(append([]string{w.phase, w.reason}, ids...), "\x00")
 	return w
 }
 
+func wishGeneration(world string, w bankWish) int64 {
+	ids := make([]string, 0, len(w.downs))
+	for _, f := range w.downs {
+		ids = append(ids, f.ID)
+	}
+	slices.Sort(ids)
+	h := sha256.New()
+	for _, part := range append([]string{world, w.phase, w.reason}, ids...) {
+		fmt.Fprintf(h, "%d:%s", len(part), part)
+	}
+	gen := int64(binary.BigEndian.Uint64(h.Sum(nil)[:8]) & generationMask)
+	if gen == 0 {
+		return 1
+	}
+	return gen
+}
+
+type bankPusher struct {
+	wake   chan struct{}
+	cancel context.CancelFunc
+}
+
 func (a *App) runPush(ctx context.Context) {
-	states := map[string]*pushState{}
+	pushers := map[string]*bankPusher{}
+	var wg sync.WaitGroup
 	tick := time.NewTicker(pushEvery)
 	defer tick.Stop()
 	for {
-		a.pushAll(ctx, states)
+		a.startPushers(ctx, &wg, pushers)
 		select {
 		case <-ctx.Done():
+			for _, p := range pushers {
+				p.cancel()
+			}
+			wg.Wait()
 			return
 		case <-tick.C:
 		case <-a.pushWake:
+			for _, p := range pushers {
+				select {
+				case p.wake <- struct{}{}:
+				default:
+				}
+			}
 		}
 	}
 }
 
-func (a *App) pushAll(ctx context.Context, states map[string]*pushState) {
+func (a *App) startPushers(ctx context.Context, wg *sync.WaitGroup, pushers map[string]*bankPusher) {
 	listed := map[string]bool{}
 	for _, b := range a.bankList() {
-		w := a.wishFor(b.ID)
-		if !pushable(w.phase) {
+		if !pushable(a.bankPhase(b.ID)) {
 			continue
 		}
 		listed[b.ID] = true
-		st := states[b.ID]
-		if st == nil {
-			st = &pushState{gen: a.clock.Real().UnixNano()}
-			states[b.ID] = st
-		}
-		if st.print != w.print {
-			st.gen++
-			st.print, st.attempts, st.next = w.print, 0, time.Time{}
-		}
-		if ctx.Err() != nil || a.clock.Real().Before(st.next) {
+		if pushers[b.ID] != nil {
 			continue
 		}
-		err := a.syncBank(ctx, b.ID, b.URL(), st.gen, w)
-		if err == nil {
-			st.attempts, st.warned = 0, ""
-			continue
-		}
-		st.attempts++
-		st.next = a.clock.Real().Add(min(backoff(st.attempts), pushRetryMax))
-		if msg := err.Error(); st.warned != msg && ctx.Err() == nil {
-			st.warned = msg
-			a.log.Warn("bank not reachable; retrying", "bank", b.ID, "err", err)
+		bctx, cancel := context.WithCancel(ctx)
+		p := &bankPusher{wake: make(chan struct{}, 1), cancel: cancel}
+		pushers[b.ID] = p
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.pushBank(bctx, b.ID, b.URL(), p.wake)
+		}()
+	}
+	for id, p := range pushers {
+		if !listed[id] {
+			p.cancel()
+			delete(pushers, id)
 		}
 	}
-	for id := range states {
-		if !listed[id] {
-			delete(states, id)
+}
+
+func (a *App) pushBank(ctx context.Context, id, base string, wake <-chan struct{}) {
+	attempts := 0
+	warned := ""
+	for {
+		w := a.wishFor(id)
+		err := a.syncBank(ctx, id, base, wishGeneration(a.WorldID(), w), w)
+		delay := pushInSync
+		switch {
+		case err == nil:
+			attempts, warned = 0, ""
+		case ctx.Err() != nil:
+			return
+		default:
+			attempts++
+			delay = min(backoff(attempts), pushRetryMax)
+			if msg := err.Error(); warned != msg {
+				warned = msg
+				a.log.Warn("bank not reachable; retrying", "bank", id, "err", err)
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-wake:
+			timer.Stop()
+		case <-timer.C:
 		}
 	}
 }

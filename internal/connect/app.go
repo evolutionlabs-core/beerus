@@ -90,6 +90,8 @@ type App struct {
 	dirClient    *http.Client
 	regAt        time.Time
 	regWarned    string
+	regRefresh   refresher
+	dirRefresh   refresher
 	peers        *http.Client
 	probeHTTP    *http.Client
 	eventMu      sync.Mutex

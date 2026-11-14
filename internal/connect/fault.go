@@ -25,7 +25,6 @@ type Fault struct {
 	Until   *time.Time `json:"until,omitempty"`
 	At      time.Time  `json:"created_at"`
 
-	ask faultAsk
 }
 
 func (f *Fault) live(now time.Time) bool {
@@ -48,24 +47,8 @@ type FaultRequest struct {
 
 const maxFaultFor = 24 * time.Hour
 
-type faultAsk struct {
-	kind, outcome string
-	count         int
-	forText       string
-}
-
-func askOf(req FaultRequest) faultAsk {
-	ask := faultAsk{kind: req.Kind, outcome: req.Outcome, forText: req.For}
-	if req.Count != nil {
-		ask.count = *req.Count
-	} else if req.Kind == FaultTimeout {
-		ask.count = 1
-	}
-	return ask
-}
-
 func newFault(req FaultRequest, now time.Time) (Fault, error) {
-	f := Fault{ID: newID("flt"), Kind: req.Kind, At: now, ask: askOf(req)}
+	f := Fault{Kind: req.Kind, At: now}
 	switch req.Kind {
 	case FaultDown:
 		if req.Outcome != "" || req.Count != nil {
@@ -112,6 +95,7 @@ func (a *App) AddFault(req FaultRequest) (Fault, error) {
 		return Fault{}, err
 	}
 	f.Bank = req.Bank
+	f.ID = faultIDFor(fmt.Sprintf("%s|%s|%d", f.Bank, f.Kind, f.At.UnixNano()))
 	a.mu.Lock()
 	a.st.Faults = append(a.st.Faults, &f)
 	a.dirty()

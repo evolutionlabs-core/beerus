@@ -80,7 +80,7 @@ func (a *App) participantAPI() http.Handler {
 	mux.HandleFunc("GET /v1/status", a.participantStatus)
 	mux.HandleFunc("PUT /v1/phase", a.setParticipantPhase)
 	mux.HandleFunc("GET /v1/faults", a.listParticipantFaults)
-	mux.HandleFunc("POST /v1/faults", a.setParticipantFault)
+	mux.HandleFunc("POST /v1/faults", a.idempotent(a.setParticipantFault))
 	mux.HandleFunc("DELETE /v1/faults", a.clearParticipantFaults)
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusNotFound, "not_found", "A bank does not serve this control call yet.")
@@ -194,11 +194,6 @@ func (a *App) listParticipantFaults(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) setParticipantFault(w http.ResponseWriter, r *http.Request) {
-	key := r.Header.Get("Idempotency-Key")
-	if key == "" || len(key) > idempotencyKeyMax {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("An Idempotency-Key header of 1 to %d characters is required.", idempotencyKeyMax))
-		return
-	}
 	var req FaultRequest
 	if err := decodeBody(r, &req); err != nil || req.Bank != "" {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"kind":"down","for":"1h"} or {"kind":"timeout","outcome":"credited"}.`)
@@ -210,61 +205,26 @@ func (a *App) setParticipantFault(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
 		return
 	}
-	f.ID, f.Bank = faultIDFor(key), a.bankID
+	f.ID, f.Bank = faultIDFor(r.Header.Get("Idempotency-Key")), a.bankID
 	a.mu.Lock()
 	a.pruneFaultsLocked(now)
-	if i := slices.IndexFunc(a.st.Faults, func(x *Fault) bool { return x.ID == f.ID }); i >= 0 {
-		first := *a.st.Faults[i]
-		a.mu.Unlock()
-		if first.ask != f.ask {
-			writeError(w, r, http.StatusUnprocessableEntity, "idempotency_key_reused", reusedMessage(key, first.ask, f.ask))
-			return
-		}
-		writeJSON(w, http.StatusCreated, faultView(first))
-		return
-	}
 	a.st.Faults = append(a.st.Faults, &f)
+	a.dirty()
 	a.mu.Unlock()
 	writeJSON(w, http.StatusCreated, faultView(f))
 }
 
 func (a *App) clearParticipantFaults(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]int{"cleared": a.ClearFaults("")})
-}
-
-func reusedMessage(key string, first, now faultAsk) string {
-	var was, is []string
-	add := func(name, a, b string) {
-		if a != b {
-			was, is = append(was, name+" "+orNone(a)), append(is, name+" "+orNone(b))
+	cleared := a.ClearFaults("")
+	prefix := strings.Join([]string{controlOwner, http.MethodPost, "/v1/faults", ""}, " ")
+	a.mu.Lock()
+	for scope := range a.st.Idem {
+		if strings.HasPrefix(scope, prefix) {
+			delete(a.st.Idem, scope)
 		}
 	}
-	add("kind", first.kind, now.kind)
-	add("outcome", first.outcome, now.outcome)
-	add("count", countText(first.count), countText(now.count))
-	add("for", first.forText, now.forText)
-	return fmt.Sprintf("Key %s was first used with %s, and this request has %s. Use a new key, or repeat the first request.", key, joinAnd(was), joinAnd(is))
-}
-
-func countText(n int) string {
-	if n == 0 {
-		return ""
-	}
-	return strconv.Itoa(n)
-}
-
-func orNone(s string) string {
-	if s == "" {
-		return "none"
-	}
-	return s
-}
-
-func joinAnd(parts []string) string {
-	if len(parts) < 2 {
-		return strings.Join(parts, "")
-	}
-	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
+	a.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]int{"cleared": cleared})
 }
 
 func (a *App) bankRefusing(id string) bool {

@@ -203,6 +203,9 @@ func (a *App) ServeBank(ctx context.Context) error {
 		case <-tick.C:
 			a.flushEvents()
 			a.flushLedger()
+			a.mu.Lock()
+			a.sweep()
+			a.mu.Unlock()
 		}
 	}
 }

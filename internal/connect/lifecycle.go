@@ -85,15 +85,20 @@ func (a *App) BankStatuses() []BankStatus {
 }
 
 func (a *App) bankPhase(id string) string {
+	phase, _ := a.bankPhaseReason(id)
+	return phase
+}
+
+func (a *App) bankPhaseReason(id string) (string, string) {
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
 	if st := a.status[id]; st != nil {
-		return st.Phase
+		return st.Phase, st.Reason
 	}
 	if a.cfg.Bank(id) == nil {
-		return PhaseActive
+		return PhaseActive, ""
 	}
-	return PhaseProvisioning
+	return PhaseProvisioning, ""
 }
 
 func (a *App) bankReady(id string) bool {
