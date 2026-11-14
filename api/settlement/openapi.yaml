@@ -8,13 +8,15 @@ info:
 
     ## Who calls it
 
-    The CBN participant serves every operation here over mTLS. NIBSS posts sessions. A bank may read its own balance and postings. The CBN authorises the caller by the identity in its client certificate, not only by a valid chain.
+    The CBN participant serves these operations. NIBSS posts sessions over mTLS. A bank may read its own balance and postings over mTLS. The CBN authorises the caller by the identity in its client certificate, not only by a valid chain. The control plane opens a bank's settlement account with the control token, as it is the CBN that onboards a bank in the real world. That operation is tagged `control`.
 
     ## Rules
 
     - Net positions in one session sum to zero. A positive net raises the bank's settlement balance, and a negative net lowers it. If the sum is not zero, the CBN refuses the session with a 422 that gives the numbers, such as `the session nets to 150, not zero`, and moves nothing.
-    - A session is posted once. The CBN keys the posting by `session_id`. A repeat with the same nets returns the first result with the header `Idempotent-Replayed: true`. The same `session_id` with different nets returns `422 idempotency_key_reused`.
-    - The `Idempotency-Key` header is the retry identity of the request. NIBSS sends `settlement:` and the session ID. The CBN also keys the posting by `session_id`, so two keys for one session still post once. Beerus keys the posting by `session_id` alone today, so the header is a Beerus addition.
+    - A session is posted once. The idempotency key is `session_id` alone. A repeat with the same nets returns the first result with the header `Idempotent-Replayed: true`. The same `session_id` with different nets returns `422 session_reused`, and the message gives the numbers.
+    - A repeat that arrives while the first post is still running returns `409 session_in_flight`. Send it again after a moment.
+    - The CBN refuses a session whose nets add up past the largest amount (`422 amount_too_large`) and a session that names one bank twice (`422 duplicate_bank`).
+    - Opening a bank's settlement account is an idempotent ensure keyed by the bank. It posts the opening capital once, as a `genesis` posting.
     - Banks are named by `bank_id`, the Beerus bank ID. The CBN keeps its accounts by bank ID today. NIBSS maps NIP codes to bank IDs before it posts.
     - A session ID is the settlement session key. It is a Lagos time such as `2026-11-14T10:00`, or `adhoc:` and a unique suffix for a session started by hand.
 
@@ -37,6 +39,8 @@ servers:
 tags:
   - name: settlement
     description: Post settlement sessions and read settlement balances at the CBN.
+  - name: control
+    description: Calls the control plane makes to the CBN. It uses the control token.
 security:
   - mutualTLS: []
 paths:
@@ -45,9 +49,7 @@ paths:
       operationId: postSettlementSession
       tags: [settlement]
       summary: Post the net positions of a settlement session
-      description: NIBSS posts the net position of each bank for one settlement session. The CBN moves every bank's settlement balance in one posting, or none. The nets must sum to zero, or the CBN refuses with `422 settlement_unbalanced` and the numbers. The idempotency key is the `Idempotency-Key` header, and the posting is also keyed by `session_id`. A replay returns the first result with `Idempotent-Replayed`.
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+      description: NIBSS posts the net position of each bank for one settlement session. The CBN moves every bank's settlement balance in one posting, or none. The nets must sum to zero, or the CBN refuses with `422 settlement_unbalanced` and the numbers. The idempotency key is `session_id`. A replay with the same nets returns the first result with `Idempotent-Replayed`. The same `session_id` with different nets returns `422 session_reused`. A repeat during the first post returns `409 session_in_flight`.
       requestBody:
         required: true
         content:
@@ -87,17 +89,52 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '422':
-          description: The CBN refused the session. The code is `settlement_unbalanced` when the nets do not sum to zero, `unknown_bank` when a bank has no settlement account, or `idempotency_key_reused` when the session ID was posted with different nets.
+        '409':
+          description: The first post of this session is still running. The code is `session_in_flight`. Send it again after a moment.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
               example:
                 error:
-                  code: settlement_unbalanced
-                  message: The session nets to 150, not zero. Send nets that sum to zero.
+                  code: session_in_flight
+                  message: Session 2026-11-14T10:00 is still being posted. Send it again in a moment.
                   request_id: req_01JBC8A5T3ZK
+        '422':
+          description: The CBN refused the session. The code is `settlement_unbalanced` when the nets do not sum to zero, `amount_too_large` when the sum overflows, `duplicate_bank` when one bank has two nets, `unknown_bank` when a bank has no settlement account, or `session_reused` when the session ID was posted with different nets.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                unbalanced:
+                  summary: The nets do not sum to zero.
+                  value:
+                    error:
+                      code: settlement_unbalanced
+                      message: The session nets to 150, not zero. Send nets that sum to zero.
+                      request_id: req_01JBC8A5T3ZK
+                reused:
+                  summary: The session ID was posted with different nets.
+                  value:
+                    error:
+                      code: session_reused
+                      message: 'Session 2026-11-14T10:00 was posted with bank-a -2500000 and bank-b 2500000, and this request has bank-a -3000000 and bank-b 3000000. Send a new session_id, or repeat the first nets.'
+                      request_id: req_01JBC8A5T3ZK
+                too_large:
+                  summary: The nets overflow when added.
+                  value:
+                    error:
+                      code: amount_too_large
+                      message: The nets of session 2026-11-14T10:00 are too large to add up. The largest net is 9223372036854775807 kobo. Send smaller nets.
+                      request_id: req_01JBC8A5T3ZK
+                duplicate:
+                  summary: One bank has two nets.
+                  value:
+                    error:
+                      code: duplicate_bank
+                      message: bank-a appears 2 times in session 2026-11-14T10:00. Send one net per bank.
+                      request_id: req_01JBC8A5T3ZK
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/banks/{bank_id}/settlement-balance:
@@ -161,11 +198,63 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/control/banks/{bank_id}/settlement-account:
+    put:
+      operationId: openSettlementAccount
+      tags: [control]
+      summary: Open a bank's settlement account
+      description: The control plane opens a bank's settlement account at the CBN and posts its opening capital as a `genesis` posting. It is an idempotent ensure keyed by `bank_id`, and the posting key is `genesis:` and the bank ID. A repeat with the same amounts returns the same account. The same `bank_id` with different amounts returns `422 account_conflict`, and the message gives the amounts. The amounts are Beerus placeholders.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BankIDPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenAccount'
+            example:
+              settlement_minor: 1000000000
+              vault_minor: 500000000
+      responses:
+        '200':
+          description: The account is open.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+              example:
+                bank_id: bank-a
+                settlement_minor: 1000000000
+                vault_minor: 500000000
+                opened_at: '2026-11-14T09:00:00+01:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          description: The account is open with other amounts. The code is `account_conflict`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: account_conflict
+                  message: 'bank-a opened with settlement_minor 1000000000 and vault_minor 500000000, and this request has settlement_minor 2000000000. Send the amounts it opened with.'
+                  request_id: req_01JBC8A5T3ZK
+        '503':
+          $ref: '#/components/responses/Unavailable'
 components:
   securitySchemes:
     mutualTLS:
       type: mutualTLS
       description: The caller presents a client certificate issued by the Beerus CA. The CBN authorises the caller by the certificate's identity, not only by a valid chain.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The control token, from the `control-token` file of the Beerus directory. Only the control plane has it.
   headers:
     IdempotentReplayed:
       description: Set to `true` when this response is a replay of the first result for the same idempotency key.
@@ -173,16 +262,6 @@ components:
         type: string
         enum: ['true']
   parameters:
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: true
-      description: A unique key per post, chosen by NIBSS. A replay with the same key and body returns the first response. The same key with a different body returns `422 idempotency_key_reused`.
-      schema:
-        type: string
-        minLength: 1
-        maxLength: 255
-      example: 'settlement:2026-11-14T10:00'
     BankIDPath:
       name: bank_id
       in: path
@@ -203,7 +282,7 @@ components:
       name: limit
       in: query
       required: false
-      description: The page size, from 1 to 500. The default is 50.
+      description: The page size, from 1 to 500. The default is 50. The cap of 500 is a Beerus placeholder.
       schema:
         type: integer
         minimum: 1
@@ -238,7 +317,7 @@ components:
       properties:
         session_id:
           type: string
-          description: The settlement session key. The posting is keyed by it.
+          description: The settlement session key. It is the idempotency key of the post.
           minLength: 1
         cutoff_at:
           type: string
@@ -246,10 +325,45 @@ components:
           description: The cut-off of the session. The posting is dated with it.
         nets:
           type: array
-          description: One net per bank. The nets sum to zero.
+          description: One net per bank, with no bank twice. The nets sum to zero.
           minItems: 2
           items:
             $ref: '#/components/schemas/Net'
+    OpenAccount:
+      type: object
+      description: The opening capital of a bank. Both amounts are Beerus placeholders.
+      required: [settlement_minor, vault_minor]
+      properties:
+        settlement_minor:
+          type: integer
+          format: int64
+          description: The opening settlement balance in kobo.
+          minimum: 0
+        vault_minor:
+          type: integer
+          format: int64
+          description: The vault cash issued to the bank in kobo.
+          minimum: 0
+    Account:
+      type: object
+      description: A bank's settlement account at the CBN.
+      required: [bank_id, settlement_minor, vault_minor, opened_at]
+      properties:
+        bank_id:
+          type: string
+          description: The Beerus bank ID.
+        settlement_minor:
+          type: integer
+          format: int64
+          description: The opening settlement balance in kobo.
+        vault_minor:
+          type: integer
+          format: int64
+          description: The vault cash issued to the bank in kobo.
+        opened_at:
+          type: string
+          format: date-time
+          description: When the account was opened.
     Posting:
       type: object
       description: One posting that moved settlement balances.
@@ -336,6 +450,17 @@ components:
             error:
               code: invalid_cursor
               message: That cursor is not valid. Use the next_cursor value from the last page.
+              request_id: req_01JBC8A5T3ZK
+    Unauthenticated:
+      description: The control token is missing or wrong. The code is `unauthenticated`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unauthenticated
+              message: A valid control token is required.
               request_id: req_01JBC8A5T3ZK
     Forbidden:
       description: The caller's certificate identity may not make this call. The code is `forbidden`.
