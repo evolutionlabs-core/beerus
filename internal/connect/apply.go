@@ -26,6 +26,7 @@ const (
 	codePruneRequired  = "prune_required"
 	codeSetupMismatch  = "setup_mismatch"
 	codeBeingRemoved   = "being_removed"
+	codeMoneyMoved     = "money_moved"
 	codeNotReady       = "not_ready"
 	partnerKeyFile     = "api-key"
 	fieldNIPCode       = "nip_code"
@@ -141,7 +142,7 @@ func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt Apply
 	if err != nil {
 		return pl.plan, err
 	}
-	if err := a.ctl.update(func(st *setup.Status) (bool, error) { return admit(st, ad) }); err != nil {
+	if err := a.admitPlan(ad); err != nil {
 		return pl.plan, errors.Join(fmt.Errorf("admit the plan: %w", err), a.discardPartners(ad))
 	}
 	a.requestSettleNow(opt, settling)
@@ -150,6 +151,14 @@ func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt Apply
 	plan := pl.plan
 	plan.Actions = append(slices.Clone(plan.Actions), retargetActions(pl.st, retarget, opt.Money)...)
 	return plan, a.syncSetupFile(pl.desired)
+}
+
+func (a *App) admitPlan(ad *admission) error {
+	if len(ad.retarget) > 0 {
+		a.stepMu.Lock()
+		defer a.stepMu.Unlock()
+	}
+	return a.ctl.update(func(st *setup.Status) (bool, error) { return admit(st, ad) })
 }
 
 func (a *App) syncSetupFile(desired setup.Spec) error {
@@ -637,6 +646,11 @@ func nextApplied(st *setup.Status, ad *admission) setup.Spec {
 }
 
 func admit(st *setup.Status, ad *admission) (bool, error) {
+	for _, id := range slices.Sorted(maps.Keys(ad.retarget)) {
+		if !moneyOpen(st, id) {
+			return false, applyFail(http.StatusConflict, codeMoneyMoved, "The money of %s has already moved. Nothing was changed.", id)
+		}
+	}
 	st.Applied = nextApplied(st, ad)
 	created := createdFields(ad.pl.plan)
 	for _, act := range ad.pl.plan.Actions {

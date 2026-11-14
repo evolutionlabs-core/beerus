@@ -427,9 +427,6 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	if r.code != 1 || r.err != "beerus: Abuja Digital is suspended or down, so money cannot move there. Resume it or choose another bank.\n" || !strings.Contains(r.out, "~ bank bank-b") || !strings.Contains(r.out, "on_remove.money") {
 		t.Fatalf("purge towards a bank that is down: %+v", r)
 	}
-	if _, err := cl.do("DELETE", "/faults?bank=bank-c", nil); err != nil {
-		t.Fatal(err)
-	}
 	if r := d(cmdBankEnd, "", false, "close", "bank-a"); r.code != 1 || r.err != "beerus: bank-a needs a money decision. Add --money transfer, payout or leave\n" {
 		t.Fatalf("close without a money decision: %+v", r)
 	}
@@ -439,6 +436,9 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	}
 	if strings.Contains(r.err, "suspended or down") || strings.Contains(r.err, "TargetUnavailable") {
 		t.Fatalf("a stale condition was shown after the new decision: %q", r.err)
+	}
+	if _, err := cl.do("DELETE", "/faults?bank=bank-c", nil); err != nil {
+		t.Fatal(err)
 	}
 	ada2, err := cl.do("GET", "/banks/bank-a/accounts", nil)
 	if err != nil {
