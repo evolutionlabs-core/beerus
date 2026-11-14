@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -416,6 +417,22 @@ func (a *App) bankAPITLS(b *config.Bank) (*tls.Config, error) {
 	return &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12}, nil
 }
 
+type nipHandlers struct {
+	mu     sync.Mutex
+	ledger *ledgerSource
+	h      http.Handler
+}
+
+func (n *nipHandlers) forLedger(l *ledgerSource, a *App) http.Handler {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.ledger != l {
+		n.ledger = l
+		n.h = inbound.New(l.Bank(), a.clock.Now, inbound.Caller{CommonName: config.NIBSSCN, Role: config.NIBSSRole}, a.log)
+	}
+	return n.h
+}
+
 func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	if b.APIPort == 0 {
 		return nil, fmt.Errorf("%s has no API port", b.ID)
@@ -436,12 +453,12 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 		return nil, err
 	}
 	h := ob.Handler()
-	unavailable := func() bool {
+	unavailable := func(l *ledgerSource) bool {
 		a.freshen()
-		return (a.role == RoleBank && !a.synced.Load()) || a.bankPhase(b.ID) == PhaseSuspended || a.obLedger(b.ID) == nil || a.bankDown(b.ID, a.clock.Now())
+		return (a.role == RoleBank && !a.synced.Load()) || a.bankPhase(b.ID) == PhaseSuspended || l == nil || a.bankDown(b.ID, a.clock.Now())
 	}
 	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if unavailable() {
+		if unavailable(a.obLedger(b.ID)) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "30")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -450,14 +467,15 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 		}
 		h.ServeHTTP(w, r)
 	})
+	var nip nipHandlers
 	nipGuarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		l := a.obLedger(b.ID)
-		if unavailable() || l == nil {
+		if unavailable(l) {
 			w.Header().Set("Retry-After", "30")
 			inbound.WriteUnavailable(w)
 			return
 		}
-		inbound.New(l.Bank(), a.clock.Now, inbound.Caller{CommonName: config.NIBSSCN, Role: config.NIBSSRole}, a.log).ServeHTTP(w, r)
+		nip.forLedger(l, a).ServeHTTP(w, r)
 	})
 	mux := http.NewServeMux()
 	mux.Handle("/v1/nip/", nipGuarded)
