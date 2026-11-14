@@ -78,7 +78,7 @@ func (s *supervisor) sync(rep replicaView) {
 	for _, id := range slices.Sorted(maps.Keys(rep.Phases)) {
 		running := s.banks[id]
 		switch phase := rep.Phases[id]; {
-		case phase == setup.PhaseClosed || phase == setup.PhaseTerminating:
+		case phase == setup.PhaseClosed:
 			s.drop(id)
 		case running != nil && running.print != prints[id]:
 			s.drop(id)
