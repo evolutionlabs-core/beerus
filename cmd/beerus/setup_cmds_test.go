@@ -201,6 +201,15 @@ func jsonEqual(t *testing.T, a, b string) {
 	}
 }
 
+const logTailBytes = 20000
+
+func tailOf(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
+}
+
 func builtBeerus(t *testing.T) string {
 	t.Helper()
 	exe := filepath.Join(t.TempDir(), "beerus")
@@ -248,6 +257,11 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	exe := builtBeerus(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	var upOut, upErr lockedBuffer
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("up stderr:\n%s", tailOf(upErr.String(), logTailBytes))
+		}
+	})
 	died := make(chan error, 1)
 	go func() {
 		e := &cli{in: bufio.NewReader(strings.NewReader("")), out: &upOut, errOut: &upErr}

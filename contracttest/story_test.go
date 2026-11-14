@@ -125,6 +125,11 @@ func startUp(t *testing.T, c *cli, spec string) (*lockedBuffer, *lockedBuffer) {
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("up stderr:\n%s", tailOf(errOut.String(), logTailBytes))
+		}
+	})
+	t.Cleanup(func() {
 		_ = cmd.Process.Signal(syscall.SIGINT)
 		select {
 		case <-exited:
@@ -379,4 +384,13 @@ func TestStory(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Error("exit did not leave the session")
 	}
+}
+
+const logTailBytes = 20000
+
+func tailOf(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
