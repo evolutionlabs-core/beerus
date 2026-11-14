@@ -126,15 +126,15 @@ const (
 func stackPorts(t *testing.T, banks int) []int {
 	t.Helper()
 	offset := config.DefaultAPIPortOffset
-	need := 4 + banks
+	need := 5 + banks
 	for range 200 {
 		base := stackPortLow + mrand.IntN(stackPortHigh-stackPortLow-need-offset)
 		free := true
 		for p := base; p < base+need && free; p++ {
-			free = portOpen(p) && (p < base+4 || portOpen(p+offset))
+			free = portOpen(p) && (p < base+5 || portOpen(p+offset))
 		}
 		if free {
-			return []int{base, base + 1, base + 2, base + 3}
+			return []int{base, base + 1, base + 2, base + 3, base + 4}
 		}
 	}
 	t.Fatal("no free block of ports for the stack")
@@ -207,7 +207,7 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
-	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort = ports[0], ports[1], ports[2], ports[3]
+	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort = ports[0], ports[1], ports[2], ports[3], ports[4]
 	today := clock.DateOf(stackBase(t))
 	spec := banktest.Spec("contract")
 	spec.Spec.Partners = []setup.Partner{{

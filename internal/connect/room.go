@@ -526,7 +526,7 @@ func (a *App) roomConnections(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) roomRevoke(w http.ResponseWriter, r *http.Request) {
-	if err := a.RevokeAtBank(r.PathValue("id")); err != nil {
+	if err := a.RevokeAtBank(r.Context(), r.PathValue("id")); err != nil {
 		if errors.Is(err, errNotFound) {
 			a.roomNotFound(w, r)
 			return

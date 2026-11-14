@@ -10,6 +10,7 @@ func (a *App) reconcileNow() {
 	a.recMu.Lock()
 	defer a.recMu.Unlock()
 	a.reconcileChanges()
+	a.pokePush()
 }
 
 func (a *App) reconcileChanges() {

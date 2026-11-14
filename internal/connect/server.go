@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/nibss/gateway"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
@@ -71,6 +72,10 @@ func (a *App) Serve(ctx context.Context) error {
 			return err
 		}
 	}
+	ntls, err := a.NIBSSTLS()
+	if err != nil {
+		return err
+	}
 	type srv struct {
 		s   *http.Server
 		tls *tls.Config
@@ -84,6 +89,7 @@ func (a *App) Serve(ctx context.Context) error {
 		{a.cfg.Connect.PartnerPort, a.PartnerHandler(), ptls},
 		{a.cfg.Connect.WidgetPort, a.WidgetHandler(), wtls},
 		{a.cfg.Connect.ControlPort, a.ControlHandler(), nil},
+		{a.cfg.Connect.NIBSSPort, gateway.New(a.listDirectory, a.log), ntls},
 	}
 	servers := []srv{}
 	for _, sp := range specs {
@@ -135,6 +141,13 @@ func (a *App) Serve(ctx context.Context) error {
 		a.Run(runCtx)
 		close(done)
 	}()
+	pushDone := make(chan struct{})
+	go func() {
+		defer close(pushDone)
+		if a.role == RoleCore {
+			a.runPush(runCtx)
+		}
+	}()
 	var serr error
 	select {
 	case <-ctx.Done():
@@ -148,6 +161,7 @@ func (a *App) Serve(ctx context.Context) error {
 	a.stopBankSites(shut)
 	cancel()
 	<-done
+	<-pushDone
 	a.closeLedgers()
 	return serr
 }

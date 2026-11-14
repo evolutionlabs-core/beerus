@@ -28,12 +28,12 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /faults", a.ctlFaults)
 	mux.HandleFunc("POST /faults", a.ctlAddFault)
 	mux.HandleFunc("DELETE /faults", a.ctlClearFaults)
-	mux.HandleFunc("GET /internal/replica", a.ctlReplica)
+	mux.HandleFunc("GET /internal/registry", a.ctlInternalRegistry)
 	mux.HandleFunc("POST /internal/consents", a.ctlConsentRecord)
 	mux.HandleFunc("POST /banks/{id}/net-debit-cap", a.ctlNetDebitCap)
 	mux.HandleFunc("GET /connections", a.ctlConnections)
 	mux.HandleFunc("POST /connections/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
-		if err := a.RevokeAtBank(r.PathValue("id")); err != nil {
+		if err := a.RevokeAtBank(r.Context(), r.PathValue("id")); err != nil {
 			writeError(w, r, http.StatusNotFound, "not_found", "No such connection.")
 			return
 		}
@@ -110,7 +110,7 @@ func (a *App) localOnly(next http.Handler) http.Handler {
 		hosts[u.Host] = true
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); !a.remotePeers() && (err != nil || !net.ParseIP(host).IsLoopback()) {
+		if !a.peerAllowed(r) {
 			writeError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
 			return
 		}
@@ -122,13 +122,25 @@ func (a *App) localOnly(next http.Handler) http.Handler {
 			writeError(w, r, http.StatusForbidden, "forbidden", "Browser requests are refused.")
 			return
 		}
-		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(tok), []byte(a.ctlToken)) != 1 {
+		if !a.tokenOK(r) {
 			writeError(w, r, http.StatusUnauthorized, "unauthenticated", "A valid control token is required.")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (a *App) peerAllowed(r *http.Request) bool {
+	if a.remotePeers() {
+		return true
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	return err == nil && net.ParseIP(host).IsLoopback()
+}
+
+func (a *App) tokenOK(r *http.Request) bool {
+	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return ok && subtle.ConstantTimeCompare([]byte(tok), []byte(a.ctlToken)) == 1
 }
 
 func (a *App) WorldID() string {

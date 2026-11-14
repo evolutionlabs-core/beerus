@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -84,6 +83,9 @@ func (app *App) BankHandler(id string) http.Handler {
 	mux.HandleFunc("GET /authorize", a.obAuthorize)
 	mux.HandleFunc("GET /authorize/consent", a.obConsentPage)
 	mux.HandleFunc("POST /authorize/consent", a.obConsentSubmit)
+	if app.role == RoleBank {
+		mux.Handle("/v1/", app.participantAPI())
+	}
 	return a.bankGuard(mux)
 }
 
@@ -95,16 +97,15 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); (!a.remotePeers() && (err != nil || !net.ParseIP(host).IsLoopback())) || !hosts[r.Host] {
+		if !a.peerAllowed(r) || !hosts[r.Host] {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/internal/") {
+		if strings.HasPrefix(r.URL.Path, "/internal/") || strings.HasPrefix(r.URL.Path, "/v1/") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		a.freshen()
-		if a.role == RoleBank && !a.synced.Load() && !strings.HasPrefix(r.URL.Path, "/assets/") {
+		if a.role == RoleBank && !a.phased.Load() && !strings.HasPrefix(r.URL.Path, "/assets/") {
 			http.Error(w, "starting", http.StatusServiceUnavailable)
 			return
 		}
@@ -115,6 +116,13 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 		if r.Method == http.MethodPost {
 			if o := r.Header.Get("Origin"); o != "" && o != "http://"+r.Host {
 				http.Error(w, "cross-origin request refused", http.StatusForbidden)
+				return
+			}
+		}
+		if strings.HasPrefix(r.URL.Path, "/authorize") {
+			if err := a.refreshRegistry(r.Context()); err != nil {
+				a.log.Error("registry not readable", "bank", a.bank.ID, "err", err)
+				http.Error(w, "starting", http.StatusServiceUnavailable)
 				return
 			}
 		}
@@ -461,6 +469,9 @@ func (a *bankSite) obTx(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *bankSite) transferPage(ctx context.Context, s *bankSession, data roomPage) (roomPage, error) {
+	if err := a.refreshBanks(ctx); err != nil {
+		return nil, err
+	}
 	_, accts, err := a.myAccounts(ctx, s.Customer)
 	if err != nil {
 		return nil, err
@@ -544,6 +555,9 @@ func (a *bankSite) obTransferReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req, err := a.obTransferRequest(r.Context(), s, r.PostForm)
+	if err == nil {
+		err = a.refreshBanks(r.Context())
+	}
 	var q TransferResult
 	if err == nil {
 		q, err = a.Quote(req)
@@ -569,7 +583,7 @@ func (a *bankSite) obTransferConfirm(w http.ResponseWriter, r *http.Request) {
 	req, err := a.obTransferRequest(r.Context(), s, r.PostForm)
 	var res TransferResult
 	if err == nil && a.role == RoleBank {
-		res, err = a.remoteTransfer(req)
+		res, err = a.remoteTransfer(r.Context(), req)
 	} else if err == nil {
 		res, err = a.Transfer(req)
 	}

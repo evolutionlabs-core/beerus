@@ -47,7 +47,7 @@ paths:
       operationId: participantHealth
       tags: [lifecycle]
       summary: Check that the participant is running
-      description: Answers `ok` when the process is up and can serve requests. It says nothing about the phase. Read the status for that.
+      description: Answers `ok` when the process is up and can serve requests. It says nothing about the phase. Read the status for that. A bank that has not been told its world yet answers `503 unavailable`.
       responses:
         '200':
           description: The participant is running.
@@ -196,6 +196,42 @@ paths:
               example:
                 participant_id: bank-a
                 status: stopping
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /v1/phase:
+    put:
+      operationId: setParticipantPhase
+      tags: [lifecycle]
+      summary: Tell the participant its phase
+      description: The control plane sends the phase it wants the participant to be in, for example `suspended` or `active`, with the `generation` of the spec the phase comes from. A bank that has never been told its phase answers `503 unavailable` on its online banking, open banking and NIP APIs, and it opens them when the first phase arrives. A `suspended` bank refuses the same calls with `503 unavailable` until the control plane sends `active`. The control plane sends it again after a participant restarts, because a restarted participant has no phase. It is safe to repeat. The same body gives the same status. `world_id` is the ID of the Beerus world, which the health check shows. Beerus has no real-world source for this call, so the whole operation is a Beerus placeholder.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhaseRequest'
+            example:
+              phase: suspended
+              reason: Suspended by the operator.
+              generation: 4
+              world_id: wld_01JBC8A5T3ZK
+      responses:
+        '200':
+          description: The participant has taken the phase. The status shows it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+              example:
+                participant_id: bank-a
+                kind: bank
+                phase: suspended
+                reason: Suspended by the operator.
+                generation: 4
+                observed_generation: 4
+                steps: []
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthenticated'
   /v1/faults:
@@ -399,6 +435,26 @@ components:
           description: The provisioning steps, in order.
           items:
             $ref: '#/components/schemas/Step'
+    PhaseRequest:
+      type: object
+      description: The phase the control plane wants.
+      required: [phase, generation, world_id]
+      properties:
+        phase:
+          type: string
+          description: The phase to take.
+          enum: [provisioning, active, suspended, repairing, closing, closed, terminating]
+        reason:
+          type: string
+          description: A short sentence about why. It is left out when there is nothing to say.
+        generation:
+          type: integer
+          format: int64
+          description: The version of the spec this phase comes from. The participant reports it back as `observed_generation`.
+          minimum: 0
+        world_id:
+          type: string
+          description: The ID of the Beerus world the participant belongs to.
     EnsureRequest:
       type: object
       description: Which generation of the spec the step is for.

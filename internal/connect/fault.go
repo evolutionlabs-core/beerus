@@ -44,12 +44,10 @@ type FaultRequest struct {
 	For     string `json:"for"`
 }
 
-func (a *App) AddFault(req FaultRequest) (Fault, error) {
-	if a.bankByID(req.Bank) == nil {
-		return Fault{}, errNotFound
-	}
-	now := a.clock.Now()
-	f := Fault{ID: newID("flt"), Kind: req.Kind, Bank: req.Bank, At: now}
+const maxFaultFor = 24 * time.Hour
+
+func newFault(req FaultRequest, now time.Time) (Fault, error) {
+	f := Fault{Kind: req.Kind, At: now}
 	switch req.Kind {
 	case FaultDown:
 		if req.Outcome != "" || req.Count != nil {
@@ -59,6 +57,9 @@ func (a *App) AddFault(req FaultRequest) (Fault, error) {
 			d, err := time.ParseDuration(req.For)
 			if err != nil || d <= 0 {
 				return Fault{}, invalid("for %q is not a duration above zero, such as 1h", req.For)
+			}
+			if d > maxFaultFor {
+				return Fault{}, invalid("for %q is above the limit of %dh", req.For, int(maxFaultFor.Hours()))
 			}
 			until := now.Add(d)
 			f.Until = &until
@@ -81,10 +82,24 @@ func (a *App) AddFault(req FaultRequest) (Fault, error) {
 	default:
 		return Fault{}, invalid("kind %q must be down or timeout", req.Kind)
 	}
+	return f, nil
+}
+
+func (a *App) AddFault(req FaultRequest) (Fault, error) {
+	if a.bankByID(req.Bank) == nil {
+		return Fault{}, errNotFound
+	}
+	f, err := newFault(req, a.clock.Now())
+	if err != nil {
+		return Fault{}, err
+	}
+	f.Bank = req.Bank
+	f.ID = faultIDFor(fmt.Sprintf("%s|%s|%d", f.Bank, f.Kind, f.At.UnixNano()))
 	a.mu.Lock()
 	a.st.Faults = append(a.st.Faults, &f)
 	a.dirty()
 	a.mu.Unlock()
+	a.pokePush()
 	return f, nil
 }
 
@@ -121,6 +136,7 @@ func (a *App) ClearFaults(bank string) int {
 	}
 	a.st.Faults = keep
 	a.dirty()
+	a.pokePush()
 	return n
 }
 

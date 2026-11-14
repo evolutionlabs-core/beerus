@@ -41,6 +41,15 @@ func partnerFrom(r *http.Request) *config.Partner {
 	return p
 }
 
+const controlOwner = "control"
+
+func idemOwner(r *http.Request) string {
+	if p := partnerFrom(r); p != nil {
+		return p.ID
+	}
+	return controlOwner
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -204,8 +213,7 @@ func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body could not be read.")
 			return
 		}
-		p := partnerFrom(r)
-		scope := strings.Join([]string{p.ID, r.Method, r.URL.Path, key}, " ")
+		scope := strings.Join([]string{idemOwner(r), r.Method, r.URL.Path, key}, " ")
 		sum := sha256.Sum256(append([]byte(r.Method+" "+r.URL.RequestURI()+"\n"), body...))
 		hash := hex.EncodeToString(sum[:])
 		entry := a.idemAcquire(scope)
@@ -236,7 +244,9 @@ func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
 		if rw.status < 500 && rw.status != http.StatusTooManyRequests {
 			a.idemPutLocked(scope, hash, rw.status, rw.Header().Get("Content-Type"), rw.buf.Bytes())
 		}
-		err = a.saveLocked()
+		if a.statePath != "" {
+			err = a.saveLocked()
+		}
 		a.mu.Unlock()
 		if err != nil {
 			a.log.Error("save state", "err", err)

@@ -185,6 +185,7 @@ type LocalConnect struct {
 	WidgetTLS    bool   `yaml:"widget_tls,omitempty"`
 	ControlPort  int    `yaml:"control_port,omitempty"`
 	HealthPort   int    `yaml:"health_port,omitempty"`
+	NIBSSPort    int    `yaml:"nibss_port,omitempty"`
 	SyncInterval string `yaml:"sync_interval,omitempty"`
 	RefreshEvery string `yaml:"refresh_min_interval,omitempty"`
 }

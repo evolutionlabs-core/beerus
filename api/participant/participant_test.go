@@ -23,6 +23,7 @@ var operations = []struct{ id, method, path string }{
 	{"ensureParticipantStep", http.MethodPost, "/v1/steps/{step_id}/ensure"},
 	{"closeParticipant", http.MethodPost, "/v1/close"},
 	{"stopParticipant", http.MethodPost, "/v1/stop"},
+	{"setParticipantPhase", http.MethodPut, "/v1/phase"},
 	{"listParticipantFaults", http.MethodGet, "/v1/faults"},
 	{"setParticipantFault", http.MethodPost, "/v1/faults"},
 	{"clearParticipantFaults", http.MethodDelete, "/v1/faults"},

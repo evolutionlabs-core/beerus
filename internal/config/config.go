@@ -45,6 +45,7 @@ type Connect struct {
 	WidgetTLS    bool   `yaml:"widget_tls"`
 	ControlPort  int    `yaml:"control_port"`
 	HealthPort   int    `yaml:"health_port"`
+	NIBSSPort    int    `yaml:"nibss_port"`
 	LegalName    string `yaml:"legal_name"`
 	BrandName    string `yaml:"brand_name"`
 	RegistryID   string `yaml:"registry_id"`
@@ -377,6 +378,8 @@ const (
 	AggregatorRole  = "aggregator"
 	NIBSSCN         = "beerus-nibss"
 	NIBSSRole       = "nibss"
+	NIBSSHost       = "nibss.localhost"
+	BankRole        = "bank"
 	EventSignerName = "events"
 	EventSignerRole = "event-signer"
 )
@@ -412,6 +415,15 @@ func (c *Config) ensureNIBSS(root *pki.Authority, now time.Time) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create nibss dir: %w", err)
 	}
+	if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
+		leaf, err := root.IssueServer([]string{NIBSSHost, "localhost"}, leafLife)
+		if err != nil {
+			return fmt.Errorf("issue NIBSS server certificate: %w", err)
+		}
+		if err := leaf.Save(dir, "server"); err != nil {
+			return fmt.Errorf("save NIBSS server certificate: %w", err)
+		}
+	}
 	if !pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
 		return nil
 	}
@@ -444,6 +456,15 @@ func (c *Config) EnsureBankCertificates(root *pki.Authority, now time.Time) erro
 			}
 			if err := leaf.Save(dir, "server"); err != nil {
 				return fmt.Errorf("save server certificate for bank %s: %w", b.ID, err)
+			}
+		}
+		if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
+			leaf, err := root.IssueClient(b.ID, BankRole, leafLife)
+			if err != nil {
+				return fmt.Errorf("issue client certificate for bank %s: %w", b.ID, err)
+			}
+			if err := leaf.Save(dir, "client"); err != nil {
+				return fmt.Errorf("save client certificate for bank %s: %w", b.ID, err)
 			}
 		}
 		if pki.NeedsRenewal(filepath.Join(dir, EventSignerName+".crt"), now) {

@@ -85,15 +85,20 @@ func (a *App) BankStatuses() []BankStatus {
 }
 
 func (a *App) bankPhase(id string) string {
+	phase, _ := a.bankPhaseReason(id)
+	return phase
+}
+
+func (a *App) bankPhaseReason(id string) (string, string) {
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
 	if st := a.status[id]; st != nil {
-		return st.Phase
+		return st.Phase, st.Reason
 	}
 	if a.cfg.Bank(id) == nil {
-		return PhaseActive
+		return PhaseActive, ""
 	}
-	return PhaseProvisioning
+	return PhaseProvisioning, ""
 }
 
 func (a *App) bankReady(id string) bool {
@@ -267,6 +272,7 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 		return err
 	}
 	a.reconcileNow()
+	a.pokePush()
 	return nil
 }
 
@@ -382,7 +388,7 @@ func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool)
 }
 
 func CheckPorts(c *config.Config) error {
-	ports := []int{c.Connect.PartnerPort, c.Connect.WidgetPort, c.Connect.ControlPort}
+	ports := []int{c.Connect.PartnerPort, c.Connect.WidgetPort, c.Connect.ControlPort, c.Connect.HealthPort, c.Connect.NIBSSPort}
 	for _, b := range c.Banks {
 		if !b.Closed() {
 			ports = append(ports, b.Port, b.APIPort)

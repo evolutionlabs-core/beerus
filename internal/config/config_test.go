@@ -115,3 +115,39 @@ func TestNIBSSClientCertificate(t *testing.T) {
 		t.Fatal("a second prepare replaced the certificate")
 	}
 }
+
+func TestBankClientAndNIBSSServerCertificates(t *testing.T) {
+	c, err := finish(Config{Banks: []*Bank{{ID: "bank-a"}, {ID: "bank-b"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Dir = t.TempDir()
+	if err := Prepare(c, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	read := func(dir, name string) *x509.Certificate {
+		t.Helper()
+		pair, err := tls.LoadX509KeyPair(c.Path(dir, name+".crt"), c.Path(dir, name+".key"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf, err := x509.ParseCertificate(pair.Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return leaf
+	}
+	for _, id := range []string{"bank-a", "bank-b"} {
+		leaf := read("banks/"+id, "client")
+		if leaf.Subject.CommonName != id || len(leaf.Subject.OrganizationalUnit) != 1 || leaf.Subject.OrganizationalUnit[0] != "bank" {
+			t.Fatalf("%s subject %v, want CN %s and role bank", id, leaf.Subject, id)
+		}
+		if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
+			t.Fatalf("%s usage %v, want client auth only", id, leaf.ExtKeyUsage)
+		}
+	}
+	server := read("nibss", "server")
+	if len(server.DNSNames) != 2 || server.DNSNames[0] != "nibss.localhost" || server.DNSNames[1] != "localhost" {
+		t.Fatalf("NIBSS server names %v, want nibss.localhost and localhost", server.DNSNames)
+	}
+}

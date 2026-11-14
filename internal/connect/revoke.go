@@ -11,17 +11,17 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-func (a *App) revokeBankConnections(_ context.Context, r setup.Resource) (*setup.Condition, error) {
+func (a *App) revokeBankConnections(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
-	return nil, a.revokeConnections(func(c *Connection) bool { return c.Institution == id })
+	return nil, a.revokeConnections(ctx, func(c *Connection) bool { return c.Institution == id })
 }
 
-func (a *App) revokePartnerConnections(_ context.Context, r setup.Resource) (*setup.Condition, error) {
+func (a *App) revokePartnerConnections(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
-	return nil, a.revokeConnections(func(c *Connection) bool { return c.PartnerID == id })
+	return nil, a.revokeConnections(ctx, func(c *Connection) bool { return c.PartnerID == id })
 }
 
-func (a *App) revokeConnections(inScope func(*Connection) bool) error {
+func (a *App) revokeConnections(ctx context.Context, inScope func(*Connection) bool) error {
 	a.mu.Lock()
 	ids := make([]string, 0, len(a.st.Connections))
 	for cid, c := range a.st.Connections {
@@ -48,7 +48,7 @@ func (a *App) revokeConnections(inScope func(*Connection) bool) error {
 	a.mu.Unlock()
 	var errs []error
 	for _, cid := range withConsent {
-		if err := a.RevokeAtBank(cid); err != nil && !errors.Is(err, openbanking.ErrNotFound) {
+		if err := a.RevokeAtBank(ctx, cid); err != nil && !errors.Is(err, openbanking.ErrNotFound) {
 			errs = append(errs, fmt.Errorf("revoke connection %s at its bank: %w", cid, err))
 		}
 	}

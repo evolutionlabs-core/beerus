@@ -57,7 +57,6 @@ type App struct {
 	nibssTried   time.Time
 	nibssOpening bool
 	members      []nip.Participant
-	peerBanks    []*config.Bank
 	settling     bool
 	settleDone   *sync.Cond
 	lifeMu       sync.Mutex
@@ -82,14 +81,17 @@ type App struct {
 	role         string
 	bankID       string
 	coreURL      string
-	replicated   bool
-	synced       atomic.Bool
-	pullMu       sync.Mutex
-	pulledAt     time.Time
-	pullFailed   time.Time
-	pullErr      error
-	pullWarned   string
-	pulling      *pullFlight
+	phased       atomic.Bool
+	phaseGen     atomic.Int64
+	pushWake     chan struct{}
+	dirMu        sync.Mutex
+	dirBanks     []*config.Bank
+	dirAt        time.Time
+	dirClient    *http.Client
+	regAt        time.Time
+	regWarned    string
+	regRefresh   refresher
+	dirRefresh   refresher
 	peers        *http.Client
 	probeHTTP    *http.Client
 	eventMu      sync.Mutex
@@ -128,7 +130,8 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		ctlToken:  token,
 		log:       o.Logger,
 		limiters:  map[string]*rate.Limiter{},
-		peers:     &http.Client{Timeout: peerTimeout},
+		peers:     newPeerClient(),
+		pushWake:  make(chan struct{}, 1),
 		probeHTTP: &http.Client{Timeout: probeTimeout},
 		coreURL:   o.CoreURL,
 		bind:      o.Bind,
@@ -674,7 +677,7 @@ func (a *App) refreshOutcomeLocked(conn *Connection, synced bool) (string, any) 
 
 var errNotFound = errors.New("not found")
 
-func (a *App) RevokeAtBank(connID string) error {
+func (a *App) RevokeAtBank(ctx context.Context, connID string) error {
 	a.mu.Lock()
 	c, ok := a.st.Connections[connID]
 	if !ok {
@@ -684,7 +687,7 @@ func (a *App) RevokeAtBank(connID string) error {
 	bank, consent := c.Institution, c.ConsentID
 	a.mu.Unlock()
 	if b := a.cfg.Bank(bank); a.role == RoleCore && b != nil && consent != "" {
-		if err := a.revokeRemote(b, consent); err != nil {
+		if err := a.revokeRemote(ctx, b, consent); err != nil {
 			return err
 		}
 		return nil
@@ -693,7 +696,7 @@ func (a *App) RevokeAtBank(connID string) error {
 	if ob == nil || consent == "" {
 		return errNotFound
 	}
-	if err := ob.RevokeByBank(context.Background(), consent, "bank"); err != nil {
+	if err := ob.RevokeByBank(ctx, consent, "bank"); err != nil {
 		return err
 	}
 	a.flushEvents()

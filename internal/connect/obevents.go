@@ -128,7 +128,7 @@ func (a *App) flushLedger() {
 		for _, e := range due {
 			ev := e.ConsentEvent
 			ev.Seq = e.ID
-			if _, err := a.coreDo(http.MethodPost, "/internal/consents", ev, nil); err != nil {
+			if _, err := a.coreDo(ctx, http.MethodPost, "/internal/consents", ev, nil); err != nil {
 				a.log.Warn("consent ledger not updated; will retry", "bank", id, "consent", e.ConsentID, "attempt", e.Attempts+1, "err", err)
 				if err := s.Retry(ctx, e, a.clock.Real().Add(eventDelay(e.Attempts))); err != nil {
 					a.log.Error("consent ledger retry not saved", "bank", id, "consent", e.ConsentID, "err", err)

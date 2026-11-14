@@ -30,6 +30,7 @@ const (
 	defaultWidgetPort   = 7444
 	defaultControlPort  = 7480
 	defaultHealthPort   = 7490
+	defaultNIBSSPort    = 7481
 	defaultSyncInterval = "1m"
 	defaultRefreshEvery = "1m"
 
@@ -76,6 +77,7 @@ func DefaultLocal() setup.Local {
 			WidgetPort:   defaultWidgetPort,
 			ControlPort:  defaultControlPort,
 			HealthPort:   defaultHealthPort,
+			NIBSSPort:    defaultNIBSSPort,
 			SyncInterval: defaultSyncInterval,
 			RefreshEvery: defaultRefreshEvery,
 		},
@@ -207,10 +209,26 @@ func pinCodes(spec setup.Spec, plan setup.Plan) setup.Spec {
 	return out
 }
 
+func nibssPort(ln setup.LocalConnect, st setup.Status) (int, error) {
+	port := ln.NIBSSPort
+	if port == 0 {
+		port = defaultNIBSSPort
+	}
+	holders := map[int]string{ln.PartnerPort: "connect.partner_port", ln.WidgetPort: "connect.widget_port", ln.ControlPort: "connect.control_port", ln.HealthPort: "connect.health_port"}
+	for _, r := range st.Resources {
+		holders[r.Allocated.Port] = r.ID + " online banking"
+		holders[r.Allocated.APIPort] = r.ID + " open banking API"
+	}
+	if holder, taken := holders[port]; taken {
+		return 0, fmt.Errorf("NIBSS port %d is already used by %s; set connect.nibss_port in %s to a free port", port, holder, LocalFile)
+	}
+	return port, nil
+}
+
 func anyPort(int) bool { return true }
 
 func allocateBanks(cfg *config.Config, st *setup.Status) error {
-	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true}
+	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true, cfg.Connect.NIBSSPort: true}
 	next := cfg.Connect.PartnerPort
 	for _, b := range st.Applied.Spec.Banks {
 		port, err := cfg.AllocatePort(next, used, anyPort)
@@ -309,6 +327,10 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 		tsqAttempts = def.NIP.TSQAttempts
 	}
 	ln := local.Connect
+	nibss, err := nibssPort(ln, st)
+	if err != nil {
+		return nil, err
+	}
 	c := &config.Config{
 		Dir:         dir,
 		DatabaseURL: local.DatabaseURL,
@@ -323,6 +345,7 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 			WidgetTLS:    ln.WidgetTLS,
 			ControlPort:  ln.ControlPort,
 			HealthPort:   ln.HealthPort,
+			NIBSSPort:    nibss,
 			SyncInterval: ln.SyncInterval,
 			RefreshEvery: ln.RefreshEvery,
 			LegalName:    orDefault(spec.Connect.LegalName, defaultLegalName),
