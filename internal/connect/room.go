@@ -15,8 +15,10 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const roomCookie = "beerus_room"
@@ -468,13 +470,13 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f := r.PostForm
-	req := TransferRequest{FromBank: f.Get("from_bank"), From: strings.TrimSpace(f.Get("from")), ToBank: f.Get("to_bank"), To: strings.TrimSpace(f.Get("to")), Narration: strings.TrimSpace(f.Get("narration"))}
+	req := server.TransferRequest{FromBank: f.Get("from_bank"), From: strings.TrimSpace(f.Get("from")), ToBank: f.Get("to_bank"), To: strings.TrimSpace(f.Get("to")), Narration: strings.TrimSpace(f.Get("narration"))}
 	amount, err := bank.ParseNaira(f.Get("amount"))
 	if err != nil {
 		err = errBadAmount
 	} else {
 		req.Amount = amount
-		var res TransferResult
+		var res server.TransferResult
 		res, err = a.Transfer(req)
 		if err == nil {
 			a.SyncAll(r.Context())
@@ -482,24 +484,17 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var te *transferError
+	var te *server.TransferError
 	if !errors.As(err, &te) && !errors.Is(err, errBadAmount) {
 		a.roomFail(w, r, err)
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.roomRender(w, r, "transfer", http.StatusUnprocessableEntity, "transfer", roomPage{"Title": "New transfer", "Form": f, "Error": sentence(err.Error())})
+	a.roomRender(w, r, "transfer", http.StatusUnprocessableEntity, "transfer", roomPage{"Title": "New transfer", "Form": f, "Error": web.Sentence(err.Error())})
 }
 
 var errBadAmount = errors.New("enter an amount in naira, like 25000 or 2500.50")
-
-func sentence(msg string) string {
-	if msg == "" {
-		return msg
-	}
-	return strings.ToUpper(msg[:1]) + strings.TrimSuffix(msg[1:], ".") + "."
-}
 
 func (a *App) roomConnections(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 )
@@ -111,7 +112,7 @@ func noBankError() error {
 		return err
 	}
 	if len(banks) == 0 {
-		return errors.New(connect.NoBanksMessage)
+		return errors.New(server.NoBanksMessage)
 	}
 	return errors.New(noBankMessage)
 }
@@ -156,7 +157,7 @@ func bankStatus(c *ctl, id string) (connect.BankStatus, error) {
 		return connect.BankStatus{}, err
 	}
 	if len(banks) == 0 {
-		return connect.BankStatus{}, errors.New(connect.NoBanksMessage)
+		return connect.BankStatus{}, errors.New(server.NoBanksMessage)
 	}
 	ids := make([]string, 0, len(banks))
 	for _, b := range banks {

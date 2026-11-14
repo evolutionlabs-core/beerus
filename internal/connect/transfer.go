@@ -13,118 +13,44 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
-	"github.com/evolutionlabs-core/beerus/internal/charges"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
-type TransferRequest struct {
-	FromBank  string `json:"from_bank"`
-	From      string `json:"from"`
-	ToBank    string `json:"to_bank"`
-	To        string `json:"to"`
-	Amount    int64  `json:"amount_minor"`
-	Narration string `json:"narration"`
-	Key       string `json:"-"`
-	Closure   bool   `json:"-"`
-}
-
-type TransferResult struct {
-	Kind         string     `json:"kind"`
-	FromBank     string     `json:"from_bank"`
-	From         string     `json:"from"`
-	ToBank       string     `json:"to_bank"`
-	To           string     `json:"to"`
-	ToName       string     `json:"to_name"`
-	SessionID    string     `json:"session_id,omitempty"`
-	Status       string     `json:"status"`
-	ResponseCode string     `json:"response_code"`
-	Amount       int64      `json:"amount_minor"`
-	Fee          int64      `json:"fee_minor"`
-	VAT          int64      `json:"vat_minor"`
-	StampDuty    int64      `json:"stamp_duty_minor"`
-	TotalDebit   int64      `json:"total_debit_minor"`
-	BalanceAfter int64      `json:"sender_balance_after_minor"`
-	NextCheckAt  *time.Time `json:"next_check_at,omitempty"`
-	At           time.Time  `json:"at"`
-}
-
-var (
-	errSameAccount   = errors.New("the from and to accounts are the same")
-	errBankNotActive = errors.New("bank is not active")
-	errOverCap       = errors.New("net debit cap reached")
-)
-
-type notActiveError struct {
-	name  string
-	phase string
-}
-
-func (e notActiveError) Error() string {
-	return fmt.Sprintf("%s is %s, so it cannot do this now", e.name, e.phase)
-}
-
-func (notActiveError) Is(target error) bool {
-	return target == errBankNotActive
-}
-
-type transferError struct {
-	code    string
-	errCode string
-	status  int
-	err     error
-}
-
-func (e *transferError) Error() string {
-	return e.err.Error()
-}
-
-func (e *transferError) Unwrap() error {
-	return e.err
-}
-
-func refused(status int, code, errCode string, err error) error {
-	return &transferError{code: code, errCode: errCode, status: status, err: err}
-}
+var errOverCap = errors.New("net debit cap reached")
 
 type transferRoute struct {
+	server.Route
 	from, to       *ledgerSource
-	fromBank       string
-	toBank         string
-	fromName       string
-	toName         string
-	fromCode       string
-	toCode         string
-	cap            int64
 	sessionCounter int64
 }
 
-func (a *App) route(req TransferRequest, session bool) (transferRoute, error) {
+func (a *App) route(req server.TransferRequest, session bool) (transferRoute, error) {
 	if req.ToBank == "" {
 		req.ToBank = req.FromBank
 	}
 	a.mu.Lock()
 	from, to := a.bankLocked(req.FromBank), a.bankLocked(req.ToBank)
 	a.mu.Unlock()
-	if from == nil {
-		return transferRoute{}, refused(http.StatusNotFound, nip.SystemError, "not_found", fmt.Errorf("no bank %q", req.FromBank))
+	var fromPhase, toPhase string
+	if from != nil {
+		fromPhase = a.bankPhase(from.ID)
 	}
-	if to == nil {
-		return transferRoute{}, refused(http.StatusUnprocessableEntity, nip.SystemError, "unknown_bank", fmt.Errorf("find bank %q: %w", req.ToBank, nibss.ErrUnknownInstitution))
+	if to != nil {
+		toPhase = a.bankPhase(to.ID)
 	}
-	if phase := a.bankPhase(from.ID); phase != PhaseActive && !req.Closure {
-		return transferRoute{}, refused(http.StatusConflict, nip.Unavailable, "bank_not_active", notActiveError{from.Name, phase})
-	}
-	if a.bankPhase(to.ID) == PhaseClosed {
-		return transferRoute{}, refused(http.StatusUnprocessableEntity, nip.Unavailable, "bank_closed", fmt.Errorf("%s is closed and takes no more transfers. Nothing was debited", to.Name))
+	route, err := server.NewRoute(req, from, to, fromPhase, toPhase)
+	if err != nil {
+		return transferRoute{}, err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	rt := transferRoute{from: a.ledgerFor(from.ID), to: a.ledgerFor(to.ID), fromBank: from.ID, toBank: to.ID, fromName: from.Name, toName: to.Name, fromCode: from.NIPCode, toCode: to.NIPCode, cap: from.Cap()}
+	rt := transferRoute{Route: route, from: a.ledgerFor(from.ID), to: a.ledgerFor(to.ID)}
 	if rt.from == nil {
-		return transferRoute{}, refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("the books of %s are not open yet", from.Name))
+		return transferRoute{}, server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("the books of %s are not open yet", from.Name))
 	}
 	if session && from.ID != to.ID {
 		a.st.NIP.Sessions++
@@ -134,152 +60,86 @@ func (a *App) route(req TransferRequest, session bool) (transferRoute, error) {
 	return rt, nil
 }
 
-func (a *App) Transfer(req TransferRequest) (TransferResult, error) {
-	if req.Amount <= 0 {
-		return TransferResult{}, refused(http.StatusBadRequest, nip.SystemError, "invalid_request", errors.New("amount must be above zero"))
-	}
-	if err := bank.CheckNarration(req.Narration); err != nil {
-		return TransferResult{}, refused(http.StatusUnprocessableEntity, nip.SystemError, "invalid_request", err)
+func (a *App) Transfer(req server.TransferRequest) (server.TransferResult, error) {
+	if err := server.CheckRequest(req); err != nil {
+		return server.TransferResult{}, err
 	}
 	if req.ToBank == "" {
 		req.ToBank = req.FromBank
 	}
 	rt, err := a.route(req, req.Key == "")
 	if err != nil {
-		return TransferResult{}, err
+		return server.TransferResult{}, err
 	}
 	now := a.clock.Now()
-	res := TransferResult{FromBank: rt.fromBank, From: req.From, ToBank: rt.toBank, To: req.To, Amount: req.Amount, At: now}
-	if rt.fromBank == rt.toBank {
+	res := server.TransferResult{FromBank: rt.FromBank, From: req.From, ToBank: rt.ToBank, To: req.To, Amount: req.Amount, At: now}
+	if rt.FromBank == rt.ToBank {
 		return a.internalTransfer(rt, req, res)
 	}
 	return a.nipTransfer(rt, req, res)
 }
 
-func (a *App) Quote(req TransferRequest) (TransferResult, error) {
-	if req.Amount <= 0 {
-		return TransferResult{}, refused(http.StatusBadRequest, nip.SystemError, "invalid_request", errors.New("amount must be above zero"))
-	}
-	if err := bank.CheckNarration(req.Narration); err != nil {
-		return TransferResult{}, refused(http.StatusUnprocessableEntity, nip.SystemError, "invalid_request", err)
+func (a *App) Quote(req server.TransferRequest) (server.TransferResult, error) {
+	if err := server.CheckRequest(req); err != nil {
+		return server.TransferResult{}, err
 	}
 	if req.ToBank == "" {
 		req.ToBank = req.FromBank
 	}
 	rt, err := a.route(req, false)
 	if err != nil {
-		return TransferResult{}, err
+		return server.TransferResult{}, err
 	}
-	ctx := context.Background()
-	b := rt.from.Bank()
-	now := a.clock.Now()
-	res := TransferResult{FromBank: rt.fromBank, From: req.From, ToBank: rt.toBank, To: req.To, Amount: req.Amount, At: now}
-	sender, err := b.L.Account(ctx, bank.CustomerAccount(req.From))
-	if err != nil {
-		return res, accountError("from", req.From, err)
-	}
-	if rt.fromBank == rt.toBank {
-		if req.From == req.To {
-			return res, refused(http.StatusUnprocessableEntity, nip.SystemError, "invalid_request", errSameAccount)
-		}
-		to, err := b.L.Account(ctx, bank.CustomerAccount(req.To))
-		if err != nil {
-			return res, accountError("to", req.To, err)
-		}
-		res.Kind, res.ToName, res.TotalDebit = "internal", to.Name, req.Amount
-	} else {
-		name, err := a.enquire(ctx, rt, req.To)
-		if err != nil {
-			return res, err
-		}
-		c := a.cfg.Fees().ForTransfer(req.Amount)
-		res.Kind, res.ToName = "nip", name
-		res.Fee, res.VAT, res.StampDuty = c.Fee, c.VAT, c.StampDuty
-		if res.TotalDebit, err = totalDebit(req.Amount, c); err != nil {
-			return res, err
-		}
-	}
-	bal, err := b.BalanceAt(ctx, req.From, now)
-	if err != nil {
-		return res, fmt.Errorf("read balance of %s: %w", req.From, err)
-	}
-	if room, ok := bank.AddMinor(bal, sender.OverdraftLimit); ok && room < res.TotalDebit {
-		return res, postingError(req.From, ledger.ErrInsufficientFunds)
-	}
-	res.BalanceAfter = bal - res.TotalDebit
-	return res, nil
+	return server.Quoter{Fees: a.cfg.Fees(), Clock: a.clock, Enquirer: a}.Quote(context.Background(), rt.from.Bank(), rt.Route, req)
 }
 
-func (a *App) enquire(ctx context.Context, rt transferRoute, nuban string) (string, error) {
+func (a *App) Enquire(ctx context.Context, rt server.Route, nuban string) (string, error) {
 	if a.role == RoleBank {
-		return a.remoteEnquiry(ctx, rt.toCode, nuban)
+		return a.remoteEnquiry(ctx, rt.ToCode, nuban)
 	}
 	sw := a.nibssStore()
 	if sw == nil {
-		return "", refused(http.StatusServiceUnavailable, nip.Unavailable, "nibss_unavailable", errors.New("NIBSS is not available right now"))
+		return "", server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "nibss_unavailable", errors.New("NIBSS is not available right now"))
 	}
-	name, err := sw.NameEnquiry(ctx, rt.toCode, nuban)
+	name, err := sw.NameEnquiry(ctx, rt.ToCode, nuban)
 	if err != nil {
-		return "", enquiryError(rt.toName, err)
+		return "", enquiryError(rt.ToName, err)
 	}
 	return name, nil
 }
 
-func (a *App) internalTransfer(rt transferRoute, req TransferRequest, res TransferResult) (TransferResult, error) {
+func (a *App) internalTransfer(rt transferRoute, req server.TransferRequest, res server.TransferResult) (server.TransferResult, error) {
 	if req.From == req.To {
-		return res, refused(http.StatusUnprocessableEntity, nip.SystemError, "invalid_request", errSameAccount)
+		return res, server.Refused(http.StatusUnprocessableEntity, nip.SystemError, "invalid_request", server.ErrSameAccount)
 	}
 	b := rt.from.Bank()
 	ctx := context.Background()
 	to, err := b.L.Account(ctx, bank.CustomerAccount(req.To))
 	if err != nil {
-		return res, accountError("to", req.To, err)
+		return res, server.AccountError("to", req.To, err)
 	}
 	key := req.Key
 	if key == "" {
 		key = web.NewID("trf")
 	}
 	if _, err := b.OwnTransfer(ctx, key, req.From, req.To, req.Amount, req.Narration, res.At); err != nil {
-		return res, postingError(req.From, err)
+		return res, server.PostingError(req.From, err)
 	}
 	res.Kind, res.Status, res.ResponseCode, res.ToName, res.TotalDebit = "internal", nip.Success, nip.OK, to.Name, req.Amount
 	res.BalanceAfter, err = b.BalanceAt(ctx, req.From, res.At)
 	return res, err
 }
 
-func accountError(side, nuban string, err error) error {
-	if errors.Is(err, ledger.ErrUnknownAccount) {
-		return refused(http.StatusUnprocessableEntity, nip.InvalidAccount, "invalid_account", fmt.Errorf("the %s account %s does not exist", side, nuban))
-	}
-	return err
-}
-
-func postingError(nuban string, err error) error {
-	switch {
-	case errors.Is(err, ledger.ErrUnknownAccount):
-		return accountError("from", nuban, err)
-	case errors.Is(err, ledger.ErrInsufficientFunds):
-		return refused(http.StatusUnprocessableEntity, nip.NoFunds, "insufficient_funds", fmt.Errorf("account %s does not have enough money for this transfer and its charges", nuban))
-	case errors.Is(err, ledger.ErrAccountClosed), errors.Is(err, ledger.ErrAccountFrozen), errors.Is(err, ledger.ErrPostNoDebit):
-		return refused(http.StatusUnprocessableEntity, nip.Restricted, "account_restricted", fmt.Errorf("account %s cannot be debited: %w", nuban, err))
-	case errors.Is(err, ledger.ErrDailyLimit):
-		return refused(http.StatusUnprocessableEntity, nip.OverCap, "daily_limit", fmt.Errorf("account %s has reached its daily limit", nuban))
-	case errors.Is(err, ledger.ErrIdempotency):
-		return refused(http.StatusUnprocessableEntity, nip.SystemError, "idempotency_key_reused", errors.New("that idempotency key was used for a different transfer"))
-	}
-	return err
-}
-
 func enquiryError(name string, err error) error {
 	switch {
 	case errors.Is(err, nip.ErrUnavailable):
-		return refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("%s is not available right now, so nothing was debited", name))
+		return server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("%s is not available right now, so nothing was debited", name))
 	case errors.Is(err, nip.ErrInvalidAccount):
-		return refused(http.StatusUnprocessableEntity, nip.InvalidAccount, "invalid_account", fmt.Errorf("that is not a valid account at %s, so nothing was debited", name))
+		return server.Refused(http.StatusUnprocessableEntity, nip.InvalidAccount, "invalid_account", fmt.Errorf("that is not a valid account at %s, so nothing was debited", name))
 	case errors.Is(err, nip.ErrNoRecord):
-		return refused(http.StatusUnprocessableEntity, nip.NoRecord, "no_record", fmt.Errorf("%s has no such account, so nothing was debited", name))
+		return server.Refused(http.StatusUnprocessableEntity, nip.NoRecord, "no_record", fmt.Errorf("%s has no such account, so nothing was debited", name))
 	case errors.Is(err, nibss.ErrUnknownInstitution):
-		return refused(http.StatusUnprocessableEntity, nip.SystemError, "unknown_bank", err)
+		return server.Refused(http.StatusUnprocessableEntity, nip.SystemError, "unknown_bank", err)
 	}
 	return err
 }
@@ -289,33 +149,25 @@ func (a *App) sendLock(bankID string) *sync.Mutex {
 	return m.(*sync.Mutex)
 }
 
-func totalDebit(amount int64, c charges.Transfer) (int64, error) {
-	total, ok := bank.TotalDebit(amount, c)
-	if !ok {
-		return 0, refused(http.StatusUnprocessableEntity, nip.SystemError, "amount_too_large", fmt.Errorf("%s is too large to add the transfer charges to. Nothing was debited", bank.Naira(amount)))
-	}
-	return total, nil
-}
-
-func (a *App) newSessionID(rt transferRoute, req TransferRequest, at time.Time) string {
+func (a *App) newSessionID(rt transferRoute, req server.TransferRequest, at time.Time) string {
 	seq := int(rt.sessionCounter)
 	if req.Key != "" {
-		sum := sha256.Sum256([]byte(rt.fromCode + "\x00" + req.Key))
+		sum := sha256.Sum256([]byte(rt.FromCode + "\x00" + req.Key))
 		seq = -int(binary.BigEndian.Uint32(sum[:4])) - 1
 	}
-	return nip.SessionID(int64(a.setupKey), rt.fromCode, at, seq)
+	return nip.SessionID(int64(a.setupKey), rt.FromCode, at, seq)
 }
 
-func (a *App) nipTransfer(rt transferRoute, req TransferRequest, res TransferResult) (TransferResult, error) {
+func (a *App) nipTransfer(rt transferRoute, req server.TransferRequest, res server.TransferResult) (server.TransferResult, error) {
 	sw := a.nibssStore()
 	if sw == nil {
-		return res, refused(http.StatusServiceUnavailable, nip.Unavailable, "nibss_unavailable", errors.New("NIBSS is not available right now, so nothing was debited"))
+		return res, server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "nibss_unavailable", errors.New("NIBSS is not available right now, so nothing was debited"))
 	}
 	ctx := context.Background()
 	b := rt.from.Bank()
 	sender, err := b.L.Account(ctx, bank.CustomerAccount(req.From))
 	if err != nil {
-		return res, accountError("from", req.From, err)
+		return res, server.AccountError("from", req.From, err)
 	}
 	sendKey := ""
 	var prior bank.PriorSend
@@ -329,14 +181,14 @@ func (a *App) nipTransfer(rt transferRoute, req TransferRequest, res TransferRes
 	name := prior.To.Name
 	if found {
 		res.At = prior.At.In(clock.Lagos)
-	} else if name, err = sw.NameEnquiry(ctx, rt.toCode, req.To); err != nil {
-		return res, enquiryError(rt.toName, err)
+	} else if name, err = sw.NameEnquiry(ctx, rt.ToCode, req.To); err != nil {
+		return res, enquiryError(rt.ToName, err)
 	}
 	res.Kind, res.ToName = "nip", name
-	if _, err := totalDebit(req.Amount, a.cfg.Fees().ForTransfer(req.Amount)); err != nil {
+	if _, err := server.TotalDebit(req.Amount, a.cfg.Fees().ForTransfer(req.Amount)); err != nil {
 		return res, err
 	}
-	lock := a.sendLock(rt.fromBank)
+	lock := a.sendLock(rt.FromBank)
 	lock.Lock()
 	sess, replayed, err := a.beginSend(ctx, sw, rt, req, &res, found, sendKey, prior.SessionID, name)
 	lock.Unlock()
@@ -346,15 +198,15 @@ func (a *App) nipTransfer(rt transferRoute, req TransferRequest, res TransferRes
 	return a.afterBegin(sw, rt, req, res, sess, replayed, sender.Name)
 }
 
-func (a *App) beginSend(ctx context.Context, sw *nibss.Store, rt transferRoute, req TransferRequest, res *TransferResult, found bool, sendKey, sid, name string) (nibss.Session, bool, error) {
+func (a *App) beginSend(ctx context.Context, sw *nibss.Store, rt transferRoute, req server.TransferRequest, res *server.TransferResult, found bool, sendKey, sid, name string) (nibss.Session, bool, error) {
 	if !found {
-		open, err := a.openPosition(sw, rt.fromCode)
+		open, err := a.openPosition(sw, rt.FromCode)
 		if err != nil {
 			return nibss.Session{}, false, err
 		}
 		pos := open.netDebit()
-		if need, ok := bank.AddMinor(pos, req.Amount); (!ok || need > rt.cap) && !req.Closure {
-			return nibss.Session{}, false, refused(http.StatusUnprocessableEntity, nip.OverCap, "net_debit_cap_exceeded", fmt.Errorf("%s has reached its NIP net debit cap of %s. This transfer needs %s and %s is left. It clears at the next settlement session. Nothing was debited: %w", rt.fromName, bank.Naira(rt.cap), bank.Naira(req.Amount), bank.Naira(max(rt.cap-pos, 0)), errOverCap))
+		if need, ok := bank.AddMinor(pos, req.Amount); (!ok || need > rt.Cap) && !req.Closure {
+			return nibss.Session{}, false, server.Refused(http.StatusUnprocessableEntity, nip.OverCap, "net_debit_cap_exceeded", fmt.Errorf("%s has reached its NIP net debit cap of %s. This transfer needs %s and %s is left. It clears at the next settlement session. Nothing was debited: %w", rt.FromName, bank.Naira(rt.Cap), bank.Naira(req.Amount), bank.Naira(max(rt.Cap-pos, 0)), errOverCap))
 		}
 		sid = a.newSessionID(rt, req, res.At)
 		if sendKey == "" {
@@ -363,18 +215,18 @@ func (a *App) beginSend(ctx context.Context, sw *nibss.Store, rt transferRoute, 
 	}
 	res.SessionID = sid
 	b := rt.from.Bank()
-	p, c, err := b.SendNIP(ctx, bank.NIPSend{Key: sendKey, From: req.From, Amount: req.Amount, SessionID: sid, To: bank.Counterparty{Name: name, AccountNumber: req.To, BankCode: rt.toCode, BankName: rt.toName}, At: res.At, NoCharges: req.Closure, Narration: req.Narration})
+	p, c, err := b.SendNIP(ctx, bank.NIPSend{Key: sendKey, From: req.From, Amount: req.Amount, SessionID: sid, To: bank.Counterparty{Name: name, AccountNumber: req.To, BankCode: rt.ToCode, BankName: rt.ToName}, At: res.At, NoCharges: req.Closure, Narration: req.Narration})
 	if err != nil {
-		return nibss.Session{}, false, postingError(req.From, err)
+		return nibss.Session{}, false, server.PostingError(req.From, err)
 	}
 	res.Fee, res.VAT, res.StampDuty = c.Fee, c.VAT, c.StampDuty
 	var terr error
-	if res.TotalDebit, terr = totalDebit(req.Amount, c); terr != nil {
+	if res.TotalDebit, terr = server.TotalDebit(req.Amount, c); terr != nil {
 		return nibss.Session{}, false, terr
 	}
-	x := nibss.Session{ID: sid, FromCode: rt.fromCode, ToCode: rt.toCode, FromNUBAN: req.From, ToNUBAN: req.To, Amount: req.Amount, Narration: req.Narration, CreatedAt: res.At, Closure: req.Closure}
+	x := nibss.Session{ID: sid, FromCode: rt.FromCode, ToCode: rt.ToCode, FromNUBAN: req.From, ToNUBAN: req.To, Amount: req.Amount, Narration: req.Narration, CreatedAt: res.At, Closure: req.Closure}
 	if !p.Replayed {
-		if held := a.takeTimeout(rt.toBank); held != "" {
+		if held := a.takeTimeout(rt.ToBank); held != "" {
 			next := res.At.Add(a.cfg.TSQAfter)
 			x.Outcome, x.NextTSQAt = held, &next
 		}
@@ -392,7 +244,7 @@ func (a *App) beginSend(ctx context.Context, sw *nibss.Store, rt transferRoute, 
 	return sess, p.Replayed, nil
 }
 
-func (a *App) afterBegin(sw *nibss.Store, rt transferRoute, req TransferRequest, res TransferResult, sess nibss.Session, replayed bool, senderName string) (TransferResult, error) {
+func (a *App) afterBegin(sw *nibss.Store, rt transferRoute, req server.TransferRequest, res server.TransferResult, sess nibss.Session, replayed bool, senderName string) (server.TransferResult, error) {
 	sid := sess.ID
 	switch {
 	case sess.Status == nibss.SessionOK:
@@ -428,7 +280,7 @@ func (a *App) afterBegin(sw *nibss.Store, rt transferRoute, req TransferRequest,
 	return a.finish(rt, req, res)
 }
 
-func (a *App) reverseFailed(sw *nibss.Store, rt transferRoute, req TransferRequest, res TransferResult, cause error) (TransferResult, error) {
+func (a *App) reverseFailed(sw *nibss.Store, rt transferRoute, req server.TransferRequest, res server.TransferResult, cause error) (server.TransferResult, error) {
 	if rerr := a.fail(sw, rt.from, res.SessionID, nip.Unavailable, res.At); rerr != nil {
 		return res, errors.Join(cause, rerr)
 	}
@@ -436,22 +288,22 @@ func (a *App) reverseFailed(sw *nibss.Store, rt transferRoute, req TransferReque
 	return a.finish(rt, req, res)
 }
 
-func (a *App) finish(rt transferRoute, req TransferRequest, res TransferResult) (TransferResult, error) {
+func (a *App) finish(rt transferRoute, req server.TransferRequest, res server.TransferResult) (server.TransferResult, error) {
 	bal, err := rt.from.Bank().BalanceAt(context.Background(), req.From, res.At)
 	res.BalanceAfter = bal
 	return res, err
 }
 
-func (a *App) credit(rt transferRoute, req TransferRequest, sid, senderName string, at time.Time) error {
+func (a *App) credit(rt transferRoute, req server.TransferRequest, sid, senderName string, at time.Time) error {
 	if rt.to == nil {
-		return fmt.Errorf("the books of %s are not open: %w", rt.toName, nip.ErrUnavailable)
+		return fmt.Errorf("the books of %s are not open: %w", rt.ToName, nip.ErrUnavailable)
 	}
-	if a.bankDown(rt.toBank, at) {
-		return fmt.Errorf("%s is down: %w", rt.toName, nip.ErrUnavailable)
+	if a.bankDown(rt.ToBank, at) {
+		return fmt.Errorf("%s is down: %w", rt.ToName, nip.ErrUnavailable)
 	}
-	_, err := rt.to.Bank().ReceiveNIP(context.Background(), sid, req.To, req.Amount, bank.Counterparty{Name: senderName, AccountNumber: req.From, BankCode: rt.fromCode, BankName: rt.fromName}, req.Narration, at)
+	_, err := rt.to.Bank().ReceiveNIP(context.Background(), sid, req.To, req.Amount, bank.Counterparty{Name: senderName, AccountNumber: req.From, BankCode: rt.FromCode, BankName: rt.FromName}, req.Narration, at)
 	if err != nil {
-		return fmt.Errorf("credit %s at %s: %w", req.To, rt.toName, err)
+		return fmt.Errorf("credit %s at %s: %w", req.To, rt.ToName, err)
 	}
 	return nil
 }

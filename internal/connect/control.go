@@ -68,15 +68,15 @@ func (a *App) ControlHandler() http.Handler {
 		web.WriteJSON(w, http.StatusOK, map[string]any{"data": data, "warnings": a.BankWarnings()})
 	})
 	mux.HandleFunc("POST /banks", a.ctlCreateBank)
-	mux.HandleFunc("GET /banks/{id}/customers", a.atBank(a.ctlCustomers))
-	mux.HandleFunc("POST /banks/{id}/customers", a.atBank(a.ctlCreateCustomer))
-	mux.HandleFunc("POST /banks/{id}/customers/{customer_id}/close", a.atBank(a.ctlCloseCustomer))
-	mux.HandleFunc("GET /banks/{id}/accounts", a.atBank(a.ctlAccounts))
-	mux.HandleFunc("POST /banks/{id}/accounts", a.atBank(a.ctlOpenAccount))
-	mux.HandleFunc("POST /banks/{id}/accounts/{nuban}/close", a.atBank(a.ctlCloseAccount))
-	mux.HandleFunc("GET /banks/{id}/accounts/{nuban}/statement", a.atBank(a.ctlStatement))
-	mux.HandleFunc("POST /banks/{id}/deposits", a.atBankSyncing(a.ctlCash("deposit")))
-	mux.HandleFunc("POST /banks/{id}/withdrawals", a.atBankSyncing(a.ctlCash("withdrawal")))
+	mux.HandleFunc("GET /banks/{id}/customers", a.atBank(a.banking.HandleCustomers))
+	mux.HandleFunc("POST /banks/{id}/customers", a.atBank(a.banking.HandleCreateCustomer))
+	mux.HandleFunc("POST /banks/{id}/customers/{customer_id}/close", a.atBank(a.banking.HandleCloseCustomer))
+	mux.HandleFunc("GET /banks/{id}/accounts", a.atBank(a.banking.HandleAccounts))
+	mux.HandleFunc("POST /banks/{id}/accounts", a.atBank(a.banking.HandleOpenAccount))
+	mux.HandleFunc("POST /banks/{id}/accounts/{nuban}/close", a.atBank(a.banking.HandleCloseAccount))
+	mux.HandleFunc("GET /banks/{id}/accounts/{nuban}/statement", a.atBank(a.banking.HandleStatement))
+	mux.HandleFunc("POST /banks/{id}/deposits", a.atBankSyncing(a.banking.HandleCash("deposit")))
+	mux.HandleFunc("POST /banks/{id}/withdrawals", a.atBankSyncing(a.banking.HandleCash("withdrawal")))
 	mux.HandleFunc("POST /internal/bvns", a.ctlEnrolBVN)
 	mux.HandleFunc("POST /banks/{id}/transfers", a.ctlBankTransfer)
 	mux.HandleFunc("POST /banks/{id}/transfers/quote", a.ctlBankQuote)
@@ -187,7 +187,7 @@ func (a *App) ctlDeliveries(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, map[string]any{"id": d.ID, "type": d.Type, "status": d.Status, "attempts": d.Attempts, "last_status": d.LastStatus, "last_error": d.LastError, "body": d.Body})
 	}
-	web.WriteJSON(w, http.StatusOK, listPage(out, next))
+	web.WriteJSON(w, http.StatusOK, web.ListPage(out, next))
 }
 
 func (a *App) SyncAll(ctx context.Context) {

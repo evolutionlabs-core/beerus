@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
@@ -423,7 +424,7 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		if err != nil {
 			return CloseResult{}, err
 		}
-		tr, err := a.Transfer(TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: key, Closure: true})
+		tr, err := a.Transfer(server.TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: key, Closure: true})
 		if err != nil {
 			return CloseResult{}, fmt.Errorf("move %s from %s: %w", bank.Naira(bal), acc.NUBAN, err)
 		}

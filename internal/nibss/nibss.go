@@ -25,7 +25,7 @@ const (
 )
 
 var (
-	ErrUnknownInstitution = errors.New("not in the NIBSS directory")
+	ErrUnknownInstitution = nip.ErrUnknownInstitution
 	ErrBadDetails         = errors.New("invalid BVN details")
 )
 

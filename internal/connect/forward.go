@@ -58,7 +58,7 @@ func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 		a.noSuchBank(w, r)
 		return
 	}
-	key, ok := idemKey(w, r)
+	key, ok := web.IdempotencyKey(w, r)
 	if !ok {
 		return
 	}
@@ -70,7 +70,7 @@ func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 	write := r.Method != http.MethodGet
 	if write {
 		if phase != PhaseActive {
-			a.bankingError(w, r, notActiveError{b.Name, phase})
+			a.banking.Error(w, r, server.NotActiveError{Name: b.Name, Phase: phase})
 			return
 		}
 		if key == "" {

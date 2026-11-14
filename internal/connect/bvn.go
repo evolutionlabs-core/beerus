@@ -16,19 +16,6 @@ import (
 
 var errNIBSSNotOpen = errors.New("NIBSS is not open yet, so no BVN can be enrolled; try again soon")
 
-type unavailableError struct {
-	msg string
-	err error
-}
-
-func (e *unavailableError) Error() string {
-	return e.msg
-}
-
-func (e *unavailableError) Unwrap() error {
-	return e.err
-}
-
 type bvnRequest struct {
 	Name  string `json:"name"`
 	Phone string `json:"phone"`
@@ -77,7 +64,7 @@ func (a *App) enrolBVNAtCore(ctx context.Context, name, phone string, dob clock.
 		return "", "", fmt.Errorf("%w: %s", ledger.ErrInvalid, pe.Message)
 	}
 	if errors.As(err, &pe) && pe.Status == http.StatusServiceUnavailable {
-		return "", "", &unavailableError{msg: pe.Message}
+		return "", "", &server.UnavailableError{Msg: pe.Message}
 	}
 	if err != nil && !errors.As(err, &pe) {
 		return "", "", a.coreAway(err)
@@ -96,16 +83,16 @@ func (a *App) ctlEnrolBVN(w http.ResponseWriter, r *http.Request) {
 	}
 	dob, err := clock.ParseDate(req.DOB)
 	if err != nil {
-		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", sentence(fmt.Sprintf("dob %q must be a date like 1990-04-21", req.DOB)))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", web.Sentence(fmt.Sprintf("dob %q must be a date like 1990-04-21", req.DOB)))
 		return
 	}
 	bvn, phone, err := a.enrolBVNLocal(r.Context(), req.Name, req.Phone, dob)
 	if errors.Is(err, errNIBSSNotOpen) {
-		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", sentence(err.Error()))
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", web.Sentence(err.Error()))
 		return
 	}
 	if err != nil {
-		a.bankingError(w, r, err)
+		a.banking.Error(w, r, err)
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, bvnReply{BVN: bvn, Phone: phone})

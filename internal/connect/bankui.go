@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const bankCookie = "beerus_bank"
@@ -149,10 +151,10 @@ func (a *bankSite) bankRender(w http.ResponseWriter, name string, status int, s 
 }
 
 func (a *bankSite) bankFail(w http.ResponseWriter, r *http.Request, err error) {
-	var ue *unavailableError
+	var ue *server.UnavailableError
 	if errors.As(err, &ue) {
-		a.log.Warn("online banking unavailable", "bank", a.bank.ID, "path", r.URL.Path, "err", ue.err)
-		http.Error(w, ue.msg, http.StatusServiceUnavailable)
+		a.log.Warn("online banking unavailable", "bank", a.bank.ID, "path", r.URL.Path, "err", ue.Err)
+		http.Error(w, ue.Msg, http.StatusServiceUnavailable)
 		return
 	}
 	a.log.Error("online banking", "bank", a.bank.ID, "path", r.URL.Path, "err", err)
@@ -505,19 +507,19 @@ func (a *bankSite) obTransferForm(w http.ResponseWriter, r *http.Request) {
 	a.bankRender(w, "bank_transfer", http.StatusOK, s, data)
 }
 
-func (a *bankSite) obTransferRequest(ctx context.Context, s *bankSession, f url.Values) (TransferRequest, error) {
+func (a *bankSite) obTransferRequest(ctx context.Context, s *bankSession, f url.Values) (server.TransferRequest, error) {
 	_, acc, ok, err := a.myAccount(ctx, s.Customer, f.Get("from"))
 	if err != nil {
-		return TransferRequest{}, err
+		return server.TransferRequest{}, err
 	}
 	if !ok {
-		return TransferRequest{}, errChooseAccount
+		return server.TransferRequest{}, errChooseAccount
 	}
 	amount, err := bank.ParseNaira(f.Get("amount"))
 	if err != nil {
-		return TransferRequest{}, errBadAmount
+		return server.TransferRequest{}, errBadAmount
 	}
-	req := TransferRequest{FromBank: a.bank.ID, From: acc.NUBAN, Amount: amount, Narration: strings.TrimSpace(f.Get("narration"))}
+	req := server.TransferRequest{FromBank: a.bank.ID, From: acc.NUBAN, Amount: amount, Narration: strings.TrimSpace(f.Get("narration"))}
 	if f.Get("mode") == "own" {
 		req.ToBank, req.To = a.bank.ID, f.Get("own")
 		if req.To == "" {
@@ -539,7 +541,7 @@ var (
 )
 
 func userFixable(err error) bool {
-	var te *transferError
+	var te *server.TransferError
 	return errors.As(err, &te) || errors.Is(err, errBadAmount) || errors.Is(err, errChooseAccount) || errors.Is(err, errChooseOwn) || errors.Is(err, errTenDigits)
 }
 
@@ -548,7 +550,7 @@ func (a *bankSite) transferFailed(w http.ResponseWriter, r *http.Request, s *ban
 		a.bankFail(w, r, err)
 		return
 	}
-	data, perr := a.transferPage(r.Context(), s, roomPage{"Error": sentence(err.Error()), "Form": r.PostForm})
+	data, perr := a.transferPage(r.Context(), s, roomPage{"Error": web.Sentence(err.Error()), "Form": r.PostForm})
 	if perr != nil {
 		a.bankFail(w, r, perr)
 		return
@@ -565,7 +567,7 @@ func (a *bankSite) obTransferReview(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = a.refreshBanks(r.Context())
 	}
-	var q TransferResult
+	var q server.TransferResult
 	if err == nil {
 		q, err = a.Quote(req)
 	}
@@ -588,7 +590,7 @@ func (a *bankSite) obTransferConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req, err := a.obTransferRequest(r.Context(), s, r.PostForm)
-	var res TransferResult
+	var res server.TransferResult
 	if err == nil && a.role == RoleBank {
 		res, err = a.remoteTransfer(r.Context(), req)
 	} else if err == nil {

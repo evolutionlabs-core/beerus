@@ -94,6 +94,7 @@ type App struct {
 	regRefresh   refresher
 	dirRefresh   refresher
 	link         server.Link
+	banking      server.Banking
 	probeHTTP    *http.Client
 	eventMu      sync.Mutex
 	eventHTTP    map[string]*http.Client
@@ -167,6 +168,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New(o.Real)
+	a.banking = server.Banking{Src: bookSource{a}, Clock: a.clock, Log: a.log}
 	if err := a.prepareOpenBanking(); err != nil {
 		return nil, err
 	}
@@ -243,6 +245,10 @@ func (a *App) closeLedgers() {
 	if a.nibss != nil {
 		a.nibss.Close()
 	}
+}
+
+func (a *App) Banking() *server.Banking {
+	return &a.banking
 }
 
 func (a *App) Config() *config.Config {

@@ -81,6 +81,7 @@ func NewBank(ctx context.Context, dir string, o Options) (*App, error) {
 	}
 	a.st = newState()
 	a.clock = clock.New(o.Real)
+	a.banking = server.Banking{Src: bookSource{a}, Clock: a.clock, Log: a.log, ID: b.ID}
 	ls, err := openLedgerSource(context.WithoutCancel(ctx), cfg, nil, a.clock, b)
 	if err != nil {
 		return nil, err
@@ -156,16 +157,16 @@ func (a *App) ServeBank(ctx context.Context) error {
 	}
 }
 
-func (a *App) remoteTransfer(ctx context.Context, req TransferRequest) (TransferResult, error) {
+func (a *App) remoteTransfer(ctx context.Context, req server.TransferRequest) (server.TransferResult, error) {
 	body := transferBody{From: req.From, To: req.To, ToBank: req.ToBank, Amount: fmt.Sprintf("%d.%02d", req.Amount/100, req.Amount%100), Narration: req.Narration}
-	var out TransferResult
+	var out server.TransferResult
 	status, err := a.coreDo(ctx, http.MethodPost, "/banks/"+url.PathEscape(req.FromBank)+"/transfers", body, &out)
 	var pe *server.PeerError
 	if err != nil && !errors.As(err, &pe) {
 		return out, a.coreAway(err)
 	}
 	if err != nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
-		return out, refused(status, nip.SystemError, "transfer_refused", err)
+		return out, server.Refused(status, nip.SystemError, "transfer_refused", err)
 	}
 	return out, err
 }
@@ -174,7 +175,7 @@ func (a *App) coreAway(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
-	return &unavailableError{msg: a.bankCopy(a.bankID).Name + " cannot reach NIBSS right now. Try again in a minute.", err: err}
+	return &server.UnavailableError{Msg: a.bankCopy(a.bankID).Name + " cannot reach NIBSS right now. Try again in a minute.", Err: err}
 }
 
 func (a *App) bankCopy(id string) config.Bank {
@@ -195,7 +196,7 @@ func (a *App) remoteEnquiry(ctx context.Context, code, nuban string) (string, er
 		return "", err
 	}
 	if out.Code != nip.OK {
-		return "", refused(http.StatusUnprocessableEntity, out.Code, "name_enquiry_failed", errors.New(out.Message))
+		return "", server.Refused(http.StatusUnprocessableEntity, out.Code, "name_enquiry_failed", errors.New(out.Message))
 	}
 	return out.AccountName, nil
 }

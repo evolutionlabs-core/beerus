@@ -1,4 +1,4 @@
-package connect
+package server
 
 import (
 	"context"
@@ -12,8 +12,80 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/web"
+	"log/slog"
 )
+
+type Book struct {
+	Name  string
+	Phase string
+	Bank  *bank.Bank
+}
+
+type Source interface {
+	Book(id string) (Book, error)
+	Enrol(ctx context.Context, name, phone string, dob clock.Date) (string, string, error)
+	Empty() bool
+}
+
+type Banking struct {
+	Src   Source
+	Clock *clock.Clock
+	Log   *slog.Logger
+	ID    string
+}
+
+var ErrBankNotFound = errors.New("no such bank")
+
+const NoBanksMessage = "there are no banks yet. Add one first with beerus bank create --name NAME"
+
+type UnavailableError struct {
+	Msg string
+	Err error
+}
+
+func (e *UnavailableError) Error() string {
+	return e.Msg
+}
+
+func (e *UnavailableError) Unwrap() error {
+	return e.Err
+}
+
+func (s *Banking) bankBook(id string) (Book, error) {
+	bk, err := s.Src.Book(id)
+	if err != nil {
+		return Book{}, err
+	}
+	return bk, nil
+}
+
+func (s *Banking) activeBook(id string) (Book, error) {
+	bk, err := s.bankBook(id)
+	if err != nil {
+		return bk, err
+	}
+	if bk.Phase != config.PhaseActive {
+		return bk, NotActiveError{bk.Name, bk.Phase}
+	}
+	return bk, nil
+}
+
+func (s *Banking) noSuchBank(w http.ResponseWriter, r *http.Request) {
+	if s.Src.Empty() {
+		web.WriteError(w, r, http.StatusNotFound, "not_found", NoBanksMessage)
+		return
+	}
+	web.WriteError(w, r, http.StatusNotFound, "not_found", "No such bank.")
+}
+
+func (s *Banking) bankIDOf(r *http.Request) string {
+	if s.ID != "" {
+		return s.ID
+	}
+	return r.PathValue("id")
+}
 
 const listDefault = 100
 
@@ -67,27 +139,6 @@ type CashResult struct {
 	PostedAt time.Time `json:"posted_at"`
 }
 
-var errBankNotFound = errors.New("no such bank")
-
-func (a *App) bankBook(id string) (book, error) {
-	bk, ok := a.bookOf(id)
-	if !ok {
-		return book{}, fmt.Errorf("%w: %s", errBankNotFound, id)
-	}
-	return bk, nil
-}
-
-func (a *App) activeBook(id string) (book, error) {
-	bk, err := a.bankBook(id)
-	if err != nil {
-		return bk, err
-	}
-	if p := a.bankPhase(id); p != PhaseActive {
-		return bk, notActiveError{bk.bank.Name, p}
-	}
-	return bk, nil
-}
-
 func writeKey(key, op string) string {
 	if key == "" {
 		return web.NewID(op)
@@ -95,8 +146,8 @@ func writeKey(key, op string) string {
 	return "api:" + key
 }
 
-func (a *App) CreateCustomer(ctx context.Context, bankID string, req CustomerRequest) (bank.Customer, error) {
-	bk, err := a.activeBook(bankID)
+func (s *Banking) CreateCustomer(ctx context.Context, bankID string, req CustomerRequest) (bank.Customer, error) {
+	bk, err := s.activeBook(bankID)
 	if err != nil {
 		return bank.Customer{}, err
 	}
@@ -113,27 +164,27 @@ func (a *App) CreateCustomer(ctx context.Context, bankID string, req CustomerReq
 			return bank.Customer{}, err
 		}
 	}
-	bvn, phone, err := a.enrolBVN(ctx, req.Name, req.Phone, dob)
+	bvn, phone, err := s.Src.Enrol(ctx, req.Name, req.Phone, dob)
 	if err != nil {
 		return bank.Customer{}, err
 	}
-	return bk.ls.Bank().CreateCustomer(ctx, writeKey(req.Key, "cus"), strings.TrimSpace(req.Name), phone, dob, bvn, req.Username, hash, a.clock.Now())
+	return bk.Bank.CreateCustomer(ctx, writeKey(req.Key, "cus"), strings.TrimSpace(req.Name), phone, dob, bvn, req.Username, hash, s.Clock.Now())
 }
 
-func (a *App) CloseCustomer(ctx context.Context, bankID, id string) error {
-	bk, err := a.activeBook(bankID)
+func (s *Banking) CloseCustomer(ctx context.Context, bankID, id string) error {
+	bk, err := s.activeBook(bankID)
 	if err != nil {
 		return err
 	}
-	return bk.ls.Bank().CloseCustomer(ctx, id, a.clock.Now())
+	return bk.Bank.CloseCustomer(ctx, id, s.Clock.Now())
 }
 
-func (a *App) Customers(ctx context.Context, bankID string, limit int, cursor string) ([]bank.Customer, string, error) {
-	bk, err := a.bankBook(bankID)
+func (s *Banking) Customers(ctx context.Context, bankID string, limit int, cursor string) ([]bank.Customer, string, error) {
+	bk, err := s.bankBook(bankID)
 	if err != nil {
 		return nil, "", err
 	}
-	return bk.ls.Bank().Customers(ctx, limit, cursor)
+	return bk.Bank.Customers(ctx, limit, cursor)
 }
 
 func accountJSON(ctx context.Context, b *bank.Bank, acc ledger.Account) (AccountJSON, error) {
@@ -144,33 +195,33 @@ func accountJSON(ctx context.Context, b *bank.Bank, acc ledger.Account) (Account
 	return AccountJSON{NUBAN: acc.NUBAN, Name: acc.Name, Customer: acc.Owner, Type: acc.Product, Status: acc.Status, Currency: acc.Currency, Balance: bal}, nil
 }
 
-func (a *App) OpenAccount(ctx context.Context, bankID string, req AccountRequest) (AccountJSON, error) {
-	bk, err := a.activeBook(bankID)
+func (s *Banking) OpenAccount(ctx context.Context, bankID string, req AccountRequest) (AccountJSON, error) {
+	bk, err := s.activeBook(bankID)
 	if err != nil {
 		return AccountJSON{}, err
 	}
-	b := bk.ls.Bank()
-	acc, err := b.OpenAccount(ctx, writeKey(req.Key, "acc"), req.Customer, req.Type, a.clock.Now())
+	b := bk.Bank
+	acc, err := b.OpenAccount(ctx, writeKey(req.Key, "acc"), req.Customer, req.Type, s.Clock.Now())
 	if err != nil {
 		return AccountJSON{}, err
 	}
 	return accountJSON(ctx, b, acc)
 }
 
-func (a *App) CloseAccount(ctx context.Context, bankID, nuban string) error {
-	bk, err := a.activeBook(bankID)
+func (s *Banking) CloseAccount(ctx context.Context, bankID, nuban string) error {
+	bk, err := s.activeBook(bankID)
 	if err != nil {
 		return err
 	}
-	return bk.ls.Bank().CloseAccount(ctx, nuban, a.clock.Now())
+	return bk.Bank.CloseAccount(ctx, nuban, s.Clock.Now())
 }
 
-func (a *App) Accounts(ctx context.Context, bankID, customer string, limit int, cursor string) ([]AccountJSON, string, error) {
-	bk, err := a.bankBook(bankID)
+func (s *Banking) Accounts(ctx context.Context, bankID, customer string, limit int, cursor string) ([]AccountJSON, string, error) {
+	bk, err := s.bankBook(bankID)
 	if err != nil {
 		return nil, "", err
 	}
-	b := bk.ls.Bank()
+	b := bk.Bank
 	accts, next, err := b.Accounts(ctx, customer, limit, cursor)
 	if err != nil {
 		return nil, "", err
@@ -186,12 +237,12 @@ func (a *App) Accounts(ctx context.Context, bankID, customer string, limit int, 
 	return data, next, nil
 }
 
-func (a *App) Statement(ctx context.Context, bankID, nuban string, from, to clock.Date, limit int, cursor string) ([]StatementLine, string, error) {
-	bk, err := a.bankBook(bankID)
+func (s *Banking) Statement(ctx context.Context, bankID, nuban string, from, to clock.Date, limit int, cursor string) ([]StatementLine, string, error) {
+	bk, err := s.bankBook(bankID)
 	if err != nil {
 		return nil, "", err
 	}
-	evs, next, err := bk.ls.Bank().Statement(ctx, nuban, from, to, limit, cursor)
+	evs, next, err := bk.Bank.Statement(ctx, nuban, from, to, limit, cursor)
 	if err != nil {
 		return nil, "", err
 	}
@@ -202,17 +253,8 @@ func (a *App) Statement(ctx context.Context, bankID, nuban string, from, to cloc
 	return data, next, nil
 }
 
-func (a *App) Cash(ctx context.Context, bankID, kind string, req CashRequest) (CashResult, error) {
-	res, err := a.postCash(ctx, bankID, kind, req)
-	if err != nil {
-		return CashResult{}, err
-	}
-	a.SyncAll(ctx)
-	return res, nil
-}
-
-func (a *App) postCash(ctx context.Context, bankID, kind string, req CashRequest) (CashResult, error) {
-	bk, err := a.activeBook(bankID)
+func (s *Banking) Cash(ctx context.Context, bankID, kind string, req CashRequest) (CashResult, error) {
+	bk, err := s.activeBook(bankID)
 	if err != nil {
 		return CashResult{}, err
 	}
@@ -220,8 +262,8 @@ func (a *App) postCash(ctx context.Context, bankID, kind string, req CashRequest
 	if err != nil {
 		return CashResult{}, fmt.Errorf("%w: %w", ledger.ErrInvalid, err)
 	}
-	b := bk.ls.Bank()
-	now := a.clock.Now()
+	b := bk.Bank
+	now := s.Clock.Now()
 	key := writeKey(req.Key, "csh")
 	var p ledger.Posted
 	if kind == "deposit" {
@@ -239,7 +281,7 @@ func (a *App) postCash(ctx context.Context, bankID, kind string, req CashRequest
 	return CashResult{Kind: kind, Account: req.Account, Amount: amount, Balance: bal, Replayed: p.Replayed, PostedAt: p.PostedAt.In(clock.Lagos)}, nil
 }
 
-func listParams(r *http.Request) (int, string, error) {
+func ListParams(r *http.Request) (int, string, error) {
 	limit := listDefault
 	if s := r.URL.Query().Get("limit"); s != "" {
 		n, err := strconv.Atoi(s)
@@ -251,14 +293,6 @@ func listParams(r *http.Request) (int, string, error) {
 	return limit, r.URL.Query().Get("cursor"), nil
 }
 
-func listPage(data any, next string) map[string]any {
-	out := map[string]any{"data": data}
-	if next != "" {
-		out["next_cursor"] = next
-	}
-	return out
-}
-
 func clean(err error) string {
 	msg := err.Error()
 	for _, p := range []string{ledger.ErrInvalid.Error() + ": ", "bank: ", "ledger: "} {
@@ -266,21 +300,21 @@ func clean(err error) string {
 			msg = msg[i+len(p):]
 		}
 	}
-	return sentence(msg)
+	return web.Sentence(msg)
 }
 
-func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
-	var te *transferError
+func (s *Banking) Error(w http.ResponseWriter, r *http.Request, err error) {
+	var te *TransferError
 	var fe *bank.InsufficientFundsError
 	var de *bank.DailyLimitError
-	var ue *unavailableError
+	var ue *UnavailableError
 	switch {
 	case errors.As(err, &te):
-		web.WriteError(w, r, te.status, te.errCode, sentence(te.Error()))
-	case errors.Is(err, errBankNotFound):
-		a.noSuchBank(w, r)
-	case errors.Is(err, errBankNotActive):
-		web.WriteError(w, r, http.StatusConflict, "bank_not_active", sentence(err.Error()))
+		web.WriteError(w, r, te.Status, te.ErrCode, web.Sentence(te.Error()))
+	case errors.Is(err, ErrBankNotFound):
+		s.noSuchBank(w, r)
+	case errors.Is(err, ErrBankNotActive):
+		web.WriteError(w, r, http.StatusConflict, "bank_not_active", web.Sentence(err.Error()))
 	case errors.Is(err, bank.ErrUnknownCustomer):
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such customer.")
 	case errors.Is(err, ledger.ErrUnknownAccount):
@@ -302,8 +336,8 @@ func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ledger.ErrInvalid):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", clean(err))
 	case errors.As(err, &ue):
-		a.log.Warn("banking unavailable", "path", r.URL.Path, "err", ue.err)
-		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", ue.msg)
+		s.Log.Warn("banking unavailable", "path", r.URL.Path, "err", ue.Err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", ue.Msg)
 	case errors.As(err, &fe):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", fe.Message())
 	case errors.As(err, &de):
@@ -315,43 +349,27 @@ func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ledger.ErrAccountClosed), errors.Is(err, ledger.ErrAccountFrozen), errors.Is(err, ledger.ErrPostNoDebit):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "account_restricted", clean(err))
 	default:
-		a.log.Error("banking", "path", r.URL.Path, "err", err)
-		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
+		s.Log.Error("banking", "path", r.URL.Path, "err", err)
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", web.SomethingWentWrong)
 	}
 }
 
-func (a *App) bankIDOf(r *http.Request) string {
-	if a.role == RoleBank {
-		return a.bankID
-	}
-	return r.PathValue("id")
-}
-
-func idemKey(w http.ResponseWriter, r *http.Request) (string, bool) {
-	key := r.Header.Get("Idempotency-Key")
-	if len(key) > 255 {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The Idempotency-Key header must be 1 to 255 characters.")
-		return "", false
-	}
-	return key, true
-}
-
-func (a *App) ctlCustomers(w http.ResponseWriter, r *http.Request) {
-	limit, cursor, err := listParams(r)
+func (s *Banking) HandleCustomers(w http.ResponseWriter, r *http.Request) {
+	limit, cursor, err := ListParams(r)
 	if err != nil {
-		a.bankingError(w, r, err)
+		s.Error(w, r, err)
 		return
 	}
-	data, next, err := a.Customers(r.Context(), a.bankIDOf(r), limit, cursor)
+	data, next, err := s.Customers(r.Context(), s.bankIDOf(r), limit, cursor)
 	if err != nil {
-		a.bankingError(w, r, err)
+		s.Error(w, r, err)
 		return
 	}
-	web.WriteJSON(w, http.StatusOK, listPage(data, next))
+	web.WriteJSON(w, http.StatusOK, web.ListPage(data, next))
 }
 
-func (a *App) ctlCreateCustomer(w http.ResponseWriter, r *http.Request) {
-	key, ok := idemKey(w, r)
+func (s *Banking) HandleCreateCustomer(w http.ResponseWriter, r *http.Request) {
+	key, ok := web.IdempotencyKey(w, r)
 	if !ok {
 		return
 	}
@@ -361,39 +379,39 @@ func (a *App) ctlCreateCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Key = key
-	c, err := a.CreateCustomer(r.Context(), a.bankIDOf(r), req)
+	c, err := s.CreateCustomer(r.Context(), s.bankIDOf(r), req)
 	if err != nil {
-		a.bankingError(w, r, err)
+		s.Error(w, r, err)
 		return
 	}
 	web.WriteJSON(w, http.StatusCreated, c)
 }
 
-func (a *App) ctlCloseCustomer(w http.ResponseWriter, r *http.Request) {
+func (s *Banking) HandleCloseCustomer(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("customer_id")
-	if err := a.CloseCustomer(r.Context(), a.bankIDOf(r), id); err != nil {
-		a.bankingError(w, r, err)
+	if err := s.CloseCustomer(r.Context(), s.bankIDOf(r), id); err != nil {
+		s.Error(w, r, err)
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, map[string]string{"customer": id, "status": bank.CustomerClosed})
 }
 
-func (a *App) ctlAccounts(w http.ResponseWriter, r *http.Request) {
-	limit, cursor, err := listParams(r)
+func (s *Banking) HandleAccounts(w http.ResponseWriter, r *http.Request) {
+	limit, cursor, err := ListParams(r)
 	if err != nil {
-		a.bankingError(w, r, err)
+		s.Error(w, r, err)
 		return
 	}
-	data, next, err := a.Accounts(r.Context(), a.bankIDOf(r), r.URL.Query().Get("customer"), limit, cursor)
+	data, next, err := s.Accounts(r.Context(), s.bankIDOf(r), r.URL.Query().Get("customer"), limit, cursor)
 	if err != nil {
-		a.bankingError(w, r, err)
+		s.Error(w, r, err)
 		return
 	}
-	web.WriteJSON(w, http.StatusOK, listPage(data, next))
+	web.WriteJSON(w, http.StatusOK, web.ListPage(data, next))
 }
 
-func (a *App) ctlOpenAccount(w http.ResponseWriter, r *http.Request) {
-	key, ok := idemKey(w, r)
+func (s *Banking) HandleOpenAccount(w http.ResponseWriter, r *http.Request) {
+	key, ok := web.IdempotencyKey(w, r)
 	if !ok {
 		return
 	}
@@ -403,27 +421,27 @@ func (a *App) ctlOpenAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Key = key
-	acc, err := a.OpenAccount(r.Context(), a.bankIDOf(r), req)
+	acc, err := s.OpenAccount(r.Context(), s.bankIDOf(r), req)
 	if err != nil {
-		a.bankingError(w, r, err)
+		s.Error(w, r, err)
 		return
 	}
 	web.WriteJSON(w, http.StatusCreated, acc)
 }
 
-func (a *App) ctlCloseAccount(w http.ResponseWriter, r *http.Request) {
+func (s *Banking) HandleCloseAccount(w http.ResponseWriter, r *http.Request) {
 	nuban := r.PathValue("nuban")
-	if err := a.CloseAccount(r.Context(), a.bankIDOf(r), nuban); err != nil {
-		a.bankingError(w, r, err)
+	if err := s.CloseAccount(r.Context(), s.bankIDOf(r), nuban); err != nil {
+		s.Error(w, r, err)
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, map[string]string{"nuban": nuban, "status": "closed"})
 }
 
-func (a *App) ctlStatement(w http.ResponseWriter, r *http.Request) {
-	limit, cursor, err := listParams(r)
+func (s *Banking) HandleStatement(w http.ResponseWriter, r *http.Request) {
+	limit, cursor, err := ListParams(r)
 	if err != nil {
-		a.bankingError(w, r, err)
+		s.Error(w, r, err)
 		return
 	}
 	var from, to clock.Date
@@ -431,24 +449,24 @@ func (a *App) ctlStatement(w http.ResponseWriter, r *http.Request) {
 		name string
 		into *clock.Date
 	}{{"from", &from}, {"to", &to}} {
-		if s := r.URL.Query().Get(d.name); s != "" {
-			if *d.into, err = clock.ParseDate(s); err != nil {
-				a.bankingError(w, r, fmt.Errorf("%w: %s %q must be a date like 2026-03-01", ledger.ErrInvalid, d.name, s))
+		if v := r.URL.Query().Get(d.name); v != "" {
+			if *d.into, err = clock.ParseDate(v); err != nil {
+				s.Error(w, r, fmt.Errorf("%w: %s %q must be a date like 2026-03-01", ledger.ErrInvalid, d.name, v))
 				return
 			}
 		}
 	}
-	data, next, err := a.Statement(r.Context(), a.bankIDOf(r), r.PathValue("nuban"), from, to, limit, cursor)
+	data, next, err := s.Statement(r.Context(), s.bankIDOf(r), r.PathValue("nuban"), from, to, limit, cursor)
 	if err != nil {
-		a.bankingError(w, r, err)
+		s.Error(w, r, err)
 		return
 	}
-	web.WriteJSON(w, http.StatusOK, listPage(data, next))
+	web.WriteJSON(w, http.StatusOK, web.ListPage(data, next))
 }
 
-func (a *App) ctlCash(kind string) http.HandlerFunc {
+func (s *Banking) HandleCash(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		key, ok := idemKey(w, r)
+		key, ok := web.IdempotencyKey(w, r)
 		if !ok {
 			return
 		}
@@ -458,9 +476,9 @@ func (a *App) ctlCash(kind string) http.HandlerFunc {
 			return
 		}
 		req.Key = key
-		res, err := a.Cash(r.Context(), a.bankIDOf(r), kind, req)
+		res, err := s.Cash(r.Context(), s.bankIDOf(r), kind, req)
 		if err != nil {
-			a.bankingError(w, r, err)
+			s.Error(w, r, err)
 			return
 		}
 		web.WriteJSON(w, http.StatusCreated, res)

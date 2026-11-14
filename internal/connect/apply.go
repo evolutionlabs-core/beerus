@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -940,9 +941,9 @@ func (a *App) applyFailed(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func (a *App) ctlResources(w http.ResponseWriter, r *http.Request) {
-	limit, cursor, err := listParams(r)
+	limit, cursor, err := server.ListParams(r)
 	if err != nil {
-		a.bankingError(w, r, err)
+		a.banking.Error(w, r, err)
 		return
 	}
 	kind := r.URL.Query().Get("kind")
@@ -955,7 +956,7 @@ func (a *App) ctlResources(w http.ResponseWriter, r *http.Request) {
 		a.applyFailed(w, r, err)
 		return
 	}
-	web.WriteJSON(w, http.StatusOK, listPage(data, next))
+	web.WriteJSON(w, http.StatusOK, web.ListPage(data, next))
 }
 
 func (a *App) ctlResource(w http.ResponseWriter, r *http.Request) {

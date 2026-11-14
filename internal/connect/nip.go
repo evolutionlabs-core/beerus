@@ -12,14 +12,13 @@ import (
 	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
-
-const somethingWentWrong = "Something went wrong. Try again."
 
 type NIPState struct {
 	Sessions int64 `json:"sessions"`
@@ -180,7 +179,7 @@ func (a *App) ctlNIPSettlement(w http.ResponseWriter, r *http.Request) {
 	c, err := a.CheckSettlement()
 	if err != nil {
 		a.log.Error("check settlement", "err", err)
-		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", web.SomethingWentWrong)
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, c)
@@ -190,7 +189,7 @@ func (a *App) ctlSettleNow(w http.ResponseWriter, r *http.Request) {
 	n, err := a.SettleNow()
 	if err != nil {
 		a.log.Error("settle now", "err", err)
-		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", web.SomethingWentWrong)
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, map[string]any{"settled_sessions": n, "at": ts(a.clock.Now())})
@@ -284,14 +283,14 @@ func (b transferBody) hash(bank string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (a *App) transferReply(r *http.Request, res TransferResult, err error) reply {
-	var te *transferError
+func (a *App) transferReply(r *http.Request, res server.TransferResult, err error) reply {
+	var te *server.TransferError
 	switch {
 	case errors.As(err, &te):
-		return jsonReply(te.status, map[string]any{"error": web.APIError{Code: te.errCode, Message: sentence(te.Error()), RequestID: web.RequestID(r)}, "response_code": te.code, "session_id": res.SessionID})
+		return jsonReply(te.Status, map[string]any{"error": web.APIError{Code: te.ErrCode, Message: web.Sentence(te.Error()), RequestID: web.RequestID(r)}, "response_code": te.Code, "session_id": res.SessionID})
 	case err != nil:
 		a.log.Error("transfer", "path", r.URL.Path, "err", err)
-		return errReply(r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
+		return errReply(r, http.StatusInternalServerError, "internal_error", web.SomethingWentWrong)
 	}
 	return jsonReply(http.StatusOK, res)
 }
@@ -307,7 +306,7 @@ func (a *App) bankTransfer(r *http.Request, bankID string, body transferBody, ke
 	if len(key) > 255 {
 		return errReply(r, http.StatusBadRequest, "invalid_request", "An Idempotency-Key must be 1 to 255 characters.")
 	}
-	req := TransferRequest{FromBank: bankID, From: body.From, ToBank: body.ToBank, To: body.To, Amount: amount, Narration: body.Narration, Key: key}
+	req := server.TransferRequest{FromBank: bankID, From: body.From, ToBank: body.ToBank, To: body.To, Amount: amount, Narration: body.Narration, Key: key}
 	if key == "" {
 		res, err := a.Transfer(req)
 		return a.transferReply(r, res, err)
@@ -351,7 +350,7 @@ func (a *App) ctlBankQuote(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "from and to are required account numbers.")
 		return
 	}
-	res, err := a.Quote(TransferRequest{FromBank: r.PathValue("id"), From: body.From, ToBank: body.ToBank, To: body.To, Amount: amount, Narration: body.Narration})
+	res, err := a.Quote(server.TransferRequest{FromBank: r.PathValue("id"), From: body.From, ToBank: body.ToBank, To: body.To, Amount: amount, Narration: body.Narration})
 	a.transferReply(r, res, err).write(w)
 }
 

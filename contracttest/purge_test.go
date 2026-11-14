@@ -15,6 +15,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
@@ -349,22 +350,23 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		return true
 	})
 	open := func(bank, name, phone, dob, username, naira string) string {
-		c, err := r.app.CreateCustomer(t.Context(), bank, connect.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
+		c, err := r.app.Banking().CreateCustomer(t.Context(), bank, server.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
 		if err != nil {
 			t.Fatal(err)
 		}
-		acc, err := r.app.OpenAccount(t.Context(), bank, connect.AccountRequest{Customer: c.ID, Type: "current"})
+		acc, err := r.app.Banking().OpenAccount(t.Context(), bank, server.AccountRequest{Customer: c.ID, Type: "current"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.app.Cash(t.Context(), bank, "deposit", connect.CashRequest{Account: acc.NUBAN, Amount: naira}); err != nil {
+		if _, err := r.app.Banking().Cash(t.Context(), bank, "deposit", server.CashRequest{Account: acc.NUBAN, Amount: naira}); err != nil {
 			t.Fatal(err)
 		}
+		r.app.SyncAll(t.Context())
 		return acc.NUBAN
 	}
 	from := open("bank-a", "Tunde Motors Ltd", "08032345678", "1979-07-02", "tunde", "50000")
 	to := open("bank-b", "Chidi Okafor", "08034567890", "1995-05-30", "chidi", "1000")
-	if tr, err := r.app.Transfer(connect.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 4_000_000, Key: "restart-1"}); err != nil || tr.Status != "success" {
+	if tr, err := r.app.Transfer(server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 4_000_000, Key: "restart-1"}); err != nil || tr.Status != "success" {
 		t.Fatalf("transfer: %+v %v", tr, err)
 	}
 	if _, err := r.app.PurgeBank("bank-b", false); err != nil {

@@ -15,6 +15,8 @@ var (
 	ErrUnavailable    = errors.New("91 institution unavailable")
 	ErrInvalidAccount = errors.New("07 invalid account")
 	ErrNoRecord       = errors.New("25 no record")
+
+	ErrUnknownInstitution = errors.New("not in the NIBSS directory")
 )
 
 const (

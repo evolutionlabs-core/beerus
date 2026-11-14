@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -330,11 +331,9 @@ func (a *App) stopBankSites(ctx context.Context) {
 	}
 }
 
-const NoBanksMessage = "there are no banks yet. Add one first with beerus bank create --name NAME"
-
 func (a *App) noSuchBank(w http.ResponseWriter, r *http.Request) {
 	if len(a.bankList()) == 0 {
-		web.WriteError(w, r, http.StatusNotFound, "not_found", NoBanksMessage)
+		web.WriteError(w, r, http.StatusNotFound, "not_found", server.NoBanksMessage)
 		return
 	}
 	web.WriteError(w, r, http.StatusNotFound, "not_found", "No such bank.")

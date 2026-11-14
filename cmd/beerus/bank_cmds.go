@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
@@ -232,7 +233,7 @@ func cmdAccount(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			a, err := decodeMap[connect.AccountJSON](out)
+			a, err := decodeMap[server.AccountJSON](out)
 			if err != nil {
 				return err
 			}
@@ -333,7 +334,7 @@ func printCustomers(out map[string]any) error {
 }
 
 func printAccounts(out map[string]any) error {
-	rows, err := decodeList[connect.AccountJSON](out)
+	rows, err := decodeList[server.AccountJSON](out)
 	if err != nil {
 		return err
 	}
@@ -355,7 +356,7 @@ func printAccounts(out map[string]any) error {
 }
 
 func printStatement(out map[string]any, nuban string) error {
-	rows, err := decodeList[connect.StatementLine](out)
+	rows, err := decodeList[server.StatementLine](out)
 	if err != nil {
 		return err
 	}
@@ -399,7 +400,7 @@ func cmdCash(kind string, args []string) error {
 		return err
 	}
 	return f.show(out, func() error {
-		r, err := decodeMap[connect.CashResult](out)
+		r, err := decodeMap[server.CashResult](out)
 		if err != nil {
 			return err
 		}
@@ -441,7 +442,7 @@ func cmdTransfer(args []string) error {
 		return err
 	}
 	return f.show(out, func() error {
-		r, err := decodeMap[connect.TransferResult](out)
+		r, err := decodeMap[server.TransferResult](out)
 		if err != nil {
 			return err
 		}
@@ -452,7 +453,7 @@ func cmdTransfer(args []string) error {
 	})
 }
 
-func chargeSentence(r connect.TransferResult) string {
+func chargeSentence(r server.TransferResult) string {
 	parts := []string{}
 	for _, c := range []struct {
 		name   string
@@ -471,7 +472,7 @@ func chargeSentence(r connect.TransferResult) string {
 	return "Charges: " + strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1] + "."
 }
 
-func printQuote(c *ctl, r connect.TransferResult) error {
+func printQuote(c *ctl, r server.TransferResult) error {
 	if r.Kind == "internal" {
 		fmt.Printf("Moving %s from %s to %s, %s, costs no charges. Balance after %s.\n", bank.FormatNaira(r.Amount), r.From, r.To, r.ToName, bank.FormatNaira(r.BalanceAfter))
 	} else {
@@ -486,7 +487,7 @@ func printQuote(c *ctl, r connect.TransferResult) error {
 	return nil
 }
 
-func printTransfer(c *ctl, r connect.TransferResult) error {
+func printTransfer(c *ctl, r server.TransferResult) error {
 	at := stamp(r.At)
 	if r.Kind == "internal" {
 		fmt.Printf("Moved %s from %s to %s, %s, at %s. Balance %s.\n", bank.FormatNaira(r.Amount), r.From, r.To, r.ToName, at, bank.FormatNaira(r.BalanceAfter))
