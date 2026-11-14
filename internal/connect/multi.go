@@ -84,7 +84,20 @@ func NewBank(ctx context.Context, dir string, o Options) (*App, error) {
 	for _, s := range st.Steps {
 		steps = append(steps, server.Step{ID: s.ID, Name: s.Name, Done: s.Done, Error: s.Error, StartedAt: s.StartedAt, CompletedAt: s.At})
 	}
-	a.srv = server.New(dir, *b, ls.Bank(), cfg.Fees(), cfg.Connect.NIBSSPort, a.coreURL, a.link, a.log, a.clock, st.Phase, steps, a.bankReloaded)
+	a.srv = server.New(server.Config{
+		Dir:       dir,
+		Bank:      *b,
+		Books:     ls.Bank(),
+		Fees:      cfg.Fees(),
+		NIBSSPort: cfg.Connect.NIBSSPort,
+		CoreURL:   a.coreURL,
+		Link:      a.link,
+		Log:       a.log,
+		Clock:     a.clock,
+		Phase:     st.Phase,
+		Steps:     steps,
+		Reloaded:  a.bankReloaded,
+	})
 	a.banking = a.srv.Banking()
 	a.sites = map[string]*siteServer{}
 	a.strikes = map[string]int{}

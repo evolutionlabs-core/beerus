@@ -71,26 +71,41 @@ type Server struct {
 	dirRefresh refresher
 }
 
-func New(dir string, bank config.Bank, books *bank.Bank, fees *charges.Schedule, nibssPort int, coreURL string, link Link, log *slog.Logger, clk *clock.Clock, phase string, steps []Step, reloaded func(config.Bank)) *Server {
+type Config struct {
+	Dir       string
+	Bank      config.Bank
+	Books     *bank.Bank
+	Fees      *charges.Schedule
+	NIBSSPort int
+	CoreURL   string
+	Link      Link
+	Log       *slog.Logger
+	Clock     *clock.Clock
+	Phase     string
+	Steps     []Step
+	Reloaded  func(config.Bank)
+}
+
+func New(c Config) *Server {
 	s := &Server{
-		id:        bank.ID,
-		dir:       dir,
-		coreURL:   coreURL,
-		nibssPort: nibssPort,
-		link:      link,
-		log:       log,
-		clock:     clk,
-		fees:      fees,
-		books:     books,
-		reloaded:  reloaded,
-		phase:     phase,
-		steps:     steps,
-		bank:      bank,
+		id:        c.Bank.ID,
+		dir:       c.Dir,
+		coreURL:   c.CoreURL,
+		nibssPort: c.NIBSSPort,
+		link:      c.Link,
+		log:       c.Log,
+		clock:     c.Clock,
+		fees:      c.Fees,
+		books:     c.Books,
+		reloaded:  c.Reloaded,
+		phase:     c.Phase,
+		steps:     c.Steps,
+		bank:      c.Bank,
 		worldID:   web.NewID("wld"),
 		replays:   map[string]*web.Record{},
 		registry:  map[string]*openbanking.RegistryClient{},
 	}
-	s.banking = &Banking{Src: s, Clock: clk, Log: log, ID: s.id}
+	s.banking = &Banking{Src: s, Clock: c.Clock, Log: c.Log, ID: s.id}
 	return s
 }
 

@@ -80,7 +80,16 @@ func TestBankRoleDirectoryComesFromNIBSS(t *testing.T) {
 		_ = hs.Close()
 		<-served
 	})
-	srv := server.New(cfg.Dir, *cfg.Bank("bank-a"), nil, nil, ln.Addr().(*net.TCPAddr).Port, "http://127.0.0.1:1", server.Link{}, slog.New(slog.NewTextHandler(io.Discard, nil)), clock.New(nil), PhaseActive, nil, func(config.Bank) {})
+	srv := server.New(server.Config{
+		Dir:       cfg.Dir,
+		Bank:      *cfg.Bank("bank-a"),
+		NIBSSPort: ln.Addr().(*net.TCPAddr).Port,
+		CoreURL:   "http://127.0.0.1:1",
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:     clock.New(nil),
+		Phase:     PhaseActive,
+		Reloaded:  func(config.Bank) {},
+	})
 	a := &App{role: RoleBank, bankID: "bank-a", cfg: cfg, srv: srv}
 	if err := a.refreshBanks(t.Context()); err != nil {
 		t.Fatal(err)

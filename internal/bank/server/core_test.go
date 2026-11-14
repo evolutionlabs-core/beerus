@@ -16,7 +16,14 @@ import (
 )
 
 func registryServer(now *time.Time, transport roundTrip) *Server {
-	return New("", config.Bank{ID: "bank-a", Name: "Bank A"}, nil, nil, 0, "http://core.invalid", Link{Client: &http.Client{Transport: transport}}, slog.New(slog.NewTextHandler(io.Discard, nil)), clock.New(func() time.Time { return *now }), "", nil, func(config.Bank) {})
+	return New(Config{
+		Bank:     config.Bank{ID: "bank-a", Name: "Bank A"},
+		CoreURL:  "http://core.invalid",
+		Link:     Link{Client: &http.Client{Transport: transport}},
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:    clock.New(func() time.Time { return *now }),
+		Reloaded: func(config.Bank) {},
+	})
 }
 
 func TestRegistryRefreshServesStaleThenFailsClosed(t *testing.T) {
