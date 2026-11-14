@@ -118,7 +118,7 @@ func (a *App) recordBank(id string, fn func(r *setup.Resource) bool) {
 	}
 }
 
-func (a *App) recordPhase(id, phase string) {
+func (a *App) recordPhase(id, phase string, gen int64) {
 	a.recordBank(id, func(r *setup.Resource) bool {
 		if r.Phase == PhaseClosing || r.Phase == PhaseTerminating || r.Phase == PhaseClosed {
 			return false
@@ -126,8 +126,9 @@ func (a *App) recordPhase(id, phase string) {
 		changed := r.Phase != phase
 		r.Phase = phase
 		if phase == PhaseActive || phase == PhaseSuspended {
-			changed = changed || r.ObservedGeneration != r.Generation || r.Attempts != 0 || r.NextAttemptAt != nil
-			r.ObservedGeneration, r.Attempts, r.NextAttemptAt = r.Generation, 0, nil
+			seen := max(r.ObservedGeneration, gen)
+			changed = changed || r.ObservedGeneration != seen || r.Attempts != 0 || r.NextAttemptAt != nil
+			r.ObservedGeneration, r.Attempts, r.NextAttemptAt = seen, 0, nil
 			changed = clearCondition(r, setup.ConditionDegraded) || changed
 		}
 		return changed
@@ -216,7 +217,20 @@ func (a *App) needsRepairLocked(st *BankStatus, stored setup.Status) bool {
 	return slices.ContainsFunc(st.Steps, func(s BankStep) bool { return !s.Done })
 }
 
+func (a *App) bankGeneration(id string) int64 {
+	st, err := a.ctl.status()
+	if err != nil {
+		a.log.Error("read control.json", "err", err)
+		return 0
+	}
+	if r := findResource(&st, setup.KindBank, id); r != nil {
+		return r.Generation
+	}
+	return 0
+}
+
 func (a *App) provision(b *config.Bank) {
+	gen := a.bankGeneration(b.ID)
 	a.lifeMu.Lock()
 	st := a.status[b.ID]
 	a.lifeMu.Unlock()
@@ -269,7 +283,7 @@ func (a *App) provision(b *config.Bank) {
 	}
 	st.Phase, st.Reason, st.Attempts, st.NextAttemptAt = phase, "", 0, nil
 	a.lifeMu.Unlock()
-	a.recordPhase(b.ID, phase)
+	a.recordPhase(b.ID, phase, gen)
 }
 
 func (a *App) nameStep(st *BankStatus, id, detail string) {
