@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -81,7 +80,6 @@ func (app *App) BankHandler(id string) http.Handler {
 	mux.HandleFunc("POST /apps/{id}/revoke", a.obRevoke)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("POST /internal/revoke", a.internalRevoke)
-
 	mux.HandleFunc("GET /authorize", a.obAuthorize)
 	mux.HandleFunc("GET /authorize/consent", a.obConsentPage)
 	mux.HandleFunc("POST /authorize/consent", a.obConsentSubmit)
@@ -99,7 +97,7 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); (!a.remotePeers() && (err != nil || !net.ParseIP(host).IsLoopback())) || !hosts[r.Host] {
+		if !a.peerAllowed(r) || !hosts[r.Host] {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -585,7 +583,7 @@ func (a *bankSite) obTransferConfirm(w http.ResponseWriter, r *http.Request) {
 	req, err := a.obTransferRequest(r.Context(), s, r.PostForm)
 	var res TransferResult
 	if err == nil && a.role == RoleBank {
-		res, err = a.remoteTransfer(req)
+		res, err = a.remoteTransfer(r.Context(), req)
 	} else if err == nil {
 		res, err = a.Transfer(req)
 	}

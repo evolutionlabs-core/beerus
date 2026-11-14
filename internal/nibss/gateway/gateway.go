@@ -12,11 +12,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 )
 
 const (
-	BankRole       = "bank"
 	defaultLimit   = 50
 	maxLimit       = 500
 	requestIDChars = 12
@@ -78,7 +78,7 @@ func callerBank(r *http.Request) (string, bool) {
 		return "", false
 	}
 	leaf := r.TLS.PeerCertificates[0]
-	return leaf.Subject.CommonName, slices.Contains(leaf.Subject.OrganizationalUnit, BankRole)
+	return leaf.Subject.CommonName, slices.Contains(leaf.Subject.OrganizationalUnit, config.BankRole)
 }
 
 func listed(all []nibss.Institution, id string) bool {

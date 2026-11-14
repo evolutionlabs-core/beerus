@@ -145,7 +145,7 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 
 func initFromEnv(dir string) error {
 	local := connect.DefaultLocal()
-	for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &local.Connect.PartnerPort, "BEERUS_WIDGET_PORT": &local.Connect.WidgetPort, "BEERUS_CONTROL_PORT": &local.Connect.ControlPort, "BEERUS_HEALTH_PORT": &local.Connect.HealthPort} {
+	for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &local.Connect.PartnerPort, "BEERUS_WIDGET_PORT": &local.Connect.WidgetPort, "BEERUS_CONTROL_PORT": &local.Connect.ControlPort, "BEERUS_HEALTH_PORT": &local.Connect.HealthPort, "BEERUS_NIBSS_PORT": &local.Connect.NIBSSPort} {
 		n, err := envNumber(key, true)
 		if err != nil {
 			return err

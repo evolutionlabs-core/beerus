@@ -2,7 +2,6 @@ package connect
 
 import (
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -90,12 +89,15 @@ func (a *App) participantAPI() http.Handler {
 
 func (a *App) participantGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !a.peerAllowed(r) {
+			writeError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
+			return
+		}
 		if r.Header.Get("Origin") != "" {
 			writeError(w, r, http.StatusForbidden, "forbidden", "Browser requests are refused.")
 			return
 		}
-		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(tok), []byte(a.ctlToken)) != 1 {
+		if !a.tokenOK(r) {
 			writeError(w, r, http.StatusUnauthorized, "unauthenticated", "A valid control token is required.")
 			return
 		}

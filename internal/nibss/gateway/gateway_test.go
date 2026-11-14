@@ -21,6 +21,7 @@ import (
 	"github.com/pb33f/libopenapi"
 	validator "github.com/pb33f/libopenapi-validator"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nibss/gateway"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -104,7 +105,7 @@ func newStack(t *testing.T) *stack {
 	})
 	s.base = "https://" + ln.Addr().String()
 	for name, id := range map[string]string{"bank-a": "bank-a", "bank-d": "bank-d", "stranger": "bank-z", "aggregator": "beerus-connect"} {
-		role := gateway.BankRole
+		role := config.BankRole
 		if name == "aggregator" {
 			role = "aggregator"
 		}

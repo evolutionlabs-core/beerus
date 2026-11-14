@@ -227,7 +227,7 @@ func (a *App) Quote(req TransferRequest) (TransferResult, error) {
 
 func (a *App) enquire(ctx context.Context, rt transferRoute, nuban string) (string, error) {
 	if a.role == RoleBank {
-		return a.remoteEnquiry(rt.toCode, nuban)
+		return a.remoteEnquiry(ctx, rt.toCode, nuban)
 	}
 	sw := a.nibssStore()
 	if sw == nil {

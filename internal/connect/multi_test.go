@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"bytes"
 	"errors"
 	"io"
@@ -57,13 +58,13 @@ func TestPeerAnswerOverTheLimitFailsClearly(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(big)), Header: http.Header{}}, nil
 	})}}
 	var out struct{ Data []*RegistryClient }
-	if _, err := a.coreDo(http.MethodGet, "/internal/registry", nil, &out); err == nil || !strings.Contains(err.Error(), "larger than 16 MiB") {
+	if _, err := a.coreDo(context.Background(), http.MethodGet, "/internal/registry", nil, &out); err == nil || !strings.Contains(err.Error(), "larger than 16 MiB") {
 		t.Fatalf("an oversized answer: %v", err)
 	}
 	a.peers = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(iotest.ErrReader(errors.New("connection reset"))), Header: http.Header{}}, nil
 	})}
-	if _, err := a.coreDo(http.MethodGet, "/internal/registry", nil, &out); err == nil || !strings.Contains(err.Error(), "connection reset") {
+	if _, err := a.coreDo(context.Background(), http.MethodGet, "/internal/registry", nil, &out); err == nil || !strings.Contains(err.Error(), "connection reset") {
 		t.Fatalf("a broken answer: %v", err)
 	}
 }

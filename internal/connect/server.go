@@ -93,9 +93,6 @@ func (a *App) Serve(ctx context.Context) error {
 	}
 	servers := []srv{}
 	for _, sp := range specs {
-		if sp.port == 0 {
-			continue
-		}
 		ls, err := a.listenLocal(sp.port)
 		if err != nil {
 			for _, s := range servers {

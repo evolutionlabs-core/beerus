@@ -677,7 +677,7 @@ func (a *App) refreshOutcomeLocked(conn *Connection, synced bool) (string, any) 
 
 var errNotFound = errors.New("not found")
 
-func (a *App) RevokeAtBank(connID string) error {
+func (a *App) RevokeAtBank(ctx context.Context, connID string) error {
 	a.mu.Lock()
 	c, ok := a.st.Connections[connID]
 	if !ok {
@@ -687,7 +687,7 @@ func (a *App) RevokeAtBank(connID string) error {
 	bank, consent := c.Institution, c.ConsentID
 	a.mu.Unlock()
 	if b := a.cfg.Bank(bank); a.role == RoleCore && b != nil && consent != "" {
-		if err := a.revokeRemote(b, consent); err != nil {
+		if err := a.revokeRemote(ctx, b, consent); err != nil {
 			return err
 		}
 		return nil
@@ -696,7 +696,7 @@ func (a *App) RevokeAtBank(connID string) error {
 	if ob == nil || consent == "" {
 		return errNotFound
 	}
-	if err := ob.RevokeByBank(context.Background(), consent, "bank"); err != nil {
+	if err := ob.RevokeByBank(ctx, consent, "bank"); err != nil {
 		return err
 	}
 	a.flushEvents()

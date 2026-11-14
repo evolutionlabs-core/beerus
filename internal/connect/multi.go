@@ -3,7 +3,6 @@ package connect
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,12 +55,12 @@ const (
 	bankFlushEvery  = 500 * time.Millisecond
 )
 
-func (a *App) coreDo(method, path string, in, out any) (int, error) {
-	return a.peerDo(a.coreURL, method, path, in, out)
+func (a *App) coreDo(ctx context.Context, method, path string, in, out any) (int, error) {
+	return a.peerDo(ctx, a.coreURL, method, path, in, out)
 }
 
-func (a *App) peerDo(base, method, path string, in, out any) (int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), peerTimeout)
+func (a *App) peerDo(ctx context.Context, base, method, path string, in, out any) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, peerTimeout)
 	defer cancel()
 	return a.peerRequest(ctx, base, method, path, nil, in, out)
 }
@@ -210,20 +209,20 @@ func (a *App) ServeBank(ctx context.Context) error {
 	}
 }
 
-func (a *App) remoteTransfer(req TransferRequest) (TransferResult, error) {
+func (a *App) remoteTransfer(ctx context.Context, req TransferRequest) (TransferResult, error) {
 	body := transferBody{From: req.From, To: req.To, ToBank: req.ToBank, Amount: fmt.Sprintf("%d.%02d", req.Amount/100, req.Amount%100), Narration: req.Narration}
 	var out TransferResult
-	status, err := a.coreDo(http.MethodPost, "/banks/"+url.PathEscape(req.FromBank)+"/transfers", body, &out)
+	status, err := a.coreDo(ctx, http.MethodPost, "/banks/"+url.PathEscape(req.FromBank)+"/transfers", body, &out)
 	if err != nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
 		return out, refused(status, nip.SystemError, "transfer_refused", err)
 	}
 	return out, err
 }
 
-func (a *App) remoteEnquiry(code, nuban string) (string, error) {
+func (a *App) remoteEnquiry(ctx context.Context, code, nuban string) (string, error) {
 	var out nameEnquiry
 	q := url.Values{"bank_code": {code}, "account_number": {nuban}}
-	if _, err := a.coreDo(http.MethodGet, "/nip/name-enquiry?"+q.Encode(), nil, &out); err != nil {
+	if _, err := a.coreDo(ctx, http.MethodGet, "/nip/name-enquiry?"+q.Encode(), nil, &out); err != nil {
 		return "", err
 	}
 	if out.Code != nip.OK {
@@ -232,8 +231,8 @@ func (a *App) remoteEnquiry(code, nuban string) (string, error) {
 	return out.AccountName, nil
 }
 
-func (a *App) revokeRemote(b *config.Bank, consent string) error {
-	_, err := a.peerDo(b.URL(), http.MethodPost, "/internal/revoke", map[string]string{"consent_id": consent}, nil)
+func (a *App) revokeRemote(ctx context.Context, b *config.Bank, consent string) error {
+	_, err := a.peerDo(ctx, b.URL(), http.MethodPost, "/internal/revoke", map[string]string{"consent_id": consent}, nil)
 	return err
 }
 
@@ -258,8 +257,7 @@ func (a *bankSite) internalRevoke(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *bankSite) peerAuthorised(w http.ResponseWriter, r *http.Request) bool {
-	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if subtle.ConstantTimeCompare([]byte(tok), []byte(a.ctlToken)) != 1 {
+	if !a.tokenOK(r) {
 		http.Error(w, "unauthenticated", http.StatusUnauthorized)
 		return false
 	}
