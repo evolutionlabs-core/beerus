@@ -120,7 +120,7 @@ func TestDirectoryOffersOnlyBanksThatTakeTransfers(t *testing.T) {
 	if len(got) != 3 || got[0] != "bank-a" || got[1] != "bank-b" || got[2] != "bank-d" {
 		t.Fatalf("offered %v, want bank-a, bank-b and bank-d without the terminating bank-c", got)
 	}
-	if own := s.lookup("bank-a"); own == nil || own.Name != "Bank A" {
+	if own := s.Lookup("bank-a"); own == nil || own.Name != "Bank A" {
 		t.Fatalf("a bank's own entry must come from its own config, got %+v", own)
 	}
 }

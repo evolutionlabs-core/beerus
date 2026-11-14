@@ -190,7 +190,7 @@ func (s *Server) Empty() bool {
 	return false
 }
 
-func (s *Server) lookup(id string) *config.Bank {
+func (s *Server) Lookup(id string) *config.Bank {
 	if id == s.id {
 		own := s.Bank()
 		return &own
@@ -210,7 +210,7 @@ func (s *Server) Quote(ctx context.Context, req TransferRequest) (TransferResult
 	if req.ToBank == "" {
 		req.ToBank = req.FromBank
 	}
-	from, to := s.lookup(req.FromBank), s.lookup(req.ToBank)
+	from, to := s.Lookup(req.FromBank), s.Lookup(req.ToBank)
 	var fromPhase, toPhase string
 	if from != nil {
 		fromPhase = s.PhaseOf(from.ID)

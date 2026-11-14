@@ -194,15 +194,15 @@ func (a *App) bankByID(id string) *config.Bank {
 }
 
 func (a *App) banksLocked() []*config.Bank {
-	if a.role != RoleBank {
+	if a.srv == nil {
 		return a.cfg.Banks
 	}
 	return a.srv.Directory()
 }
 
 func (a *App) bankLocked(id string) *config.Bank {
-	if a.role == RoleBank && id == a.bankID {
-		return a.cfg.Bank(id)
+	if a.srv != nil {
+		return a.srv.Lookup(id)
 	}
 	for _, b := range a.banksLocked() {
 		if b.ID == id {

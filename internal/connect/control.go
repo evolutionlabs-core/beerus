@@ -131,9 +131,6 @@ func (a *App) localOnly(next http.Handler) http.Handler {
 }
 
 func (a *App) WorldID() string {
-	if a.srv != nil {
-		return a.srv.WorldID()
-	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.st.WorldID

@@ -174,33 +174,38 @@ func TestParticipantBankContract(t *testing.T) {
 	host := fmt.Sprintf("bank-a.localhost:%d", a.cfg.Bank(a.bankID).Port)
 	var wg sync.WaitGroup
 	wg.Add(1)
+	failures := make(chan error, 30)
 	go func() {
 		defer wg.Done()
-		for i := range 30 {
-			renamed := *core.cfg.Bank(a.bankID)
-			renamed.Name = fmt.Sprintf("Bank A %d", i)
-			if err := core.cfg.EnsureBankDir(&renamed, participantNow); err != nil {
-				t.Error(err)
+		defer close(failures)
+		for range 30 {
+			req, err := http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+"/login", nil)
+			if err != nil {
+				failures <- err
 				return
 			}
-			if got := call("PUT", "/v1/phase", "", `{"phase":"suspended","reason":"Suspended by the operator.","generation":2,"world_id":"wld_1"}`, tok, false); got.status != 200 {
-				t.Errorf("reload: %d %s", got.status, got.body)
+			req.Host = host
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				failures <- err
 				return
 			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
 		}
 	}()
-	for range 30 {
-		req, err := http.NewRequest(http.MethodGet, "http://"+ln.Addr().String()+"/login", nil)
-		if err != nil {
+	for i := range 30 {
+		renamed := *core.cfg.Bank(a.bankID)
+		renamed.Name = fmt.Sprintf("Bank A %d", i)
+		if err := core.cfg.EnsureBankDir(&renamed, participantNow); err != nil {
 			t.Fatal(err)
 		}
-		req.Host = host
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
+		if got := call("PUT", "/v1/phase", "", `{"phase":"suspended","reason":"Suspended by the operator.","generation":2,"world_id":"wld_1"}`, tok, false); got.status != 200 {
+			t.Fatalf("reload: %d %s", got.status, got.body)
 		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
 	}
 	wg.Wait()
+	for err := range failures {
+		t.Error(err)
+	}
 }
