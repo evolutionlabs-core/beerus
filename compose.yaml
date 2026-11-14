@@ -64,6 +64,9 @@ services:
       default:
         aliases:
           - connect.localhost
+    depends_on:
+      cbn:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "beerus", "health", "--token-file", "/state/control-token", "http://127.0.0.1:7480/health"]
       interval: 2s

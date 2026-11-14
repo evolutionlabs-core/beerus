@@ -106,13 +106,8 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 	if id := os.Getenv("BEERUS_PARTNER_ID"); ok && os.Getenv("BEERUS_PARTNER_REDIRECT_URI") != "" && c.Partner(id) == nil {
 		log.Warn("BEERUS_PARTNER_* only applies when the setup is first made; register the partner with beerus partner add once Beerus is running", "partner", id)
 	}
-	if err := c.EnsureCertificates(time.Now()); err != nil {
+	if err := c.EnsureCertificates(clock.New(nil).Real()); err != nil {
 		return err
-	}
-	for _, b := range c.Banks {
-		if err := c.EnsureBankDir(b, clock.New(nil).Real()); err != nil {
-			return err
-		}
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
@@ -143,7 +138,7 @@ func initFromEnv(dir string) error {
 			*dst = int(n)
 		}
 	}
-	today := clock.DateOf(time.Now())
+	today := clock.DateOf(clock.New(nil).Now())
 	spec := setup.DefaultSpec(defaultSetupName)
 	if path := os.Getenv("BEERUS_SETUP_FILE"); path != "" {
 		var err error
