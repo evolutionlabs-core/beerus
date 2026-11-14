@@ -349,11 +349,11 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		return true
 	})
 	open := func(bank, name, phone, dob, username, naira string) string {
-		c, err := r.app.CreateCustomer(bank, connect.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
+		c, err := r.app.CreateCustomer(t.Context(), bank, connect.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
 		if err != nil {
 			t.Fatal(err)
 		}
-		acc, err := r.app.OpenAccount(bank, connect.AccountRequest{Customer: c.ID, Type: "current"})
+		acc, err := r.app.OpenAccount(t.Context(), bank, connect.AccountRequest{Customer: c.ID, Type: "current"})
 		if err != nil {
 			t.Fatal(err)
 		}

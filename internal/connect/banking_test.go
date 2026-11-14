@@ -47,11 +47,11 @@ func fmtAny(v any) string {
 
 func funded(t *testing.T, a *App, bankID, name, naira string) string {
 	t.Helper()
-	c, err := a.CreateCustomer(bankID, CustomerRequest{Name: name, Phone: "08031234567", DOB: "1990-04-21"})
+	c, err := a.CreateCustomer(t.Context(), bankID, CustomerRequest{Name: name, Phone: "08031234567", DOB: "1990-04-21"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	acc, err := a.OpenAccount(bankID, AccountRequest{Customer: c.ID, Type: "current"})
+	acc, err := a.OpenAccount(t.Context(), bankID, AccountRequest{Customer: c.ID, Type: "current"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,15 +68,15 @@ func TestBankingThroughTheApp(t *testing.T) {
 	a := newTestApp(t, Options{})
 	from := funded(t, a, "bank-a", "Ada Obi", "50000")
 	to := funded(t, a, "bank-b", "Ada Obi", "")
-	ca, _ := a.CreateCustomer("bank-a", CustomerRequest{Name: "Ada Obi", Phone: "08031234567", DOB: "1990-04-21"})
-	cb, err := a.CreateCustomer("bank-b", CustomerRequest{Name: "Ada Obi", Phone: "+2348031234567", DOB: "1990-04-21"})
+	ca, _ := a.CreateCustomer(t.Context(), "bank-a", CustomerRequest{Name: "Ada Obi", Phone: "08031234567", DOB: "1990-04-21"})
+	cb, err := a.CreateCustomer(t.Context(), "bank-b", CustomerRequest{Name: "Ada Obi", Phone: "+2348031234567", DOB: "1990-04-21"})
 	if err != nil || ca.BVN == "" || ca.BVN != cb.BVN {
 		t.Fatalf("one person got BVNs %q and %q: %v", ca.BVN, cb.BVN, err)
 	}
-	if cs, err := a.CreateCustomer("bank-a", CustomerRequest{Name: "Ada Obi", Phone: "0803 123 4567", DOB: "1990-04-21"}); err != nil || cs.BVN != ca.BVN {
+	if cs, err := a.CreateCustomer(t.Context(), "bank-a", CustomerRequest{Name: "Ada Obi", Phone: "0803 123 4567", DOB: "1990-04-21"}); err != nil || cs.BVN != ca.BVN {
 		t.Fatalf("a spaced phone gave BVN %q, want %q: %v", cs.BVN, ca.BVN, err)
 	}
-	if _, err := a.CreateCustomer("bank-a", CustomerRequest{Name: "Ada Obi", Phone: "08031234567", DOB: "21/04/1990"}); !errors.Is(err, ledger.ErrInvalid) {
+	if _, err := a.CreateCustomer(t.Context(), "bank-a", CustomerRequest{Name: "Ada Obi", Phone: "08031234567", DOB: "21/04/1990"}); !errors.Is(err, ledger.ErrInvalid) {
 		t.Fatalf("a bad date of birth: %v", err)
 	}
 	bad := callHandler(t, a.ctlCreateCustomer, "bank-a", `{"name":"Ada Obi","phone":"0803-ABC","dob":"1990-04-21"}`, "")
