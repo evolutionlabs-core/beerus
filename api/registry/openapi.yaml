@@ -1,0 +1,1127 @@
+openapi: 3.1.0
+info:
+  title: Beerus Trust Anchor and Registry API
+  version: 0.1.0
+  summary: How participants get certificates and how they find each other.
+  description: |
+    Every participant in Beerus (a bank, NIBSS, CBN and Beerus Connect) joins the network through this API. The trust anchor gives a participant a transport certificate. The Registry lists who the participants are and how to reach them. Beerus is a copy of Nigeria's banking infrastructure for building and learning: no real certificates, keys or participants are involved.
+
+    The trust anchor sits on the CBN side and the Registry sits on the NIBSS side. They are two services with one contract. Trust anchor paths start with `/v1/trust` and are served from the CBN host. Registry paths start with `/v1/registry` and are served from the NIBSS host.
+
+    ## Trust anchor
+
+    1. The operator, which is the Beerus control plane and authenticates with its bearer token, creates the participant and issues a one-time enrolment token. The token works once and expires 24 hours after it is issued. 24 hours is a Beerus placeholder.
+    2. The participant makes a key pair, builds a certificate signing request (CSR) and posts it with the token to `/v1/trust/enrolments`. It gets back a transport certificate valid for 90 days.
+    3. From day 60 the participant renews over mTLS with its current certificate at `/v1/trust/renewals`. The old certificate keeps working until it expires.
+    4. A participant can revoke its own certificate at `/v1/trust/revocations`. The operator can revoke any certificate at `/v1/trust/operator/revocations`. Every participant reads the trust bundle and the revocation list and checks the certificate identity on every mTLS call.
+
+    Certificate times keep the X.509 names `not_before` and `not_after`.
+
+    The 90-day lifetime and the day-60 renewal window are Beerus placeholders, not Nigerian rules.
+
+    ## Registry
+
+    The Registry holds one record per participant: its role, tier, endpoints, redirect URIs, public signing keys and status. The operator creates the record. A participant publishes its own signing keys over mTLS. It also lists the sponsorships, which are the partner apps that Beerus Connect sponsors. Connect creates a sponsorship over mTLS. Sponsored partner apps are `tier_0`. A participant reads only what it needs to call another participant.
+
+    The participant tiers `tier_1` to `tier_3` are Beerus placeholders and are not confirmed as a Nigerian classification.
+
+    ## Time
+
+    Times are RFC 3339 strings.
+
+    ## Errors
+
+    Every error body is `{"error":{"code","message","request_id"}}`. Branch on `code`, never on `message`. User-fixable errors are 422.
+  contact:
+    name: Evolution Labs
+    url: https://github.com/evolutionlabs-core/beerus
+  license:
+    name: GNU Affero General Public License v3.0 only
+    identifier: AGPL-3.0-only
+servers:
+  - url: https://nibss.localhost
+    description: The NIBSS side, which serves the Registry.
+tags:
+  - name: Trust anchor
+    description: Certificates, the trust bundle and revocations. Served on the CBN side.
+  - name: Registry
+    description: Participants and sponsorships. Served on the NIBSS side.
+security:
+  - mutualTLS: []
+paths:
+  /v1/trust/enrolments:
+    servers:
+      - url: https://cbn.localhost
+        description: The CBN side, which serves the trust anchor.
+    post:
+      tags: [Trust anchor]
+      operationId: enrolParticipant
+      summary: Enrol a participant
+      description: Swaps a certificate signing request and a one-time enrolment token for a transport certificate valid for 90 days. The token is used up even if the CSR is rejected. The caller has no certificate yet, so this call is over server-authenticated TLS only.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrolRequest'
+            example:
+              participant_id: bank-a
+              enrolment_token: et_6f1b9d3a58c24e07
+              csr_pem: "-----BEGIN CERTIFICATE REQUEST-----\nMIIBVTCB/AIBADAWMRQwEgYDVQQDDAtiYW5rLWEubG9jYWwwKjAFBgMrZXADIQD3\n-----END CERTIFICATE REQUEST-----\n"
+      responses:
+        '201':
+          description: The certificate was issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Certificate'
+              example:
+                participant_id: bank-a
+                serial: 4c9e1a7b20d85f36
+                certificate_pem: "-----BEGIN CERTIFICATE-----\nMIIBhzCCATmgAwIBAgIITJ6hp7INXzYwBQYDK2VwMBkxFzAVBgNVBAMTDkJlZXJ1\n-----END CERTIFICATE-----\n"
+                not_before: '2026-10-28T12:00:00+01:00'
+                not_after: '2027-01-26T12:00:00+01:00'
+                renew_at: '2026-12-27T12:00:00+01:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/trust/renewals:
+    servers:
+      - url: https://cbn.localhost
+        description: The CBN side, which serves the trust anchor.
+    post:
+      tags: [Trust anchor]
+      operationId: renewCertificate
+      summary: Renew a certificate
+      description: Swaps a new CSR for a new 90-day certificate. The caller must present its current certificate over mTLS, and the current certificate must be on day 60 or later. Before day 60 the call fails with `renewal_too_early`. The new certificate has the same participant ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenewRequest'
+            example:
+              csr_pem: "-----BEGIN CERTIFICATE REQUEST-----\nMIIBVTCB/AIBADAWMRQwEgYDVQQDDAtiYW5rLWEubG9jYWwwKjAFBgMrZXADIQD3\n-----END CERTIFICATE REQUEST-----\n"
+      responses:
+        '201':
+          description: The new certificate was issued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Certificate'
+              example:
+                participant_id: bank-a
+                serial: 8d02f5c1a7b3946e
+                certificate_pem: "-----BEGIN CERTIFICATE-----\nMIIBhzCCATmgAwIBAgIIjQL1waezlG4wBQYDK2VwMBkxFzAVBgNVBAMTDkJlZXJ1\n-----END CERTIFICATE-----\n"
+                not_before: '2026-12-27T12:00:00+01:00'
+                not_after: '2027-03-27T12:00:00+01:00'
+                renew_at: '2027-02-25T12:00:00+01:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/trust/revocations:
+    servers:
+      - url: https://cbn.localhost
+        description: The CBN side, which serves the trust anchor.
+    post:
+      tags: [Trust anchor]
+      operationId: revokeCertificate
+      summary: Revoke your own certificate
+      description: Revokes one of the caller's own certificates by serial number. A serial that belongs to another participant fails with `forbidden`. Revoking a certificate that is already revoked succeeds with no change. Every participant sees the revocation in the list at the next read.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokeRequest'
+            example:
+              serial: 4c9e1a7b20d85f36
+              reason: key_compromise
+      responses:
+        '200':
+          description: The certificate is revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Revocation'
+              example:
+                serial: 4c9e1a7b20d85f36
+                participant_id: bank-a
+                reason: key_compromise
+                revoked_at: '2026-11-02T09:15:00+01:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    get:
+      tags: [Trust anchor]
+      operationId: listRevocations
+      summary: List revoked certificates
+      description: Returns the revocation list, oldest first. A participant refuses any certificate whose serial is on it. Page with `limit` and `cursor`.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of the revocation list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevocationList'
+              example:
+                data:
+                  - serial: 4c9e1a7b20d85f36
+                    participant_id: bank-a
+                    reason: key_compromise
+                    revoked_at: '2026-11-02T09:15:00+01:00'
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/trust/operator/revocations:
+    servers:
+      - url: https://cbn.localhost
+        description: The CBN side, which serves the trust anchor.
+    post:
+      tags: [Trust anchor]
+      operationId: revokeCertificateAsOperator
+      summary: Revoke any certificate as the operator
+      description: Revokes a certificate of any participant by serial number. Only the operator may do this. Revoking a certificate that is already revoked succeeds with no change.
+      security:
+        - operatorToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokeRequest'
+            example:
+              serial: 4c9e1a7b20d85f36
+              reason: participant_removed
+      responses:
+        '200':
+          description: The certificate is revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Revocation'
+              example:
+                serial: 4c9e1a7b20d85f36
+                participant_id: bank-a
+                reason: participant_removed
+                revoked_at: '2026-11-02T09:15:00+01:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/trust/enrolment_tokens:
+    servers:
+      - url: https://cbn.localhost
+        description: The CBN side, which serves the trust anchor.
+    post:
+      tags: [Trust anchor]
+      operationId: createEnrolmentToken
+      summary: Issue an enrolment token
+      description: Issues a one-time enrolment token for a participant the operator already created in the Registry. The token expires 24 hours after it is issued. 24 hours is a Beerus placeholder. Issuing another token for the same participant cancels the earlier one. Only the operator may do this.
+      security:
+        - operatorToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrolmentTokenRequest'
+            example:
+              participant_id: bank-a
+      responses:
+        '201':
+          description: The token was issued. It is shown once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrolmentToken'
+              example:
+                participant_id: bank-a
+                enrolment_token: et_6f1b9d3a58c24e07
+                expires_at: '2026-10-29T12:00:00+01:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/trust/bundle:
+    servers:
+      - url: https://cbn.localhost
+        description: The CBN side, which serves the trust anchor.
+    get:
+      tags: [Trust anchor]
+      operationId: getTrustBundle
+      summary: Get the trust bundle
+      description: Returns the CA certificates every participant trusts. The caller has no certificate before it enrols, so this call is over server-authenticated TLS only. Check the bundle against the fingerprint the operator gave you out of band.
+      security: []
+      responses:
+        '200':
+          description: The trust bundle.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrustBundle'
+              example:
+                ca_certificates_pem:
+                  - "-----BEGIN CERTIFICATE-----\nMIIBgTCCATOgAwIBAgIIFq3dW0wYk1QwBQYDK2VwMBcxFTATBgNVBAMTDEJlZXJ1\n-----END CERTIFICATE-----\n"
+                updated_at: '2026-10-01T08:00:00+01:00'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/registry/participants:
+    get:
+      tags: [Registry]
+      operationId: listParticipants
+      summary: List participants
+      description: Returns the participants, ordered by ID. Filter by `role` or `status`. Page with `limit` and `cursor`.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: role
+          in: query
+          required: false
+          description: Only participants with this role.
+          schema:
+            $ref: '#/components/schemas/Role'
+          example: bank
+        - name: status
+          in: query
+          required: false
+          description: Only participants with this status.
+          schema:
+            $ref: '#/components/schemas/ParticipantStatus'
+          example: active
+      responses:
+        '200':
+          description: One page of participants.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParticipantList'
+              example:
+                data:
+                  - id: bank-a
+                    name: Bank A
+                    role: bank
+                    tier: tier_1
+                    status: active
+                    endpoints:
+                      - kind: open_banking
+                        url: https://bank-a.localhost
+                    redirect_uris: []
+                    signing_keys:
+                      - key_id: bank-a-key-1
+                        algorithm: EdDSA
+                        public_key: MCowBQYDK2VwAyEAhnO3f9T8Ytu9HwrXslvumlUpqtNVqkhq
+                        published_at: '2026-10-28T12:00:00+01:00'
+                        expires_at: null
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [Registry]
+      operationId: createParticipant
+      summary: Create a participant
+      description: Creates a participant record with status `pending`. It becomes `active` when the participant enrols. Only the operator may do this. The ID must be unique.
+      security:
+        - operatorToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ParticipantCreate'
+            example:
+              id: bank-a
+              name: Bank A
+              role: bank
+              tier: tier_1
+              endpoints:
+                - kind: open_banking
+                  url: https://bank-a.localhost
+              redirect_uris: []
+      responses:
+        '201':
+          description: The participant was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participant'
+              example:
+                id: bank-a
+                name: Bank A
+                role: bank
+                tier: tier_1
+                status: pending
+                endpoints:
+                  - kind: open_banking
+                    url: https://bank-a.localhost
+                redirect_uris: []
+                signing_keys: []
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/registry/participants/{participant_id}:
+    parameters:
+      - name: participant_id
+        in: path
+        required: true
+        description: The participant ID.
+        schema:
+          type: string
+        example: bank-a
+    get:
+      tags: [Registry]
+      operationId: getParticipant
+      summary: Get a participant
+      description: Returns one participant with its endpoints and public signing keys. A caller uses the endpoints to find the participant and the signing keys to check what the participant signs.
+      responses:
+        '200':
+          description: The participant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Participant'
+              example:
+                id: bank-a
+                name: Bank A
+                role: bank
+                tier: tier_1
+                status: active
+                endpoints:
+                  - kind: open_banking
+                    url: https://bank-a.localhost
+                redirect_uris: []
+                signing_keys:
+                  - key_id: bank-a-key-1
+                    algorithm: EdDSA
+                    public_key: MCowBQYDK2VwAyEAhnO3f9T8Ytu9HwrXslvumlUpqtNVqkhq
+                    published_at: '2026-10-28T12:00:00+01:00'
+                    expires_at: null
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/registry/participants/{participant_id}/signing_keys:
+    parameters:
+      - name: participant_id
+        in: path
+        required: true
+        description: The participant ID. It must be the caller's own.
+        schema:
+          type: string
+        example: bank-a
+    post:
+      tags: [Registry]
+      operationId: publishSigningKey
+      summary: Publish a signing key
+      description: A participant publishes a public signing key over mTLS. The caller's certificate identity must match `participant_id`, otherwise the call fails with `forbidden`. A key ID can be published once. Peers read the key from the participant record.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SigningKeyCreate'
+            example:
+              key_id: bank-a-key-1
+              algorithm: EdDSA
+              public_key: MCowBQYDK2VwAyEAhnO3f9T8Ytu9HwrXslvumlUpqtNVqkhq
+              expires_at: null
+      responses:
+        '201':
+          description: The key was published.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SigningKey'
+              example:
+                key_id: bank-a-key-1
+                algorithm: EdDSA
+                public_key: MCowBQYDK2VwAyEAhnO3f9T8Ytu9HwrXslvumlUpqtNVqkhq
+                published_at: '2026-10-28T12:00:00+01:00'
+                expires_at: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/registry/sponsorships:
+    get:
+      tags: [Registry]
+      operationId: listSponsorships
+      summary: List sponsorships
+      description: Returns the partner apps that a sponsor, such as Beerus Connect, sponsors. A bank checks it before it accepts a partner's consent request through Connect. Filter by `sponsor_id`. Page with `limit` and `cursor`.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: sponsor_id
+          in: query
+          required: false
+          description: Only sponsorships by this participant.
+          schema:
+            type: string
+          example: connect
+      responses:
+        '200':
+          description: One page of sponsorships.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SponsorshipList'
+              example:
+                data:
+                  - id: spn_01JBE1R6T2HC
+                    sponsor_id: connect
+                    partner_id: balance
+                    partner_name: Balance
+                    tier: tier_0
+                    status: active
+                    started_at: '2026-10-28T11:00:00+01:00'
+                    ended_at: null
+                next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [Registry]
+      operationId: createSponsorship
+      summary: Sponsor a partner app
+      description: Connect sponsors a partner app, which becomes `tier_0`. The sponsor is the participant whose certificate made the call, and it must have the `connect` role. A partner app can have one active sponsorship.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SponsorshipCreate'
+            example:
+              partner_id: balance
+              partner_name: Balance
+      responses:
+        '201':
+          description: The sponsorship was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sponsorship'
+              example:
+                id: spn_01JBE1R6T2HC
+                sponsor_id: connect
+                partner_id: balance
+                partner_name: Balance
+                tier: tier_0
+                status: active
+                started_at: '2026-10-28T11:00:00+01:00'
+                ended_at: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  securitySchemes:
+    operatorToken:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: The Beerus control plane's bearer token. Only the operator holds it.
+    mutualTLS:
+      type: mutualTLS
+      description: The caller presents a transport certificate issued by the trust anchor. The service authorises the caller by the certificate's identity in the Registry, and refuses a serial on the revocation list.
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: The most items to return. The maximum of 500 and the default of 100 are Beerus placeholders.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 100
+      example: 100
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: The `next_cursor` from the previous page. Opaque.
+      schema:
+        type: string
+      example: cur_eyJzIjoxfQ
+  responses:
+    BadRequest:
+      description: The request is malformed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invalid_request
+              message: csr_pem must be a PEM certificate request.
+              request_id: req_01JBE2A1
+    Unauthenticated:
+      description: The certificate is missing, expired or revoked.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unauthenticated
+              message: The certificate is revoked.
+              request_id: req_01JBE2A2
+    Forbidden:
+      description: The caller may not do this, or the enrolment token is wrong.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invalid_enrolment_token
+              message: The enrolment token is unknown or already used.
+              request_id: req_01JBE2A3
+    NotFound:
+      description: The resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_found
+              message: No such participant.
+              request_id: req_01JBE2A4
+    Conflict:
+      description: The resource already exists.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: already_exists
+              message: A participant with this ID already exists.
+              request_id: req_01JBE2A8
+    Unprocessable:
+      description: The request is well formed but cannot be processed. The message says what to change.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: renewal_too_early
+              message: This certificate is on day 12 of 90. Renew from day 60.
+              request_id: req_01JBE2A5
+    RateLimited:
+      description: Too many requests. Retry after the number of seconds in `Retry-After`.
+      headers:
+        Retry-After:
+          description: Seconds to wait.
+          schema:
+            type: integer
+            minimum: 0
+          example: 30
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: rate_limited
+              message: Too many requests.
+              request_id: req_01JBE2A6
+    InternalError:
+      description: Something went wrong inside the service.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: internal_error
+              message: Something went wrong.
+              request_id: req_01JBE2A7
+  schemas:
+    Error:
+      description: The error body every endpoint returns.
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+              description: For people. Do not parse it.
+            request_id:
+              type: string
+              description: Quote this when reporting a problem.
+      example:
+        error:
+          code: not_found
+          message: No such participant.
+          request_id: req_01JBE2A4
+    ErrorCode:
+      description: |
+        A stable error code. The list is closed.
+
+        - `invalid_request` (400): the request is malformed.
+        - `invalid_cursor` (400): the cursor cannot be read.
+        - `unauthenticated` (401): the certificate or operator token is missing, expired or revoked.
+        - `forbidden` (403): the caller may not do this.
+        - `invalid_enrolment_token` (403): the enrolment token is unknown, used or expired.
+        - `not_found` (404): the resource does not exist.
+        - `already_exists` (409): the participant, key or sponsorship already exists.
+        - `invalid_csr` (422): the CSR is not valid or does not match the participant.
+        - `renewal_too_early` (422): the certificate is before day 60.
+        - `rate_limited` (429): too many requests.
+        - `internal_error` (500): something went wrong inside the service.
+      type: string
+      enum: [invalid_request, invalid_cursor, unauthenticated, forbidden, invalid_enrolment_token, not_found, already_exists, invalid_csr, renewal_too_early, rate_limited, internal_error]
+      examples:
+        - not_found
+    EnrolmentTokenRequest:
+      description: A request for an enrolment token.
+      type: object
+      required: [participant_id]
+      properties:
+        participant_id:
+          type: string
+          description: A participant that exists and is `pending`.
+    EnrolmentToken:
+      description: A one-time enrolment token.
+      type: object
+      required: [participant_id, enrolment_token, expires_at]
+      properties:
+        participant_id:
+          type: string
+        enrolment_token:
+          type: string
+          description: The token. It works once and is never shown again.
+        expires_at:
+          type: string
+          format: date-time
+          description: 24 hours after issue. 24 hours is a Beerus placeholder.
+    ParticipantCreate:
+      description: A new participant.
+      type: object
+      required: [id, name, role, tier, endpoints, redirect_uris]
+      properties:
+        id:
+          type: string
+          description: The participant ID. It is also the certificate subject.
+        name:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        tier:
+          type: string
+          enum: [tier_1, tier_2, tier_3]
+          description: A Beerus placeholder grade.
+        endpoints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Endpoint'
+        redirect_uris:
+          type: array
+          items:
+            type: string
+            format: uri
+    SigningKeyCreate:
+      description: A signing key to publish.
+      type: object
+      required: [key_id, algorithm, public_key, expires_at]
+      properties:
+        key_id:
+          type: string
+        algorithm:
+          type: string
+          enum: [EdDSA, ES256]
+        public_key:
+          type: string
+          description: The public key, base64 of its DER encoding.
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+          description: Null when the key does not expire.
+    SponsorshipCreate:
+      description: A partner app for Connect to sponsor.
+      type: object
+      required: [partner_id, partner_name]
+      properties:
+        partner_id:
+          type: string
+        partner_name:
+          type: string
+    EnrolRequest:
+      description: A first certificate request.
+      type: object
+      required: [participant_id, enrolment_token, csr_pem]
+      properties:
+        participant_id:
+          type: string
+          description: The participant the token was made for.
+        enrolment_token:
+          type: string
+          description: The one-time token the operator gave the participant.
+        csr_pem:
+          type: string
+          description: The certificate signing request in PEM form. Its subject must name the participant.
+    RenewRequest:
+      description: A renewal request.
+      type: object
+      required: [csr_pem]
+      properties:
+        csr_pem:
+          type: string
+          description: The certificate signing request in PEM form. Use a new key pair.
+    Certificate:
+      description: An issued transport certificate.
+      type: object
+      required: [participant_id, serial, certificate_pem, not_before, not_after, renew_at]
+      properties:
+        participant_id:
+          type: string
+        serial:
+          type: string
+          description: The certificate's serial number in hex. It appears on the revocation list if revoked.
+        certificate_pem:
+          type: string
+          description: The certificate in PEM form.
+        not_before:
+          type: string
+          format: date-time
+          description: The X.509 `notBefore` time.
+        not_after:
+          type: string
+          format: date-time
+          description: The X.509 `notAfter` time, 90 days after `not_before`. 90 days is a Beerus placeholder.
+        renew_at:
+          type: string
+          format: date-time
+          description: The earliest time a renewal is accepted, 60 days after `not_before`. A Beerus placeholder.
+    RevokeReason:
+      description: Why a certificate was revoked.
+      type: string
+      enum: [key_compromise, participant_removed, superseded, other]
+    RevokeRequest:
+      description: A revocation request.
+      type: object
+      required: [serial, reason]
+      properties:
+        serial:
+          type: string
+          description: The serial of the certificate to revoke.
+        reason:
+          $ref: '#/components/schemas/RevokeReason'
+    Revocation:
+      description: A revoked certificate.
+      type: object
+      required: [serial, participant_id, reason, revoked_at]
+      properties:
+        serial:
+          type: string
+        participant_id:
+          type: string
+        reason:
+          $ref: '#/components/schemas/RevokeReason'
+        revoked_at:
+          type: string
+          format: date-time
+    RevocationList:
+      description: One page of the revocation list.
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Revocation'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass it as `cursor` for the next page. Null on the last page.
+      example:
+        data:
+          - serial: 4c9e1a7b20d85f36
+            participant_id: bank-a
+            reason: key_compromise
+            revoked_at: '2026-11-02T09:15:00+01:00'
+        next_cursor: null
+    TrustBundle:
+      description: The CA certificates every participant trusts.
+      type: object
+      required: [ca_certificates_pem, updated_at]
+      properties:
+        ca_certificates_pem:
+          type: array
+          items:
+            type: string
+          description: Each CA certificate in PEM form. More than one appears while a CA is being replaced.
+        updated_at:
+          type: string
+          format: date-time
+          description: When the bundle last changed.
+      example:
+        ca_certificates_pem:
+          - "-----BEGIN CERTIFICATE-----\nMIIBgTCCATOgAwIBAgIIFq3dW0wYk1QwBQYDK2VwMBcxFTATBgNVBAMTDEJlZXJ1\n-----END CERTIFICATE-----\n"
+        updated_at: '2026-10-01T08:00:00+01:00'
+    Role:
+      description: What a participant does in the network.
+      type: string
+      enum: [bank, nibss, cbn, connect]
+    ParticipantStatus:
+      description: Whether a participant may take part.
+      type: string
+      enum: [pending, active, suspended, removed]
+    EndpointKind:
+      description: Which API an endpoint serves.
+      type: string
+      enum: [open_banking, nip, settlement, participant]
+    Endpoint:
+      description: Where to reach a participant for one API.
+      type: object
+      required: [kind, url]
+      properties:
+        kind:
+          $ref: '#/components/schemas/EndpointKind'
+        url:
+          type: string
+          format: uri
+    SigningKey:
+      description: A public key a participant signs with.
+      type: object
+      required: [key_id, algorithm, public_key, published_at, expires_at]
+      properties:
+        key_id:
+          type: string
+        algorithm:
+          type: string
+          enum: [EdDSA, ES256]
+        public_key:
+          type: string
+          description: The public key, base64 of its DER encoding.
+        published_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+          description: Null when the key does not expire.
+    Participant:
+      description: One participant in the network.
+      type: object
+      required: [id, name, role, tier, status, endpoints, redirect_uris, signing_keys]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        tier:
+          type: string
+          enum: [tier_1, tier_2, tier_3]
+          description: A Beerus placeholder grade. It is not a Nigerian classification.
+        status:
+          $ref: '#/components/schemas/ParticipantStatus'
+        endpoints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Endpoint'
+        redirect_uris:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: The redirect URIs the participant may use in browser flows. A bank has none; Connect has the callback URI a bank redirects to.
+        signing_keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/SigningKey'
+      example:
+        id: bank-a
+        name: Bank A
+        role: bank
+        tier: tier_1
+        status: active
+        endpoints:
+          - kind: open_banking
+            url: https://bank-a.localhost
+        redirect_uris: []
+        signing_keys:
+          - key_id: bank-a-key-1
+            algorithm: EdDSA
+            public_key: MCowBQYDK2VwAyEAhnO3f9T8Ytu9HwrXslvumlUpqtNVqkhq
+            published_at: '2026-10-28T12:00:00+01:00'
+            expires_at: null
+    ParticipantList:
+      description: One page of participants.
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Participant'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass it as `cursor` for the next page. Null on the last page.
+      example:
+        data:
+          - id: bank-a
+            name: Bank A
+            role: bank
+            tier: tier_1
+            status: active
+            endpoints:
+              - kind: open_banking
+                url: https://bank-a.localhost
+            redirect_uris: []
+            signing_keys:
+              - key_id: bank-a-key-1
+                algorithm: EdDSA
+                public_key: MCowBQYDK2VwAyEAhnO3f9T8Ytu9HwrXslvumlUpqtNVqkhq
+                published_at: '2026-10-28T12:00:00+01:00'
+                expires_at: null
+        next_cursor: null
+    Sponsorship:
+      description: A partner app that a sponsor vouches for.
+      type: object
+      required: [id, sponsor_id, partner_id, partner_name, tier, status, started_at, ended_at]
+      properties:
+        id:
+          type: string
+        sponsor_id:
+          type: string
+          description: The participant that sponsors the partner, such as Beerus Connect.
+        partner_id:
+          type: string
+        partner_name:
+          type: string
+        tier:
+          type: string
+          enum: [tier_0]
+          description: Sponsored partner apps are always `tier_0`. Connect sponsors them.
+        status:
+          type: string
+          enum: [active, ended]
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: [string, 'null']
+          format: date-time
+          description: Null while the sponsorship is active.
+    SponsorshipList:
+      description: One page of sponsorships.
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Sponsorship'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass it as `cursor` for the next page. Null on the last page.
+      example:
+        data:
+          - id: spn_01JBE1R6T2HC
+            sponsor_id: connect
+            partner_id: balance
+            partner_name: Balance
+            tier: tier_0
+            status: active
+            started_at: '2026-10-28T11:00:00+01:00'
+            ended_at: null
+        next_cursor: null

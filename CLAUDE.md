@@ -57,6 +57,7 @@ Beerus is a copy of Nigeria's banking infrastructure in one Go binary: banks, NI
 - **No `panic`** outside `main` startup. User input never causes one.
 - **Never return a zero value for a failed read.** A balance that could not be read is an error, not 0.
 - **A change that cannot be saved is undone** in memory before the error is returned.
+- **OAuth endpoints** (PAR, token, revoke) use the RFC 6749 error body and status codes; everything else uses the Beerus body.
 
 ## Concurrency
 - **Lock order:** `applyMu` → `stepMu` → `recMu` → `lifeMu` → `sendLock` → `mu` → `regMu` → `ctlMu`. Never take an earlier lock while holding a later one.
