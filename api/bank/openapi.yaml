@@ -10,10 +10,19 @@ info:
 
     The security profile is FAPI 2.0 with pushed authorisation requests (PAR), PKCE, `private_key_jwt` client authentication and certificate-bound access tokens over mutual TLS (mTLS). This is Beerus's choice. It is not confirmed as the profile Nigeria requires.
 
-    - Every call uses mTLS. The bank checks the caller's certificate identity against the Registry, not only the chain.
-    - Connect authenticates to `/par`, `/token` and `/revoke` with a `private_key_jwt` client assertion signed with its Registry signing key.
+    - Every call uses mTLS except three. `/authorize` is a browser call and carries no client certificate. The metadata and JWKS documents are public. The bank checks the caller's certificate identity against the Registry, not only the chain.
+    - Connect authenticates to `/par`, `/token` and `/revoke` with a `private_key_jwt` client assertion signed with its Registry signing key. The allowed algorithms are `EdDSA` and `PS256`.
     - An access token is bound to the certificate it was issued to. A call that presents the token over a different certificate fails with `invalid_token`.
     - Every authorisation uses PKCE with `S256`.
+
+    ## Client assertion
+
+    The `client_assertion` is a JWT with these claims:
+
+    - `iss` and `sub`: the client ID, which is Connect's participant ID in the Registry.
+    - `aud`: the bank's issuer URL, as given in the metadata document.
+    - `exp`: the expiry. It is at most 60 seconds after issue. 60 seconds is a Beerus placeholder.
+    - `jti`: a unique ID. The bank accepts each `jti` once and refuses a repeat with `invalid_client`.
 
     ## Flow
 
@@ -22,15 +31,17 @@ info:
     3. Connect exchanges the code at `/token` with the PKCE verifier and gets an access token and a refresh token.
     4. Connect reads `/accounts`, `/accounts/{account_id}/balances` and `/accounts/{account_id}/transactions`.
     5. Connect refreshes the access token with the `refresh_token` grant. Each refresh rotates the refresh token. Reusing an old refresh token ends the consent.
-    6. Connect revokes a consent at `/revoke`. The bank also signs consent events for revoke and expiry. Connect reads them at `/consent_events`.
+    6. Connect revokes a consent at `/revoke`. The bank also signs consent events for revoke and expiry as compact JWS. Connect reads them at `/consent_events`.
+
+    The metadata document at `/.well-known/oauth-authorization-server` lists the endpoints. The JWKS document at `/jwks.json` lists the bank's public signing keys, the same keys it publishes in the Registry.
 
     ## Consent
 
-    A revoked or expired consent fails every read with `403 consent_revoked`. The error message says whether the consent was revoked or expired.
+    A revoked or expired consent fails every read with `403 consent_revoked`. The error message says whether the consent was revoked or expired. A refresh on a revoked consent fails with `400 invalid_grant` and the description `consent revoked`.
 
     ## Transactions
 
-    Transactions are read from the account's event log, oldest first. A line never changes after it is posted. A correction arrives as a new line. Use `limit` and `cursor` to page; the cursor is opaque.
+    Transactions and balances are read from the account's event log. Only posted lines appear, oldest first. A line never changes. A correction is a new line whose `reverses_id` is the ID of the line it corrects. Use `limit` and `cursor` to page; the cursor is opaque. The `limit` maximum of 500 and default of 100 are Beerus placeholders.
 
     ## Time and money
 
@@ -38,7 +49,7 @@ info:
 
     ## Errors
 
-    Every error body is `{"error":{"code","message","request_id"}}`, including on `/par`, `/token` and `/revoke`, where OAuth would use a plain `error` string. Branch on `code`, never on `message`. User-fixable errors are 422.
+    `/par`, `/token` and `/revoke` are OAuth endpoints. They use the RFC 6749 error body `{"error","error_description","request_id"}` and the RFC status codes: 400, or 401 with `WWW-Authenticate` for `invalid_client`. Every other endpoint uses the Beerus body `{"error":{"code","message","request_id"}}`. Branch on the code, never on the description or message.
   contact:
     name: Evolution Labs
     url: https://github.com/evolutionlabs-core/beerus
@@ -55,6 +66,8 @@ tags:
     description: Accounts, balances and transactions shared under a consent.
   - name: Consent events
     description: Signed events about consents that Connect pulls.
+  - name: Discovery
+    description: The bank's metadata and public keys.
 security:
   - mutualTLS: []
     bearerToken: []
@@ -64,7 +77,7 @@ paths:
       tags: [Authorisation]
       operationId: createPushedAuthorisationRequest
       summary: Push an authorisation request
-      description: Connect sends the whole authorisation request to the bank before the customer's browser moves. The bank returns a short-lived `request_uri` for `/authorize`. The request must carry a PKCE challenge with `S256` and a `private_key_jwt` client assertion.
+      description: Connect sends the whole authorisation request to the bank before the customer's browser moves. The bank returns a short-lived `request_uri` for `/authorize`. The request must carry a PKCE challenge with `S256` and a `private_key_jwt` client assertion. Errors use the RFC 6749 body.
       security:
         - mutualTLS: []
       requestBody:
@@ -95,21 +108,19 @@ paths:
                 request_uri: urn:beerus:par:5d2f8c1e9b7a4036
                 expires_in: 90
         '400':
-          $ref: '#/components/responses/BadRequest'
+          $ref: '#/components/responses/OAuthBadRequest'
         '401':
-          $ref: '#/components/responses/Unauthenticated'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+          $ref: '#/components/responses/OAuthInvalidClient'
         '500':
-          $ref: '#/components/responses/InternalError'
+          $ref: '#/components/responses/OAuthServerError'
+        '503':
+          $ref: '#/components/responses/OAuthUnavailable'
   /authorize:
     get:
       tags: [Authorisation]
       operationId: authorise
       summary: Start the customer's sign-in
-      description: The customer's browser arrives here with a `request_uri` from `/par`. The bank redirects it to the bank's own sign-in page. After sign-in, consent and account choice, the bank redirects the browser to the request's `redirect_uri` with `code` and `state`, or with `error` and `state` if the customer says no. The bank never shows this page to Connect's server; only browsers call it.
+      description: The customer's browser arrives here with a `request_uri` from `/par`. The bank redirects it to the bank's own sign-in page. After sign-in, consent and account choice, the bank redirects the browser to the request's `redirect_uri` with `code` and `state`, or with `error` and `state` if the customer says no. Only browsers call this endpoint, so it uses no client certificate. The success redirect carries `code`, `state` and `iss`, and the error redirect carries `error`, `error_description`, `state` and `iss`; `iss` is the bank's issuer URL, as RFC 9207 says. The `authorisation.redirect` and `authorisation.error_redirect` entries below describe both.
       security: []
       parameters:
         - name: client_id
@@ -183,21 +194,19 @@ paths:
                 consent_id: cns_01JBD2M4Q8XT
                 consent_expires_at: '2027-10-28T12:04:00+01:00'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          $ref: '#/components/responses/OAuthBadRequest'
         '401':
-          $ref: '#/components/responses/Unauthenticated'
-        '422':
-          $ref: '#/components/responses/Unprocessable'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+          $ref: '#/components/responses/OAuthInvalidClient'
         '500':
-          $ref: '#/components/responses/InternalError'
+          $ref: '#/components/responses/OAuthServerError'
+        '503':
+          $ref: '#/components/responses/OAuthUnavailable'
   /revoke:
     post:
       tags: [Authorisation]
       operationId: revokeToken
       summary: Revoke a consent
-      description: Revokes a refresh token or an access token. Revoking a token ends the consent it belongs to. Revoking a token that is already revoked succeeds with no change. The bank signs a `consent.revoked` event.
+      description: Revokes a refresh token or an access token. Revoking a token ends the consent it belongs to. Revoking a token that is already revoked, or one the bank does not know, succeeds with an empty body, as RFC 7009 says. The bank signs a `consent.revoked` event.
       security:
         - mutualTLS: []
       requestBody:
@@ -214,23 +223,15 @@ paths:
               client_assertion: eyJhbGciOiJFZERTQSIsImtpZCI6ImNvbm5lY3Qta2V5LTEifQ.eyJpc3MiOiJjb25uZWN0In0.c2lnbmF0dXJl
       responses:
         '200':
-          description: The consent is revoked.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RevokeResponse'
-              example:
-                consent_id: cns_01JBD2M4Q8XT
-                status: revoked
-                revoked_at: '2026-10-28T15:20:00+01:00'
+          description: The token is revoked, or it was not known. The body is empty.
         '400':
-          $ref: '#/components/responses/BadRequest'
+          $ref: '#/components/responses/OAuthBadRequest'
         '401':
-          $ref: '#/components/responses/Unauthenticated'
-        '429':
-          $ref: '#/components/responses/RateLimited'
+          $ref: '#/components/responses/OAuthInvalidClient'
         '500':
-          $ref: '#/components/responses/InternalError'
+          $ref: '#/components/responses/OAuthServerError'
+        '503':
+          $ref: '#/components/responses/OAuthUnavailable'
   /accounts:
     get:
       tags: [Accounts]
@@ -273,7 +274,7 @@ paths:
       tags: [Accounts]
       operationId: getAccountBalances
       summary: Get an account's balances
-      description: Returns the current ledger balance and the available balance of an account.
+      description: Returns the current ledger balance and the available balance of an account, worked out from the account's event log.
       responses:
         '200':
           description: The balances.
@@ -307,7 +308,7 @@ paths:
       tags: [Accounts]
       operationId: listAccountTransactions
       summary: List an account's transactions
-      description: Reads the account's event log, oldest first, from the consent's history start date. Page with `limit` and `cursor`. A page never repeats or skips a line, even when new lines post between calls.
+      description: Reads the account's event log, oldest first, from the consent's history start date. Only posted lines appear. Page with `limit` and `cursor`. A page never repeats or skips a line, even when new lines post between calls.
       parameters:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Cursor'
@@ -324,7 +325,7 @@ paths:
                     sequence: 1042
                     amount_minor: -10000000
                     currency: NGN
-                    status: posted
+                    reverses_id: null
                     booked_at: '2026-10-23T23:50:04+01:00'
                     value_date: '2026-10-23'
                     description: NIP TRF TO CHIDI OKAFOR/BANK B/REF 000001261023235004
@@ -353,7 +354,7 @@ paths:
       tags: [Consent events]
       operationId: listConsentEvents
       summary: List signed consent events
-      description: Returns the bank's signed `consent.revoked` and `consent.expired` events, oldest first. Connect pulls them to learn that a consent ended without calling an account. Each event is signed with the bank's Registry signing key, so Connect can show the signature to the partner or to NIBSS. Page with `limit` and `cursor`.
+      description: Returns the bank's `consent.revoked` and `consent.expired` events, oldest first, each as a compact JWS signed with the bank's Registry signing key. Connect pulls them to learn that a consent ended without calling an account, and can show the JWS to the partner or to NIBSS. Page with `limit` and `cursor`.
       security:
         - mutualTLS: []
       parameters:
@@ -369,12 +370,7 @@ paths:
               example:
                 data:
                   - id: cev_01JBD3Q9R5NA
-                    type: consent.revoked
-                    consent_id: cns_01JBD2M4Q8XT
-                    occurred_at: '2026-10-28T15:20:00+01:00'
-                    reason: customer_revoked
-                    key_id: bank-a-key-1
-                    signature: MEUCIQDk3c2m0Zx1b7Wq9v8dYy5oJ4T6sPzE1aXnH2uRrQIgS8
+                    jws: eyJhbGciOiJFZERTQSIsImtpZCI6ImJhbmstYS1rZXktMSIsInR5cCI6ImNvbnNlbnQtZXZlbnQrand0In0.eyJpc3MiOiJiYW5rLWEiLCJqdGkiOiJjZXZfMDFKQkQzUTlSNU5BIiwidHlwZSI6ImNvbnNlbnQucmV2b2tlZCIsImNvbnNlbnRfaWQiOiJjbnNfMDFKQkQyTTRROFhUIiwib2NjdXJyZWRfYXQiOiIyMDI2LTEwLTI4VDE1OjIwOjAwKzAxOjAwIiwicmVhc29uIjoiY3VzdG9tZXJfcmV2b2tlZCJ9.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-Pw
                 next_cursor: null
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -384,6 +380,108 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
+  /.well-known/oauth-authorization-server:
+    get:
+      tags: [Discovery]
+      operationId: getAuthorisationServerMetadata
+      summary: Get the bank's metadata
+      description: Returns the RFC 8414 metadata document. It lists the bank's issuer URL, its endpoints and what it supports. It is public and needs no client certificate.
+      security: []
+      responses:
+        '200':
+          description: The metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Metadata'
+              example:
+                issuer: https://bank-a.localhost
+                authorization_endpoint: https://bank-a.localhost/authorize
+                token_endpoint: https://bank-a.localhost/token
+                pushed_authorization_request_endpoint: https://bank-a.localhost/par
+                revocation_endpoint: https://bank-a.localhost/revoke
+                jwks_uri: https://bank-a.localhost/jwks.json
+                response_types_supported: [code]
+                grant_types_supported: [authorization_code, refresh_token]
+                code_challenge_methods_supported: [S256]
+                token_endpoint_auth_methods_supported: [private_key_jwt]
+                token_endpoint_auth_signing_alg_values_supported: [EdDSA, PS256]
+                tls_client_certificate_bound_access_tokens: true
+                authorization_response_iss_parameter_supported: true
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /jwks.json:
+    get:
+      tags: [Discovery]
+      operationId: getJWKS
+      summary: Get the bank's public keys
+      description: Returns the bank's public signing keys as a JWK Set. They are the same keys the bank publishes in the Registry. It is public and needs no client certificate.
+      security: []
+      responses:
+        '200':
+          description: The keys.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JWKS'
+              example:
+                keys:
+                  - kty: OKP
+                    crv: Ed25519
+                    kid: bank-a-key-1
+                    use: sig
+                    alg: EdDSA
+                    x: hnO3f9T8Ytu9HwrXslvumlUpqtNVqkhqw_enGzPCXe4
+        '500':
+          $ref: '#/components/responses/InternalError'
+webhooks:
+  authorisation.redirect:
+    get:
+      tags: [Authorisation]
+      operationId: onAuthorisationRedirect
+      security: []
+      summary: The customer gave consent
+      description: The bank redirects the customer's browser to Connect's `redirect_uri` with these query parameters after consent. `iss` is the bank's issuer URL and Connect must check it.
+      parameters:
+        - name: redirect
+          in: query
+          required: true
+          style: form
+          explode: true
+          description: The query parameters of the redirect.
+          schema:
+            $ref: '#/components/schemas/AuthorisationRedirect'
+          example:
+            code: ac_71c0e4a95d3b2f68
+            state: 9f86d081884c7d65
+            iss: https://bank-a.localhost
+      responses:
+        '200':
+          description: Connect accepted the redirect.
+  authorisation.error_redirect:
+    get:
+      tags: [Authorisation]
+      operationId: onAuthorisationErrorRedirect
+      security: []
+      summary: The customer said no
+      description: The bank redirects the customer's browser to Connect's `redirect_uri` with these query parameters when consent fails or the customer cancels.
+      parameters:
+        - name: redirect
+          in: query
+          required: true
+          style: form
+          explode: true
+          description: The query parameters of the redirect.
+          schema:
+            $ref: '#/components/schemas/AuthorisationErrorRedirect'
+          example:
+            error: access_denied
+            error_description: the customer cancelled
+            state: 9f86d081884c7d65
+            iss: https://bank-a.localhost
+      responses:
+        '200':
+          description: Connect accepted the redirect.
 components:
   securitySchemes:
     mutualTLS:
@@ -392,14 +490,14 @@ components:
     bearerToken:
       type: http
       scheme: bearer
-      bearerFormat: JWT
-      description: A short-lived access token from `/token`. It is bound to the certificate of the call that obtained it, and is only valid over that certificate.
+      bearerFormat: opaque
+      description: A short-lived opaque access token from `/token`. It is bound to the certificate of the call that obtained it, and is only valid over that certificate.
   parameters:
     Limit:
       name: limit
       in: query
       required: false
-      description: The most items to return.
+      description: The most items to return. The maximum of 500 and the default of 100 are Beerus placeholders.
       schema:
         type: integer
         minimum: 1
@@ -435,7 +533,13 @@ components:
               message: code_challenge_method must be S256.
               request_id: req_01JBD4A1
     Unauthenticated:
-      description: The certificate, client assertion or access token is missing or invalid.
+      description: The certificate or access token is missing or invalid.
+      headers:
+        WWW-Authenticate:
+          description: Says how to authenticate.
+          schema:
+            type: string
+          example: Bearer error="invalid_token"
       content:
         application/json:
           schema:
@@ -445,6 +549,59 @@ components:
               code: invalid_token
               message: The access token is not bound to this certificate.
               request_id: req_01JBD4A2
+    OAuthBadRequest:
+      description: The OAuth request failed. This is the RFC 6749 body. A refresh on a revoked consent returns `invalid_grant` with the description `consent revoked`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OAuthError'
+          example:
+            error: invalid_grant
+            error_description: consent revoked
+            request_id: req_01JBD4B1
+    OAuthInvalidClient:
+      description: The client assertion or certificate is not valid.
+      headers:
+        WWW-Authenticate:
+          description: Says how to authenticate.
+          schema:
+            type: string
+          example: Bearer realm="bank-a", error="invalid_client"
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OAuthError'
+          example:
+            error: invalid_client
+            error_description: the client assertion jti was already used
+            request_id: req_01JBD4B2
+    OAuthServerError:
+      description: Something went wrong inside the bank.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OAuthError'
+          example:
+            error: server_error
+            error_description: something went wrong
+            request_id: req_01JBD4B3
+    OAuthUnavailable:
+      description: The bank is busy. Retry after the number of seconds in `Retry-After`.
+      headers:
+        Retry-After:
+          description: Seconds to wait.
+          schema:
+            type: integer
+            minimum: 0
+          example: 30
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/OAuthError'
+          example:
+            error: temporarily_unavailable
+            error_description: too many requests for this client
+            request_id: req_01JBD4B4
     ConsentRevoked:
       description: The consent was revoked or has expired.
       content:
@@ -467,25 +624,15 @@ components:
               code: not_found
               message: No such account.
               request_id: req_01JBD4A4
-    Unprocessable:
-      description: The request is well formed but cannot be processed. The message says what to change.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            error:
-              code: invalid_grant
-              message: The code was already used. Start a new authorisation.
-              request_id: req_01JBD4A5
     RateLimited:
       description: Too many requests. Retry after the number of seconds in `Retry-After`.
       headers:
         Retry-After:
-          description: Seconds to wait, in real time.
+          description: Seconds to wait.
           schema:
             type: integer
             minimum: 0
+          example: 30
       content:
         application/json:
           schema:
@@ -531,21 +678,50 @@ components:
           request_id: req_01JBD4A4
     ErrorCode:
       description: |
-        A stable error code. The list is not closed; treat an unknown code as its HTTP status.
+        A stable error code for the Beerus error body. The list is closed.
 
         - `invalid_request` (400): the request is malformed.
         - `invalid_cursor` (400): the cursor cannot be read.
-        - `invalid_client` (401): the client assertion or certificate is not valid.
         - `invalid_token` (401): the access token is missing, expired or not bound to this certificate.
         - `consent_revoked` (403): the consent was revoked or has expired.
         - `not_found` (404): the account or request does not exist under this consent.
-        - `invalid_grant` (422): the code or refresh token is unknown, used or expired. Start a new authorisation.
-        - `unsupported_grant_type` (422): the grant type is not `authorization_code` or `refresh_token`.
         - `rate_limited` (429): too many requests.
         - `internal_error` (500): something went wrong inside the bank.
       type: string
+      enum: [invalid_request, invalid_cursor, invalid_token, consent_revoked, not_found, rate_limited, internal_error]
       examples:
         - consent_revoked
+    OAuthError:
+      description: The RFC 6749 error body that `/par`, `/token` and `/revoke` return.
+      type: object
+      required: [error, error_description, request_id]
+      properties:
+        error:
+          $ref: '#/components/schemas/OAuthErrorCode'
+        error_description:
+          type: string
+          description: For people. Do not parse it.
+        request_id:
+          type: string
+          description: Quote this when reporting a problem.
+      example:
+        error: invalid_grant
+        error_description: consent revoked
+        request_id: req_01JBD4B1
+    OAuthErrorCode:
+      description: |
+        An RFC 6749 error code.
+
+        - `invalid_request` (400): the request is malformed.
+        - `invalid_client` (401): the client assertion or certificate is not valid.
+        - `invalid_grant` (400): the code or refresh token is unknown, used or expired, or the consent was revoked.
+        - `unauthorized_client` (400): the client may not use this grant.
+        - `unsupported_grant_type` (400): the grant type is not `authorization_code` or `refresh_token`.
+        - `invalid_scope` (400): the scope is not one the bank offers.
+        - `server_error` (500): something went wrong inside the bank.
+        - `temporarily_unavailable` (503): the bank is busy.
+      type: string
+      enum: [invalid_request, invalid_client, invalid_grant, unauthorized_client, unsupported_grant_type, invalid_scope, server_error, temporarily_unavailable]
     PushedAuthorisationRequest:
       description: The authorisation request Connect pushes to the bank.
       type: object
@@ -560,7 +736,7 @@ components:
           description: Always the JWT bearer assertion type.
         client_assertion:
           type: string
-          description: A JWT signed with Connect's Registry signing key. It proves who Connect is.
+          description: A JWT signed with Connect's Registry signing key, with the claims listed in the client assertion section. It proves who Connect is.
         response_type:
           type: string
           const: code
@@ -666,7 +842,7 @@ components:
         consent_expires_at:
           type: string
           format: date-time
-          description: When the consent ends.
+          description: When the consent ends. A consent lasts one year; that is a Beerus placeholder.
       example:
         access_token: at_4be1f6a07c92d358
         token_type: Bearer
@@ -697,25 +873,121 @@ components:
         client_assertion:
           type: string
           description: A JWT signed with Connect's Registry signing key.
-    RevokeResponse:
-      description: The state of the consent after the revoke.
+    AuthorisationRedirect:
+      description: The query parameters on a successful redirect to Connect.
       type: object
-      required: [consent_id, status, revoked_at]
+      required: [code, state, iss]
       properties:
-        consent_id:
+        code:
           type: string
-        status:
+          description: The one-time code for `/token`.
+        state:
           type: string
-          const: revoked
-          description: Always `revoked`.
-        revoked_at:
+          description: The `state` Connect sent to `/par`, unchanged.
+        iss:
           type: string
-          format: date-time
-          description: When the consent was first revoked. A repeat revoke returns the same time.
-      example:
-        consent_id: cns_01JBD2M4Q8XT
-        status: revoked
-        revoked_at: '2026-10-28T15:20:00+01:00'
+          format: uri
+          description: The bank's issuer URL, as RFC 9207 says. Connect must check it.
+    AuthorisationErrorRedirect:
+      description: The query parameters on a failed redirect to Connect.
+      type: object
+      required: [error, error_description, state, iss]
+      properties:
+        error:
+          type: string
+          enum: [access_denied, invalid_scope, server_error, temporarily_unavailable]
+          description: Why the authorisation failed.
+        error_description:
+          type: string
+          description: For people. Do not parse it.
+        state:
+          type: string
+          description: The `state` Connect sent to `/par`, unchanged.
+        iss:
+          type: string
+          format: uri
+          description: The bank's issuer URL.
+    Metadata:
+      description: The bank's RFC 8414 metadata.
+      type: object
+      required: [issuer, authorization_endpoint, token_endpoint, pushed_authorization_request_endpoint, revocation_endpoint, jwks_uri, response_types_supported, grant_types_supported, code_challenge_methods_supported, token_endpoint_auth_methods_supported, token_endpoint_auth_signing_alg_values_supported, tls_client_certificate_bound_access_tokens, authorization_response_iss_parameter_supported]
+      properties:
+        issuer:
+          type: string
+          format: uri
+          description: The bank's issuer URL. It is the `aud` of client assertions and the `iss` of redirects.
+        authorization_endpoint:
+          type: string
+          format: uri
+        token_endpoint:
+          type: string
+          format: uri
+        pushed_authorization_request_endpoint:
+          type: string
+          format: uri
+        revocation_endpoint:
+          type: string
+          format: uri
+        jwks_uri:
+          type: string
+          format: uri
+        response_types_supported:
+          type: array
+          items:
+            type: string
+        grant_types_supported:
+          type: array
+          items:
+            type: string
+        code_challenge_methods_supported:
+          type: array
+          items:
+            type: string
+        token_endpoint_auth_methods_supported:
+          type: array
+          items:
+            type: string
+        token_endpoint_auth_signing_alg_values_supported:
+          type: array
+          items:
+            type: string
+            enum: [EdDSA, PS256]
+        tls_client_certificate_bound_access_tokens:
+          type: boolean
+        authorization_response_iss_parameter_supported:
+          type: boolean
+    JWK:
+      description: One public key.
+      type: object
+      required: [kty, crv, kid, use, alg, x]
+      properties:
+        kty:
+          type: string
+          description: The key type. `OKP` for Ed25519.
+        crv:
+          type: string
+          description: The curve.
+        kid:
+          type: string
+          description: The key ID.
+        use:
+          type: string
+          enum: [sig]
+        alg:
+          type: string
+          enum: [EdDSA]
+        x:
+          type: string
+          description: The public key, base64url.
+    JWKS:
+      description: A JWK Set.
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/JWK'
     Account:
       description: An account the customer shared.
       type: object
@@ -812,9 +1084,9 @@ components:
         bank_code:
           type: [string, 'null']
     Transaction:
-      description: One line of an account's event log.
+      description: One posted line of an account's event log.
       type: object
-      required: [id, sequence, amount_minor, currency, status, booked_at, value_date, description, channel, counterparty, session_id, balance_after_minor]
+      required: [id, sequence, amount_minor, currency, reverses_id, booked_at, value_date, description, channel, counterparty, session_id, balance_after_minor]
       properties:
         id:
           type: string
@@ -832,13 +1104,13 @@ components:
           type: string
           pattern: '^[A-Z]{3}$'
           description: ISO 4217 code.
-        status:
-          type: string
-          enum: [pending, posted]
-        booked_at:
+        reverses_id:
           type: [string, 'null']
+          description: When this line corrects an earlier line, the `id` of that line. Null otherwise. A posted line never changes; a correction is a new line.
+        booked_at:
+          type: string
           format: date-time
-          description: The posting time. Null while the line is pending.
+          description: The posting time.
         value_date:
           type: string
           format: date
@@ -857,9 +1129,9 @@ components:
           pattern: '^[0-9]{30}$'
           description: The 30-digit NIP session ID, when the line came from a NIP transfer.
         balance_after_minor:
-          type: [integer, 'null']
+          type: integer
           format: int64
-          description: The running ledger balance after this line. Null while the line is pending.
+          description: The running ledger balance after this line.
     TransactionList:
       description: One page of transactions.
       type: object
@@ -878,7 +1150,7 @@ components:
             sequence: 1042
             amount_minor: -10000000
             currency: NGN
-            status: posted
+            reverses_id: null
             booked_at: '2026-10-23T23:50:04+01:00'
             value_date: '2026-10-23'
             description: NIP TRF TO CHIDI OKAFOR/BANK B/REF 000001261023235004
@@ -891,31 +1163,18 @@ components:
             balance_after_minor: 125034000
         next_cursor: cur_eyJzIjoxMDQyfQ
     ConsentEvent:
-      description: A signed event about a consent ending.
+      description: |
+        A signed event about a consent ending. `jws` is a compact JWS signed with the bank's Registry signing key, so Connect can show it to the partner or to NIBSS. The header has `alg` (`EdDSA`), `kid` (the key ID) and `typ` `consent-event+jwt`. The payload has `iss` (the bank's participant ID), `jti` (the event ID), `type` (`consent.revoked` or `consent.expired`), `consent_id`, `occurred_at` (RFC 3339) and `reason` (`customer_revoked`, `connect_revoked`, `refresh_token_reused` or `expired`).
       type: object
-      required: [id, type, consent_id, occurred_at, reason, key_id, signature]
+      required: [id, jws]
       properties:
         id:
           type: string
-        type:
+          description: The event ID. It equals the `jti` in the payload.
+        jws:
           type: string
-          enum: [consent.revoked, consent.expired]
-        consent_id:
-          type: string
-        occurred_at:
-          type: string
-          format: date-time
-          description: When the consent ended.
-        reason:
-          type: string
-          enum: [customer_revoked, connect_revoked, refresh_token_reused, expired]
-          description: Why the consent ended.
-        key_id:
-          type: string
-          description: The Registry signing key that made the signature.
-        signature:
-          type: string
-          description: A base64 signature over the event's other fields, in the order listed here, joined by newlines.
+          pattern: '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'
+          description: The signed event in compact serialisation.
     ConsentEventList:
       description: One page of consent events.
       type: object
@@ -931,10 +1190,5 @@ components:
       example:
         data:
           - id: cev_01JBD3Q9R5NA
-            type: consent.revoked
-            consent_id: cns_01JBD2M4Q8XT
-            occurred_at: '2026-10-28T15:20:00+01:00'
-            reason: customer_revoked
-            key_id: bank-a-key-1
-            signature: MEUCIQDk3c2m0Zx1b7Wq9v8dYy5oJ4T6sPzE1aXnH2uRrQIgS8
+            jws: eyJhbGciOiJFZERTQSIsImtpZCI6ImJhbmstYS1rZXktMSIsInR5cCI6ImNvbnNlbnQtZXZlbnQrand0In0.eyJpc3MiOiJiYW5rLWEiLCJqdGkiOiJjZXZfMDFKQkQzUTlSNU5BIiwidHlwZSI6ImNvbnNlbnQucmV2b2tlZCIsImNvbnNlbnRfaWQiOiJjbnNfMDFKQkQyTTRROFhUIiwib2NjdXJyZWRfYXQiOiIyMDI2LTEwLTI4VDE1OjIwOjAwKzAxOjAwIiwicmVhc29uIjoiY3VzdG9tZXJfcmV2b2tlZCJ9.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-Pw
         next_cursor: null
