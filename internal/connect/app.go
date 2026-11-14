@@ -57,7 +57,6 @@ type App struct {
 	nibssTried   time.Time
 	nibssOpening bool
 	members      []nip.Participant
-	peerBanks    []*config.Bank
 	settling     bool
 	settleDone   *sync.Cond
 	lifeMu       sync.Mutex
@@ -82,14 +81,15 @@ type App struct {
 	role         string
 	bankID       string
 	coreURL      string
-	replicated   bool
-	synced       atomic.Bool
-	pullMu       sync.Mutex
-	pulledAt     time.Time
-	pullFailed   time.Time
-	pullErr      error
-	pullWarned   string
-	pulling      *pullFlight
+	phased       atomic.Bool
+	phaseGen     atomic.Int64
+	pushWake     chan struct{}
+	dirMu        sync.Mutex
+	dirBanks     []*config.Bank
+	dirAt        time.Time
+	dirClient    *http.Client
+	regAt        time.Time
+	regWarned    string
 	peers        *http.Client
 	probeHTTP    *http.Client
 	eventMu      sync.Mutex
@@ -128,7 +128,8 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		ctlToken:  token,
 		log:       o.Logger,
 		limiters:  map[string]*rate.Limiter{},
-		peers:     &http.Client{Timeout: peerTimeout},
+		peers:     newPeerClient(),
+		pushWake:  make(chan struct{}, 1),
 		probeHTTP: &http.Client{Timeout: probeTimeout},
 		coreURL:   o.CoreURL,
 		bind:      o.Bind,

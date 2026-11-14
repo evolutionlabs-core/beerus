@@ -454,11 +454,18 @@ func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	}
 	h := ob.Handler()
 	unavailable := func(l *ledgerSource) bool {
-		a.freshen()
-		return (a.role == RoleBank && !a.synced.Load()) || a.bankPhase(b.ID) == PhaseSuspended || l == nil || a.bankDown(b.ID, a.clock.Now())
+		return l == nil || a.bankRefusing(b.ID)
 	}
 	guarded := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if unavailable(a.obLedger(b.ID)) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"temporarily_unavailable","error_description":"The bank is not available right now."}`))
+			return
+		}
+		if err := a.refreshRegistry(r.Context()); err != nil {
+			a.log.Error("registry not readable", "bank", b.ID, "err", err)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "30")
 			w.WriteHeader(http.StatusServiceUnavailable)

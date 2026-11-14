@@ -28,7 +28,7 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /faults", a.ctlFaults)
 	mux.HandleFunc("POST /faults", a.ctlAddFault)
 	mux.HandleFunc("DELETE /faults", a.ctlClearFaults)
-	mux.HandleFunc("GET /internal/replica", a.ctlReplica)
+	mux.HandleFunc("GET /internal/registry", a.ctlInternalRegistry)
 	mux.HandleFunc("POST /internal/consents", a.ctlConsentRecord)
 	mux.HandleFunc("POST /banks/{id}/net-debit-cap", a.ctlNetDebitCap)
 	mux.HandleFunc("GET /connections", a.ctlConnections)

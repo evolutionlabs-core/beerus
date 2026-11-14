@@ -81,9 +81,13 @@ func (app *App) BankHandler(id string) http.Handler {
 	mux.HandleFunc("POST /apps/{id}/revoke", a.obRevoke)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("POST /internal/revoke", a.internalRevoke)
+
 	mux.HandleFunc("GET /authorize", a.obAuthorize)
 	mux.HandleFunc("GET /authorize/consent", a.obConsentPage)
 	mux.HandleFunc("POST /authorize/consent", a.obConsentSubmit)
+	if app.role == RoleBank {
+		mux.Handle("/v1/", app.participantAPI())
+	}
 	return a.bankGuard(mux)
 }
 
@@ -99,12 +103,11 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/internal/") {
+		if strings.HasPrefix(r.URL.Path, "/internal/") || strings.HasPrefix(r.URL.Path, "/v1/") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		a.freshen()
-		if a.role == RoleBank && !a.synced.Load() && !strings.HasPrefix(r.URL.Path, "/assets/") {
+		if a.role == RoleBank && !a.phased.Load() && !strings.HasPrefix(r.URL.Path, "/assets/") {
 			http.Error(w, "starting", http.StatusServiceUnavailable)
 			return
 		}
@@ -115,6 +118,13 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 		if r.Method == http.MethodPost {
 			if o := r.Header.Get("Origin"); o != "" && o != "http://"+r.Host {
 				http.Error(w, "cross-origin request refused", http.StatusForbidden)
+				return
+			}
+		}
+		if strings.HasPrefix(r.URL.Path, "/authorize") {
+			if err := a.refreshRegistry(r.Context()); err != nil {
+				a.log.Error("registry not readable", "bank", a.bank.ID, "err", err)
+				http.Error(w, "starting", http.StatusServiceUnavailable)
 				return
 			}
 		}
@@ -461,6 +471,9 @@ func (a *bankSite) obTx(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *bankSite) transferPage(ctx context.Context, s *bankSession, data roomPage) (roomPage, error) {
+	if err := a.refreshBanks(ctx); err != nil {
+		return nil, err
+	}
 	_, accts, err := a.myAccounts(ctx, s.Customer)
 	if err != nil {
 		return nil, err
@@ -544,6 +557,9 @@ func (a *bankSite) obTransferReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req, err := a.obTransferRequest(r.Context(), s, r.PostForm)
+	if err == nil {
+		err = a.refreshBanks(r.Context())
+	}
 	var q TransferResult
 	if err == nil {
 		q, err = a.Quote(req)

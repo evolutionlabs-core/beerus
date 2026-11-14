@@ -192,13 +192,18 @@ func (a *App) bankByID(id string) *config.Bank {
 }
 
 func (a *App) banksLocked() []*config.Bank {
-	if a.role == RoleBank && a.peerBanks != nil {
-		return a.peerBanks
+	if a.role != RoleBank {
+		return a.cfg.Banks
 	}
-	return a.cfg.Banks
+	a.dirMu.Lock()
+	defer a.dirMu.Unlock()
+	return a.dirBanks
 }
 
 func (a *App) bankLocked(id string) *config.Bank {
+	if a.role == RoleBank && id == a.bankID {
+		return a.cfg.Bank(id)
+	}
 	for _, b := range a.banksLocked() {
 		if b.ID == id {
 			return b

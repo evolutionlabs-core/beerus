@@ -267,6 +267,7 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 		return err
 	}
 	a.reconcileNow()
+	a.pokePush()
 	return nil
 }
 

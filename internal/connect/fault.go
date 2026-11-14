@@ -24,6 +24,8 @@ type Fault struct {
 	Left    int        `json:"left,omitempty"`
 	Until   *time.Time `json:"until,omitempty"`
 	At      time.Time  `json:"created_at"`
+
+	ask faultAsk
 }
 
 func (f *Fault) live(now time.Time) bool {
@@ -44,12 +46,26 @@ type FaultRequest struct {
 	For     string `json:"for"`
 }
 
-func (a *App) AddFault(req FaultRequest) (Fault, error) {
-	if a.bankByID(req.Bank) == nil {
-		return Fault{}, errNotFound
+const maxFaultFor = 24 * time.Hour
+
+type faultAsk struct {
+	kind, outcome string
+	count         int
+	forText       string
+}
+
+func askOf(req FaultRequest) faultAsk {
+	ask := faultAsk{kind: req.Kind, outcome: req.Outcome, forText: req.For}
+	if req.Count != nil {
+		ask.count = *req.Count
+	} else if req.Kind == FaultTimeout {
+		ask.count = 1
 	}
-	now := a.clock.Now()
-	f := Fault{ID: newID("flt"), Kind: req.Kind, Bank: req.Bank, At: now}
+	return ask
+}
+
+func newFault(req FaultRequest, now time.Time) (Fault, error) {
+	f := Fault{ID: newID("flt"), Kind: req.Kind, At: now, ask: askOf(req)}
 	switch req.Kind {
 	case FaultDown:
 		if req.Outcome != "" || req.Count != nil {
@@ -59,6 +75,9 @@ func (a *App) AddFault(req FaultRequest) (Fault, error) {
 			d, err := time.ParseDuration(req.For)
 			if err != nil || d <= 0 {
 				return Fault{}, invalid("for %q is not a duration above zero, such as 1h", req.For)
+			}
+			if d > maxFaultFor {
+				return Fault{}, invalid("for %q is above the limit of %s", req.For, maxFaultFor)
 			}
 			until := now.Add(d)
 			f.Until = &until
@@ -81,10 +100,23 @@ func (a *App) AddFault(req FaultRequest) (Fault, error) {
 	default:
 		return Fault{}, invalid("kind %q must be down or timeout", req.Kind)
 	}
+	return f, nil
+}
+
+func (a *App) AddFault(req FaultRequest) (Fault, error) {
+	if a.bankByID(req.Bank) == nil {
+		return Fault{}, errNotFound
+	}
+	f, err := newFault(req, a.clock.Now())
+	if err != nil {
+		return Fault{}, err
+	}
+	f.Bank = req.Bank
 	a.mu.Lock()
 	a.st.Faults = append(a.st.Faults, &f)
 	a.dirty()
 	a.mu.Unlock()
+	a.pokePush()
 	return f, nil
 }
 
@@ -121,6 +153,7 @@ func (a *App) ClearFaults(bank string) int {
 	}
 	a.st.Faults = keep
 	a.dirty()
+	a.pokePush()
 	return n
 }
 

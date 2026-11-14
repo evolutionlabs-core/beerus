@@ -144,6 +144,13 @@ func (a *App) Serve(ctx context.Context) error {
 		a.Run(runCtx)
 		close(done)
 	}()
+	pushDone := make(chan struct{})
+	go func() {
+		defer close(pushDone)
+		if a.role == RoleCore {
+			a.runPush(runCtx)
+		}
+	}()
 	var serr error
 	select {
 	case <-ctx.Done():
@@ -157,6 +164,7 @@ func (a *App) Serve(ctx context.Context) error {
 	a.stopBankSites(shut)
 	cancel()
 	<-done
+	<-pushDone
 	a.closeLedgers()
 	return serr
 }
