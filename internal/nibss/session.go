@@ -30,7 +30,7 @@ func (s *Store) NameEnquiry(ctx context.Context, code, nuban string) (string, er
 	if !nubanRe.MatchString(nuban) {
 		return "", fmt.Errorf("an account number has 10 digits: %w", nip.ErrInvalidAccount)
 	}
-	if in.Status != StatusActive {
+	if in.Status != nip.StatusActive {
 		return "", fmt.Errorf("%s is %s: %w", in.Name, in.Status, nip.ErrUnavailable)
 	}
 	if !world.ValidNUBAN(in.NUBANCode, nuban) {
@@ -70,7 +70,7 @@ func checkBegin(x Session) error {
 		return fmt.Errorf("session %s needs a created time", x.ID)
 	case x.Status != "" && x.Status != SessionPending:
 		return fmt.Errorf("session %s starts pending, not %s", x.ID, x.Status)
-	case !slices.Contains([]string{"", OutcomeCredited, OutcomeFailed, OutcomeUnknown}, x.Outcome):
+	case !slices.Contains([]string{"", nip.OutcomeCredited, nip.OutcomeFailed, nip.OutcomeUnknown}, x.Outcome):
 		return fmt.Errorf("session %s cannot start with outcome %s", x.ID, x.Outcome)
 	case x.Outcome != "" && x.NextTSQAt == nil:
 		return fmt.Errorf("session %s holds outcome %s and needs a status query time", x.ID, x.Outcome)
@@ -105,10 +105,10 @@ func (s *Store) Begin(ctx context.Context, x Session) (Session, error) {
 		if err != nil {
 			return err
 		}
-		if from.Status != StatusActive && !(x.Closure && from.Status == StatusTerminating) {
+		if from.Status != nip.StatusActive && !(x.Closure && from.Status == nip.StatusTerminating) {
 			return fmt.Errorf("%s is %s: %w", from.Name, from.Status, nip.ErrUnavailable)
 		}
-		if to.Status != StatusActive {
+		if to.Status != nip.StatusActive {
 			return fmt.Errorf("%s is %s: %w", to.Name, to.Status, nip.ErrUnavailable)
 		}
 		x.Status = SessionPending
@@ -135,7 +135,7 @@ RETURNING `+sessionCols,
 	return out, nil
 }
 
-func sessionBank(ctx context.Context, tx pgx.Tx, code string) (Institution, error) {
+func sessionBank(ctx context.Context, tx pgx.Tx, code string) (nip.Institution, error) {
 	return institution(ctx, tx, code, "FOR SHARE")
 }
 
@@ -148,9 +148,9 @@ func checkResolve(id, status, outcome string, at time.Time) error {
 	switch {
 	case !resolvedRe.MatchString(status):
 		return fmt.Errorf("session %s: %q is not a response code", id, status)
-	case status == SessionOK && outcome != OutcomeCredited:
+	case status == SessionOK && outcome != nip.OutcomeCredited:
 		return fmt.Errorf("session %s: a 00 session is credited, not %q", id, outcome)
-	case status != SessionOK && outcome != OutcomeFailed && outcome != OutcomeReversed:
+	case status != SessionOK && outcome != nip.OutcomeFailed && outcome != OutcomeReversed:
 		return fmt.Errorf("session %s: a %s session is failed or reversed, not %q", id, status, outcome)
 	case at.IsZero():
 		return fmt.Errorf("session %s needs a resolved time", id)
@@ -176,14 +176,14 @@ func (s *Store) Resolve(ctx context.Context, id, status, outcome string, at time
 		case curStatus == status && curOutcome == outcome:
 			return nil
 		case curStatus == SessionPending:
-			if (curOutcome == OutcomeCredited && status != SessionOK) || (curOutcome == OutcomeFailed && status == SessionOK) {
+			if (curOutcome == nip.OutcomeCredited && status != SessionOK) || (curOutcome == nip.OutcomeFailed && status == SessionOK) {
 				return fmt.Errorf("session %s holds outcome %s and cannot resolve as %s: %w", id, curOutcome, status, errTransition)
 			}
 			if at.Before(created) {
 				return fmt.Errorf("session %s cannot resolve at %s, before it began at %s", id, at.In(clock.Lagos).Format(time.RFC3339), created.In(clock.Lagos).Format(time.RFC3339))
 			}
 			_, err = tx.Exec(ctx, `UPDATE nip_sessions SET status = $2, outcome = $3, resolved_at = $4, next_tsq_at = NULL WHERE session_id = $1`, id, status, outcome, at)
-		case curStatus == status && curOutcome == OutcomeFailed && outcome == OutcomeReversed:
+		case curStatus == status && curOutcome == nip.OutcomeFailed && outcome == OutcomeReversed:
 			_, err = tx.Exec(ctx, `UPDATE nip_sessions SET outcome = $2 WHERE session_id = $1`, id, outcome)
 		default:
 			return fmt.Errorf("session %s is %s/%s and cannot become %s/%s: %w", id, curStatus, curOutcome, status, outcome, errTransition)
@@ -196,7 +196,7 @@ func (s *Store) Resolve(ctx context.Context, id, status, outcome string, at time
 }
 
 func (s *Store) RevokeCredit(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE nip_sessions SET outcome = $2 WHERE session_id = $1 AND status = $3 AND outcome = $4`, id, OutcomeFailed, SessionPending, OutcomeCredited)
+	tag, err := s.pool.Exec(ctx, `UPDATE nip_sessions SET outcome = $2 WHERE session_id = $1 AND status = $3 AND outcome = $4`, id, nip.OutcomeFailed, SessionPending, nip.OutcomeCredited)
 	if err != nil {
 		return fmt.Errorf("revoke credit of session %s: %w", id, err)
 	}
@@ -207,7 +207,7 @@ func (s *Store) RevokeCredit(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if x.Outcome != OutcomeFailed {
+	if x.Outcome != nip.OutcomeFailed {
 		return fmt.Errorf("session %s is %s/%s, so its credit cannot be revoked: %w", id, x.Status, x.Outcome, errTransition)
 	}
 	return nil

@@ -40,7 +40,7 @@ func storedBank(t *testing.T, dir, id string) setup.Resource {
 
 func checkProvisioned(t *testing.T, r setup.Resource) {
 	t.Helper()
-	if r.Phase != setup.PhaseActive || r.ObservedGeneration != r.Generation || r.Attempts != 0 || r.NextAttemptAt != nil {
+	if r.Phase != config.PhaseActive || r.ObservedGeneration != r.Generation || r.Attempts != 0 || r.NextAttemptAt != nil {
 		t.Errorf("%s: phase %s generation %d/%d attempts %d next %v", r.ID, r.Phase, r.ObservedGeneration, r.Generation, r.Attempts, r.NextAttemptAt)
 	}
 	for _, step := range createSteps {
@@ -113,7 +113,7 @@ func TestRestartResumesProvisioning(t *testing.T) {
 	for i := range st.Resources {
 		r := &st.Resources[i]
 		if r.Kind == setup.KindBank && r.ID == "bank-b" {
-			r.Phase = setup.PhaseProvisioning
+			r.Phase = config.PhaseProvisioning
 			r.Steps = map[string]string{setup.StepAllocate: "done", setup.StepDirectory: "done"}
 			r.Attempts, r.NextAttemptAt = 3, &later
 		}

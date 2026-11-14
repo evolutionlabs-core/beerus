@@ -11,6 +11,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -47,7 +48,7 @@ func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
 	return PlanReply{Plan: plan, Text: setup.Render(plan), Changed: changes(plan), Warning: warning}, nil
 }
 
-func offlineDirectory(cfg *config.Config) ([]nibss.Institution, error) {
+func offlineDirectory(cfg *config.Config) ([]nip.Institution, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), offlineTimeout)
 	defer cancel()
 	name := config.DatabaseName(cfg.Dir, setup.SystemNIBSS)
@@ -66,7 +67,7 @@ func offlineDirectory(cfg *config.Config) ([]nibss.Institution, error) {
 	return s.Directory(ctx)
 }
 
-func keepTombstone(st *setup.Status, in nibss.Institution) {
-	st.Tombstones = slices.DeleteFunc(st.Tombstones, func(x nibss.Institution) bool { return x.ID == in.ID })
+func keepTombstone(st *setup.Status, in nip.Institution) {
+	st.Tombstones = slices.DeleteFunc(st.Tombstones, func(x nip.Institution) bool { return x.ID == in.ID })
 	st.Tombstones = append(st.Tombstones, in)
 }

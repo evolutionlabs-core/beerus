@@ -444,7 +444,7 @@ func TestCloseBank(t *testing.T) {
 		t.Fatalf("fault without a count: %v", got)
 	}
 	accepted := s.ctl("POST", "/banks/abuja-digital/close", map[string]any{"money": "transfer", "to": "bank-a", "customers": map[string]string{opened["tunde"].Customer: "leave"}})
-	if accepted["phase"] != setup.PhaseClosing || accepted["deletion_requested_at"] == nil {
+	if accepted["phase"] != config.PhaseClosing || accepted["deletion_requested_at"] == nil {
 		t.Fatalf("close was not admitted as closing: %v", accepted)
 	}
 	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦35,000.00). Wait for it, or run beerus nip settle-now.")

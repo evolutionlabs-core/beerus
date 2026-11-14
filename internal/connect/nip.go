@@ -56,7 +56,7 @@ func (a *App) NameEnquiry(code, nuban string) (server.NameEnquiry, error) {
 	}
 	ctx := context.Background()
 	in, err := sw.Institution(ctx, code)
-	if errors.Is(err, nibss.ErrUnknownInstitution) {
+	if errors.Is(err, nip.ErrUnknownInstitution) {
 		out.Message = fmt.Sprintf("Bank code %s is not in the NIBSS directory.", code)
 		return out, nil
 	}
@@ -111,11 +111,11 @@ func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	out := []map[string]any{}
 	for _, in := range list {
-		if in.Status == nibss.StatusRemoved {
+		if in.Status == nip.StatusRemoved {
 			continue
 		}
 		status := in.Status
-		if status == nibss.StatusActive && a.bankDownLocked(in.ID, now) {
+		if status == nip.StatusActive && a.bankDownLocked(in.ID, now) {
 			status = "outage"
 		}
 		out = append(out, map[string]any{"nip_code": in.NIPCode, "name": in.Name, "bank_id": in.ID, "status": status})
@@ -325,7 +325,7 @@ func (a *App) ctlBankQuote(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "from and to are required account numbers.")
 		return
 	}
-	res, err := a.Quote(server.TransferRequest{FromBank: r.PathValue("id"), From: body.From, ToBank: body.ToBank, To: body.To, Amount: amount, Narration: body.Narration})
+	res, err := a.Quote(r.Context(), server.TransferRequest{FromBank: r.PathValue("id"), From: body.From, ToBank: body.ToBank, To: body.To, Amount: amount, Narration: body.Narration})
 	a.transferReply(r, res, err).write(w)
 }
 

@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 const (
@@ -24,7 +24,7 @@ const (
 
 var ErrUnavailable = errors.New("the NIBSS directory is not open")
 
-type Lister func(ctx context.Context) ([]nibss.Institution, error)
+type Lister func(ctx context.Context) ([]nip.Institution, error)
 
 type server struct {
 	list Lister
@@ -38,8 +38,8 @@ type apiError struct {
 }
 
 type bankPage struct {
-	Data       []nibss.Institution `json:"data"`
-	NextCursor string              `json:"next_cursor,omitempty"`
+	Data       []nip.Institution `json:"data"`
+	NextCursor string            `json:"next_cursor,omitempty"`
 }
 
 func New(list Lister, log *slog.Logger) http.Handler {
@@ -81,8 +81,8 @@ func callerBank(r *http.Request) (string, bool) {
 	return leaf.Subject.CommonName, slices.Contains(leaf.Subject.OrganizationalUnit, config.BankRole)
 }
 
-func listed(all []nibss.Institution, id string) bool {
-	return slices.ContainsFunc(all, func(in nibss.Institution) bool { return in.ID == id && in.Status != nibss.StatusRemoved })
+func listed(all []nip.Institution, id string) bool {
+	return slices.ContainsFunc(all, func(in nip.Institution) bool { return in.ID == id && in.Status != nip.StatusRemoved })
 }
 
 func (s *server) banks(w http.ResponseWriter, r *http.Request) {
@@ -128,17 +128,17 @@ func pageLimit(r *http.Request) (int, bool) {
 	return n, err == nil && n >= 1 && n <= maxLimit
 }
 
-func paginate(all []nibss.Institution, cursor string, limit int) (bankPage, error) {
-	kept := make([]nibss.Institution, 0, len(all))
+func paginate(all []nip.Institution, cursor string, limit int) (bankPage, error) {
+	kept := make([]nip.Institution, 0, len(all))
 	for _, in := range all {
-		if in.Status != nibss.StatusRemoved {
+		if in.Status != nip.StatusRemoved {
 			kept = append(kept, in)
 		}
 	}
-	slices.SortFunc(kept, func(a, b nibss.Institution) int { return strings.Compare(a.NIPCode, b.NIPCode) })
+	slices.SortFunc(kept, func(a, b nip.Institution) int { return strings.Compare(a.NIPCode, b.NIPCode) })
 	start := 0
 	if cursor != "" {
-		i := slices.IndexFunc(kept, func(in nibss.Institution) bool { return in.NIPCode == cursor })
+		i := slices.IndexFunc(kept, func(in nip.Institution) bool { return in.NIPCode == cursor })
 		if i < 0 {
 			return bankPage{}, errors.New("unknown cursor")
 		}

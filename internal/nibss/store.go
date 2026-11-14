@@ -17,6 +17,7 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 //go:embed migrations/*.sql
@@ -29,10 +30,10 @@ const maxConns = 8
 var errTransition = errors.New("status change not allowed")
 
 var transitions = map[string][]string{
-	StatusActive:      {StatusSuspended, StatusTerminating},
-	StatusSuspended:   {StatusActive, StatusTerminating},
-	StatusTerminating: {StatusRemoved},
-	StatusRemoved:     {},
+	nip.StatusActive:      {nip.StatusSuspended, nip.StatusTerminating},
+	nip.StatusSuspended:   {nip.StatusActive, nip.StatusTerminating},
+	nip.StatusTerminating: {nip.StatusRemoved},
+	nip.StatusRemoved:     {},
 }
 
 type Participant interface {
@@ -174,19 +175,19 @@ type querier interface {
 
 const institutionCols = `id, name, nip_code, nuban_code, type, status`
 
-func scanInstitution(row pgx.Row) (Institution, error) {
-	var in Institution
+func scanInstitution(row pgx.Row) (nip.Institution, error) {
+	var in nip.Institution
 	err := row.Scan(&in.ID, &in.Name, &in.NIPCode, &in.NUBANCode, &in.Type, &in.Status)
 	return in, err
 }
 
-func (s *Store) Directory(ctx context.Context) ([]Institution, error) {
+func (s *Store) Directory(ctx context.Context) ([]nip.Institution, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+institutionCols+` FROM institutions ORDER BY nip_code`)
 	if err != nil {
 		return nil, fmt.Errorf("list institutions: %w", err)
 	}
 	defer rows.Close()
-	out := []Institution{}
+	out := []nip.Institution{}
 	for rows.Next() {
 		in, err := scanInstitution(rows)
 		if err != nil {
@@ -200,17 +201,17 @@ func (s *Store) Directory(ctx context.Context) ([]Institution, error) {
 	return out, nil
 }
 
-func (s *Store) Institution(ctx context.Context, code string) (Institution, error) {
+func (s *Store) Institution(ctx context.Context, code string) (nip.Institution, error) {
 	return institution(ctx, s.pool, code, "")
 }
 
-func institution(ctx context.Context, q querier, code, lock string) (Institution, error) {
+func institution(ctx context.Context, q querier, code, lock string) (nip.Institution, error) {
 	in, err := scanInstitution(q.QueryRow(ctx, `SELECT `+institutionCols+` FROM institutions WHERE nip_code = $1 `+lock, code))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Institution{}, fmt.Errorf("bank code %s is %w", code, ErrUnknownInstitution)
+		return nip.Institution{}, fmt.Errorf("bank code %s is %w", code, nip.ErrUnknownInstitution)
 	}
 	if err != nil {
-		return Institution{}, fmt.Errorf("look up institution %s: %w", code, err)
+		return nip.Institution{}, fmt.Errorf("look up institution %s: %w", code, err)
 	}
 	return in, nil
 }
@@ -223,7 +224,7 @@ func (s *Store) SetStatus(ctx context.Context, id, status string) error {
 		var cur string
 		err := tx.QueryRow(ctx, `SELECT status FROM institutions WHERE id = $1 FOR UPDATE`, id).Scan(&cur)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("bank id %s is %w", id, ErrUnknownInstitution)
+			return fmt.Errorf("bank id %s is %w", id, nip.ErrUnknownInstitution)
 		}
 		if err != nil {
 			return fmt.Errorf("look up institution %s: %w", id, err)

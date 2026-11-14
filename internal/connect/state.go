@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
@@ -309,5 +308,5 @@ func newSecret(prefix string, n int) string {
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
 	}
-	return prefix + strings.ToLower(web.IDEncoding.EncodeToString(b))
+	return prefix + web.Encode(b)
 }

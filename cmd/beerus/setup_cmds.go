@@ -330,7 +330,7 @@ func (t target) label() string { return strings.ToLower(t.kind) + " " + t.id }
 
 func ready(r setup.Resource) bool {
 	switch r.Phase {
-	case setup.PhaseActive, setup.PhaseSuspended, setup.PhaseClosed:
+	case config.PhaseActive, config.PhaseSuspended, config.PhaseClosed:
 		return r.ObservedGeneration == r.Generation
 	}
 	return false
@@ -341,7 +341,7 @@ func finished(t target, r *setup.Resource) bool {
 	case setup.OpRemove:
 		return r == nil
 	case setup.OpClose:
-		return r != nil && r.Phase == setup.PhaseClosed
+		return r != nil && r.Phase == config.PhaseClosed
 	case opFinish, setup.OpUpdate:
 		return r == nil || ready(*r)
 	}
@@ -512,7 +512,7 @@ func (e *cli) wait(ctx context.Context, c *ctl, p planReply, wait time.Duration,
 		return err
 	}
 	for _, r := range res {
-		busy := r.Phase == setup.PhaseClosing || r.Phase == setup.PhaseTerminating
+		busy := r.Phase == config.PhaseClosing || r.Phase == config.PhaseTerminating
 		if !busy {
 			continue
 		}
@@ -551,7 +551,7 @@ func (e *cli) wait(ctx context.Context, c *ctl, p planReply, wait time.Duration,
 			if !strings.EqualFold(t.kind, setup.KindBank) {
 				continue
 			}
-			if r := findResource(res, t.kind, t.id); r == nil || r.Phase == setup.PhaseClosed {
+			if r := findResource(res, t.kind, t.id); r == nil || r.Phase == config.PhaseClosed {
 				if err := awaitPortsFree(ctx, t.id, ports[t.id]); err != nil {
 					return err
 				}

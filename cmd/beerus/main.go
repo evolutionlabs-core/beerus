@@ -494,7 +494,7 @@ func waitBank(ctx context.Context, c *ctl, first bankProgress, clk *clock.Clock)
 			fmt.Println(stepLine(s.Name, width, true, stepTime(s.StartedAt, s.At)))
 		}
 		if st.Phase != "provisioning" && shown == len(st.Steps) {
-			if st.Phase == setup.PhaseActive {
+			if st.Phase == config.PhaseActive {
 				return st, awaitBankSite(ctx, st)
 			}
 			return st, nil

@@ -53,7 +53,7 @@ func CheckStart(dir string) error {
 	if !found {
 		return fmt.Errorf("no Beerus setup in %s. Run beerus init first.", dir)
 	}
-	if systemPhase(st, setup.SystemCBN) == setup.PhaseProvisioning {
+	if systemPhase(st, setup.SystemCBN) == config.PhaseProvisioning {
 		return fmt.Errorf("the setup in %s is not finished. Run beerus init again to finish it.", dir)
 	}
 	return nil
@@ -100,7 +100,7 @@ func Install(ctx context.Context, dir string, spec setup.Spec, local setup.Local
 	if err != nil {
 		return err
 	}
-	if found && systemPhase(st, setup.SystemCBN) == setup.PhaseActive && systemPhase(st, setup.SystemNIBSS) == setup.PhaseActive {
+	if found && systemPhase(st, setup.SystemCBN) == config.PhaseActive && systemPhase(st, setup.SystemNIBSS) == config.PhaseActive {
 		return fmt.Errorf("%s is already set up. Run beerus up to start it.", dir)
 	}
 	in := &installer{clock: clock.New(nil), report: report}
@@ -227,7 +227,7 @@ func (in *installer) ensure(ctl *ctlStore, st setup.Status, system, step, name s
 			if slices.ContainsFunc(all, func(id string) bool { return r.Steps[id] != stepDone }) {
 				return true, nil
 			}
-			r.Phase = setup.PhaseActive
+			r.Phase = config.PhaseActive
 			return true, nil
 		})
 	})

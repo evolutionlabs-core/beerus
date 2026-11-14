@@ -10,6 +10,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -100,7 +101,7 @@ func (a *App) inflightWith(ctx context.Context, code, id string) (string, error)
 		if x.FromCode == code {
 			net -= x.Amount
 		}
-		if x.ToCode == code && (x.Status == nibss.SessionOK || x.Outcome == nibss.OutcomeCredited) {
+		if x.ToCode == code && (x.Status == nibss.SessionOK || x.Outcome == nip.OutcomeCredited) {
 			net += x.Amount
 		}
 	}

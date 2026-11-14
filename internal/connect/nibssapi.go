@@ -5,8 +5,8 @@ import (
 	"crypto/tls"
 	"fmt"
 
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nibss/gateway"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
@@ -22,7 +22,7 @@ func (a *App) NIBSSTLS() (*tls.Config, error) {
 	return &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12}, nil
 }
 
-func (a *App) listDirectory(ctx context.Context) ([]nibss.Institution, error) {
+func (a *App) listDirectory(ctx context.Context) ([]nip.Institution, error) {
 	s := a.nibssStore()
 	if s == nil {
 		return nil, gateway.ErrUnavailable

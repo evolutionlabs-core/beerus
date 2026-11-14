@@ -22,8 +22,8 @@ import (
 	validator "github.com/pb33f/libopenapi-validator"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nibss/gateway"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
@@ -37,11 +37,11 @@ const (
 
 var requestID = regexp.MustCompile(`"request_id":"req_[A-Za-z0-9]+"`)
 
-var directory = []nibss.Institution{
-	{ID: "bank-b", Name: "Bank B", NIPCode: "000015", NUBANCode: "015", Type: "digital", Status: nibss.StatusSuspended},
-	{ID: "bank-a", Name: "Bank A", NIPCode: "000014", NUBANCode: "014", Type: "commercial", Status: nibss.StatusActive},
-	{ID: "bank-c", Name: "Bank C", NIPCode: "000016", NUBANCode: "016", Type: "microfinance", Status: nibss.StatusTerminating},
-	{ID: "bank-d", Name: "Bank D", NIPCode: "000017", NUBANCode: "017", Type: "commercial", Status: nibss.StatusRemoved},
+var directory = []nip.Institution{
+	{ID: "bank-b", Name: "Bank B", NIPCode: "000015", NUBANCode: "015", Type: "digital", Status: nip.StatusSuspended},
+	{ID: "bank-a", Name: "Bank A", NIPCode: "000014", NUBANCode: "014", Type: "commercial", Status: nip.StatusActive},
+	{ID: "bank-c", Name: "Bank C", NIPCode: "000016", NUBANCode: "016", Type: "microfinance", Status: nip.StatusTerminating},
+	{ID: "bank-d", Name: "Bank D", NIPCode: "000017", NUBANCode: "017", Type: "commercial", Status: nip.StatusRemoved},
 }
 
 func leafConfig(t *testing.T, leaf *pki.Leaf, ca *pki.Authority) *tls.Config {
@@ -83,7 +83,7 @@ func newStack(t *testing.T) *stack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list := func(context.Context) ([]nibss.Institution, error) {
+	list := func(context.Context) ([]nip.Institution, error) {
 		if s.down.Load() {
 			return nil, errors.New("directory closed")
 		}
@@ -171,7 +171,7 @@ func (s *stack) call(t *testing.T, client, method, path string, validate bool) r
 	return reply{resp.StatusCode, requestID.ReplaceAllString(strings.TrimSpace(string(raw)), `"request_id":"req_ID"`), resp.Header.Get("Allow")}
 }
 
-func bankJSON(in nibss.Institution) string {
+func bankJSON(in nip.Institution) string {
 	return fmt.Sprintf(`{"id":%q,"name":%q,"nip_code":%q,"nuban_code":%q,"type":%q,"status":%q}`, in.ID, in.Name, in.NIPCode, in.NUBANCode, in.Type, in.Status)
 }
 

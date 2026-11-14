@@ -226,7 +226,7 @@ func settleTargets(pl planned) []string {
 		}
 	}
 	for _, r := range pl.st.Resources {
-		if r.Kind == setup.KindBank && (r.Phase == setup.PhaseClosing || r.Phase == setup.PhaseTerminating) && !slices.Contains(out, r.ID) {
+		if r.Kind == setup.KindBank && (r.Phase == config.PhaseClosing || r.Phase == config.PhaseTerminating) && !slices.Contains(out, r.ID) {
 			out = append(out, r.ID)
 		}
 	}
@@ -276,7 +276,7 @@ func andList(xs []string) string {
 
 func moneyOpen(st *setup.Status, id string) bool {
 	r := findResource(st, setup.KindBank, id)
-	return r == nil || (r.Phase != setup.PhaseClosed && !slices.Contains(r.Done, setup.FinalizerDecideMoney))
+	return r == nil || (r.Phase != config.PhaseClosed && !slices.Contains(r.Done, setup.FinalizerDecideMoney))
 }
 
 func withMoney(desired setup.Spec, st *setup.Status, rm *setup.Removal) setup.Spec {
@@ -306,7 +306,7 @@ func retargeted(st setup.Status, rm *setup.Removal) map[string]bool {
 		return out
 	}
 	for _, r := range st.Resources {
-		if r.Kind == setup.KindBank && (r.Phase == setup.PhaseClosing || r.Phase == setup.PhaseTerminating) && moneyOpen(&st, r.ID) && (!reflect.DeepEqual(r.Money, rm) || waitingOnMoney(r)) {
+		if r.Kind == setup.KindBank && (r.Phase == config.PhaseClosing || r.Phase == config.PhaseTerminating) && moneyOpen(&st, r.ID) && (!reflect.DeepEqual(r.Money, rm) || waitingOnMoney(r)) {
 			out[r.ID] = true
 		}
 	}
@@ -702,7 +702,7 @@ func admitBank(st *setup.Status, act setup.Action, ad *admission, fields map[str
 			Kind:       setup.KindBank,
 			ID:         act.ID,
 			Generation: gen,
-			Phase:      setup.PhaseProvisioning,
+			Phase:      config.PhaseProvisioning,
 			Allocated: setup.Allocation{
 				NIPCode:   fields[fieldNIPCode],
 				NUBANCode: fields[fieldNUBANCode],
@@ -719,12 +719,12 @@ func admitBank(st *setup.Status, act setup.Action, ad *admission, fields map[str
 	case setup.OpClose:
 		if r := findResource(st, setup.KindBank, act.ID); r != nil {
 			d, _ := bankIn(ad.pl.desired, act.ID)
-			leaving(r, setup.PhaseClosing, finalizerNames(bankFinalizers)[:len(bankFinalizers)-1], d.OnRemove, ad.now)
+			leaving(r, config.PhaseClosing, finalizerNames(bankFinalizers)[:len(bankFinalizers)-1], d.OnRemove, ad.now)
 		}
 	case setup.OpRemove:
 		if r := findResource(st, setup.KindBank, act.ID); r != nil {
 			b, _ := bankIn(ad.pl.st.Applied, act.ID)
-			leaving(r, setup.PhaseTerminating, finalizerNames(bankFinalizers), b.OnRemove, ad.now)
+			leaving(r, config.PhaseTerminating, finalizerNames(bankFinalizers), b.OnRemove, ad.now)
 		}
 	}
 }
@@ -740,7 +740,7 @@ func admitPartner(st *setup.Status, act setup.Action, ad *admission) {
 			ID:                 act.ID,
 			Generation:         gen,
 			ObservedGeneration: gen,
-			Phase:              setup.PhaseActive,
+			Phase:              config.PhaseActive,
 			Partner:            &setup.PartnerKeys{CertCN: p.CertCN, APIKeySHA256: p.APIKeySHA256, CertSHA256: p.CertSHA256},
 			Owned:              []setup.Owned{{Kind: ownedDir, Name: "partners/" + act.ID}},
 		}
@@ -750,7 +750,7 @@ func admitPartner(st *setup.Status, act setup.Action, ad *admission) {
 		}
 	case setup.OpRemove:
 		if r := findResource(st, setup.KindPartner, act.ID); r != nil {
-			leaving(r, setup.PhaseTerminating, finalizerNames(partnerFinalizers), nil, ad.now)
+			leaving(r, config.PhaseTerminating, finalizerNames(partnerFinalizers), nil, ad.now)
 		}
 	}
 }

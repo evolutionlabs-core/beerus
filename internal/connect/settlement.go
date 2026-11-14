@@ -15,6 +15,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -96,10 +97,10 @@ func openRTGS(ctx context.Context, cfg *config.Config, ctl *ctlStore, clk *clock
 	}
 	if err := ctl.update(func(s *setup.Status) (bool, error) {
 		res := ensureResource(s, setup.KindSystem, setup.SystemCBN)
-		if res.Phase == setup.PhaseActive {
+		if res.Phase == config.PhaseActive {
 			return false, nil
 		}
-		res.Phase = setup.PhaseActive
+		res.Phase = config.PhaseActive
 		return true, nil
 	}); err != nil {
 		st.Close()
@@ -510,7 +511,7 @@ func (s settlementBooks) check(l *ledgerSource) ([]string, error) {
 		if x.FromCode == code {
 			want.outward += x.Amount
 		}
-		if x.ToCode == code && (x.Status == nibss.SessionOK || x.Outcome == nibss.OutcomeCredited) {
+		if x.ToCode == code && (x.Status == nibss.SessionOK || x.Outcome == nip.OutcomeCredited) {
 			want.inward += x.Amount
 		}
 	}

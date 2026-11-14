@@ -29,10 +29,10 @@ func openNIBSS(ctx context.Context, cfg *config.Config, ctl *ctlStore) (*nibss.S
 	}
 	if err := ctl.update(func(st *setup.Status) (bool, error) {
 		r := ensureResource(st, setup.KindSystem, setup.SystemNIBSS)
-		if r.Phase == setup.PhaseActive {
+		if r.Phase == config.PhaseActive {
 			return false, nil
 		}
-		r.Phase = setup.PhaseActive
+		r.Phase = config.PhaseActive
 		return true, nil
 	}); err != nil {
 		s.Close()
@@ -81,9 +81,9 @@ func (a *App) syncDirectory(s *nibss.Store) error {
 	for _, in := range list {
 		status, member := want[in.ID]
 		switch {
-		case in.Status == nibss.StatusRemoved:
+		case in.Status == nip.StatusRemoved:
 		case !member:
-			for _, next := range []string{nibss.StatusTerminating, nibss.StatusRemoved} {
+			for _, next := range []string{nip.StatusTerminating, nip.StatusRemoved} {
 				if in.Status == next {
 					continue
 				}
@@ -91,7 +91,7 @@ func (a *App) syncDirectory(s *nibss.Store) error {
 					return fmt.Errorf("set NIBSS status of %s to %s: %w", in.ID, next, err)
 				}
 			}
-		case in.Status != status && in.Status != nibss.StatusTerminating:
+		case in.Status != status && in.Status != nip.StatusTerminating:
 			if err := s.SetStatus(ctx, in.ID, status); err != nil {
 				return fmt.Errorf("set NIBSS status of %s to %s: %w", in.ID, status, err)
 			}
@@ -116,15 +116,15 @@ func (a *App) dropNIBSS(ctx context.Context) error {
 	return a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
 }
 
-func memberOf(b *config.Bank) nibss.Institution {
-	return nibss.Institution{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Type: b.Type}
+func memberOf(b *config.Bank) nip.Institution {
+	return nip.Institution{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Type: b.Type}
 }
 
 func memberStatus(b *config.Bank) string {
 	if b.Suspended() || b.Closed() {
-		return nibss.StatusSuspended
+		return nip.StatusSuspended
 	}
-	return nibss.StatusActive
+	return nip.StatusActive
 }
 
 func (a *App) registerMember(b *config.Bank) error {
@@ -136,7 +136,7 @@ func (a *App) registerMember(b *config.Bank) error {
 	if err := s.Register(ctx, memberOf(b)); err != nil {
 		return fmt.Errorf("register %s with NIBSS: %w", b.ID, err)
 	}
-	if in, err := s.Institution(ctx, b.NIPCode); err != nil || in.Status != nibss.StatusTerminating {
+	if in, err := s.Institution(ctx, b.NIPCode); err != nil || in.Status != nip.StatusTerminating {
 		if err := s.SetStatus(ctx, b.ID, memberStatus(b)); err != nil {
 			return fmt.Errorf("set NIBSS status of %s: %w", b.ID, err)
 		}
@@ -184,15 +184,15 @@ func (a *App) stopRouting(ctx context.Context, r setup.Resource) (*setup.Conditi
 	if sw == nil {
 		return nil, errors.New("NIBSS is not open, so routing to the bank cannot be stopped; try again soon")
 	}
-	if err := a.setMemberStatus(ctx, r.ID, nibss.StatusTerminating); err != nil {
+	if err := a.setMemberStatus(ctx, r.ID, nip.StatusTerminating); err != nil {
 		return nil, err
 	}
 	in, err := sw.Institution(ctx, r.Allocated.NIPCode)
 	if err != nil {
 		return nil, fmt.Errorf("read back the NIBSS status of %s: %w", r.ID, err)
 	}
-	if in.Status != nibss.StatusTerminating {
-		return nil, fmt.Errorf("NIBSS shows %s as %s, not %s", r.ID, in.Status, nibss.StatusTerminating)
+	if in.Status != nip.StatusTerminating {
+		return nil, fmt.Errorf("NIBSS shows %s as %s, not %s", r.ID, in.Status, nip.StatusTerminating)
 	}
 	return nil, nil
 }
@@ -215,8 +215,8 @@ func (a *App) removeMember(ctx context.Context, id string) error {
 			cur = in.Status
 		}
 	}
-	for _, status := range []string{nibss.StatusTerminating, nibss.StatusRemoved} {
-		if cur == nibss.StatusRemoved || cur == "" {
+	for _, status := range []string{nip.StatusTerminating, nip.StatusRemoved} {
+		if cur == nip.StatusRemoved || cur == "" {
 			break
 		}
 		if cur == status {
@@ -243,7 +243,7 @@ func (a *App) refreshDirectory(ctx context.Context) error {
 	}
 	members := make([]nip.Participant, 0, len(list))
 	for _, in := range list {
-		if in.Status != nibss.StatusRemoved {
+		if in.Status != nip.StatusRemoved {
 			members = append(members, nip.Participant{Code: in.NIPCode, Name: in.Name, BankID: in.ID})
 		}
 	}
@@ -251,10 +251,6 @@ func (a *App) refreshDirectory(ctx context.Context) error {
 	a.members = members
 	a.mu.Unlock()
 	return nil
-}
-
-func (a *App) directoryLocked() *nip.Directory {
-	return nip.NewDirectory(a.members, nil)
 }
 
 const removedSuffix = " (removed)"
@@ -273,7 +269,7 @@ func (a *App) markRemoved(ctx context.Context, lines []bank.FeedLine) error {
 	}
 	removed := map[string]bool{}
 	for _, in := range directory {
-		removed[in.NIPCode] = in.Status == nibss.StatusRemoved
+		removed[in.NIPCode] = in.Status == nip.StatusRemoved
 	}
 	for _, l := range lines {
 		if cp := l.Counterparty; cp != nil && removed[cp.BankCode] && !strings.HasSuffix(cp.BankName, removedSuffix) {

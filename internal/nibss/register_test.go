@@ -3,10 +3,12 @@ package nibss
 import (
 	"context"
 	"testing"
+
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
-func member(id, name, code, nuban string) Institution {
-	return Institution{ID: id, Name: name, NIPCode: code, NUBANCode: nuban, Type: "commercial"}
+func member(id, name, code, nuban string) nip.Institution {
+	return nip.Institution{ID: id, Name: name, NIPCode: code, NUBANCode: nuban, Type: "commercial"}
 }
 
 func TestRegister(t *testing.T) {
@@ -19,11 +21,11 @@ func TestRegister(t *testing.T) {
 		}
 	}
 	got, err := s.Institution(ctx, "999001")
-	want := Institution{ID: "bank-a", Name: "Member A", NIPCode: "999001", NUBANCode: "901", Type: "commercial", Status: StatusActive}
+	want := nip.Institution{ID: "bank-a", Name: "Member A", NIPCode: "999001", NUBANCode: "901", Type: "commercial", Status: nip.StatusActive}
 	if err != nil || got != want {
 		t.Fatalf("registered: %+v, %v", got, err)
 	}
-	if err := s.SetStatus(ctx, "bank-a", StatusSuspended); err != nil {
+	if err := s.SetStatus(ctx, "bank-a", nip.StatusSuspended); err != nil {
 		t.Fatal(err)
 	}
 	rebrand := a
@@ -32,7 +34,7 @@ func TestRegister(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ = s.Institution(ctx, "999001")
-	if got.Name != "Member A Plc" || got.Type != "digital" || got.Status != StatusSuspended {
+	if got.Name != "Member A Plc" || got.Type != "digital" || got.Status != nip.StatusSuspended {
 		t.Fatalf("rebrand: %+v", got)
 	}
 	dir, _ := s.Directory(ctx)
@@ -46,13 +48,13 @@ func TestRegisterRefusals(t *testing.T) {
 	s := testStore(t)
 	register(t, s, "bank-a", "Member A", "999001", "901")
 	register(t, s, "bank-gone", "Gone Bank", "999009", "909")
-	for _, st := range []string{StatusTerminating, StatusRemoved} {
+	for _, st := range []string{nip.StatusTerminating, nip.StatusRemoved} {
 		if err := s.SetStatus(ctx, "bank-gone", st); err != nil {
 			t.Fatal(err)
 		}
 	}
 	cases := []struct {
-		in   Institution
+		in   nip.Institution
 		want string
 	}{
 		{member("bank-a", "Member A", "999001", "911"), "bank bank-a has codes 999001/901 and they cannot change to 999001/911"},
@@ -74,6 +76,6 @@ func TestRegisterRefusals(t *testing.T) {
 		t.Fatalf("a removed bank's name is free again: %v", err)
 	}
 	suspended := member("bank-x", "X", "999031", "931")
-	suspended.Status = StatusSuspended
+	suspended.Status = nip.StatusSuspended
 	wantErr(t, s.Register(ctx, suspended), "bank bank-x registers as active, not suspended; use SetStatus to change it")
 }

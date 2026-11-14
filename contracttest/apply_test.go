@@ -40,7 +40,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 	}
 	settled := func(kind, id string) map[string]any {
 		return s.waitResource(kind, id, 60*time.Second, func(r map[string]any) bool {
-			return r != nil && r["phase"] == setup.PhaseActive && r["observed_generation"] == r["generation"]
+			return r != nil && r["phase"] == config.PhaseActive && r["observed_generation"] == r["generation"]
 		})
 	}
 
@@ -198,7 +198,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 	if _, err := post("/apply", withP, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.waitResource("partner", "ledgerly", 60*time.Second, func(r map[string]any) bool { return r["observed_generation"] == float64(2) }); got["phase"] != setup.PhaseActive {
+	if got := s.waitResource("partner", "ledgerly", 60*time.Second, func(r map[string]any) bool { return r["observed_generation"] == float64(2) }); got["phase"] != config.PhaseActive {
 		t.Fatalf("partner update: %v", got)
 	}
 	if got := s.loadConfig().Partner("ledgerly"); got == nil || got.WebhookURL != "https://ledgerly.localhost/hook" {

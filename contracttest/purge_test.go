@@ -67,7 +67,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("purge preview: %v", imp)
 	}
 	atBankA := s.balances(home)[home.Accounts[0]]
-	if res := s.ctl("POST", "/banks/abuja-digital/purge", nil); res["phase"] != setup.PhaseTerminating {
+	if res := s.ctl("POST", "/banks/abuja-digital/purge", nil); res["phase"] != config.PhaseTerminating {
 		t.Fatalf("purge was not admitted as terminating: %v", res)
 	}
 	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦25,100.00). Wait for it, or run beerus nip settle-now.")

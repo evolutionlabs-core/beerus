@@ -569,7 +569,7 @@ func (a *bankSite) obTransferReview(w http.ResponseWriter, r *http.Request) {
 	}
 	var q server.TransferResult
 	if err == nil {
-		q, err = a.Quote(req)
+		q, err = a.Quote(r.Context(), req)
 	}
 	if err != nil {
 		a.transferFailed(w, r, s, err)

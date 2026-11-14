@@ -4,8 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 const (
@@ -31,14 +30,6 @@ const (
 	OutcomeTransferred = "transferred"
 	OutcomeClaim       = "claim"
 	OutcomeLeft        = "left"
-
-	PhaseProvisioning = config.PhaseProvisioning
-	PhaseActive       = config.PhaseActive
-	PhaseSuspended    = config.PhaseSuspended
-	PhaseRepairing    = config.PhaseRepairing
-	PhaseClosing      = config.PhaseClosing
-	PhaseClosed       = config.PhaseClosed
-	PhaseTerminating  = config.PhaseTerminating
 
 	OpCreate = "create"
 	OpUpdate = "update"
@@ -197,14 +188,14 @@ type PartnerLocal struct {
 }
 
 type Status struct {
-	Version       int                 `json:"version"`
-	Setup         string              `json:"setup"`
-	SetupKey      uint64              `json:"setup_key,string"`
-	Applied       Spec                `json:"applied"`
-	AppliedSHA256 string              `json:"applied_sha256"`
-	Resources     []Resource          `json:"resources"`
-	Tombstones    []nibss.Institution `json:"tombstones,omitempty"`
-	Closures      []Closure           `json:"closures,omitempty"`
+	Version       int               `json:"version"`
+	Setup         string            `json:"setup"`
+	SetupKey      uint64            `json:"setup_key,string"`
+	Applied       Spec              `json:"applied"`
+	AppliedSHA256 string            `json:"applied_sha256"`
+	Resources     []Resource        `json:"resources"`
+	Tombstones    []nip.Institution `json:"tombstones,omitempty"`
+	Closures      []Closure         `json:"closures,omitempty"`
 }
 
 type ClosureLine struct {

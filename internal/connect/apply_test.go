@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -45,7 +46,7 @@ func TestApplyRefusals(t *testing.T) {
 	blocked := setup.Plan{Actions: []setup.Action{{Op: setup.OpRemove, Kind: setup.KindBank, ID: "bank-a", Blockers: []string{"bank-c settles through bank-a and is not leaving."}}}}
 	check(admissible(blocked, ApplyOptions{Prune: true}), http.StatusUnprocessableEntity, "invalid_spec", "bank-c settles through bank-a and is not leaving.")
 
-	moved := &setup.Status{Resources: []setup.Resource{{Kind: setup.KindBank, ID: "bank-b", Phase: setup.PhaseTerminating, Done: []string{setup.FinalizerDecideMoney}}}}
+	moved := &setup.Status{Resources: []setup.Resource{{Kind: setup.KindBank, ID: "bank-b", Phase: config.PhaseTerminating, Done: []string{setup.FinalizerDecideMoney}}}}
 	_, err = admit(moved, &admission{retarget: map[string]bool{"bank-b": true}})
 	check(err, http.StatusConflict, "money_moved", "The money of bank-b has already moved. Nothing was changed.")
 

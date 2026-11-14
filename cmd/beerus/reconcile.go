@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 const (
@@ -75,11 +74,11 @@ func (s *supervisor) sync(banks []bankState) {
 		listed[b.ID] = true
 		running := s.banks[b.ID]
 		switch {
-		case b.Phase == setup.PhaseClosed:
+		case b.Phase == config.PhaseClosed:
 			s.drop(b.ID)
 		case running != nil && running.print != b.fingerprint():
 			s.drop(b.ID)
-		case running == nil && (b.Phase == setup.PhaseActive || b.Phase == setup.PhaseSuspended):
+		case running == nil && (b.Phase == config.PhaseActive || b.Phase == config.PhaseSuspended):
 			s.bring(b.ID, b.fingerprint())
 		}
 	}

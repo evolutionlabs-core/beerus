@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 var (
@@ -17,7 +19,7 @@ var (
 	nubanCodeRe = regexp.MustCompile(`^([0-9]{3}|[0-9]{5}|[0-9]{6})$`)
 )
 
-func checkRegister(in Institution) error {
+func checkRegister(in nip.Institution) error {
 	switch {
 	case in.ID == "" || strings.TrimSpace(in.Name) == "" || in.Type == "":
 		return errors.New("a bank needs an id, a name and a type")
@@ -25,13 +27,13 @@ func checkRegister(in Institution) error {
 		return fmt.Errorf("bank %s: nip_code %q must be 6 digits", in.ID, in.NIPCode)
 	case !nubanCodeRe.MatchString(in.NUBANCode):
 		return fmt.Errorf("bank %s: nuban_code %q must be 3, 5 or 6 digits", in.ID, in.NUBANCode)
-	case in.Status != "" && in.Status != StatusActive:
+	case in.Status != "" && in.Status != nip.StatusActive:
 		return fmt.Errorf("bank %s registers as active, not %s; use SetStatus to change it", in.ID, in.Status)
 	}
 	return nil
 }
 
-func (s *Store) Register(ctx context.Context, in Institution) error {
+func (s *Store) Register(ctx context.Context, in nip.Institution) error {
 	if err := checkRegister(in); err != nil {
 		return err
 	}
@@ -45,7 +47,7 @@ ORDER BY nip_code`, in.ID, in.NIPCode, in.NUBANCode, in.Name)
 		if err != nil {
 			return fmt.Errorf("look up bank %s: %w", in.ID, err)
 		}
-		var clash []Institution
+		var clash []nip.Institution
 		for rows.Next() {
 			c, err := scanInstitution(rows)
 			if err != nil {
@@ -58,7 +60,7 @@ ORDER BY nip_code`, in.ID, in.NIPCode, in.NUBANCode, in.Name)
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("look up bank %s: %w", in.ID, err)
 		}
-		var self *Institution
+		var self *nip.Institution
 		for i := range clash {
 			c := &clash[i]
 			if c.ID != in.ID {
@@ -78,9 +80,9 @@ ORDER BY nip_code`, in.ID, in.NIPCode, in.NUBANCode, in.Name)
 	})
 }
 
-func updateMember(ctx context.Context, tx pgx.Tx, in, cur Institution) error {
+func updateMember(ctx context.Context, tx pgx.Tx, in, cur nip.Institution) error {
 	switch {
-	case cur.Status == StatusRemoved:
+	case cur.Status == nip.StatusRemoved:
 		return fmt.Errorf("bank %s was removed, and its id stays reserved: %w", in.ID, errCodeTaken)
 	case cur.NIPCode != in.NIPCode || cur.NUBANCode != in.NUBANCode:
 		return fmt.Errorf("bank %s has codes %s/%s and they cannot change to %s/%s", in.ID, cur.NIPCode, cur.NUBANCode, in.NIPCode, in.NUBANCode)
@@ -93,9 +95,9 @@ func updateMember(ctx context.Context, tx pgx.Tx, in, cur Institution) error {
 	return nil
 }
 
-func clashError(in, c Institution) error {
+func clashError(in, c nip.Institution) error {
 	holder := c.ID
-	if c.Status == StatusRemoved {
+	if c.Status == nip.StatusRemoved {
 		holder = "removed bank " + c.ID
 	}
 	switch {

@@ -10,26 +10,15 @@ import (
 )
 
 const (
-	StatusActive      = nip.StatusActive
-	StatusSuspended   = nip.StatusSuspended
-	StatusTerminating = nip.StatusTerminating
-	StatusRemoved     = nip.StatusRemoved
-
 	SessionPending = "pending"
 	SessionOK      = "00"
 
-	OutcomeCredited = nip.OutcomeCredited
-	OutcomeFailed   = nip.OutcomeFailed
-	OutcomeUnknown  = nip.OutcomeUnknown
 	OutcomeReversed = "reversed"
 )
 
 var (
-	ErrUnknownInstitution = nip.ErrUnknownInstitution
-	ErrBadDetails         = errors.New("invalid BVN details")
+	ErrBadDetails = errors.New("invalid BVN details")
 )
-
-type Institution = nip.Institution
 
 type Session struct {
 	ID          string     `json:"session_id"`
@@ -60,9 +49,9 @@ type ConsentEvent struct {
 }
 
 type Switch interface {
-	Directory(ctx context.Context) ([]Institution, error)
-	Institution(ctx context.Context, code string) (Institution, error)
-	Register(ctx context.Context, in Institution) error
+	Directory(ctx context.Context) ([]nip.Institution, error)
+	Institution(ctx context.Context, code string) (nip.Institution, error)
+	Register(ctx context.Context, in nip.Institution) error
 	SetStatus(ctx context.Context, id, status string) error
 	EnrolBVN(ctx context.Context, name, phone string, dob clock.Date) (string, error)
 	NameEnquiry(ctx context.Context, code, nuban string) (string, error)

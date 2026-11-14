@@ -16,19 +16,19 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
-	PhaseProvisioning  = setup.PhaseProvisioning
-	PhaseActive        = setup.PhaseActive
-	PhaseSuspended     = setup.PhaseSuspended
-	PhaseRepairing     = setup.PhaseRepairing
-	PhaseClosing       = setup.PhaseClosing
-	PhaseClosed        = setup.PhaseClosed
-	PhaseTerminating   = setup.PhaseTerminating
+	PhaseProvisioning  = config.PhaseProvisioning
+	PhaseActive        = config.PhaseActive
+	PhaseSuspended     = config.PhaseSuspended
+	PhaseRepairing     = config.PhaseRepairing
+	PhaseClosing       = config.PhaseClosing
+	PhaseClosed        = config.PhaseClosed
+	PhaseTerminating   = config.PhaseTerminating
 	driftEvery         = 5 * time.Second
 	connectionsPerBank = 8
 )
@@ -169,7 +169,7 @@ func (a *App) postgresRoom(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) removedBanks(ctx context.Context) ([]nibss.Institution, error) {
+func (a *App) removedBanks(ctx context.Context) ([]nip.Institution, error) {
 	s := a.nibssStore()
 	if s == nil {
 		return nil, errors.New("the NIBSS directory is not open yet, so the codes of removed banks cannot be checked; try again soon")
@@ -178,9 +178,9 @@ func (a *App) removedBanks(ctx context.Context) ([]nibss.Institution, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := []nibss.Institution{}
+	out := []nip.Institution{}
 	for _, in := range all {
-		if in.Status == nibss.StatusRemoved {
+		if in.Status == nip.StatusRemoved {
 			out = append(out, in)
 		}
 	}
@@ -197,7 +197,7 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 	name := strings.TrimSpace(req.Name)
 	id := strings.TrimSpace(req.ID)
 	slug := ""
-	var removed []nibss.Institution
+	var removed []nip.Institution
 	if id == "" {
 		slug = strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
 	}

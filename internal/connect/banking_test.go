@@ -13,6 +13,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 type apiReply struct {
@@ -89,7 +90,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatalf("an unknown bank: %d %s", r.status, errMessage(r))
 	}
 
-	q, err := a.Quote(server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 1_000_000})
+	q, err := a.Quote(t.Context(), server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 1_000_000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +144,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.AddFault(server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nibss.OutcomeCredited}); err != nil {
+	if _, err := a.AddFault(server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeCredited}); err != nil {
 		t.Fatal(err)
 	}
 	held, err := a.Transfer(server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 200_000, Key: "held-1"})
@@ -164,7 +165,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatalf("a transfer past the cap with a pending session: %v", err)
 	}
 
-	if _, err := a.AddFault(server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nibss.OutcomeCredited}); err != nil {
+	if _, err := a.AddFault(server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeCredited}); err != nil {
 		t.Fatal(err)
 	}
 	bkB, err := bookSource{a}.Book("bank-b")

@@ -168,7 +168,7 @@ func TestInstall(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {
-				if r := findResource(&st, setup.KindSystem, id); r == nil || r.Phase != setup.PhaseActive {
+				if r := findResource(&st, setup.KindSystem, id); r == nil || r.Phase != config.PhaseActive {
 					t.Errorf("%s after install: %+v", id, r)
 				}
 			}
@@ -230,7 +230,7 @@ func TestInstall(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := systemPhase(st, setup.SystemCBN); got != setup.PhaseActive {
+		if got := systemPhase(st, setup.SystemCBN); got != config.PhaseActive {
 			t.Fatalf("CBN phase after openRTGS: %q", got)
 		}
 	})

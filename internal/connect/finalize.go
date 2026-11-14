@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -95,7 +96,7 @@ func (a *App) advanceFinalizers(ctx context.Context, lists map[string][]finalize
 	}
 	now := a.clock.Real()
 	for _, r := range st.Resources {
-		if r.Phase != setup.PhaseClosing && r.Phase != setup.PhaseTerminating {
+		if r.Phase != config.PhaseClosing && r.Phase != config.PhaseTerminating {
 			continue
 		}
 		if r.NextAttemptAt != nil && now.Before(*r.NextAttemptAt) {
@@ -134,8 +135,8 @@ func (a *App) advanceFinalizers(ctx context.Context, lists map[string][]finalize
 				cur.Attempts, cur.NextAttemptAt = 0, nil
 				clearCondition(cur, setup.ConditionDegraded)
 				clearCondition(cur, setup.ConditionBlocked)
-				if cur.Phase == setup.PhaseClosing && nextFinalizer(*cur) == "" {
-					cur.Phase = setup.PhaseClosed
+				if cur.Phase == config.PhaseClosing && nextFinalizer(*cur) == "" {
+					cur.Phase = config.PhaseClosed
 					cur.ObservedGeneration = cur.Generation
 					closed = true
 					setCondition(cur, setup.Condition{Type: setup.ConditionProgressing, Status: "False", Reason: setup.ReasonClosed, Message: "closed", ChangedAt: now})

@@ -130,8 +130,8 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	}
 	st := setup.Status{Version: setup.StatusVersion, Setup: spec.Metadata.Name, SetupKey: key, Applied: pinCodes(spec, plan)}
 	st.Resources = []setup.Resource{
-		{Kind: setup.KindSystem, ID: setup.SystemCBN, Phase: setup.PhaseProvisioning},
-		{Kind: setup.KindSystem, ID: setup.SystemNIBSS, Phase: setup.PhaseProvisioning},
+		{Kind: setup.KindSystem, ID: setup.SystemCBN, Phase: config.PhaseProvisioning},
+		{Kind: setup.KindSystem, ID: setup.SystemNIBSS, Phase: config.PhaseProvisioning},
 	}
 	cfg, err := buildConfig(dir, st, local)
 	if err != nil {
@@ -246,7 +246,7 @@ func allocateBanks(cfg *config.Config, st *setup.Status) error {
 			Kind:       setup.KindBank,
 			ID:         b.ID,
 			Generation: 1,
-			Phase:      setup.PhaseProvisioning,
+			Phase:      config.PhaseProvisioning,
 			Allocated:  setup.Allocation{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Database: config.DatabaseName(cfg.Dir, b.ID), Port: port, APIPort: api},
 			Steps:      map[string]string{setup.StepAllocate: stepDone},
 		}
@@ -267,7 +267,7 @@ func issuePartnerKeys(dir string, partners []setup.Partner) ([]setup.Resource, e
 			Kind:       setup.KindPartner,
 			ID:         p.ID,
 			Generation: 1,
-			Phase:      setup.PhaseActive,
+			Phase:      config.PhaseActive,
 			Partner:    &setup.PartnerKeys{CertCN: p.ID, APIKeySHA256: config.HashKey(key)},
 			Owned:      []setup.Owned{{Kind: ownedDir, Name: filepath.Join("partners", p.ID)}},
 		})
@@ -380,9 +380,9 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 func runtimeBank(b setup.Bank, r setup.Resource) *config.Bank {
 	state := b.State
 	switch r.Phase {
-	case setup.PhaseClosed:
+	case config.PhaseClosed:
 		state = setup.StateClosed
-	case setup.PhaseClosing, setup.PhaseTerminating:
+	case config.PhaseClosing, config.PhaseTerminating:
 		state = setup.StateSuspended
 		if slices.Contains(r.Done, setup.FinalizerDecideMoney) {
 			state = setup.StateClosed

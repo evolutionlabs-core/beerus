@@ -12,7 +12,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -144,30 +144,30 @@ func (a *App) dropBankRows(id string) {
 	a.dirty()
 }
 
-func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nibss.Institution, error) {
+func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nip.Institution, error) {
 	id := r.ID
 	if r.Allocated.Database != "" {
 		left, err := store.List(ctx, a.cfg.DatabaseURL, r.Allocated.Database)
 		if err != nil {
-			return nibss.Institution{}, fmt.Errorf("read back the databases of %s: %w", id, err)
+			return nip.Institution{}, fmt.Errorf("read back the databases of %s: %w", id, err)
 		}
 		if slices.Contains(left, r.Allocated.Database) {
-			return nibss.Institution{}, fmt.Errorf("database %s of %s still exists after the purge", r.Allocated.Database, id)
+			return nip.Institution{}, fmt.Errorf("database %s of %s still exists after the purge", r.Allocated.Database, id)
 		}
 	}
 	if _, err := os.Stat(a.cfg.Path("banks", id)); !os.IsNotExist(err) {
-		return nibss.Institution{}, fmt.Errorf("banks/%s still exists after the purge", id)
+		return nip.Institution{}, fmt.Errorf("banks/%s still exists after the purge", id)
 	}
 	sw := a.nibssStore()
 	if sw == nil {
-		return nibss.Institution{}, errors.New("NIBSS is not open, so its tombstone for the bank cannot be read back; try again soon")
+		return nip.Institution{}, errors.New("NIBSS is not open, so its tombstone for the bank cannot be read back; try again soon")
 	}
 	in, err := sw.Institution(ctx, r.Allocated.NIPCode)
 	if err != nil {
-		return nibss.Institution{}, fmt.Errorf("read back the NIBSS status of %s: %w", id, err)
+		return nip.Institution{}, fmt.Errorf("read back the NIBSS status of %s: %w", id, err)
 	}
-	if in.Status != nibss.StatusRemoved {
-		return nibss.Institution{}, fmt.Errorf("NIBSS shows %s as %s, not %s", id, in.Status, nibss.StatusRemoved)
+	if in.Status != nip.StatusRemoved {
+		return nip.Institution{}, fmt.Errorf("NIBSS shows %s as %s, not %s", id, in.Status, nip.StatusRemoved)
 	}
 	return in, nil
 }

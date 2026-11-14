@@ -8,8 +8,8 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nibss/gateway"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"io"
@@ -63,10 +63,10 @@ func TestBankRoleDirectoryComesFromNIBSS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	list := func(context.Context) ([]nibss.Institution, error) {
-		out := []nibss.Institution{}
-		for _, in := range []struct{ id, status string }{{"bank-a", nibss.StatusActive}, {"bank-b", nibss.StatusSuspended}, {"bank-c", nibss.StatusTerminating}, {"bank-d", nibss.StatusActive}} {
-			out = append(out, nibss.Institution{ID: in.id, Name: in.id, Status: in.status})
+	list := func(context.Context) ([]nip.Institution, error) {
+		out := []nip.Institution{}
+		for _, in := range []struct{ id, status string }{{"bank-a", nip.StatusActive}, {"bank-b", nip.StatusSuspended}, {"bank-c", nip.StatusTerminating}, {"bank-d", nip.StatusActive}} {
+			out = append(out, nip.Institution{ID: in.id, Name: in.id, Status: in.status})
 		}
 		return out, nil
 	}

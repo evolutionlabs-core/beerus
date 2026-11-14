@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 func sampleStatus() Status {
@@ -22,7 +24,7 @@ func sampleStatus() Status {
 			ID:                  "bank-b",
 			Generation:          3,
 			ObservedGeneration:  3,
-			Phase:               PhaseTerminating,
+			Phase:               config.PhaseTerminating,
 			DeletionRequestedAt: &at,
 			Finalizers:          []string{FinalizerSettleInflight},
 			Done:                []string{FinalizerStopRouting},

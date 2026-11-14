@@ -79,9 +79,9 @@ func (a *App) Transfer(req server.TransferRequest) (server.TransferResult, error
 	return a.nipTransfer(rt, req, res)
 }
 
-func (a *App) Quote(req server.TransferRequest) (server.TransferResult, error) {
+func (a *App) Quote(ctx context.Context, req server.TransferRequest) (server.TransferResult, error) {
 	if a.srv != nil {
-		return a.srv.Quote(context.Background(), req)
+		return a.srv.Quote(ctx, req)
 	}
 	if err := server.CheckRequest(req); err != nil {
 		return server.TransferResult{}, err
@@ -93,7 +93,7 @@ func (a *App) Quote(req server.TransferRequest) (server.TransferResult, error) {
 	if err != nil {
 		return server.TransferResult{}, err
 	}
-	return server.Quoter{Fees: a.cfg.Fees(), Clock: a.clock, Enquirer: a}.Quote(context.Background(), rt.from.Bank(), rt.Route, req)
+	return server.Quoter{Fees: a.cfg.Fees(), Clock: a.clock, Enquirer: a}.Quote(ctx, rt.from.Bank(), rt.Route, req)
 }
 
 func (a *App) Enquire(ctx context.Context, rt server.Route, nuban string) (string, error) {
@@ -138,7 +138,7 @@ func enquiryError(name string, err error) error {
 		return server.Refused(http.StatusUnprocessableEntity, nip.InvalidAccount, "invalid_account", fmt.Errorf("that is not a valid account at %s, so nothing was debited", name))
 	case errors.Is(err, nip.ErrNoRecord):
 		return server.Refused(http.StatusUnprocessableEntity, nip.NoRecord, "no_record", fmt.Errorf("%s has no such account, so nothing was debited", name))
-	case errors.Is(err, nibss.ErrUnknownInstitution):
+	case errors.Is(err, nip.ErrUnknownInstitution):
 		return server.Refused(http.StatusUnprocessableEntity, nip.SystemError, "unknown_bank", err)
 	}
 	return err
@@ -257,7 +257,7 @@ func (a *App) afterBegin(sw *nibss.Store, rt transferRoute, req server.TransferR
 		}
 		res.Status, res.ResponseCode = nip.Reversed, sess.Status
 	case sess.Outcome != "":
-		if sess.Outcome == nibss.OutcomeCredited {
+		if sess.Outcome == nip.OutcomeCredited {
 			if err := a.credit(rt, req, sid, senderName, res.At); err != nil {
 				a.log.Warn("NIP credit failed; reversing", "session", sid, "err", err)
 				if rerr := sw.RevokeCredit(context.Background(), sid); rerr != nil {
@@ -272,7 +272,7 @@ func (a *App) afterBegin(sw *nibss.Store, rt transferRoute, req server.TransferR
 			a.log.Warn("NIP credit failed; reversing", "session", sid, "err", err)
 			return a.reverseFailed(sw, rt, req, res, err)
 		}
-		if err := sw.Resolve(context.Background(), sid, nibss.SessionOK, nibss.OutcomeCredited, res.At); err != nil {
+		if err := sw.Resolve(context.Background(), sid, nibss.SessionOK, nip.OutcomeCredited, res.At); err != nil {
 			return res, fmt.Errorf("resolve NIP session %s: %w", sid, err)
 		}
 		res.Status, res.ResponseCode = nip.Success, nip.OK
@@ -322,7 +322,7 @@ func (a *App) reverseSend(from *ledgerSource, sid string, at time.Time) error {
 
 func (a *App) fail(sw *nibss.Store, from *ledgerSource, sid, code string, at time.Time) error {
 	ctx := context.Background()
-	if err := sw.Resolve(ctx, sid, code, nibss.OutcomeFailed, at); err != nil {
+	if err := sw.Resolve(ctx, sid, code, nip.OutcomeFailed, at); err != nil {
 		return fmt.Errorf("fail NIP session %s: %w", sid, err)
 	}
 	if err := a.reverseSend(from, sid, at); err != nil {
@@ -375,9 +375,9 @@ func (a *App) checkSession(sw *nibss.Store, x nibss.Session, now time.Time) erro
 		return err
 	}
 	switch {
-	case q.Outcome == nibss.OutcomeCredited:
-		return sw.Resolve(ctx, x.ID, nibss.SessionOK, nibss.OutcomeCredited, now)
-	case q.Outcome == nibss.OutcomeUnknown && q.TSQAttempts < a.cfg.TSQAttempts:
+	case q.Outcome == nip.OutcomeCredited:
+		return sw.Resolve(ctx, x.ID, nibss.SessionOK, nip.OutcomeCredited, now)
+	case q.Outcome == nip.OutcomeUnknown && q.TSQAttempts < a.cfg.TSQAttempts:
 		return nil
 	}
 	return a.fail(sw, from, x.ID, nip.Unavailable, now)
