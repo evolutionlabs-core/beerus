@@ -12,7 +12,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 )
 
 const listDefault = 100
@@ -64,7 +63,7 @@ type CashResult struct {
 	Amount   int64     `json:"amount_minor"`
 	Balance  int64     `json:"balance_minor"`
 	Replayed bool      `json:"replayed"`
-	At       time.Time `json:"at"`
+	PostedAt time.Time `json:"posted_at"`
 }
 
 var errBankNotFound = errors.New("no such bank")
@@ -95,7 +94,7 @@ func writeKey(key, op string) string {
 	return "api:" + key
 }
 
-func (a *App) CreateCustomer(bankID string, req CustomerRequest) (bank.Customer, error) {
+func (a *App) CreateCustomer(ctx context.Context, bankID string, req CustomerRequest) (bank.Customer, error) {
 	bk, err := a.activeBook(bankID)
 	if err != nil {
 		return bank.Customer{}, err
@@ -107,40 +106,33 @@ func (a *App) CreateCustomer(bankID string, req CustomerRequest) (bank.Customer,
 	if strings.TrimSpace(req.Name) == "" {
 		return bank.Customer{}, fmt.Errorf("%w: name is empty", ledger.ErrInvalid)
 	}
-	sw := a.nibssStore()
-	if sw == nil {
-		return bank.Customer{}, errors.New("NIBSS is not open yet, so no BVN can be enrolled; try again soon")
-	}
-	phone, err := sw.NormalisePhone(req.Phone)
-	if errors.Is(err, nibss.ErrBadDetails) {
-		return bank.Customer{}, fmt.Errorf("%w: %s", ledger.ErrInvalid, strings.TrimPrefix(err.Error(), nibss.ErrBadDetails.Error()+": "))
-	}
-	if err != nil {
-		return bank.Customer{}, fmt.Errorf("normalise phone: %w", err)
-	}
 	hash := ""
 	if req.Password != "" {
 		if hash, err = bank.HashPassword(req.Password); err != nil {
 			return bank.Customer{}, err
 		}
 	}
-	ctx := context.Background()
-	bvn, err := sw.EnrolBVN(ctx, req.Name, phone, dob)
-	if errors.Is(err, nibss.ErrBadDetails) {
-		return bank.Customer{}, fmt.Errorf("%w: %s", ledger.ErrInvalid, strings.TrimPrefix(err.Error(), nibss.ErrBadDetails.Error()+": "))
-	}
+	bvn, phone, err := a.enrolBVN(ctx, req.Name, req.Phone, dob)
 	if err != nil {
-		return bank.Customer{}, fmt.Errorf("enrol a BVN at NIBSS: %w", err)
+		return bank.Customer{}, err
 	}
 	return bk.ls.Bank().CreateCustomer(ctx, writeKey(req.Key, "cus"), strings.TrimSpace(req.Name), phone, dob, bvn, req.Username, hash, a.clock.Now())
 }
 
-func (a *App) CloseCustomer(bankID, id string) error {
+func (a *App) CloseCustomer(ctx context.Context, bankID, id string) error {
 	bk, err := a.activeBook(bankID)
 	if err != nil {
 		return err
 	}
-	return bk.ls.Bank().CloseCustomer(context.Background(), id, a.clock.Now())
+	return bk.ls.Bank().CloseCustomer(ctx, id, a.clock.Now())
+}
+
+func (a *App) Customers(ctx context.Context, bankID string, limit int, cursor string) ([]bank.Customer, string, error) {
+	bk, err := a.bankBook(bankID)
+	if err != nil {
+		return nil, "", err
+	}
+	return bk.ls.Bank().Customers(ctx, limit, cursor)
 }
 
 func accountJSON(ctx context.Context, b *bank.Bank, acc ledger.Account) (AccountJSON, error) {
@@ -151,12 +143,11 @@ func accountJSON(ctx context.Context, b *bank.Bank, acc ledger.Account) (Account
 	return AccountJSON{NUBAN: acc.NUBAN, Name: acc.Name, Customer: acc.Owner, Type: acc.Product, Status: acc.Status, Currency: acc.Currency, Balance: bal}, nil
 }
 
-func (a *App) OpenAccount(bankID string, req AccountRequest) (AccountJSON, error) {
+func (a *App) OpenAccount(ctx context.Context, bankID string, req AccountRequest) (AccountJSON, error) {
 	bk, err := a.activeBook(bankID)
 	if err != nil {
 		return AccountJSON{}, err
 	}
-	ctx := context.Background()
 	b := bk.ls.Bank()
 	acc, err := b.OpenAccount(ctx, writeKey(req.Key, "acc"), req.Customer, req.Type, a.clock.Now())
 	if err != nil {
@@ -165,16 +156,53 @@ func (a *App) OpenAccount(bankID string, req AccountRequest) (AccountJSON, error
 	return accountJSON(ctx, b, acc)
 }
 
-func (a *App) CloseAccount(bankID, nuban string) error {
+func (a *App) CloseAccount(ctx context.Context, bankID, nuban string) error {
 	bk, err := a.activeBook(bankID)
 	if err != nil {
 		return err
 	}
-	return bk.ls.Bank().CloseAccount(context.Background(), nuban, a.clock.Now())
+	return bk.ls.Bank().CloseAccount(ctx, nuban, a.clock.Now())
+}
+
+func (a *App) Accounts(ctx context.Context, bankID, customer string, limit int, cursor string) ([]AccountJSON, string, error) {
+	bk, err := a.bankBook(bankID)
+	if err != nil {
+		return nil, "", err
+	}
+	b := bk.ls.Bank()
+	accts, next, err := b.Accounts(ctx, customer, limit, cursor)
+	if err != nil {
+		return nil, "", err
+	}
+	data := make([]AccountJSON, 0, len(accts))
+	for _, acc := range accts {
+		j, err := accountJSON(ctx, b, acc)
+		if err != nil {
+			return nil, "", err
+		}
+		data = append(data, j)
+	}
+	return data, next, nil
+}
+
+func (a *App) Statement(ctx context.Context, bankID, nuban string, from, to clock.Date, limit int, cursor string) ([]StatementLine, string, error) {
+	bk, err := a.bankBook(bankID)
+	if err != nil {
+		return nil, "", err
+	}
+	evs, next, err := bk.ls.Bank().Statement(ctx, nuban, from, to, limit, cursor)
+	if err != nil {
+		return nil, "", err
+	}
+	data := make([]StatementLine, 0, len(evs))
+	for _, ev := range evs {
+		data = append(data, StatementLine{Seq: ev.Seq, Amount: ev.Amount, BalanceAfter: ev.BalanceAfter, PostedAt: ev.PostedAt, ValueDate: ev.ValueDate.String(), Narration: ev.Narration, SessionID: ev.SessionID})
+	}
+	return data, next, nil
 }
 
 func (a *App) Cash(ctx context.Context, bankID, kind string, req CashRequest) (CashResult, error) {
-	res, err := a.postCash(bankID, kind, req)
+	res, err := a.postCash(ctx, bankID, kind, req)
 	if err != nil {
 		return CashResult{}, err
 	}
@@ -182,7 +210,7 @@ func (a *App) Cash(ctx context.Context, bankID, kind string, req CashRequest) (C
 	return res, nil
 }
 
-func (a *App) postCash(bankID, kind string, req CashRequest) (CashResult, error) {
+func (a *App) postCash(ctx context.Context, bankID, kind string, req CashRequest) (CashResult, error) {
 	bk, err := a.activeBook(bankID)
 	if err != nil {
 		return CashResult{}, err
@@ -191,7 +219,6 @@ func (a *App) postCash(bankID, kind string, req CashRequest) (CashResult, error)
 	if err != nil {
 		return CashResult{}, fmt.Errorf("%w: %w", ledger.ErrInvalid, err)
 	}
-	ctx := context.Background()
 	b := bk.ls.Bank()
 	now := a.clock.Now()
 	key := writeKey(req.Key, "csh")
@@ -202,13 +229,13 @@ func (a *App) postCash(bankID, kind string, req CashRequest) (CashResult, error)
 		p, err = b.CashWithdrawal(ctx, key, req.Account, amount, now)
 	}
 	if err != nil {
-		return CashResult{}, err
+		return CashResult{}, a.cashRefusal(ctx, b, req, amount, err)
 	}
 	bal, ok := p.Balances[bank.CustomerAccount(req.Account)]
 	if !ok {
 		return CashResult{}, fmt.Errorf("read balance of %s: the posted entry has no balance for it", req.Account)
 	}
-	return CashResult{Kind: kind, Account: req.Account, Amount: amount, Balance: bal, Replayed: p.Replayed, At: p.PostedAt.In(clock.Lagos)}, nil
+	return CashResult{Kind: kind, Account: req.Account, Amount: amount, Balance: bal, Replayed: p.Replayed, PostedAt: p.PostedAt.In(clock.Lagos)}, nil
 }
 
 func listParams(r *http.Request) (int, string, error) {
@@ -243,6 +270,9 @@ func clean(err error) string {
 
 func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
 	var te *transferError
+	var fe *insufficientFundsError
+	var de *dailyLimitError
+	var ue *unavailableError
 	switch {
 	case errors.As(err, &te):
 		writeError(w, r, te.status, te.errCode, sentence(te.Error()))
@@ -270,6 +300,12 @@ func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusUnprocessableEntity, "idempotency_key_reused", "That Idempotency-Key was used for a different request.")
 	case errors.Is(err, ledger.ErrInvalid):
 		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", clean(err))
+	case errors.As(err, &ue):
+		writeError(w, r, http.StatusServiceUnavailable, "unavailable", ue.msg)
+	case errors.As(err, &fe):
+		writeError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", fe.Message())
+	case errors.As(err, &de):
+		writeError(w, r, http.StatusUnprocessableEntity, "daily_limit", de.Message())
 	case errors.Is(err, ledger.ErrInsufficientFunds):
 		writeError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", "The account does not have enough money.")
 	case errors.Is(err, ledger.ErrDailyLimit):
@@ -280,6 +316,13 @@ func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
 		a.log.Error("banking", "path", r.URL.Path, "err", err)
 		writeError(w, r, http.StatusInternalServerError, "internal_error", somethingWentWrong)
 	}
+}
+
+func (a *App) bankIDOf(r *http.Request) string {
+	if a.role == RoleBank {
+		return a.bankID
+	}
+	return r.PathValue("id")
 }
 
 func idemKey(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -297,12 +340,7 @@ func (a *App) ctlCustomers(w http.ResponseWriter, r *http.Request) {
 		a.bankingError(w, r, err)
 		return
 	}
-	bk, err := a.bankBook(r.PathValue("id"))
-	if err != nil {
-		a.bankingError(w, r, err)
-		return
-	}
-	data, next, err := bk.ls.Bank().Customers(r.Context(), limit, cursor)
+	data, next, err := a.Customers(r.Context(), a.bankIDOf(r), limit, cursor)
 	if err != nil {
 		a.bankingError(w, r, err)
 		return
@@ -321,7 +359,7 @@ func (a *App) ctlCreateCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Key = key
-	c, err := a.CreateCustomer(r.PathValue("id"), req)
+	c, err := a.CreateCustomer(r.Context(), a.bankIDOf(r), req)
 	if err != nil {
 		a.bankingError(w, r, err)
 		return
@@ -330,11 +368,12 @@ func (a *App) ctlCreateCustomer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlCloseCustomer(w http.ResponseWriter, r *http.Request) {
-	if err := a.CloseCustomer(r.PathValue("id"), r.PathValue("customer")); err != nil {
+	id := r.PathValue("customer_id")
+	if err := a.CloseCustomer(r.Context(), a.bankIDOf(r), id); err != nil {
 		a.bankingError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"customer": r.PathValue("customer"), "status": bank.CustomerClosed})
+	writeJSON(w, http.StatusOK, map[string]string{"customer": id, "status": bank.CustomerClosed})
 }
 
 func (a *App) ctlAccounts(w http.ResponseWriter, r *http.Request) {
@@ -343,26 +382,10 @@ func (a *App) ctlAccounts(w http.ResponseWriter, r *http.Request) {
 		a.bankingError(w, r, err)
 		return
 	}
-	bk, err := a.bankBook(r.PathValue("id"))
+	data, next, err := a.Accounts(r.Context(), a.bankIDOf(r), r.URL.Query().Get("customer"), limit, cursor)
 	if err != nil {
 		a.bankingError(w, r, err)
 		return
-	}
-	ctx := r.Context()
-	b := bk.ls.Bank()
-	accts, next, err := b.Accounts(ctx, r.URL.Query().Get("customer"), limit, cursor)
-	if err != nil {
-		a.bankingError(w, r, err)
-		return
-	}
-	data := []AccountJSON{}
-	for _, acc := range accts {
-		j, err := accountJSON(ctx, b, acc)
-		if err != nil {
-			a.bankingError(w, r, err)
-			return
-		}
-		data = append(data, j)
 	}
 	writeJSON(w, http.StatusOK, listPage(data, next))
 }
@@ -378,7 +401,7 @@ func (a *App) ctlOpenAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Key = key
-	acc, err := a.OpenAccount(r.PathValue("id"), req)
+	acc, err := a.OpenAccount(r.Context(), a.bankIDOf(r), req)
 	if err != nil {
 		a.bankingError(w, r, err)
 		return
@@ -387,11 +410,12 @@ func (a *App) ctlOpenAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlCloseAccount(w http.ResponseWriter, r *http.Request) {
-	if err := a.CloseAccount(r.PathValue("id"), r.PathValue("nuban")); err != nil {
+	nuban := r.PathValue("nuban")
+	if err := a.CloseAccount(r.Context(), a.bankIDOf(r), nuban); err != nil {
 		a.bankingError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"nuban": r.PathValue("nuban"), "status": "closed"})
+	writeJSON(w, http.StatusOK, map[string]string{"nuban": nuban, "status": "closed"})
 }
 
 func (a *App) ctlStatement(w http.ResponseWriter, r *http.Request) {
@@ -412,19 +436,10 @@ func (a *App) ctlStatement(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	bk, err := a.bankBook(r.PathValue("id"))
+	data, next, err := a.Statement(r.Context(), a.bankIDOf(r), r.PathValue("nuban"), from, to, limit, cursor)
 	if err != nil {
 		a.bankingError(w, r, err)
 		return
-	}
-	evs, next, err := bk.ls.Bank().Statement(r.Context(), r.PathValue("nuban"), from, to, limit, cursor)
-	if err != nil {
-		a.bankingError(w, r, err)
-		return
-	}
-	data := []StatementLine{}
-	for _, ev := range evs {
-		data = append(data, StatementLine{Seq: ev.Seq, Amount: ev.Amount, BalanceAfter: ev.BalanceAfter, PostedAt: ev.PostedAt, ValueDate: ev.ValueDate.String(), Narration: ev.Narration, SessionID: ev.SessionID})
 	}
 	writeJSON(w, http.StatusOK, listPage(data, next))
 }
@@ -441,11 +456,63 @@ func (a *App) ctlCash(kind string) http.HandlerFunc {
 			return
 		}
 		req.Key = key
-		res, err := a.Cash(r.Context(), r.PathValue("id"), kind, req)
+		res, err := a.Cash(r.Context(), a.bankIDOf(r), kind, req)
 		if err != nil {
 			a.bankingError(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, res)
 	}
+}
+
+type insufficientFundsError struct {
+	Account string
+	Balance int64
+	Amount  int64
+}
+
+func (e *insufficientFundsError) Error() string {
+	return ledger.ErrInsufficientFunds.Error()
+}
+
+func (e *insufficientFundsError) Unwrap() error {
+	return ledger.ErrInsufficientFunds
+}
+
+func (e *insufficientFundsError) Message() string {
+	return fmt.Sprintf("Account %s holds %s and %s was asked for; withdraw %s or less.", e.Account, FormatNaira(e.Balance), FormatNaira(e.Amount), FormatNaira(max(e.Balance, 0)))
+}
+
+type dailyLimitError struct {
+	Account string
+	Limit   int64
+	Used    int64
+	Amount  int64
+}
+
+func (e *dailyLimitError) Error() string {
+	return ledger.ErrDailyLimit.Error()
+}
+
+func (e *dailyLimitError) Unwrap() error {
+	return ledger.ErrDailyLimit
+}
+
+func (e *dailyLimitError) Message() string {
+	return fmt.Sprintf("Account %s has used %s of its %s daily limit and %s was asked for; withdraw %s or less today.", e.Account, FormatNaira(e.Used), FormatNaira(e.Limit), FormatNaira(e.Amount), FormatNaira(max(e.Limit-e.Used, 0)))
+}
+
+func (a *App) cashRefusal(ctx context.Context, b *bank.Bank, req CashRequest, amount int64, err error) error {
+	var limit *ledger.DailyLimitError
+	switch {
+	case errors.Is(err, ledger.ErrInsufficientFunds):
+		bal, berr := b.L.Balance(ctx, bank.CustomerAccount(req.Account))
+		if berr != nil {
+			return fmt.Errorf("read balance of %s: %w", req.Account, berr)
+		}
+		return &insufficientFundsError{Account: req.Account, Balance: bal, Amount: amount}
+	case errors.As(err, &limit):
+		return &dailyLimitError{Account: req.Account, Limit: limit.Limit, Used: limit.Used, Amount: amount}
+	}
+	return err
 }

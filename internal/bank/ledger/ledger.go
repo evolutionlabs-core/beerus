@@ -488,7 +488,7 @@ func (l *Ledger) postIn(ctx context.Context, tx pgx.Tx, e Entry, hash string) (P
 				return Posted{}, err
 			}
 			if limit, ok := l.limits[tier]; ok && total > limit {
-				return Posted{}, ErrDailyLimit
+				return Posted{}, &DailyLimitError{Limit: limit, Used: spent}
 			}
 		}
 	}
@@ -626,6 +626,19 @@ func (l *Ledger) Reverse(ctx context.Context, entryID int64, key string, at time
 		e.SessionID = *session
 	}
 	return l.Post(ctx, e)
+}
+
+type DailyLimitError struct {
+	Limit int64
+	Used  int64
+}
+
+func (e *DailyLimitError) Error() string {
+	return ErrDailyLimit.Error()
+}
+
+func (e *DailyLimitError) Is(target error) bool {
+	return target == ErrDailyLimit
 }
 
 type Event struct {

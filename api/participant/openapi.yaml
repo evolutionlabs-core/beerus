@@ -16,7 +16,7 @@ info:
 
     ## Idempotency
 
-    Provisioning is a list of steps. Each step is an idempotent ensure: running it twice gives the same result. The key of a step is the participant ID, the step ID and the generation. Faults take an `Idempotency-Key` header, because a repeat would add a second fault. Stop is safe to repeat. Close is safe to repeat with the same body and returns the current status. A close with a different body while a close is running returns `409 close_in_progress`.
+    Provisioning is a list of steps. Each step is an idempotent ensure: running it twice gives the same result. The key of a step is the participant ID, the step ID and the generation. Faults take an `Idempotency-Key` header, because a repeat would add a second fault. So does every write of a bank: creating a customer, opening an account, a deposit, a withdrawal and a close. A repeat with the same key and body returns the first answer with an `Idempotent-Replayed: true` header, and the same key with a different body returns `422 idempotency_key_reused`. Stop is safe to repeat. Close is safe to repeat with the same body and returns the current status. A close with a different body while a close is running returns `409 close_in_progress`.
 
     ## Time
 
@@ -39,6 +39,8 @@ tags:
     description: Watch a participant and move it through its phases.
   - name: faults
     description: Make a participant fail on purpose, for testing.
+  - name: bank
+    description: The customers, accounts and cash of a bank. Only a bank serves these.
 security:
   - bearerAuth: []
 paths:
@@ -313,12 +315,364 @@ paths:
                 cleared: 2
         '401':
           $ref: '#/components/responses/Unauthenticated'
+  /v1/customers:
+    get:
+      operationId: listCustomers
+      tags: [bank]
+      summary: List the bank's customers
+      description: Lists the customers of this bank, oldest first. A list is never null. Use `next_cursor` as `cursor` to read the next page. A page is never cut short without a `next_cursor`.
+      parameters:
+        - $ref: '#/components/parameters/ListLimit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of customers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerPage'
+              example:
+                data:
+                  - id: cus_01JBC8A5T3ZK
+                    name: Ada Obi
+                    phone: '2348031234567'
+                    bvn: '22212345678'
+                    status: active
+                    username: ada
+                    dob: '1990-04-21'
+                    created_at: '2026-11-14T10:00:00+01:00'
+                next_cursor: cus_01JBC8A5T3ZK
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+    post:
+      operationId: createCustomer
+      tags: [bank]
+      summary: Create a customer
+      description: Creates a customer at this bank. The bank asks NIBSS to enrol a BVN for the name, phone and date of birth, and the same details always get the same BVN. A `username` and `password` give the customer online banking. The password is hashed and never returned. The `Idempotency-Key` is the idempotency key. A repeat with the same key and body returns the first answer with an `Idempotent-Replayed` header, and the same key with a different body returns `422 idempotency_key_reused`. A bank that is not `active` answers `409 bank_not_active`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+            example:
+              name: Ada Obi
+              phone: '08031234567'
+              dob: '1990-04-21'
+              username: ada
+              password: a-long-passphrase
+      responses:
+        '201':
+          description: The customer was created, or this is a replay of the first answer.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+              example:
+                id: cus_01JBC8A5T3ZK
+                name: Ada Obi
+                phone: '2348031234567'
+                bvn: '22212345678'
+                status: active
+                username: ada
+                dob: '1990-04-21'
+                created_at: '2026-11-14T10:00:00+01:00'
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '409':
+          $ref: '#/components/responses/BankConflict'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+  /v1/customers/{customer_id}/close:
+    post:
+      operationId: closeCustomer
+      tags: [bank]
+      summary: Close a customer
+      description: Closes a customer who has no open accounts. A customer with an open account returns `422 open_accounts`. It takes the `Idempotency-Key`, and a repeat returns the first answer.
+      parameters:
+        - $ref: '#/components/parameters/CustomerIDPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The customer is closed.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerClosed'
+              example:
+                customer: cus_01JBC8A5T3ZK
+                status: closed
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '409':
+          $ref: '#/components/responses/BankConflict'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+  /v1/accounts:
+    get:
+      operationId: listAccounts
+      tags: [bank]
+      summary: List the bank's accounts
+      description: Lists the customer accounts of this bank with their balances, oldest first. `customer` limits the list to one customer. A list is never null. Use `next_cursor` as `cursor` to read the next page.
+      parameters:
+        - $ref: '#/components/parameters/CustomerFilter'
+        - $ref: '#/components/parameters/ListLimit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountPage'
+              example:
+                data:
+                  - nuban: '0123456789'
+                    name: Ada Obi
+                    customer: cus_01JBC8A5T3ZK
+                    type: savings
+                    status: active
+                    currency: NGN
+                    balance_minor: 500000
+                next_cursor: '0123456789'
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+    post:
+      operationId: openAccount
+      tags: [bank]
+      summary: Open an account
+      description: Opens a `current` or `savings` account for a customer and gives it a NUBAN. It takes the `Idempotency-Key`. A repeat with the same key and body returns the first account, and the same key for a different customer or type returns `422 idempotency_key_reused`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountRequest'
+            example:
+              customer: cus_01JBC8A5T3ZK
+              type: savings
+      responses:
+        '201':
+          description: The account was opened, or this is a replay of the first answer.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+              example:
+                nuban: '0123456789'
+                name: Ada Obi
+                customer: cus_01JBC8A5T3ZK
+                type: savings
+                status: active
+                currency: NGN
+                balance_minor: 0
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '409':
+          $ref: '#/components/responses/BankConflict'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+  /v1/accounts/{nuban}/close:
+    post:
+      operationId: closeAccount
+      tags: [bank]
+      summary: Close an account
+      description: Closes an account whose balance is zero. An account with money in it returns `422 balance_not_zero`. It takes the `Idempotency-Key`, and a repeat returns the first answer.
+      parameters:
+        - $ref: '#/components/parameters/NUBANPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The account is closed.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountClosed'
+              example:
+                nuban: '0123456789'
+                status: closed
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '409':
+          $ref: '#/components/responses/BankConflict'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+  /v1/accounts/{nuban}/statement:
+    get:
+      operationId: accountStatement
+      tags: [bank]
+      summary: Read an account's statement
+      description: Lists the postings on an account in the order they were made. `from` and `to` are Lagos dates and both ends are included. Use `next_cursor` as `cursor` to read the next page. A list is never null.
+      parameters:
+        - $ref: '#/components/parameters/NUBANPath'
+        - $ref: '#/components/parameters/FromDate'
+        - $ref: '#/components/parameters/ToDate'
+        - $ref: '#/components/parameters/ListLimit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of statement lines.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatementPage'
+              example:
+                data:
+                  - seq: 1
+                    amount_minor: 500000
+                    balance_after_minor: 500000
+                    posted_at: '2026-11-14T10:00:00+01:00'
+                    value_date: '2026-11-14'
+                    narration: CASH DEPOSIT
+                next_cursor: '1'
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+  /v1/deposits:
+    post:
+      operationId: depositCash
+      tags: [bank]
+      summary: Deposit cash into an account
+      description: Puts cash into an account at this bank's counter. `amount` is naira, such as `5000` or `5,000.50`, with at most two decimals. The answer has the amount and the new balance in kobo. It takes the `Idempotency-Key`. A repeat with the same key and body returns the first answer with an `Idempotent-Replayed` header.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CashRequest'
+            example:
+              account: '0123456789'
+              amount: '5000.00'
+      responses:
+        '201':
+          description: The cash was deposited, or this is a replay of the first answer.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashResult'
+              example:
+                kind: deposit
+                account: '0123456789'
+                amount_minor: 500000
+                balance_minor: 500000
+                replayed: false
+                posted_at: '2026-11-14T10:00:00+01:00'
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '409':
+          $ref: '#/components/responses/BankConflict'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+  /v1/withdrawals:
+    post:
+      operationId: withdrawCash
+      tags: [bank]
+      summary: Withdraw cash from an account
+      description: Takes cash out of an account at this bank's counter. `amount` is naira, with at most two decimals. A withdrawal above the balance returns `422 insufficient_funds`, and one above the daily limit returns `422 daily_limit`. Both messages give the figures. It takes the `Idempotency-Key`. A repeat with the same key and body returns the first answer with an `Idempotent-Replayed` header.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CashRequest'
+            example:
+              account: '0123456789'
+              amount: '1200.00'
+      responses:
+        '201':
+          description: The cash was withdrawn, or this is a replay of the first answer.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashResult'
+              example:
+                kind: withdrawal
+                account: '0123456789'
+                amount_minor: 120000
+                balance_minor: 380000
+                replayed: false
+                posted_at: '2026-11-14T10:00:00+01:00'
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '409':
+          $ref: '#/components/responses/BankConflict'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       description: The control token, from the `control-token` file of the Beerus directory. The API only accepts loopback connections.
+  headers:
+    IdempotentReplayed:
+      description: Set to `true` when the answer is a replay of the first one for this `Idempotency-Key`.
+      schema:
+        type: string
+        enum: ['true']
   parameters:
     StepIDPath:
       name: step_id
@@ -332,12 +686,65 @@ components:
       name: Idempotency-Key
       in: header
       required: true
-      description: A unique key per fault, chosen by the control plane. A replay with the same key and body returns the first response. The same key with a different body returns `422 idempotency_key_reused`.
+      description: A unique key per write, chosen by the caller. A replay with the same key and body returns the first response. The same key with a different body returns `422 idempotency_key_reused`.
       schema:
         type: string
         minLength: 1
         maxLength: 255
       example: 5c0d8a3e-7a1f-4f7e-9d0b-2a4c6e8f1b3d
+    ListLimit:
+      name: limit
+      in: query
+      required: false
+      description: The page size, from 1 to 1000. The default is 100. The cap of 1000 is a Beerus placeholder. A number outside the range returns `422 invalid_request`.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+      example: 100
+    CustomerFilter:
+      name: customer
+      in: query
+      required: false
+      description: Only the accounts of this customer ID.
+      schema:
+        type: string
+      example: cus_01JBC8A5T3ZK
+    FromDate:
+      name: from
+      in: query
+      required: false
+      description: The first day to include, as a date such as `2026-03-01`.
+      schema:
+        type: string
+        format: date
+      example: '2026-11-01'
+    ToDate:
+      name: to
+      in: query
+      required: false
+      description: The last day to include, as a date such as `2026-03-31`. It must not be before `from`.
+      schema:
+        type: string
+        format: date
+      example: '2026-11-30'
+    CustomerIDPath:
+      name: customer_id
+      in: path
+      required: true
+      description: The customer ID.
+      schema:
+        type: string
+      example: cus_01JBC8A5T3ZK
+    NUBANPath:
+      name: nuban
+      in: path
+      required: true
+      description: The 10-digit account number.
+      schema:
+        type: string
+      example: '0123456789'
     Limit:
       name: limit
       in: query
@@ -566,6 +973,236 @@ components:
           type: integer
           description: The number of faults removed.
           minimum: 0
+    Customer:
+      type: object
+      description: A customer of the bank.
+      required: [id, name, phone, bvn, status, dob, created_at]
+      properties:
+        id:
+          type: string
+          description: The customer ID.
+        name:
+          type: string
+          description: The customer's name.
+        phone:
+          type: string
+          description: The phone number in international form without a plus, such as `2348031234567`.
+        bvn:
+          type: string
+          description: The BVN NIBSS enrolled for the name, phone and date of birth.
+        status:
+          type: string
+          description: Whether the customer can bank.
+          enum: [active, closed]
+        username:
+          type: string
+          description: The online banking username. It is absent when the customer has none.
+        dob:
+          type: string
+          format: date
+          description: The date of birth.
+        created_at:
+          type: string
+          format: date-time
+          description: When the customer was created.
+        closed_at:
+          type: string
+          format: date-time
+          description: When the customer was closed. It is absent while the customer is active.
+    CustomerRequest:
+      type: object
+      description: A customer to create.
+      required: [name, phone, dob]
+      properties:
+        name:
+          type: string
+          description: The customer's name.
+        phone:
+          type: string
+          description: A Nigerian phone number, such as `08031234567` or `+2348031234567`.
+        dob:
+          type: string
+          format: date
+          description: The date of birth, such as `1990-04-21`.
+        username:
+          type: string
+          description: An online banking username. It must be unique at the bank. Without one the customer has no online banking.
+        password:
+          type: string
+          description: The online banking password. The bank stores a hash and never returns it.
+    CustomerPage:
+      type: object
+      description: One page of customers.
+      required: [data]
+      properties:
+        data:
+          type: array
+          description: The customers on this page.
+          items:
+            $ref: '#/components/schemas/Customer'
+        next_cursor:
+          type: string
+          description: Pass this as `cursor` to read the next page. It is absent on the last page.
+    CustomerClosed:
+      type: object
+      description: The answer of a customer close.
+      required: [customer, status]
+      properties:
+        customer:
+          type: string
+          description: The customer ID.
+        status:
+          type: string
+          description: Always `closed`.
+          enum: [closed]
+    Account:
+      type: object
+      description: A customer account with its balance.
+      required: [nuban, name, customer, type, status, currency, balance_minor]
+      properties:
+        nuban:
+          type: string
+          description: The 10-digit account number.
+        name:
+          type: string
+          description: The account name.
+        customer:
+          type: string
+          description: The ID of the customer who owns the account.
+        type:
+          type: string
+          description: The account product.
+          enum: [current, savings]
+        status:
+          type: string
+          description: Whether the account can post. `frozen` and `closed` accounts refuse debits, and `closed` ones refuse credits too.
+          enum: [active, frozen, pnd, closed]
+        currency:
+          type: string
+          description: The currency code. It is `NGN`.
+        balance_minor:
+          type: integer
+          format: int64
+          description: The balance in kobo.
+    AccountRequest:
+      type: object
+      description: An account to open.
+      required: [customer, type]
+      properties:
+        customer:
+          type: string
+          description: The ID of the customer who will own the account.
+        type:
+          type: string
+          description: The account product.
+          enum: [current, savings]
+    AccountPage:
+      type: object
+      description: One page of accounts.
+      required: [data]
+      properties:
+        data:
+          type: array
+          description: The accounts on this page.
+          items:
+            $ref: '#/components/schemas/Account'
+        next_cursor:
+          type: string
+          description: Pass this as `cursor` to read the next page. It is absent on the last page.
+    AccountClosed:
+      type: object
+      description: The answer of an account close.
+      required: [nuban, status]
+      properties:
+        nuban:
+          type: string
+          description: The account number.
+        status:
+          type: string
+          description: Always `closed`.
+          enum: [closed]
+    StatementLine:
+      type: object
+      description: One posting on an account.
+      required: [seq, amount_minor, balance_after_minor, posted_at, value_date, narration]
+      properties:
+        seq:
+          type: integer
+          format: int64
+          description: The position of the posting on the account. It only goes up.
+        amount_minor:
+          type: integer
+          format: int64
+          description: The amount in kobo. A credit is positive and a debit is negative.
+        balance_after_minor:
+          type: integer
+          format: int64
+          description: The balance in kobo after this posting.
+        posted_at:
+          type: string
+          format: date-time
+          description: When the bank posted it.
+        value_date:
+          type: string
+          format: date
+          description: The day the posting counts for.
+        narration:
+          type: string
+          description: The text on the statement.
+        session_id:
+          type: string
+          description: The NIP session that caused the posting. It is absent for cash and other postings.
+    StatementPage:
+      type: object
+      description: One page of statement lines.
+      required: [data]
+      properties:
+        data:
+          type: array
+          description: The lines on this page.
+          items:
+            $ref: '#/components/schemas/StatementLine'
+        next_cursor:
+          type: string
+          description: Pass this as `cursor` to read the next page. It is absent on the last page.
+    CashRequest:
+      type: object
+      description: Cash to deposit or withdraw.
+      required: [account, amount]
+      properties:
+        account:
+          type: string
+          description: The 10-digit account number.
+        amount:
+          type: string
+          description: The amount in naira, such as `5000` or `5,000.50`, with at most two decimals. It must be above zero.
+    CashResult:
+      type: object
+      description: What a deposit or withdrawal did.
+      required: [kind, account, amount_minor, balance_minor, replayed, posted_at]
+      properties:
+        kind:
+          type: string
+          description: What was done.
+          enum: [deposit, withdrawal]
+        account:
+          type: string
+          description: The account number.
+        amount_minor:
+          type: integer
+          format: int64
+          description: The amount in kobo.
+        balance_minor:
+          type: integer
+          format: int64
+          description: The balance in kobo after the posting.
+        replayed:
+          type: boolean
+          description: True when the bank had already posted this key and returned the earlier posting.
+        posted_at:
+          type: string
+          format: date-time
+          description: When the bank posted it.
     Error:
       type: object
       description: The body of every error.
@@ -662,3 +1299,143 @@ components:
               code: idempotency_key_reused
               message: 'Key 5c0d8a3e-7a1f-4f7e-9d0b-2a4c6e8f1b3d was first used with kind timeout, outcome credited and count 2, and this request has kind down. Use a new key, or repeat the first request.'
               request_id: req_01JBC8A5T3ZK
+    BankBadRequest:
+      description: The request is not valid. The code is `invalid_request` for a body or an `Idempotency-Key` that does not fit, or `invalid_cursor` for a cursor that is not valid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            invalid_request:
+              summary: The body is not what the call takes.
+              value:
+                error:
+                  code: invalid_request
+                  message: 'Send {"customer":"cus_...","type":"current"}.'
+                  request_id: req_01JBC8A5T3ZK
+            missing_key:
+              summary: A write without an Idempotency-Key.
+              value:
+                error:
+                  code: invalid_request
+                  message: An Idempotency-Key header of 1 to 255 characters is required on writes.
+                  request_id: req_01JBC8A5T3ZK
+            invalid_cursor:
+              summary: The cursor is not from a page this call gave.
+              value:
+                error:
+                  code: invalid_cursor
+                  message: That cursor is not valid. Use next_cursor from the last page.
+                  request_id: req_01JBC8A5T3ZK
+    BankNotFound:
+      description: The customer or account does not exist at this bank. The code is `not_found`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            customer:
+              summary: No such customer.
+              value:
+                error:
+                  code: not_found
+                  message: No such customer.
+                  request_id: req_01JBC8A5T3ZK
+            account:
+              summary: No such account.
+              value:
+                error:
+                  code: not_found
+                  message: No such account.
+                  request_id: req_01JBC8A5T3ZK
+    BankConflict:
+      description: The bank cannot do this now. The code is `bank_not_active` when the bank is not in the `active` phase, or `username_taken` when another customer has the username.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            bank_not_active:
+              summary: The bank is suspended.
+              value:
+                error:
+                  code: bank_not_active
+                  message: Bank A is suspended, so it cannot do this now.
+                  request_id: req_01JBC8A5T3ZK
+            username_taken:
+              summary: The username belongs to another customer.
+              value:
+                error:
+                  code: username_taken
+                  message: 'Username is taken: ada.'
+                  request_id: req_01JBC8A5T3ZK
+    BankUnprocessable:
+      description: The request is well formed but the bank refuses it, and the customer can fix it. The code says why.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            invalid_request:
+              summary: A value does not fit, such as a limit above 1000.
+              value:
+                error:
+                  code: invalid_request
+                  message: Limit must be a number from 1 to 1000.
+                  request_id: req_01JBC8A5T3ZK
+            idempotency_key_reused:
+              summary: The key was used with a different request.
+              value:
+                error:
+                  code: idempotency_key_reused
+                  message: This Idempotency-Key was used with a different request.
+                  request_id: req_01JBC8A5T3ZK
+            insufficient_funds:
+              summary: A withdrawal above the balance.
+              value:
+                error:
+                  code: insufficient_funds
+                  message: 'Account 0123456789 holds ₦3,800.00 and ₦100,000.00 was asked for; withdraw ₦3,800.00 or less.'
+                  request_id: req_01JBC8A5T3ZK
+            daily_limit:
+              summary: A withdrawal above the daily limit.
+              value:
+                error:
+                  code: daily_limit
+                  message: 'Account 0123456789 has used ₦90,000.00 of its ₦100,000.00 daily limit and ₦20,000.00 was asked for; withdraw ₦10,000.00 or less today.'
+                  request_id: req_01JBC8A5T3ZK
+            account_restricted:
+              summary: The account is closed, frozen or post-no-debit.
+              value:
+                error:
+                  code: account_restricted
+                  message: Account is closed.
+                  request_id: req_01JBC8A5T3ZK
+            customer_closed:
+              summary: The customer is closed.
+              value:
+                error:
+                  code: customer_closed
+                  message: 'Customer is closed: cus_01JBC8A5T3ZK.'
+                  request_id: req_01JBC8A5T3ZK
+            open_accounts:
+              summary: The customer still has open accounts.
+              value:
+                error:
+                  code: open_accounts
+                  message: 'Customer has open accounts: customer cus_01JBC8A5T3ZK still has 1 open account; close them first.'
+                  request_id: req_01JBC8A5T3ZK
+            balance_not_zero:
+              summary: The account still holds money.
+              value:
+                error:
+                  code: balance_not_zero
+                  message: 'Account balance is not zero: account 0123456789 holds ₦3,800.00; move it out by transfer or cash first.'
+                  request_id: req_01JBC8A5T3ZK
+            nubans_used:
+              summary: The bank has used every account number.
+              value:
+                error:
+                  code: nubans_used
+                  message: No NUBANs left.
+                  request_id: req_01JBC8A5T3ZK

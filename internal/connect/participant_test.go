@@ -32,11 +32,15 @@ var (
 )
 
 type controlReply struct {
-	status int
-	body   string
+	status   int
+	body     string
+	replayed bool
 }
 
-func TestParticipantControlContract(t *testing.T) {
+type contractCall func(method, path, key, body, token string, validate bool) controlReply
+
+func newContractCall(t *testing.T, handler http.Handler) contractCall {
+	t.Helper()
 	spec, err := os.ReadFile(participantSpec)
 	if err != nil {
 		t.Fatal(err)
@@ -49,17 +53,11 @@ func TestParticipantControlContract(t *testing.T) {
 	if len(errs) > 0 {
 		t.Fatalf("validator: %v", errs)
 	}
-	a := &App{
-		role: RoleBank, bankID: "bank-a", ctlToken: participantTok, st: newState(),
-		log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
-		clock:  clock.New(func() time.Time { return participantNow }),
-		status: map[string]*BankStatus{"bank-a": {ID: "bank-a", Phase: PhaseActive}},
-	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &http.Server{Handler: a.participantAPI(), ReadHeaderTimeout: probeLimit}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: probeLimit}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -71,7 +69,7 @@ func TestParticipantControlContract(t *testing.T) {
 	})
 	client := &http.Client{Timeout: probeLimit}
 	base := "http://" + ln.Addr().String()
-	call := func(method, path, key, body, token string, validate bool) controlReply {
+	return func(method, path, key, body, token string, validate bool) controlReply {
 		t.Helper()
 		build := func() *http.Request {
 			req, err := http.NewRequest(method, base+path, strings.NewReader(body))
@@ -109,8 +107,18 @@ func TestParticipantControlContract(t *testing.T) {
 				t.Fatalf("%s %s response %d %s: %v", method, path, resp.StatusCode, raw, errs)
 			}
 		}
-		return controlReply{resp.StatusCode, participantRequestID.ReplaceAllString(strings.TrimSpace(string(raw)), `"request_id":"req_ID"`)}
+		return controlReply{resp.StatusCode, participantRequestID.ReplaceAllString(strings.TrimSpace(string(raw)), `"request_id":"req_ID"`), resp.Header.Get("Idempotent-Replayed") == "true"}
 	}
+}
+
+func TestParticipantControlContract(t *testing.T) {
+	a := &App{
+		role: RoleBank, bankID: "bank-a", ctlToken: participantTok, st: newState(),
+		log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		clock:  clock.New(func() time.Time { return participantNow }),
+		status: map[string]*BankStatus{"bank-a": {ID: "bank-a", Phase: PhaseActive}},
+	}
+	call := newContractCall(t, a.participantAPI())
 	first, second := faultIDFor("flt_one"), faultIDFor("flt_two")
 	down := `{"kind":"down","for":"1h"}`
 	timeout := `{"kind":"timeout","outcome":"credited","count":2}`
