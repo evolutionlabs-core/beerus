@@ -290,7 +290,7 @@ func TestBankCLI(t *testing.T) {
 		{[]string{"deposit"}, "beerus: usage: beerus deposit <nuban> --amount NAIRA [options]"},
 		{[]string{"deposit", "0000000000", "--bank", "bank-a", "--amount", "5"}, "beerus: No such account."},
 		{[]string{"deposit", a1, "--bank", "bank-z", "--amount", "5"}, "beerus: No such bank."},
-		{[]string{"withdraw", a2, "--bank", "bank-a", "--amount", "999999"}, "beerus: The account does not have enough money."},
+		{[]string{"withdraw", a2, "--bank", "bank-a", "--amount", "999999"}, "beerus: Account " + a2 + " holds ₦1,000.00 and ₦999,999.00 was asked for; withdraw ₦1,000.00 or less."},
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", a1, "--amount", "5"}, "beerus: The from and to accounts are the same."},
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", "9999999999", "--to-bank", "bank-b", "--amount", "5"}, "beerus: That is not a valid account at Bank B, so nothing was debited."},
 		{[]string{"transfer", "--bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-z", "--amount", "5"}, `beerus: Find bank "bank-z": not in the NIBSS directory.`},

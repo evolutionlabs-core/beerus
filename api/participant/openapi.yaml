@@ -390,6 +390,8 @@ paths:
           $ref: '#/components/responses/BankBadRequest'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '503':
+          $ref: '#/components/responses/Unavailable'
         '409':
           $ref: '#/components/responses/BankConflict'
         '422':
@@ -604,7 +606,7 @@ paths:
                 amount_minor: 500000
                 balance_minor: 500000
                 replayed: false
-                at: '2026-11-14T10:00:00+01:00'
+                posted_at: '2026-11-14T10:00:00+01:00'
         '400':
           $ref: '#/components/responses/BankBadRequest'
         '401':
@@ -620,7 +622,7 @@ paths:
       operationId: withdrawCash
       tags: [bank]
       summary: Withdraw cash from an account
-      description: Takes cash out of an account at this bank's counter. `amount` is naira, with at most two decimals. A withdrawal above the balance returns `422 insufficient_funds`, and one above the daily limit returns `422 daily_limit`. It takes the `Idempotency-Key`. A repeat with the same key and body returns the first answer with an `Idempotent-Replayed` header.
+      description: Takes cash out of an account at this bank's counter. `amount` is naira, with at most two decimals. A withdrawal above the balance returns `422 insufficient_funds`, and one above the daily limit returns `422 daily_limit`. Both messages give the figures. It takes the `Idempotency-Key`. A repeat with the same key and body returns the first answer with an `Idempotent-Replayed` header.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -648,7 +650,7 @@ paths:
                 amount_minor: 120000
                 balance_minor: 380000
                 replayed: false
-                at: '2026-11-14T10:00:00+01:00'
+                posted_at: '2026-11-14T10:00:00+01:00'
         '400':
           $ref: '#/components/responses/BankBadRequest'
         '401':
@@ -1177,7 +1179,7 @@ components:
     CashResult:
       type: object
       description: What a deposit or withdrawal did.
-      required: [kind, account, amount_minor, balance_minor, replayed, at]
+      required: [kind, account, amount_minor, balance_minor, replayed, posted_at]
       properties:
         kind:
           type: string
@@ -1197,10 +1199,10 @@ components:
         replayed:
           type: boolean
           description: True when the bank had already posted this key and returned the earlier posting.
-        at:
+        posted_at:
           type: string
           format: date-time
-          description: When the bank posted it. This is today's name for the field, and it does not end in `_at` in the way `posted_at` does.
+          description: When the bank posted it.
     Error:
       type: object
       description: The body of every error.
@@ -1393,14 +1395,14 @@ components:
               value:
                 error:
                   code: insufficient_funds
-                  message: The account does not have enough money.
+                  message: 'Account 0123456789 holds ₦3,800.00 and ₦100,000.00 was asked for; withdraw ₦3,800.00 or less.'
                   request_id: req_01JBC8A5T3ZK
             daily_limit:
               summary: A withdrawal above the daily limit.
               value:
                 error:
                   code: daily_limit
-                  message: The account has reached its daily limit.
+                  message: 'Account 0123456789 has used ₦90,000.00 of its ₦100,000.00 daily limit and ₦20,000.00 was asked for; withdraw ₦10,000.00 or less today.'
                   request_id: req_01JBC8A5T3ZK
             account_restricted:
               summary: The account is closed, frozen or post-no-debit.

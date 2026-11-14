@@ -14,6 +14,14 @@ import (
 
 var errNIBSSNotOpen = errors.New("NIBSS is not open yet, so no BVN can be enrolled; try again soon")
 
+type unavailableError struct {
+	msg string
+}
+
+func (e *unavailableError) Error() string {
+	return e.msg
+}
+
 type bvnRequest struct {
 	Name  string `json:"name"`
 	Phone string `json:"phone"`
@@ -60,6 +68,9 @@ func (a *App) enrolBVNAtCore(ctx context.Context, name, phone string, dob clock.
 	var pe *peerError
 	if errors.As(err, &pe) && pe.Status == http.StatusUnprocessableEntity {
 		return "", "", fmt.Errorf("%w: %s", ledger.ErrInvalid, pe.Message)
+	}
+	if errors.As(err, &pe) && pe.Status == http.StatusServiceUnavailable {
+		return "", "", &unavailableError{msg: pe.Message}
 	}
 	if err != nil {
 		return "", "", fmt.Errorf("enrol a BVN at NIBSS: %w", err)

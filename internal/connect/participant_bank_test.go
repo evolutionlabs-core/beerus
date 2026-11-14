@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	stampedField = regexp.MustCompile(`"(created_at|posted_at|at)":"[^"]*"`)
+	stampedField = regexp.MustCompile(`"(created_at|posted_at)":"[^"]*"`)
 	accountNo    = regexp.MustCompile(`"nuban":"(\d{10})"`)
 )
 
@@ -105,7 +105,7 @@ func TestParticipantBankContract(t *testing.T) {
 	}
 	step("account key reused", "POST", "/v1/accounts", "acc-ada", fmt.Sprintf(`{"customer":%q,"type":"current"}`, adaID), 422, apiErr("idempotency_key_reused", "This Idempotency-Key was used with a different request."))
 	cash := func(kind, account string, balance, minor int64) string {
-		return fmt.Sprintf(`{"kind":%q,"account":%q,"amount_minor":%d,"balance_minor":%d,"replayed":false,"at":"T"}`, kind, account, minor, balance)
+		return fmt.Sprintf(`{"kind":%q,"account":%q,"amount_minor":%d,"balance_minor":%d,"replayed":false,"posted_at":"T"}`, kind, account, minor, balance)
 	}
 	deposit := fmt.Sprintf(`{"account":%q,"amount":"5,000.00"}`, adaAcct)
 	step("deposit", "POST", "/v1/deposits", "cash-1", deposit, 201, cash("deposit", adaAcct, 500000, 500000))
@@ -116,7 +116,7 @@ func TestParticipantBankContract(t *testing.T) {
 	step("deposit into nothing", "POST", "/v1/deposits", "cash-none", `{"account":"0000000000","amount":"1"}`, 404, apiErr("not_found", "No such account."))
 	step("deposit of nothing", "POST", "/v1/deposits", "cash-zero", fmt.Sprintf(`{"account":%q,"amount":"0"}`, adaAcct), 422, apiErr("invalid_request", `Amount "0" must be a positive naira amount.`))
 	step("withdrawal", "POST", "/v1/withdrawals", "cash-2", fmt.Sprintf(`{"account":%q,"amount":"1200"}`, adaAcct), 201, cash("withdrawal", adaAcct, 380000, 120000))
-	step("overdraw", "POST", "/v1/withdrawals", "cash-3", fmt.Sprintf(`{"account":%q,"amount":"100000"}`, adaAcct), 422, apiErr("insufficient_funds", "The account does not have enough money."))
+	step("overdraw", "POST", "/v1/withdrawals", "cash-3", fmt.Sprintf(`{"account":%q,"amount":"100000"}`, adaAcct), 422, apiErr("insufficient_funds", "Account "+adaAcct+" holds ₦3,800.00 and ₦100,000.00 was asked for; withdraw ₦3,800.00 or less."))
 	accountsOf := func(customer string, balance int64) string {
 		return fmt.Sprintf(`{"data":[{"nuban":%q,"name":"Ada Obi","customer":%q,"type":"savings","status":"active","currency":"NGN","balance_minor":%d}]}`, adaAcct, customer, balance)
 	}
@@ -143,6 +143,14 @@ func TestParticipantBankContract(t *testing.T) {
 	step("close the customer", "POST", "/v1/customers/"+adaID+"/close", "close-4", "", 200, fmt.Sprintf(`{"customer":%q,"status":"closed"}`, adaID))
 	step("close nobody", "POST", "/v1/customers/cus_nobody/close", "close-5", "", 404, apiErr("not_found", "No such customer."))
 	step("open an account for a closed customer", "POST", "/v1/accounts", "acc-closed", fmt.Sprintf(`{"customer":%q,"type":"current"}`, adaID), 422, apiErr("customer_closed", "Customer is closed: "+adaID+"."))
+	enrol := core.nibss
+	core.mu.Lock()
+	core.nibss, core.nibssOpening = nil, true
+	core.mu.Unlock()
+	step("customer while NIBSS is closed", "POST", "/v1/customers", "cus-late", `{"name":"Chi Eze","phone":"08030000002","dob":"1992-02-02"}`, 503, apiErr("unavailable", "NIBSS is not open yet, so no BVN can be enrolled; try again soon."))
+	core.mu.Lock()
+	core.nibss, core.nibssOpening = enrol, false
+	core.mu.Unlock()
 	if got := call("PUT", "/v1/phase", "", `{"phase":"suspended","reason":"Suspended by the operator.","generation":2,"world_id":"wld_1"}`, tok, true); got.status != 200 {
 		t.Fatalf("suspend: %d %s", got.status, got.body)
 	}

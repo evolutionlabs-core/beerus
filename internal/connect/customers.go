@@ -63,7 +63,7 @@ type CashResult struct {
 	Amount   int64     `json:"amount_minor"`
 	Balance  int64     `json:"balance_minor"`
 	Replayed bool      `json:"replayed"`
-	At       time.Time `json:"at"`
+	PostedAt time.Time `json:"posted_at"`
 }
 
 var errBankNotFound = errors.New("no such bank")
@@ -229,13 +229,13 @@ func (a *App) postCash(ctx context.Context, bankID, kind string, req CashRequest
 		p, err = b.CashWithdrawal(ctx, key, req.Account, amount, now)
 	}
 	if err != nil {
-		return CashResult{}, err
+		return CashResult{}, a.cashRefusal(ctx, b, req, amount, err)
 	}
 	bal, ok := p.Balances[bank.CustomerAccount(req.Account)]
 	if !ok {
 		return CashResult{}, fmt.Errorf("read balance of %s: the posted entry has no balance for it", req.Account)
 	}
-	return CashResult{Kind: kind, Account: req.Account, Amount: amount, Balance: bal, Replayed: p.Replayed, At: p.PostedAt.In(clock.Lagos)}, nil
+	return CashResult{Kind: kind, Account: req.Account, Amount: amount, Balance: bal, Replayed: p.Replayed, PostedAt: p.PostedAt.In(clock.Lagos)}, nil
 }
 
 func listParams(r *http.Request) (int, string, error) {
@@ -270,6 +270,9 @@ func clean(err error) string {
 
 func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
 	var te *transferError
+	var fe *insufficientFundsError
+	var de *dailyLimitError
+	var ue *unavailableError
 	switch {
 	case errors.As(err, &te):
 		writeError(w, r, te.status, te.errCode, sentence(te.Error()))
@@ -297,6 +300,12 @@ func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, r, http.StatusUnprocessableEntity, "idempotency_key_reused", "That Idempotency-Key was used for a different request.")
 	case errors.Is(err, ledger.ErrInvalid):
 		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", clean(err))
+	case errors.As(err, &ue):
+		writeError(w, r, http.StatusServiceUnavailable, "unavailable", ue.msg)
+	case errors.As(err, &fe):
+		writeError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", fe.Message())
+	case errors.As(err, &de):
+		writeError(w, r, http.StatusUnprocessableEntity, "daily_limit", de.Message())
 	case errors.Is(err, ledger.ErrInsufficientFunds):
 		writeError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", "The account does not have enough money.")
 	case errors.Is(err, ledger.ErrDailyLimit):
@@ -454,4 +463,56 @@ func (a *App) ctlCash(kind string) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusCreated, res)
 	}
+}
+
+type insufficientFundsError struct {
+	Account string
+	Balance int64
+	Amount  int64
+}
+
+func (e *insufficientFundsError) Error() string {
+	return ledger.ErrInsufficientFunds.Error()
+}
+
+func (e *insufficientFundsError) Unwrap() error {
+	return ledger.ErrInsufficientFunds
+}
+
+func (e *insufficientFundsError) Message() string {
+	return fmt.Sprintf("Account %s holds %s and %s was asked for; withdraw %s or less.", e.Account, FormatNaira(e.Balance), FormatNaira(e.Amount), FormatNaira(max(e.Balance, 0)))
+}
+
+type dailyLimitError struct {
+	Account string
+	Limit   int64
+	Used    int64
+	Amount  int64
+}
+
+func (e *dailyLimitError) Error() string {
+	return ledger.ErrDailyLimit.Error()
+}
+
+func (e *dailyLimitError) Unwrap() error {
+	return ledger.ErrDailyLimit
+}
+
+func (e *dailyLimitError) Message() string {
+	return fmt.Sprintf("Account %s has used %s of its %s daily limit and %s was asked for; withdraw %s or less today.", e.Account, FormatNaira(e.Used), FormatNaira(e.Limit), FormatNaira(e.Amount), FormatNaira(max(e.Limit-e.Used, 0)))
+}
+
+func (a *App) cashRefusal(ctx context.Context, b *bank.Bank, req CashRequest, amount int64, err error) error {
+	var limit *ledger.DailyLimitError
+	switch {
+	case errors.Is(err, ledger.ErrInsufficientFunds):
+		bal, berr := b.L.Balance(ctx, bank.CustomerAccount(req.Account))
+		if berr != nil {
+			return fmt.Errorf("read balance of %s: %w", req.Account, berr)
+		}
+		return &insufficientFundsError{Account: req.Account, Balance: bal, Amount: amount}
+	case errors.As(err, &limit):
+		return &dailyLimitError{Account: req.Account, Limit: limit.Limit, Used: limit.Used, Amount: amount}
+	}
+	return err
 }
