@@ -31,7 +31,7 @@ func sampleStatus() Status {
 			Money:               &Removal{Money: MoneyTransfer, To: "bank-a"},
 			Allocated:           Allocation{NIPCode: "999002", NUBANCode: "902", Port: 7451, APIPort: 7461},
 			Owned:               []Owned{{Kind: "database", Name: "beerus_x_bank_b"}},
-			Steps:               map[string]string{StepAllocate: "done"},
+			Steps:               map[string]string{config.StepAllocate: "done"},
 			Result:              json.RawMessage(`{"moved_minor":5}`),
 			Conditions:          []Condition{{Type: ConditionReady, Status: "False", Reason: ReasonTerminating, Message: "Removing bank-b.", ChangedAt: at}},
 			Events:              []Event{{LastAt: at, Reason: "FinalizerDone", Message: "stop-routing done", Count: 1}},

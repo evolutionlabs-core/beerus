@@ -3,6 +3,7 @@ package connect
 import (
 	"fmt"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -96,11 +97,11 @@ func (a *App) reloadSite(id string) {
 	if b == nil {
 		return
 	}
-	a.detach(b, setup.StepSite)
+	a.detach(b, config.StepSite)
 	a.lifeMu.Lock()
 	if st := a.status[id]; st != nil {
 		st.Phase = PhaseRepairing
-		for _, step := range []string{setup.StepSite, setup.StepAPI} {
+		for _, step := range []string{config.StepSite, config.StepAPI} {
 			if i := stepIndex(step); i >= 0 {
 				st.Steps[i].Done, st.Steps[i].Error = false, ""
 			}
@@ -109,8 +110,8 @@ func (a *App) reloadSite(id string) {
 	a.lifeMu.Unlock()
 	a.recordBank(id, func(r *setup.Resource) bool {
 		r.Phase = PhaseRepairing
-		delete(r.Steps, setup.StepSite)
-		delete(r.Steps, setup.StepAPI)
+		delete(r.Steps, config.StepSite)
+		delete(r.Steps, config.StepAPI)
 		return true
 	})
 }

@@ -143,13 +143,13 @@ func (a *App) registerMember(b *config.Bank) error {
 	}
 	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
 		r := findResource(st, setup.KindBank, b.ID)
-		if r == nil || r.Steps[setup.StepDirectory] == stepDone {
+		if r == nil || r.Steps[config.StepDirectory] == stepDone {
 			return false, nil
 		}
 		if r.Steps == nil {
 			r.Steps = map[string]string{}
 		}
-		r.Steps[setup.StepDirectory] = stepDone
+		r.Steps[config.StepDirectory] = stepDone
 		return true, nil
 	}); err != nil {
 		return err

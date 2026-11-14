@@ -82,11 +82,11 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	a.sendLocks.Delete(id)
 	var ls *ledgerSource
 	if b != nil {
-		a.detach(b, setup.StepSite)
+		a.detach(b, config.StepSite)
 		a.mu.Lock()
 		ls = a.ledgerFor(id)
 		a.mu.Unlock()
-		a.detach(b, setup.StepDatabase)
+		a.detach(b, config.StepDatabase)
 	}
 	var errs []error
 	switch {

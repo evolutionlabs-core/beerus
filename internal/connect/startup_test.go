@@ -80,7 +80,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 		t.Errorf("applied codes are not pinned: %+v", st.Applied.Spec.Banks[0])
 	}
 	r := findResource(&st, setup.KindBank, "bank-b")
-	if r == nil || r.Phase != config.PhaseProvisioning || r.Steps[setup.StepAllocate] != stepDone || r.Generation != 1 {
+	if r == nil || r.Phase != config.PhaseProvisioning || r.Steps[config.StepAllocate] != stepDone || r.Generation != 1 {
 		t.Fatalf("bank-b resource: %+v", r)
 	}
 	for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {

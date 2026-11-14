@@ -710,7 +710,7 @@ func admitBank(st *setup.Status, act setup.Action, ad *admission, fields map[str
 				Port:      ports[0],
 				APIPort:   ports[1],
 			},
-			Steps: map[string]string{setup.StepAllocate: stepDone},
+			Steps: map[string]string{config.StepAllocate: stepDone},
 		}
 	case setup.OpUpdate:
 		if r := findResource(st, setup.KindBank, act.ID); r != nil {

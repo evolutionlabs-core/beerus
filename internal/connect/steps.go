@@ -37,7 +37,7 @@ func newStatus(b *config.Bank, done bool) *BankStatus {
 	st := &BankStatus{ID: b.ID, Name: b.Name, Phase: PhaseProvisioning, URL: b.URL()}
 	for _, s := range config.BankSteps() {
 		name := s.Name
-		if s.ID == setup.StepAllocate && b.NIPCode != "" {
+		if s.ID == config.StepAllocate && b.NIPCode != "" {
 			name += " (NIP " + b.NIPCode + ", NUBAN " + b.NUBANCode + ")"
 		}
 		st.Steps = append(st.Steps, BankStep{ID: s.ID, Name: name, Done: done})
@@ -79,7 +79,7 @@ func (a *App) initLifecycle(unready map[string]bool) []*config.Bank {
 			st.Phase = PhaseRepairing
 		}
 		for i := range st.Steps {
-			st.Steps[i].Done = st.Steps[i].ID == setup.StepAllocate && r != nil && r.Steps[setup.StepAllocate] == stepDone
+			st.Steps[i].Done = st.Steps[i].ID == config.StepAllocate && r != nil && r.Steps[config.StepAllocate] == stepDone
 		}
 		resume = append(resume, b)
 	}
@@ -215,31 +215,31 @@ func (a *App) provision(b *config.Bank) {
 	a.lifeMu.Lock()
 	st := a.status[b.ID]
 	a.lifeMu.Unlock()
-	ok := a.step(st, setup.StepAllocate, func() error {
+	ok := a.step(st, config.StepAllocate, func() error {
 		return a.claimBank(b)
-	}) && a.step(st, setup.StepDirectory, func() error {
+	}) && a.step(st, config.StepDirectory, func() error {
 		return a.registerMember(b)
-	}) && a.step(st, setup.StepDatabase, func() error {
+	}) && a.step(st, config.StepDatabase, func() error {
 		return store.Create(context.Background(), a.cfg.DatabaseURL, b.Database)
-	}) && a.step(st, setup.StepLedgerSchema, func() error {
+	}) && a.step(st, config.StepLedgerSchema, func() error {
 		n, err := store.Migrate(context.Background(), a.cfg.DatabaseURL, b.Database, ledger.Migrate)
 		if err != nil {
 			return err
 		}
-		a.nameStep(st, setup.StepLedgerSchema, migrationCount(n))
+		a.nameStep(st, config.StepLedgerSchema, migrationCount(n))
 		return nil
-	}) && a.step(st, setup.StepOpenBankingSchema, func() error {
+	}) && a.step(st, config.StepOpenBankingSchema, func() error {
 		n, err := store.Migrate(context.Background(), a.cfg.DatabaseURL, b.Database, openbanking.Migrate)
 		if err != nil {
 			return err
 		}
-		a.nameStep(st, setup.StepOpenBankingSchema, migrationCount(n))
+		a.nameStep(st, config.StepOpenBankingSchema, migrationCount(n))
 		return a.openLedger(b)
-	}) && a.step(st, setup.StepCerts, func() error {
+	}) && a.step(st, config.StepCerts, func() error {
 		return a.bankCerts(b)
-	}) && a.step(st, setup.StepCBN, func() error {
+	}) && a.step(st, config.StepCBN, func() error {
 		return a.cbnMember(b)
-	}) && a.step(st, setup.StepSite, func() error {
+	}) && a.step(st, config.StepSite, func() error {
 		if b.Closed() {
 			return nil
 		}
@@ -247,7 +247,7 @@ func (a *App) provision(b *config.Bank) {
 			return err
 		}
 		return a.probeSite(b)
-	}) && a.step(st, setup.StepAPI, func() error {
+	}) && a.step(st, config.StepAPI, func() error {
 		if b.Closed() {
 			return nil
 		}
@@ -440,7 +440,7 @@ func (a *App) probe(b *config.Bank) (string, []string) {
 	a.mu.Lock()
 	ls := a.ledgerFor(b.ID)
 	a.mu.Unlock()
-	rebuild := []string{setup.StepDatabase, setup.StepLedgerSchema, setup.StepOpenBankingSchema, setup.StepSite, setup.StepAPI}
+	rebuild := []string{config.StepDatabase, config.StepLedgerSchema, config.StepOpenBankingSchema, config.StepSite, config.StepAPI}
 	if ls == nil {
 		return "its ledger is not open", rebuild
 	}
@@ -457,11 +457,11 @@ func (a *App) probe(b *config.Bank) (string, []string) {
 		resp.Body.Close()
 		return "", nil
 	}
-	return "online banking is not answering", []string{setup.StepSite, setup.StepAPI}
+	return "online banking is not answering", []string{config.StepSite, config.StepAPI}
 }
 
 func (a *App) detach(b *config.Bank, from string) {
-	if from == setup.StepDatabase {
+	if from == config.StepDatabase {
 		a.mu.Lock()
 		var ls *ledgerSource
 		for i, l := range a.ledgers {

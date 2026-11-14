@@ -27,13 +27,13 @@ func TestBackoffDoublesToFiveMinutes(t *testing.T) {
 }
 
 func TestStepIndexKeepsTheDatabaseThird(t *testing.T) {
-	if stepIndex(setup.StepDatabase) != 2 || stepIndex(setup.StepAllocate) != 0 || stepIndex("nope") != -1 {
+	if stepIndex(config.StepDatabase) != 2 || stepIndex(config.StepAllocate) != 0 || stepIndex("nope") != -1 {
 		t.Fatal("step order changed")
 	}
 }
 
 func TestDriftRules(t *testing.T) {
-	missing := []string{setup.StepDatabase, setup.StepSite}
+	missing := []string{config.StepDatabase, config.StepSite}
 	cases := []struct {
 		phase     string
 		done      []string

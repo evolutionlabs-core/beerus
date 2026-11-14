@@ -38,7 +38,7 @@ func spec() Spec {
 }
 
 func doneSteps() map[string]string {
-	return map[string]string{StepAllocate: stepDone, StepDirectory: stepDone, StepDatabase: stepDone, StepCerts: stepDone, StepCBN: stepDone, StepSite: stepDone, StepAPI: stepDone}
+	return map[string]string{config.StepAllocate: stepDone, config.StepDirectory: stepDone, config.StepDatabase: stepDone, config.StepCerts: stepDone, config.StepCBN: stepDone, config.StepSite: stepDone, config.StepAPI: stepDone}
 }
 
 func status(applied Spec) Status {
@@ -56,7 +56,7 @@ func status(applied Spec) Status {
 	for _, x := range applied.Spec.Partners {
 		st.Resources = append(st.Resources, Resource{Kind: KindPartner, ID: x.ID, Phase: config.PhaseActive})
 	}
-	st.Resources = append(st.Resources, Resource{Kind: KindSystem, ID: SystemNIBSS, Phase: config.PhaseActive, Steps: map[string]string{StepDatabase: stepDone}})
+	st.Resources = append(st.Resources, Resource{Kind: KindSystem, ID: SystemNIBSS, Phase: config.PhaseActive, Steps: map[string]string{config.StepDatabase: stepDone}})
 	return st
 }
 
@@ -218,7 +218,7 @@ func TestBuildNoChanges(t *testing.T) {
 			name: "provisioning bank with steps still running",
 			status: func(st *Status) {
 				r := res(st, KindBank, "bank-b")
-				r.Phase, r.Steps = config.PhaseProvisioning, map[string]string{StepAllocate: stepDone}
+				r.Phase, r.Steps = config.PhaseProvisioning, map[string]string{config.StepAllocate: stepDone}
 			},
 		},
 	})
@@ -901,7 +901,7 @@ func TestBuildDrift(t *testing.T) {
 	run(t, []planCase{
 		{
 			name:   "database missing",
-			status: func(st *Status) { res(st, KindBank, "bank-a").Steps[StepDatabase] = "missing" },
+			status: func(st *Status) { res(st, KindBank, "bank-a").Steps[config.StepDatabase] = "missing" },
 			want:   []Action{{Op: OpDrift, Kind: KindBank, ID: "bank-a", Fields: []FieldChange{{Path: "steps.database", From: stepDone, To: "missing"}}}},
 		},
 		{
@@ -909,7 +909,7 @@ func TestBuildDrift(t *testing.T) {
 			status: func(st *Status) {
 				r := res(st, KindBank, "bank-b")
 				r.Phase = config.PhaseRepairing
-				r.Steps[StepCerts], r.Steps[StepSite] = "missing", "failed"
+				r.Steps[config.StepCerts], r.Steps[config.StepSite] = "missing", "failed"
 			},
 			want: []Action{{Op: OpDrift, Kind: KindBank, ID: "bank-b", Fields: []FieldChange{
 				{Path: "steps.certs", From: stepDone, To: "missing"},
@@ -929,7 +929,7 @@ func TestBuildDrift(t *testing.T) {
 		{
 			name: "system database missing",
 			status: func(st *Status) {
-				res(st, KindSystem, SystemNIBSS).Steps[StepDatabase] = "missing"
+				res(st, KindSystem, SystemNIBSS).Steps[config.StepDatabase] = "missing"
 			},
 			want: []Action{{Op: OpDrift, Kind: KindSystem, ID: SystemNIBSS, Fields: []FieldChange{{Path: "steps.database", From: stepDone, To: "missing"}}}},
 		},
@@ -937,14 +937,14 @@ func TestBuildDrift(t *testing.T) {
 			name: "terminating bank is not drift",
 			status: func(st *Status) {
 				r := res(st, KindBank, "bank-b")
-				r.Phase, r.Steps[StepDatabase] = config.PhaseTerminating, "missing"
+				r.Phase, r.Steps[config.StepDatabase] = config.PhaseTerminating, "missing"
 			},
 			desired: func(s *Spec) { dropBank(s, "bank-b") },
 		},
 		{
 			name: "an update wins over drift",
 			status: func(st *Status) {
-				res(st, KindBank, "bank-a").Steps[StepDatabase] = "missing"
+				res(st, KindBank, "bank-a").Steps[config.StepDatabase] = "missing"
 			},
 			desired: func(s *Spec) { bank(s, "bank-a").Name = "Zenith Bank" },
 			want:    []Action{{Op: OpUpdate, Kind: KindBank, ID: "bank-a", Fields: []FieldChange{{Path: "name", From: "Bank A", To: "Zenith Bank"}}}},

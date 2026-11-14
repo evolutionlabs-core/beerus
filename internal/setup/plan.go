@@ -426,7 +426,7 @@ func driftAction(r Resource) (Action, bool) {
 		return Action{}, false
 	}
 	var fields []FieldChange
-	for _, s := range []string{StepAllocate, StepDirectory, StepDatabase, StepLedgerSchema, StepOpenBankingSchema, StepCerts, StepCBN, StepSite, StepAPI} {
+	for _, s := range []string{config.StepAllocate, config.StepDirectory, config.StepDatabase, config.StepLedgerSchema, config.StepOpenBankingSchema, config.StepCerts, config.StepCBN, config.StepSite, config.StepAPI} {
 		if v, ok := r.Steps[s]; ok && v != stepDone {
 			fields = append(fields, FieldChange{Path: "steps." + s, From: stepDone, To: v})
 		}

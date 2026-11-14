@@ -25,8 +25,8 @@ func TestBanksJoinTheNIBSSDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, r := range st.Resources {
-		if r.Kind == setup.KindBank && r.Steps[setup.StepDirectory] != "done" {
-			t.Errorf("%s: directory step %q", r.ID, r.Steps[setup.StepDirectory])
+		if r.Kind == setup.KindBank && r.Steps[config.StepDirectory] != "done" {
+			t.Errorf("%s: directory step %q", r.ID, r.Steps[config.StepDirectory])
 		}
 		if r.Kind == setup.KindSystem && r.ID == setup.SystemNIBSS && r.Phase != config.PhaseActive {
 			t.Errorf("System/nibss is %s", r.Phase)

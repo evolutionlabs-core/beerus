@@ -164,7 +164,7 @@ func checkPostgres(ctx context.Context, url string) error {
 
 func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *ctlStore, st setup.Status) error {
 	name := config.DatabaseName(cfg.Dir, cbnID)
-	steps := []string{setup.StepDatabase, setup.StepLedgerSchema, setup.StepSettlement}
+	steps := []string{config.StepDatabase, config.StepLedgerSchema, setup.StepSettlement}
 	err := in.ensure(ctl, st, setup.SystemCBN, steps[0], stepNameCBNCreate, steps, func() (string, error) {
 		if err := ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
 			return "", err
@@ -193,7 +193,7 @@ func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *ctl
 
 func installNIBSS(ctx context.Context, in *installer, cfg *config.Config, ctl *ctlStore, st setup.Status) error {
 	name := config.DatabaseName(cfg.Dir, setup.SystemNIBSS)
-	steps := []string{setup.StepDatabase, setup.StepSchema}
+	steps := []string{config.StepDatabase, setup.StepSchema}
 	err := in.ensure(ctl, st, setup.SystemNIBSS, steps[0], stepNameNIBSSMake, steps, func() (string, error) {
 		if err := ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
 			return "", err
@@ -234,7 +234,7 @@ func (in *installer) ensure(ctl *ctlStore, st setup.Status, system, step, name s
 }
 
 func skippedDetail(step string) string {
-	if step == setup.StepLedgerSchema || step == setup.StepSchema {
+	if step == config.StepLedgerSchema || step == setup.StepSchema {
 		return migrationCount(0)
 	}
 	return ""

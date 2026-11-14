@@ -16,7 +16,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-var createSteps = []string{setup.StepAllocate, setup.StepDirectory, setup.StepDatabase, setup.StepLedgerSchema, setup.StepOpenBankingSchema, setup.StepCerts, setup.StepCBN, setup.StepSite, setup.StepAPI}
+var createSteps = []string{config.StepAllocate, config.StepDirectory, config.StepDatabase, config.StepLedgerSchema, config.StepOpenBankingSchema, config.StepCerts, config.StepCBN, config.StepSite, config.StepAPI}
 
 func storedStatus(t *testing.T, dir string) setup.Status {
 	t.Helper()
@@ -114,7 +114,7 @@ func TestRestartResumesProvisioning(t *testing.T) {
 		r := &st.Resources[i]
 		if r.Kind == setup.KindBank && r.ID == "bank-b" {
 			r.Phase = config.PhaseProvisioning
-			r.Steps = map[string]string{setup.StepAllocate: "done", setup.StepDirectory: "done"}
+			r.Steps = map[string]string{config.StepAllocate: "done", config.StepDirectory: "done"}
 			r.Attempts, r.NextAttemptAt = 3, &later
 		}
 	}
