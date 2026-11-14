@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,11 +28,13 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/inbound"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 const (
+	forbidden   = `{"error":{"code":"forbidden","message":"This certificate may not call the NIP API of this bank. Only NIBSS may.","request_id":"req_ID"}}`
 	specFile    = "../../../api/nip/openapi.yaml"
 	nipCode     = "999001"
 	nubanCode   = "901"
@@ -54,6 +58,7 @@ type stack struct {
 	spec    validator.Validator
 	funded  string
 	empty   string
+	frozen  string
 }
 
 func session(n int) string {
@@ -82,7 +87,7 @@ func newStack(t *testing.T) *stack {
 		t.Fatal(err)
 	}
 	s := &stack{bank: b, clients: map[string]*http.Client{}}
-	for i, deposit := range []int64{startAmount, 0} {
+	for i, deposit := range []int64{startAmount, 0, 0} {
 		c, err := b.CreateCustomer(ctx, fmt.Sprintf("c%d", i), "ADA OBI", "+2348030000001", clock.Date{Y: 1990, M: 1, D: 1}, "22912345678", "", "", t0)
 		if err != nil {
 			t.Fatal(err)
@@ -96,10 +101,16 @@ func newStack(t *testing.T) *stack {
 				t.Fatal(err)
 			}
 		}
-		if i == 0 {
+		switch i {
+		case 0:
 			s.funded = acc.NUBAN
-		} else {
+		case 1:
 			s.empty = acc.NUBAN
+		default:
+			s.frozen = acc.NUBAN
+			if err := b.FreezeAccount(ctx, acc.NUBAN); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	ca, err := pki.NewAuthority("Test CA", certLife)
@@ -168,44 +179,68 @@ type reply struct {
 	status   int
 	body     string
 	replayed bool
+	allow    string
 }
 
-func (s *stack) call(t *testing.T, client, method, path, body string, checkRequest bool) reply {
-	t.Helper()
-	if checkRequest {
-		vreq, err := http.NewRequest(method, s.base+path, strings.NewReader(body))
+type check int
+
+const (
+	checkBoth check = iota
+	checkResponse
+	checkNone
+)
+
+func (s *stack) do(client, method, path, body string, mode check) (reply, error) {
+	newRequest := func() (*http.Request, error) {
+		req, err := http.NewRequest(method, s.base+path, strings.NewReader(body))
 		if err != nil {
-			t.Fatal(err)
+			return nil, err
 		}
-		vreq.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	}
+	if mode == checkBoth {
+		vreq, err := newRequest()
+		if err != nil {
+			return reply{}, err
+		}
 		if ok, errs := s.spec.ValidateHttpRequest(vreq); !ok {
-			t.Fatalf("%s %s request: %v", method, path, errs)
+			return reply{}, fmt.Errorf("%s %s request: %v", method, path, errs)
 		}
 	}
-	req, err := http.NewRequest(method, s.base+path, strings.NewReader(body))
+	req, err := newRequest()
 	if err != nil {
-		t.Fatal(err)
+		return reply{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.clients[client].Do(req)
 	if err != nil {
-		t.Fatal(err)
+		return reply{}, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatal(err)
+		return reply{}, err
 	}
-	vresp := &http.Response{StatusCode: resp.StatusCode, Header: resp.Header, Body: io.NopCloser(bytes.NewReader(raw))}
-	vreq, err := http.NewRequest(method, s.base+path, strings.NewReader(body))
+	if mode != checkNone {
+		vresp := &http.Response{StatusCode: resp.StatusCode, Header: resp.Header, Body: io.NopCloser(bytes.NewReader(raw))}
+		vreq, err := newRequest()
+		if err != nil {
+			return reply{}, err
+		}
+		if ok, errs := s.spec.ValidateHttpResponse(vreq, vresp); !ok {
+			return reply{}, fmt.Errorf("%s %s response %d %s: %v", method, path, resp.StatusCode, raw, errs)
+		}
+	}
+	return reply{resp.StatusCode, requestID.ReplaceAllString(strings.TrimSpace(string(raw)), `"request_id":"req_ID"`), resp.Header.Get("Idempotent-Replayed") == "true", resp.Header.Get("Allow")}, nil
+}
+
+func (s *stack) call(t *testing.T, client, method, path, body string, mode check) reply {
+	t.Helper()
+	r, err := s.do(client, method, path, body, mode)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vreq.Header.Set("Content-Type", "application/json")
-	if ok, errs := s.spec.ValidateHttpResponse(vreq, vresp); !ok {
-		t.Fatalf("%s %s response %d %s: %v", method, path, resp.StatusCode, raw, errs)
-	}
-	return reply{resp.StatusCode, requestID.ReplaceAllString(strings.TrimSpace(string(raw)), `"request_id":"req_ID"`), resp.Header.Get("Idempotent-Replayed") == "true"}
+	return r
 }
 
 func (s *stack) balance(t *testing.T, nuban string) int64 {
@@ -236,7 +271,8 @@ func TestNIPContract(t *testing.T) {
 		client       string
 		method, path string
 		body         string
-		skipRequest  bool
+		mode         check
+		allow        string
 		status       int
 		want         string
 		replayed     bool
@@ -257,8 +293,15 @@ func TestNIPContract(t *testing.T) {
 		{name: "status of refused credit", method: "GET", path: "/v1/nip/credits/" + session(3), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"25"}`, session(3)), funded: startAmount + 2500000},
 		{name: "largest amount", method: "POST", path: "/v1/nip/credits", body: creditBody(session(4), s.empty, math.MaxInt64, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(4)), funded: startAmount + 2500000, empty: math.MaxInt64},
 		{name: "overflow", method: "POST", path: "/v1/nip/credits", body: creditBody(session(5), s.empty, 1, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"96"}`, session(5)), funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "wrong certificate", client: "aggregator", method: "GET", path: "/v1/nip/account-names/" + s.funded, status: 403, want: `{"error":{"code":"forbidden","message":"This certificate may not call the NIP API of this bank. Only NIBSS may.","request_id":"req_ID"}}`, funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "oversized body", method: "POST", path: "/v1/nip/credits", body: creditBody(session(6), s.funded, 1000000, strings.Repeat("x", bodyLimit)), skipRequest: true, status: 400, want: fmt.Sprintf(`{"error":{"code":"invalid_request","message":"The body is larger than %d bytes. Send a smaller body.","request_id":"req_ID"}}`, bodyLimit), funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "credit to unknown account", method: "POST", path: "/v1/nip/credits", body: creditBody(session(7), unknown, 1000000, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"07"}`, session(7)), funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "credit to frozen account", method: "POST", path: "/v1/nip/credits", body: creditBody(session(8), s.frozen, 1000000, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"57"}`, session(8)), funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "wrong certificate", client: "aggregator", method: "GET", path: "/v1/nip/account-names/" + s.funded, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "wrong certificate unknown path", client: "aggregator", method: "GET", path: "/v1/nip/nothing", mode: checkNone, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "wrong certificate wrong method", client: "aggregator", method: "DELETE", path: "/v1/nip/credits", mode: checkNone, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "unknown path", method: "GET", path: "/v1/nip/nothing", mode: checkNone, status: 404, want: `{"error":{"code":"not_found","message":"This path is not part of the NIP API of a bank.","request_id":"req_ID"}}`, funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "wrong method", method: "DELETE", path: "/v1/nip/credits", mode: checkNone, status: 405, allow: "POST", want: `{"error":{"code":"method_not_allowed","message":"Use POST for this path.","request_id":"req_ID"}}`, funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "unknown field", method: "POST", path: "/v1/nip/credits", body: strings.Replace(creditBody(session(9), s.funded, 1000000, ""), `"narration"`, `"extra":1,"narration"`, 1), mode: checkResponse, status: 400, want: `{"error":{"code":"invalid_request","message":"Send a JSON credit request with only the documented fields as the body.","request_id":"req_ID"}}`, funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "oversized body", method: "POST", path: "/v1/nip/credits", body: creditBody(session(6), s.funded, 1000000, strings.Repeat("x", bodyLimit)), mode: checkResponse, status: 400, want: fmt.Sprintf(`{"error":{"code":"invalid_request","message":"The body is larger than %d bytes. Send a smaller body.","request_id":"req_ID"}}`, bodyLimit), funded: startAmount + 2500000, empty: math.MaxInt64},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
@@ -266,16 +309,30 @@ func TestNIPContract(t *testing.T) {
 			if client == "" {
 				client = "nibss"
 			}
-			got := s.call(t, client, r.method, r.path, r.body, !r.skipRequest)
-			if got.status != r.status || got.body != r.want || got.replayed != r.replayed {
-				t.Fatalf("got %d %s replayed=%v, want %d %s replayed=%v", got.status, got.body, got.replayed, r.status, r.want, r.replayed)
+			got := s.call(t, client, r.method, r.path, r.body, r.mode)
+			if got.status != r.status || got.body != r.want || got.replayed != r.replayed || got.allow != r.allow {
+				t.Fatalf("got %d %s replayed=%v allow=%q, want %d %s replayed=%v allow=%q", got.status, got.body, got.replayed, got.allow, r.status, r.want, r.replayed, r.allow)
 			}
 			if f, e := s.balance(t, s.funded), s.balance(t, s.empty); f != r.funded || e != r.empty {
 				t.Fatalf("balances %d and %d, want %d and %d", f, e, r.funded, r.empty)
 			}
 		})
 	}
-	check, err := s.bank.L.Verify(context.Background())
+	ctx := context.Background()
+	sender := bank.Counterparty{Name: "CHIDI OKAFOR", AccountNumber: "9010000014", BankCode: "000014", BankName: "Bank B"}
+	if _, err := s.bank.ReceiveNIP(ctx, session(2), s.funded, 1000000, sender, "", t0); !errors.Is(err, nip.ErrNoRecord) {
+		t.Fatalf("direct credit of a session answered 25: %v, want %v", err, nip.ErrNoRecord)
+	}
+	if _, err := s.bank.ReceiveNIP(ctx, session(10), s.funded, 1000000, sender, "", t0); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.call(t, "nibss", "GET", "/v1/nip/credits/"+session(10), "", checkBoth); got.body != fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(10)) {
+		t.Fatalf("status of a direct credit: %s", got.body)
+	}
+	if got := s.balance(t, s.funded); got != startAmount+2500000+1000000 {
+		t.Fatalf("balance %d, want %d", got, startAmount+2500000+1000000)
+	}
+	check, err := s.bank.L.Verify(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,43 +343,60 @@ func TestNIPContract(t *testing.T) {
 
 func TestCreditRacesStatus(t *testing.T) {
 	s := newStack(t)
-	const sessions, parallel = 40, 8
-	type outcome struct{ credit, status string }
+	const sessions, credits, parallel = 100, 3, 8
+	type outcome struct {
+		credits [credits]string
+		status  string
+	}
 	outcomes := make([]outcome, sessions)
+	errs := make(chan error, sessions*(credits+1))
 	gate := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
+	run := func(method, path, body string, set func(string)) {
+		defer wg.Done()
+		gate <- struct{}{}
+		defer func() { <-gate }()
+		r, err := s.do("nibss", method, path, body, checkBoth)
+		if err != nil {
+			errs <- err
+			return
+		}
+		var got struct {
+			ResponseCode string `json:"response_code"`
+		}
+		if err := json.Unmarshal([]byte(r.body), &got); err != nil {
+			errs <- fmt.Errorf("decode %s %s: %w", method, path, err)
+			return
+		}
+		set(got.ResponseCode)
+	}
 	for i := 0; i < sessions; i++ {
 		sid := session(100 + i)
-		for _, kind := range []string{"credit", "status"} {
+		for k := 0; k < credits; k++ {
 			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				gate <- struct{}{}
-				defer func() { <-gate }()
-				var r reply
-				if kind == "credit" {
-					r = s.call(t, "nibss", "POST", "/v1/nip/credits", creditBody(sid, s.funded, 1000000, ""), true)
-				} else {
-					r = s.call(t, "nibss", "GET", "/v1/nip/credits/"+sid, "", true)
-				}
-				code := strings.Split(r.body, `"response_code":"`)[1][:2]
-				if kind == "credit" {
-					outcomes[i].credit = code
-				} else {
-					outcomes[i].status = code
-				}
-			}()
+			go run("POST", "/v1/nip/credits", creditBody(sid, s.funded, 1000000, ""), func(code string) { outcomes[i].credits[k] = code })
 		}
+		wg.Add(1)
+		go run("GET", "/v1/nip/credits/"+sid, "", func(code string) { outcomes[i].status = code })
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if t.Failed() {
+		t.FailNow()
+	}
 	credited := int64(0)
 	for i, o := range outcomes {
-		switch {
-		case o.credit == "00" && o.status == "00":
+		want := o.status
+		for k, got := range o.credits {
+			if got != want || (want != "00" && want != "25") {
+				t.Errorf("session %d: credit %d answered %s and status %s, want every answer 00 or every answer 25", i, k, got, want)
+			}
+		}
+		if want == "00" {
 			credited++
-		case o.credit == "25" && o.status == "25":
-		default:
-			t.Errorf("session %d: credit %s and status %s, want 00 and 00 or 25 and 25", i, o.credit, o.status)
 		}
 	}
 	if got, want := s.balance(t, s.funded), startAmount+credited*1000000; got != want {
