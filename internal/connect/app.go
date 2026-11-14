@@ -242,10 +242,6 @@ func (a *App) closeLedgers() {
 	}
 }
 
-func (a *App) Clock() *clock.Clock {
-	return a.clock
-}
-
 func (a *App) Config() *config.Config {
 	return a.cfg
 }

@@ -49,7 +49,7 @@ type replica struct {
 }
 
 func (a *App) ctlReplica(w http.ResponseWriter, r *http.Request) {
-	rep := replica{Phases: map[string]string{}}
+	rep := replica{Phases: map[string]string{}, Banks: []*config.Bank{}}
 	a.mu.Lock()
 	ids := []string{}
 	for _, b := range a.cfg.Banks {
