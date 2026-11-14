@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 )
 
 const (
@@ -173,7 +175,7 @@ func (a *App) syncBank(ctx context.Context, id, base string, gen int64, w bankWi
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
 	var state participantState
-	if _, err := a.peerRequest(ctx, base, http.MethodGet, "/v1/status", nil, nil, &state); err != nil {
+	if _, err := a.link.Request(ctx, base, http.MethodGet, "/v1/status", nil, nil, &state); err != nil {
 		return fmt.Errorf("read status of %s: %w", id, err)
 	}
 	if state.ObservedGeneration == gen && state.Phase == w.phase {
@@ -183,7 +185,7 @@ func (a *App) syncBank(ctx context.Context, id, base string, gen int64, w bankWi
 		return err
 	}
 	body := phaseRequest{Phase: w.phase, Reason: w.reason, Generation: gen, WorldID: a.WorldID()}
-	if _, err := a.peerRequest(ctx, base, http.MethodPut, "/v1/phase", nil, body, nil); err != nil {
+	if _, err := a.link.Request(ctx, base, http.MethodPut, "/v1/phase", nil, body, nil); err != nil {
 		return fmt.Errorf("send the phase of %s: %w", id, err)
 	}
 	return nil
@@ -198,7 +200,7 @@ func (a *App) heldFaults(ctx context.Context, base string) ([]string, error) {
 			path += "&cursor=" + url.QueryEscape(cursor)
 		}
 		var page remoteFaults
-		if _, err := a.peerRequest(ctx, base, http.MethodGet, path, nil, nil, &page); err != nil {
+		if _, err := a.link.Request(ctx, base, http.MethodGet, path, nil, nil, &page); err != nil {
 			return nil, err
 		}
 		for _, f := range page.Data {
@@ -221,7 +223,7 @@ func (a *App) syncFaults(ctx context.Context, id, base string, downs []Fault) er
 		wanted = append(wanted, faultIDFor(f.ID))
 	}
 	if slices.ContainsFunc(held, func(h string) bool { return !slices.Contains(wanted, h) }) {
-		if _, err := a.peerRequest(ctx, base, http.MethodDelete, "/v1/faults", nil, nil, nil); err != nil {
+		if _, err := a.link.Request(ctx, base, http.MethodDelete, "/v1/faults", nil, nil, nil); err != nil {
 			return fmt.Errorf("clear faults of %s: %w", id, err)
 		}
 		held = nil
@@ -240,8 +242,8 @@ func (a *App) syncFaults(ctx context.Context, id, base string, downs []Fault) er
 			req.For = min(left, maxFaultFor).String()
 		}
 		header := http.Header{"Idempotency-Key": {f.ID}}
-		_, err := a.peerRequest(ctx, base, http.MethodPost, "/v1/faults", header, req, nil)
-		var pe *peerError
+		_, err := a.link.Request(ctx, base, http.MethodPost, "/v1/faults", header, req, nil)
+		var pe *server.PeerError
 		if errors.As(err, &pe) && pe.Code == "idempotency_key_reused" {
 			continue
 		}

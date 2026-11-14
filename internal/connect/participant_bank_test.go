@@ -51,7 +51,7 @@ func TestParticipantBankContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(a.closeLedgers)
-	tok := a.ctlToken
+	tok := a.link.Token
 	call := newContractCall(t, a.participantAPI())
 	norm := func(s string) string { return stampedField.ReplaceAllString(s, `"$1":"T"`) }
 	run := func(validate bool) func(name, method, path, key, body string, status int, want string) controlReply {

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -71,7 +72,7 @@ func (a *App) enrolBVNLocal(ctx context.Context, name, phone string, dob clock.D
 func (a *App) enrolBVNAtCore(ctx context.Context, name, phone string, dob clock.Date) (string, string, error) {
 	var out bvnReply
 	_, err := a.coreDo(ctx, http.MethodPost, "/internal/bvns", bvnRequest{Name: name, Phone: phone, DOB: dob.String()}, &out)
-	var pe *peerError
+	var pe *server.PeerError
 	if errors.As(err, &pe) && pe.Status == http.StatusUnprocessableEntity {
 		return "", "", fmt.Errorf("%w: %s", ledger.ErrInvalid, pe.Message)
 	}

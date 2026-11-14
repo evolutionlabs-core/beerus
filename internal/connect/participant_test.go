@@ -16,6 +16,7 @@ import (
 	"github.com/pb33f/libopenapi"
 	validator "github.com/pb33f/libopenapi-validator"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
@@ -116,7 +117,7 @@ func TestParticipantControlContract(t *testing.T) {
 	cfg := bankDirConfig(t, &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1, APIPort: 2, Database: "db"})
 	a := &App{
 		cfg:  cfg,
-		role: RoleBank, bankID: "bank-a", ctlToken: participantTok, st: newState(),
+		role: RoleBank, bankID: "bank-a", link: server.Link{Token: participantTok}, st: newState(),
 		log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		clock:  clock.New(func() time.Time { return participantNow }),
 		status: map[string]*BankStatus{"bank-a": {ID: "bank-a", Phase: PhaseActive}},

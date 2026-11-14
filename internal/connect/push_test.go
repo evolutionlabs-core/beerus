@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
@@ -104,7 +105,7 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 		st:       newState(),
 		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		clock:    clock.New(nil),
-		peers:    &http.Client{Transport: transport},
+		link:     server.Link{Client: &http.Client{Transport: transport}},
 		pushWake: make(chan struct{}, 1),
 		status:   map[string]*BankStatus{"bank-a": {ID: "bank-a", Phase: PhaseActive}, "bank-b": {ID: "bank-b", Phase: PhaseSuspended, Reason: "Suspended."}},
 	}

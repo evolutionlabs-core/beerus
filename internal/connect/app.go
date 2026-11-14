@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
@@ -27,7 +28,6 @@ import (
 )
 
 type App struct {
-	bind         string
 	applyMu      sync.Mutex
 	bankFileMu   sync.Mutex
 	bankEnsures  map[string]bankEnsured
@@ -38,7 +38,6 @@ type App struct {
 	ctl          *ctlStore
 	setupKey     uint64
 	key          config.SigningKey
-	ctlToken     string
 	log          *slog.Logger
 	isDirty      atomic.Bool
 	limiters     map[string]*rate.Limiter
@@ -94,7 +93,7 @@ type App struct {
 	regWarned    string
 	regRefresh   refresher
 	dirRefresh   refresher
-	peers        *http.Client
+	link         server.Link
 	probeHTTP    *http.Client
 	eventMu      sync.Mutex
 	eventHTTP    map[string]*http.Client
@@ -127,14 +126,12 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	a := &App{
 		cfg:       cfg,
 		key:       key,
-		ctlToken:  token,
 		log:       o.Logger,
 		limiters:  map[string]*rate.Limiter{},
-		peers:     newPeerClient(),
+		link:      server.NewLink(token, o.Bind),
 		pushWake:  make(chan struct{}, 1),
 		probeHTTP: &http.Client{Timeout: probeTimeout},
 		coreURL:   o.CoreURL,
-		bind:      o.Bind,
 		client:    o.Client,
 		bankWrap:  o.BankWrap,
 		role:      o.Role,

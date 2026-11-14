@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
@@ -24,7 +25,7 @@ func registryApp(now *time.Time, transport roundTrip) *App {
 		st:      newState(),
 		log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		clock:   clock.New(func() time.Time { return *now }),
-		peers:   &http.Client{Transport: transport},
+		link:    server.Link{Client: &http.Client{Transport: transport}},
 	}
 }
 

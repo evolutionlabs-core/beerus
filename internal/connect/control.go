@@ -2,15 +2,12 @@ package connect
 
 import (
 	"context"
-	"crypto/subtle"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -109,11 +106,11 @@ func (a *App) ControlHandler() http.Handler {
 func (a *App) localOnly(next http.Handler) http.Handler {
 	port := strconv.Itoa(a.cfg.Connect.ControlPort)
 	hosts := map[string]bool{"127.0.0.1:" + port: true, "localhost:" + port: true, "[::1]:" + port: true}
-	if u, err := url.Parse(a.coreURL); err == nil && a.multiProcess() && u.Host != "" {
+	if u, err := url.Parse(a.coreURL); err == nil && a.link.Multi() && u.Host != "" {
 		hosts[u.Host] = true
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.peerAllowed(r) {
+		if !a.link.Allowed(r) {
 			web.WriteError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
 			return
 		}
@@ -125,25 +122,12 @@ func (a *App) localOnly(next http.Handler) http.Handler {
 			web.WriteError(w, r, http.StatusForbidden, "forbidden", "Browser requests are refused.")
 			return
 		}
-		if !a.tokenOK(r) {
+		if !a.link.TokenOK(r) {
 			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "A valid control token is required.")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func (a *App) peerAllowed(r *http.Request) bool {
-	if a.remotePeers() {
-		return true
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	return err == nil && net.ParseIP(host).IsLoopback()
-}
-
-func (a *App) tokenOK(r *http.Request) bool {
-	tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	return ok && subtle.ConstantTimeCompare([]byte(tok), []byte(a.ctlToken)) == 1
 }
 
 func (a *App) WorldID() string {

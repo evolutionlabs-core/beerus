@@ -52,7 +52,7 @@ func (a *App) fetchRegistry(ctx context.Context) error {
 	var out struct {
 		Data []*openbanking.RegistryClient `json:"data"`
 	}
-	if _, err := a.peerRequest(ctx, a.coreURL, http.MethodGet, "/internal/registry", nil, nil, &out); err != nil {
+	if _, err := a.link.Request(ctx, a.coreURL, http.MethodGet, "/internal/registry", nil, nil, &out); err != nil {
 		return err
 	}
 	clients := map[string]*openbanking.RegistryClient{}

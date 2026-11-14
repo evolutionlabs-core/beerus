@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -126,24 +127,24 @@ func (a *App) callBank(ctx context.Context, b *config.Bank, r *http.Request, key
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+a.ctlToken)
+	req.Header.Set("Authorization", "Bearer "+a.link.Token)
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if key != "" {
 		req.Header.Set("Idempotency-Key", key)
 	}
-	resp, err := a.peers.Do(req)
+	resp, err := a.link.Client.Do(req)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("call %s: %w", b.ID, err)
 	}
 	defer resp.Body.Close()
-	out, err := io.ReadAll(io.LimitReader(resp.Body, maxPeerBody+1))
+	out, err := io.ReadAll(io.LimitReader(resp.Body, server.MaxPeerBody+1))
 	if err != nil {
 		return 0, nil, nil, &badAnswerError{bank: b.ID, err: fmt.Errorf("read failed: %w", err)}
 	}
-	if len(out) > maxPeerBody {
-		return 0, nil, nil, &badAnswerError{bank: b.ID, err: fmt.Errorf("answer is larger than %d MiB", maxPeerBody>>20)}
+	if len(out) > server.MaxPeerBody {
+		return 0, nil, nil, &badAnswerError{bank: b.ID, err: fmt.Errorf("answer is larger than %d MiB", server.MaxPeerBody>>20)}
 	}
 	return resp.StatusCode, resp.Header, out, nil
 }

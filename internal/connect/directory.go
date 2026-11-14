@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -85,12 +86,12 @@ func (a *App) directoryFetch(ctx context.Context, client *http.Client, cursor st
 		return page, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxPeerBody+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, server.MaxPeerBody+1))
 	if err != nil {
 		return page, fmt.Errorf("read the directory answer: %w", err)
 	}
-	if len(raw) > maxPeerBody {
-		return page, fmt.Errorf("the directory answer is larger than %d MiB", maxPeerBody>>20)
+	if len(raw) > server.MaxPeerBody {
+		return page, fmt.Errorf("the directory answer is larger than %d MiB", server.MaxPeerBody>>20)
 	}
 	if resp.StatusCode != http.StatusOK {
 		var e struct {

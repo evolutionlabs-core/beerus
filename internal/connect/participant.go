@@ -99,7 +99,7 @@ func (a *App) participantAPI() http.Handler {
 
 func (a *App) participantGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.peerAllowed(r) {
+		if !a.link.Allowed(r) {
 			web.WriteError(w, r, http.StatusForbidden, "forbidden", "The control API only accepts local connections.")
 			return
 		}
@@ -107,7 +107,7 @@ func (a *App) participantGuard(next http.Handler) http.Handler {
 			web.WriteError(w, r, http.StatusForbidden, "forbidden", "Browser requests are refused.")
 			return
 		}
-		if !a.tokenOK(r) {
+		if !a.link.TokenOK(r) {
 			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "A valid control token is required.")
 			return
 		}

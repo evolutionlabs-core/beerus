@@ -37,8 +37,8 @@ func (a *App) WidgetTLS() (*tls.Config, error) {
 }
 
 func (a *App) listenLocal(port int) ([]net.Listener, error) {
-	if a.multiProcess() {
-		l, err := net.Listen("tcp", net.JoinHostPort(a.bind, strconv.Itoa(port)))
+	if a.link.Multi() {
+		l, err := net.Listen("tcp", net.JoinHostPort(a.link.Bind, strconv.Itoa(port)))
 		if err != nil {
 			return nil, fmt.Errorf("listen on port %d: %w", port, err)
 		}

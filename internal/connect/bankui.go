@@ -97,7 +97,7 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !a.peerAllowed(r) || !hosts[r.Host] {
+		if !a.link.Allowed(r) || !hosts[r.Host] {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
