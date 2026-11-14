@@ -28,6 +28,8 @@ import (
 type App struct {
 	bind         string
 	applyMu      sync.Mutex
+	bankFileMu   sync.Mutex
+	bankDigests  map[string]string
 	mu           sync.Mutex
 	cfg          *config.Config
 	clock        *clock.Clock
@@ -81,7 +83,7 @@ type App struct {
 	role         string
 	bankID       string
 	coreURL      string
-	phased       atomic.Bool
+	siteStale    atomic.Bool
 	phaseGen     atomic.Int64
 	pushWake     chan struct{}
 	dirMu        sync.Mutex
@@ -102,20 +104,18 @@ type App struct {
 }
 
 type Options struct {
-	Real     func() time.Time
-	Logger   *slog.Logger
-	Client   *http.Client
-	Role     string
-	BankID   string
-	CoreURL  string
-	Bind     string
-	BankWrap func(http.RoundTripper) http.RoundTripper
+	Real        func() time.Time
+	Logger      *slog.Logger
+	Client      *http.Client
+	Role        string
+	BankID      string
+	CoreURL     string
+	Bind        string
+	DatabaseURL string
+	BankWrap    func(http.RoundTripper) http.RoundTripper
 }
 
 func New(cfg *config.Config, o Options) (*App, error) {
-	if o.Role == RoleBank {
-		return newBankRole(cfg, o)
-	}
 	key, err := config.WebhookKey(cfg)
 	if err != nil {
 		return nil, err
@@ -177,6 +177,9 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		return nil, err
 	}
 	for _, b := range cfg.Banks {
+		if _, err := a.ensureBankDir(b.ID, true); err != nil {
+			return nil, err
+		}
 		if err := a.claimBank(b); err != nil {
 			return nil, err
 		}

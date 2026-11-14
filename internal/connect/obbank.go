@@ -405,12 +405,19 @@ func (a *App) forgetOpenBanking(id string) {
 	a.obMu.Unlock()
 }
 
+func (a *App) rootCertPath() string {
+	if a.role == RoleBank {
+		return a.cfg.Path("banks", a.bankID, config.BankCAFile)
+	}
+	return a.cfg.Path("ca", "root.crt")
+}
+
 func (a *App) bankAPITLS(b *config.Bank) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(a.cfg.Path("banks", b.ID, "server.crt"), a.cfg.Path("banks", b.ID, "server.key"))
 	if err != nil {
 		return nil, err
 	}
-	pool, err := pki.LoadPool(a.cfg.Path("ca", "root.crt"))
+	pool, err := pki.LoadPool(a.rootCertPath())
 	if err != nil {
 		return nil, err
 	}
@@ -436,9 +443,6 @@ func (n *nipHandlers) forLedger(l *ledgerSource, a *App) http.Handler {
 func (a *App) startBankAPI(b *config.Bank) (*http.Server, error) {
 	if b.APIPort == 0 {
 		return nil, fmt.Errorf("%s has no API port", b.ID)
-	}
-	if err := a.cfg.EnsureBankCertificates(nil, a.clock.Real()); err != nil {
-		return nil, err
 	}
 	ob := a.openBanking(b.ID)
 	if ob == nil {

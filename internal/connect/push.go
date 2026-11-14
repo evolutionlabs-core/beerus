@@ -25,6 +25,7 @@ const (
 type bankWish struct {
 	phase  string
 	reason string
+	config string
 	downs  []Fault
 }
 
@@ -44,15 +45,19 @@ func pushable(phase string) bool {
 	return phase != PhaseProvisioning && phase != PhaseClosed
 }
 
-func (a *App) wishFor(id string) bankWish {
+func (a *App) wishFor(id string) (bankWish, error) {
 	w := bankWish{}
+	var err error
+	if w.config, err = a.ensureBankDir(id, false); err != nil {
+		return w, err
+	}
 	w.phase, w.reason = a.bankPhaseReason(id)
 	for _, f := range a.Faults() {
 		if f.Kind == FaultDown && f.Bank == id {
 			w.downs = append(w.downs, f)
 		}
 	}
-	return w
+	return w, nil
 }
 
 func wishGeneration(world string, w bankWish) int64 {
@@ -62,7 +67,7 @@ func wishGeneration(world string, w bankWish) int64 {
 	}
 	slices.Sort(ids)
 	h := sha256.New()
-	for _, part := range append([]string{world, w.phase, w.reason}, ids...) {
+	for _, part := range append([]string{world, w.phase, w.reason, w.config}, ids...) {
 		fmt.Fprintf(h, "%d:%s", len(part), part)
 	}
 	gen := int64(binary.BigEndian.Uint64(h.Sum(nil)[:8]) & generationMask)
@@ -134,8 +139,10 @@ func (a *App) pushBank(ctx context.Context, id, base string, wake <-chan struct{
 	attempts := 0
 	warned := ""
 	for {
-		w := a.wishFor(id)
-		err := a.syncBank(ctx, id, base, wishGeneration(a.WorldID(), w), w)
+		w, err := a.wishFor(id)
+		if err == nil {
+			err = a.syncBank(ctx, id, base, wishGeneration(a.WorldID(), w), w)
+		}
 		delay := pushInSync
 		switch {
 		case err == nil:
@@ -147,7 +154,7 @@ func (a *App) pushBank(ctx context.Context, id, base string, wake <-chan struct{
 			delay = min(backoff(attempts), pushRetryMax)
 			if msg := err.Error(); warned != msg {
 				warned = msg
-				a.log.Warn("bank not reachable; retrying", "bank", id, "err", err)
+				a.log.Warn("bank not synced; retrying", "bank", id, "err", err)
 			}
 		}
 		timer := time.NewTimer(delay)

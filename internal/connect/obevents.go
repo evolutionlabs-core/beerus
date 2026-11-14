@@ -169,7 +169,7 @@ func (a *App) eventClient(dest string) (*http.Client, error) {
 	if cl := a.eventHTTP[dest]; cl != nil {
 		return cl, nil
 	}
-	pool, err := pki.LoadPool(a.cfg.Path("ca", "root.crt"))
+	pool, err := pki.LoadPool(a.rootCertPath())
 	if err != nil {
 		return nil, err
 	}

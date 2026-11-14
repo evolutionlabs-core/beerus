@@ -2,6 +2,7 @@ package connect
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 const (
@@ -131,18 +134,23 @@ func (a *App) peerRequest(ctx context.Context, base, method, path string, header
 	return resp.StatusCode, nil
 }
 
-func newBankRole(cfg *config.Config, o Options) (*App, error) {
-	b := cfg.Bank(o.BankID)
-	if b == nil {
-		return nil, fmt.Errorf("no bank %q in %s", o.BankID, cfg.Path(statusFile))
+func NewBank(ctx context.Context, dir string, o Options) (*App, error) {
+	f, err := config.LoadBankFile(dir, o.BankID)
+	if err != nil {
+		return nil, err
 	}
-	if o.CoreURL == "" {
-		return nil, errors.New("a bank needs --core or BEERUS_CORE_URL, the control URL of the core participant")
+	if o.DatabaseURL == "" {
+		return nil, fmt.Errorf("%s is not set; set it to the Postgres URL of the bank", config.DatabaseURLEnv)
 	}
-	token, err := config.ReadSecret(cfg.Path("control-token"))
+	cfg, err := f.Config(dir, o.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+	token, err := config.ReadSecret(filepath.Join(config.BankDir(dir, f.ID), config.BankTokenFile))
 	if err != nil {
 		return nil, fmt.Errorf("control token: %w", err)
 	}
+	b := cfg.Banks[0]
 	a := &App{
 		cfg:       cfg,
 		ctlToken:  token,
@@ -154,7 +162,7 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 		sending:   make(chan struct{}, 4),
 		role:      RoleBank,
 		bankID:    b.ID,
-		coreURL:   o.CoreURL,
+		coreURL:   cmp.Or(o.CoreURL, f.CoreURL),
 		bind:      o.Bind,
 	}
 	if a.log == nil {
@@ -162,14 +170,7 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = newState()
 	a.clock = clock.New(o.Real)
-	if a.ctl, err = readStore(cfg.Dir); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	if a.ctl == nil {
-		a.ctl = &ctlStore{dir: cfg.Dir, readOnly: true}
-	}
-	a.setupKey = a.ctl.setupKey()
-	ls, err := openLedgerSource(context.Background(), cfg, a.ctl, a.clock, b)
+	ls, err := openLedgerSource(context.WithoutCancel(ctx), cfg, nil, a.clock, b)
 	if err != nil {
 		return nil, err
 	}
@@ -179,6 +180,40 @@ func newBankRole(cfg *config.Config, o Options) (*App, error) {
 	a.strikes = map[string]int{}
 	a.obs = map[string]*openbanking.Server{}
 	return a, nil
+}
+
+func (a *App) reloadBank() error {
+	f, err := config.LoadBankFile(a.cfg.Dir, a.bankID)
+	if err != nil {
+		return err
+	}
+	want := f.Bank()
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	b := a.cfg.Bank(a.bankID)
+	a.mu.Lock()
+	changed := b.Name != want.Name || b.API != want.API
+	b.Name, b.State, b.NetDebitCap, b.Collateral, b.API = want.Name, want.State, want.NetDebitCap, want.Collateral, want.API
+	a.mu.Unlock()
+	if st := a.status[a.bankID]; st != nil {
+		st.Name = want.Name
+	}
+	if changed {
+		a.siteStale.Store(true)
+	}
+	return nil
+}
+
+func (a *App) restartSiteIfStale() {
+	if !a.siteStale.Swap(false) {
+		return
+	}
+	b := a.cfg.Bank(a.bankID)
+	a.detach(b, setup.StepSite)
+	if err := a.startBankSite(b); err != nil {
+		a.log.Error("bank site not restarted; retrying", "bank", a.bankID, "err", err)
+		a.siteStale.Store(true)
+	}
 }
 
 func (a *App) ServeBank(ctx context.Context) error {
@@ -202,6 +237,7 @@ func (a *App) ServeBank(ctx context.Context) error {
 		case <-tick.C:
 			a.flushEvents()
 			a.flushLedger()
+			a.restartSiteIfStale()
 			a.mu.Lock()
 			a.sweep()
 			a.mu.Unlock()

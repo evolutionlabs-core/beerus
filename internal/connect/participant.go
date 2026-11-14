@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 const (
@@ -19,7 +20,6 @@ const (
 	faultPageMax      = 500
 	idempotencyKeyMax = 255
 	faultIDHexChars   = 20
-	waitingForPhase   = "Waiting for the control plane to send the phase."
 )
 
 var participantPhases = []string{PhaseProvisioning, PhaseActive, PhaseSuspended, PhaseRepairing, PhaseClosing, PhaseClosed, PhaseTerminating}
@@ -115,10 +115,6 @@ func (a *App) participantGuard(next http.Handler) http.Handler {
 }
 
 func (a *App) participantHealth(w http.ResponseWriter, r *http.Request) {
-	if !a.phased.Load() {
-		writeError(w, r, http.StatusServiceUnavailable, "unavailable", "The participant is still starting. Try again soon.")
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "participant_id": a.bankID, "world_id": a.WorldID()})
 }
 
@@ -132,10 +128,6 @@ func (a *App) participantState() participantState {
 		}
 	}
 	a.lifeMu.Unlock()
-	if !a.phased.Load() {
-		out.Phase, out.Reason = PhaseProvisioning, waitingForPhase
-		return out
-	}
 	gen := a.phaseGen.Load()
 	out.Generation, out.ObservedGeneration = gen, gen
 	return out
@@ -151,6 +143,11 @@ func (a *App) setParticipantPhase(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"phase":"active","generation":1,"world_id":"wld_..."} with a phase, a generation and a world ID.`)
 		return
 	}
+	if err := a.reloadBank(); err != nil {
+		a.log.Error("bank config not reloaded", "bank", a.bankID, "err", err)
+		writeError(w, r, http.StatusInternalServerError, "config_unreadable", "The bank config could not be read. Fix banks/"+a.bankID+"/"+config.BankFileName+" and send the phase again.")
+		return
+	}
 	a.lifeMu.Lock()
 	if st := a.status[a.bankID]; st != nil {
 		st.Phase, st.Reason = req.Phase, req.Reason
@@ -160,7 +157,6 @@ func (a *App) setParticipantPhase(w http.ResponseWriter, r *http.Request) {
 	a.st.WorldID = req.WorldID
 	a.mu.Unlock()
 	a.phaseGen.Store(req.Generation)
-	a.phased.Store(true)
 	writeJSON(w, http.StatusOK, a.participantState())
 }
 
@@ -239,8 +235,5 @@ func (a *App) clearParticipantFaults(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) bankRefusing(id string) bool {
-	if a.role == RoleBank && !a.phased.Load() {
-		return true
-	}
 	return a.bankPhase(id) == PhaseSuspended || a.bankDown(id, a.clock.Now())
 }

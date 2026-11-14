@@ -25,6 +25,7 @@ const (
 type child struct {
 	id        string
 	print     string
+	env       []string
 	quit      chan struct{}
 	quitOnce  sync.Once
 	done      chan struct{}
@@ -53,8 +54,8 @@ func (c *child) remember(line string) {
 	}
 }
 
-func (s *supervisor) launch(id, print string, args []string) *child {
-	c := &child{id: id, print: print, quit: make(chan struct{}), done: make(chan struct{}), firstExit: make(chan struct{})}
+func (s *supervisor) launch(id, print string, env, args []string) *child {
+	c := &child{id: id, print: print, env: env, quit: make(chan struct{}), done: make(chan struct{}), firstExit: make(chan struct{})}
 	go s.keep(c, args)
 	return c
 }
@@ -97,6 +98,9 @@ func (s *supervisor) keep(c *child, args []string) {
 
 func (s *supervisor) runOnce(c *child, args []string) error {
 	cmd := exec.Command(s.exe, args...)
+	if c.env != nil {
+		cmd.Env = append(os.Environ(), c.env...)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

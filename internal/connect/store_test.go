@@ -2,7 +2,6 @@ package connect
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -133,20 +132,6 @@ func TestStoreConcurrentClaims(t *testing.T) {
 	wg.Wait()
 	if got := diskStatus(t, s).Resources[0].Owned; len(got) != 20 {
 		t.Fatalf("%d claims saved, want 20", len(got))
-	}
-}
-
-func TestReadOnlyStoreRefusesWrites(t *testing.T) {
-	s := testStore(t)
-	ro, err := readStore(s.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ro.Claim(setup.KindBank, "bank-a", setup.Owned{Kind: ownedPort, Name: "1"}); !errors.Is(err, errStoreReadOnly) {
-		t.Fatalf("claim from a read-only store: %v", err)
-	}
-	if ro.setupKey() != 9 {
-		t.Fatalf("setup key %d", ro.setupKey())
 	}
 }
 

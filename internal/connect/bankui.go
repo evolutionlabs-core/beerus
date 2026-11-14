@@ -105,10 +105,6 @@ func (a *bankSite) bankGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if a.role == RoleBank && !a.phased.Load() && !strings.HasPrefix(r.URL.Path, "/assets/") {
-			http.Error(w, "starting", http.StatusServiceUnavailable)
-			return
-		}
 		if a.bankPhase(a.bank.ID) == PhaseSuspended && !strings.HasPrefix(r.URL.Path, "/assets/") {
 			a.bankRender(w, "bank_unavailable", http.StatusServiceUnavailable, nil, roomPage{"Title": a.bank.Name})
 			return

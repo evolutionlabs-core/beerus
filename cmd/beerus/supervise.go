@@ -22,6 +22,7 @@ type supervisor struct {
 	exe       string
 	dir       string
 	coreURL   string
+	database  string
 	ctl       *ctl
 	clock     *clock.Clock
 	log       *slog.Logger
@@ -45,12 +46,13 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	return s.w.Write(p)
 }
 
-func newSupervisor(exe, dir, coreURL string, c *ctl, out io.Writer) *supervisor {
+func newSupervisor(exe, dir, coreURL, databaseURL string, c *ctl, out io.Writer) *supervisor {
 	logs := &syncWriter{w: out}
 	return &supervisor{
 		exe:      exe,
 		dir:      dir,
 		coreURL:  coreURL,
+		database: databaseURL,
 		ctl:      c,
 		clock:    clock.New(nil),
 		log:      slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})),
@@ -61,7 +63,7 @@ func newSupervisor(exe, dir, coreURL string, c *ctl, out io.Writer) *supervisor 
 }
 
 func (s *supervisor) startCore() {
-	s.core = s.launch(coreID, "", []string{"run", "--participant", coreID, "--dir", s.dir, "--supervised"})
+	s.core = s.launch(coreID, "", nil, []string{"run", "--participant", coreID, "--dir", s.dir, "--supervised"})
 }
 
 func (s *supervisor) awaitCore(ctx context.Context) error {

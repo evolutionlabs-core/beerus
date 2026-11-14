@@ -314,6 +314,9 @@ func (a *App) decideMoney(ctx context.Context, r setup.Resource) (*setup.Conditi
 	a.mu.Unlock()
 	a.lifeMu.Unlock()
 	a.detach(b, setup.StepSite)
+	if _, err := a.ensureBankDir(id, false); err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 

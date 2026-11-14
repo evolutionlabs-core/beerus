@@ -49,7 +49,7 @@ paths:
       operationId: participantHealth
       tags: [lifecycle]
       summary: Check that the participant is running
-      description: Answers `ok` when the process is up and can serve requests. It says nothing about the phase. Read the status for that. A bank that has not been told its world yet answers `503 unavailable`.
+      description: Answers `ok` when the process is up and can serve requests. It says nothing about the phase. Read the status for that.
       responses:
         '200':
           description: The participant is running.
@@ -63,8 +63,6 @@ paths:
                 world_id: wld_01JBC8A5T3ZK
         '401':
           $ref: '#/components/responses/Unauthenticated'
-        '503':
-          $ref: '#/components/responses/Unavailable'
   /v1/status:
     get:
       operationId: participantStatus
@@ -205,7 +203,7 @@ paths:
       operationId: setParticipantPhase
       tags: [lifecycle]
       summary: Tell the participant its phase
-      description: The control plane sends the phase it wants the participant to be in, for example `suspended` or `active`, with the `generation` of the spec the phase comes from. A bank that has never been told its phase answers `503 unavailable` on its online banking, open banking and NIP APIs, and it opens them when the first phase arrives. A `suspended` bank refuses the same calls with `503 unavailable` until the control plane sends `active`. The control plane sends it again after a participant restarts, because a restarted participant has no phase. It is safe to repeat. The same body gives the same status. `world_id` is the ID of the Beerus world, which the health check shows. Beerus has no real-world source for this call, so the whole operation is a Beerus placeholder.
+      description: The control plane sends the phase it wants the participant to be in, for example `suspended` or `active`, with the `generation` of the spec the phase comes from. A bank starts in the state its own config file gives and serves at once, so it does not wait for a phase. A `suspended` bank refuses the same calls with `503 unavailable` until the control plane sends `active`. The participant reloads its own config file each time, so a rename or a change of state reaches it with the phase. If the file cannot be read, the answer is `500 config_unreadable` and the old config stays. The control plane sends the phase again after a participant restarts. It is safe to repeat. The same body gives the same status. `world_id` is the ID of the Beerus world, which the health check shows. Beerus has no real-world source for this call, so the whole operation is a Beerus placeholder.
       requestBody:
         required: true
         content:
@@ -236,6 +234,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthenticated'
+        '500':
+          $ref: '#/components/responses/ConfigUnreadable'
   /v1/faults:
     get:
       operationId: listParticipantFaults
@@ -1244,6 +1244,17 @@ components:
             error:
               code: invalid_request
               message: 'Send {"kind":"down","for":"1h"} or {"kind":"timeout","outcome":"credited"}.'
+              request_id: req_01JBC8A5T3ZK
+    ConfigUnreadable:
+      description: The participant could not read its own config file. The code is `config_unreadable`. The old config stays.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: config_unreadable
+              message: The bank config could not be read. Fix banks/bank-a/bank.json and send the phase again.
               request_id: req_01JBC8A5T3ZK
     Unauthenticated:
       description: The control token is missing or wrong. The code is `unauthenticated`.

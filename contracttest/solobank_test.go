@@ -1,0 +1,248 @@
+package contracttest
+
+import (
+	"cmp"
+	"context"
+	"fmt"
+	"io"
+	"io/fs"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
+	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
+	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/openbanking"
+)
+
+const (
+	soloDeposit = 50_000_000
+	soloCredit  = 2_500_000
+	soloRefused = 1_000_000
+	soloStop    = 30 * time.Second
+)
+
+func copyBankDir(t *testing.T, from, to string) {
+	t.Helper()
+	err := filepath.WalkDir(from, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(from, path)
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return os.MkdirAll(filepath.Join(to, rel), info.Mode().Perm())
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(to, rel), raw, info.Mode().Perm())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func dirListing(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || path == root {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		out = append(out, rel)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a bank process; run without -short")
+	}
+	ctx := context.WithoutCancel(t.Context())
+	dbURL := cmp.Or(os.Getenv(config.DatabaseURLEnv), os.Getenv("BEERUS_TEST_DATABASE_URL"), "postgres:///postgres")
+	now := clock.New(nil).Now()
+	stage := filepath.Join(t.TempDir(), "stage")
+	if err := os.Mkdir(stage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ports := freePorts(t, 5)
+	cfg := &config.Config{Dir: stage, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", WidgetPort: ports[2], ControlPort: ports[3], NIBSSPort: ports[4]}}
+	if err := config.Prepare(cfg, now); err != nil {
+		t.Fatal(err)
+	}
+	own := &config.Bank{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: ports[0], APIPort: ports[1], Database: config.DatabaseName(stage, "bank-a")}
+	if err := cfg.EnsureBankDir(own, now); err != nil {
+		t.Fatal(err)
+	}
+	other := config.DatabaseName(stage, "bank-b")
+	if err := store.Create(ctx, dbURL, other); err != nil {
+		t.Skipf("no Postgres for the solo bank test (%v); set BEERUS_TEST_DATABASE_URL", err)
+	}
+	t.Cleanup(func() { _ = store.DropDatabases(ctx, dbURL, []string{other}) })
+	st, err := store.Open(ctx, dbURL, own.Database, openbanking.Migrate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Drop(ctx) })
+	fees := banktest.Fees(t)
+	books := bank.New(ledger.New(st.Pool, nil), bank.Profile{ID: own.ID, Name: own.Name, NIPCode: own.NIPCode, NUBANCode: own.NUBANCode}, fees)
+	if err := books.Setup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := books.Genesis(ctx, bank.GenesisSettlement, bank.GenesisVault, now); err != nil {
+		t.Fatal(err)
+	}
+	customer, err := books.CreateCustomer(ctx, "cus-ada", "ADA OBI", "+2348030000001", clock.Date{Y: 1990, M: 1, D: 1}, "22912345678", "", "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := books.OpenAccount(ctx, "acc-ada", customer.ID, bank.ProductCurrent, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := books.CashDeposit(ctx, "dep-ada", account.NUBAN, soloDeposit, now); err != nil {
+		t.Fatal(err)
+	}
+
+	solo := filepath.Join(t.TempDir(), "solo")
+	copyBankDir(t, config.BankDir(stage, own.ID), config.BankDir(solo, own.ID))
+	c := newCLIAt(t, solo)
+	run := exec.Command(c.bin, "run", "--participant", own.ID, "--dir", solo)
+	run.Env = c.env(config.DatabaseURLEnv + "=" + dbURL)
+	logs := &lockedBuffer{}
+	run.Stdout, run.Stderr = logs, logs
+	if err := run.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- run.Wait() }()
+	t.Cleanup(func() {
+		_ = run.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-exited:
+		case <-time.After(soloStop):
+			_ = run.Process.Kill()
+			<-exited
+		}
+	})
+	site := fmt.Sprintf("http://127.0.0.1:%d", own.Port)
+	api := fmt.Sprintf("https://127.0.0.1:%d", own.APIPort)
+	probe := &bankProbe{t: t, plain: &http.Client{Timeout: controlProbeTimeout}}
+	waitFor(t, "the bank to answer on its own", func() bool {
+		select {
+		case err := <-exited:
+			t.Fatalf("the bank exited: %v\n%s", err, logs.String())
+		default:
+		}
+		code, _ := probe.get(probe.plain, site+"/health", nil)
+		return code == http.StatusOK
+	})
+	if code, _ := probe.get(probe.plain, site+"/login", nil); code != http.StatusOK {
+		t.Fatalf("the login page answered %d, want 200", code)
+	}
+
+	nibss := mutualClient(t, stage, "nibss", "client")
+	session := func(n int) string { return banktest.Session(own.NIPCode, n) }
+	reply := func(sid, code string) string {
+		return fmt.Sprintf(`{"session_id":%q,"response_code":%q}`, sid, code)
+	}
+	rows := []struct {
+		name         string
+		method, path string
+		body         string
+		want         string
+		replayed     bool
+		balance      int64
+	}{
+		{"name enquiry", "GET", "/v1/nip/account-names/" + account.NUBAN, "", fmt.Sprintf(`{"response_code":"00","account_number":%q,"account_name":"ADA OBI"}`, account.NUBAN), false, soloDeposit},
+		{"credit", "POST", "/v1/nip/credits", banktest.CreditBody(session(1), account.NUBAN, soloCredit, "Rent"), reply(session(1), "00"), false, soloDeposit + soloCredit},
+		{"credit replay", "POST", "/v1/nip/credits", banktest.CreditBody(session(1), account.NUBAN, soloCredit, "Rent"), reply(session(1), "00"), true, soloDeposit + soloCredit},
+		{"status credited", "GET", "/v1/nip/credits/" + session(1), "", reply(session(1), "00"), false, soloDeposit + soloCredit},
+		{"status unknown", "GET", "/v1/nip/credits/" + session(2), "", reply(session(2), "25"), false, soloDeposit + soloCredit},
+		{"credit after 25", "POST", "/v1/nip/credits", banktest.CreditBody(session(2), account.NUBAN, soloRefused, ""), reply(session(2), "25"), false, soloDeposit + soloCredit},
+		{"status after refused credit", "GET", "/v1/nip/credits/" + session(2), "", reply(session(2), "25"), false, soloDeposit + soloCredit},
+	}
+	for _, r := range rows {
+		req, err := http.NewRequest(r.method, api+r.path, strings.NewReader(r.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := nibss.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", r.name, err)
+		}
+		raw, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", r.name, err)
+		}
+		replayed := resp.Header.Get("Idempotent-Replayed") == "true"
+		if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(raw)) != r.want || replayed != r.replayed {
+			t.Fatalf("%s: got %d %s replayed=%v, want 200 %s replayed=%v", r.name, resp.StatusCode, strings.TrimSpace(string(raw)), replayed, r.want, r.replayed)
+		}
+		if got, err := books.L.Balance(ctx, bank.CustomerAccount(account.NUBAN)); err != nil || got != r.balance {
+			t.Fatalf("%s: balance %d (%v), want %d", r.name, got, err, r.balance)
+		}
+	}
+
+	files := []string{"banks", "banks/bank-a"}
+	for _, f := range []string{"bank.json", "ca.crt", "client.crt", "client.key", "control-token", "events.crt", "events.key", "server.crt", "server.key"} {
+		files = append(files, "banks/bank-a/"+f)
+	}
+	if got := dirListing(t, solo); !slices.Equal(got, files) {
+		t.Fatalf("the bank directory holds %v, want %v", got, files)
+	}
+	for _, f := range []string{"bank.json", "control-token", "client.key", "events.key", "server.key"} {
+		fi, err := os.Stat(filepath.Join(config.BankDir(solo, own.ID), f))
+		if err != nil || fi.Mode().Perm() != 0o600 {
+			t.Fatalf("%s: mode %v, error %v, want 0600", f, fi, err)
+		}
+	}
+	conn, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	prefix := strings.TrimSuffix(config.DatabaseName(stage, "x"), "x")
+	rowsDB, err := conn.Query(ctx, `SELECT DISTINCT datname FROM pg_stat_activity WHERE datname LIKE $1 ORDER BY datname`, strings.ReplaceAll(prefix, "_", `\_`)+"%")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := pgx.CollectRows(rowsDB, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(opened, []string{own.Database}) {
+		t.Fatalf("databases open: %v, want only %s", opened, own.Database)
+	}
+}

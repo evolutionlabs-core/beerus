@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -20,14 +19,11 @@ const (
 	ownedDir      = "dir"
 )
 
-var errStoreReadOnly = errors.New("only the core process writes control.json")
-
 type ctlStore struct {
-	mu       sync.Mutex
-	dir      string
-	st       setup.Status
-	version  uint64
-	readOnly bool
+	mu      sync.Mutex
+	dir     string
+	st      setup.Status
+	version uint64
 
 	writeMu sync.Mutex
 	written uint64
@@ -39,15 +35,6 @@ func openStore(dir string) (*ctlStore, error) {
 		return nil, err
 	}
 	return &ctlStore{dir: dir, st: st}, nil
-}
-
-func readStore(dir string) (*ctlStore, error) {
-	s, err := openStore(dir)
-	if err != nil {
-		return nil, err
-	}
-	s.readOnly = true
-	return s, nil
 }
 
 func createStore(dir string, st setup.Status) (*ctlStore, error) {
@@ -95,9 +82,6 @@ func (s *ctlStore) setupKey() uint64 {
 }
 
 func (s *ctlStore) change(fn func(*setup.Status) (bool, error)) (uint64, error) {
-	if s.readOnly {
-		return 0, errStoreReadOnly
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	work, err := cloneStatus(s.st)

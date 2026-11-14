@@ -49,7 +49,7 @@ func newReconcileStack(t *testing.T) (*supervisor, func(string)) {
 		_, _ = io.WriteString(w, body)
 	})}
 	go srv.Serve(lis)
-	s := newSupervisor(exe, t.TempDir(), "http://"+lis.Addr().String(), &ctl{base: "http://" + lis.Addr().String()}, io.Discard)
+	s := newSupervisor(exe, t.TempDir(), "http://"+lis.Addr().String(), "", &ctl{base: "http://" + lis.Addr().String()}, io.Discard)
 	t.Cleanup(func() {
 		srv.Close()
 		for _, c := range s.banks {

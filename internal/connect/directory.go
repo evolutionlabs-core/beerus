@@ -41,7 +41,7 @@ func (a *App) directoryClient() (*http.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load bank client certificate: %w", err)
 	}
-	pool, err := pki.LoadPool(a.cfg.Path("ca", "root.crt"))
+	pool, err := pki.LoadPool(a.rootCertPath())
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (a *App) directoryURL(cursor string) (string, error) {
 		return "", fmt.Errorf("core URL %q has no host", a.coreURL)
 	}
 	if a.cfg.Connect.NIBSSPort == 0 {
-		return "", fmt.Errorf("%s sets no connect.nibss_port", a.cfg.Path(LocalFile))
+		return "", fmt.Errorf("%s sets no nibss_port", config.BankFilePath(a.cfg.Dir, a.bankID))
 	}
 	q := url.Values{"limit": {strconv.Itoa(directoryPage)}}
 	if cursor != "" {

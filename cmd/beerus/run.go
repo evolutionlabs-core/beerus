@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -82,27 +81,12 @@ func cmdRun(args []string) error {
 	case "connect", "nibss":
 		return fmt.Errorf("%s runs inside the core participant; start --participant core", *participant)
 	}
-	c, err := connect.LoadConfig(*dir)
-	if err != nil {
-		return err
-	}
-	if c.Bank(*participant) == nil {
-		return fmt.Errorf("%q is not a participant; banks in %s are %s", *participant, c.Dir, strings.Join(bankIDs(c), ", "))
-	}
-	app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleBank, BankID: *participant, CoreURL: *core, Bind: *bind})
+	app, err := connect.NewBank(ctx, *dir, connect.Options{Logger: log, BankID: *participant, CoreURL: *core, Bind: *bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
 	if err != nil {
 		return err
 	}
 	log.Info("bank running", "bank", *participant)
 	return app.ServeBank(ctx)
-}
-
-func bankIDs(c *config.Config) []string {
-	ids := []string{}
-	for _, b := range c.Banks {
-		ids = append(ids, b.ID)
-	}
-	return ids
 }
 
 func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
@@ -124,6 +108,11 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 	}
 	if err := c.EnsureCertificates(time.Now()); err != nil {
 		return err
+	}
+	for _, b := range c.Banks {
+		if err := c.EnsureBankDir(b, clock.New(nil).Real()); err != nil {
+			return err
+		}
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })

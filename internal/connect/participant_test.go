@@ -17,6 +17,7 @@ import (
 	validator "github.com/pb33f/libopenapi-validator"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 const (
@@ -112,13 +113,19 @@ func newContractCall(t *testing.T, handler http.Handler) contractCall {
 }
 
 func TestParticipantControlContract(t *testing.T) {
+	cfg := bankDirConfig(t, &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1, APIPort: 2, Database: "db"})
 	a := &App{
+		cfg:  cfg,
 		role: RoleBank, bankID: "bank-a", ctlToken: participantTok, st: newState(),
 		log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		clock:  clock.New(func() time.Time { return participantNow }),
 		status: map[string]*BankStatus{"bank-a": {ID: "bank-a", Phase: PhaseActive}},
 	}
+	a.st.WorldID = "wld_0"
 	call := newContractCall(t, a.participantAPI())
+	bankFile := config.BankFilePath(cfg.Dir, "bank-a")
+	renamed := *cfg.Bank("bank-a")
+	renamed.Name, renamed.State = "Bank A Renamed", "suspended"
 	first, second := faultIDFor("flt_one"), faultIDFor("flt_two")
 	down := `{"kind":"down","for":"1h"}`
 	timeout := `{"kind":"timeout","outcome":"credited","count":2}`
@@ -128,18 +135,27 @@ func TestParticipantControlContract(t *testing.T) {
 	badRequest := `{"error":{"code":"invalid_request","message":"Send {\"kind\":\"down\",\"for\":\"1h\"} or {\"kind\":\"timeout\",\"outcome\":\"credited\"}.","request_id":"req_ID"}}`
 	rows := []struct {
 		name                    string
+		before                  func()
 		method, path, key, body string
 		token                   string
 		validate                bool
 		status                  int
 		want                    string
 	}{
-		{name: "health before the phase", method: "GET", path: "/v1/health", token: participantTok, validate: true, status: 503, want: `{"error":{"code":"unavailable","message":"The participant is still starting. Try again soon.","request_id":"req_ID"}}`},
-		{name: "status before the phase", method: "GET", path: "/v1/status", token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","kind":"bank","phase":"provisioning","reason":"Waiting for the control plane to send the phase.","generation":0,"observed_generation":0,"steps":[]}`},
+		{name: "health before the phase", method: "GET", path: "/v1/health", token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","status":"ok","world_id":"wld_0"}`},
+		{name: "status before the phase", method: "GET", path: "/v1/status", token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","kind":"bank","phase":"active","generation":0,"observed_generation":0,"steps":[]}`},
 		{name: "no token", method: "GET", path: "/v1/status", validate: true, status: 401, want: unauthenticated},
 		{name: "wrong token", method: "GET", path: "/v1/faults", token: "nope", validate: true, status: 401, want: unauthenticated},
 		{name: "phase with a bad body", method: "PUT", path: "/v1/phase", body: `{"phase":"asleep","generation":1,"world_id":"wld_1"}`, token: participantTok, status: 400, want: `{"error":{"code":"invalid_request","message":"Send {\"phase\":\"active\",\"generation\":1,\"world_id\":\"wld_...\"} with a phase, a generation and a world ID.","request_id":"req_ID"}}`},
 		{name: "phase active", method: "PUT", path: "/v1/phase", body: `{"phase":"active","generation":4,"world_id":"wld_1"}`, token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","kind":"bank","phase":"active","generation":4,"observed_generation":4,"steps":[]}`},
+		{name: "phase with an unreadable config", before: func() { _ = os.Remove(bankFile) }, method: "PUT", path: "/v1/phase", body: `{"phase":"suspended","generation":9,"world_id":"wld_9"}`, token: participantTok, status: 500, want: `{"error":{"code":"config_unreadable","message":"The bank config could not be read. Fix banks/bank-a/bank.json and send the phase again.","request_id":"req_ID"}}`},
+		{name: "status after the refused phase", method: "GET", path: "/v1/status", token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","kind":"bank","phase":"active","generation":4,"observed_generation":4,"steps":[]}`},
+		{name: "phase with a renamed bank", before: func() {
+			if err := cfg.EnsureBankDir(&renamed, clock.New(nil).Real()); err != nil {
+				t.Fatal(err)
+			}
+		}, method: "PUT", path: "/v1/phase", body: `{"phase":"suspended","generation":6,"world_id":"wld_1"}`, token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","kind":"bank","phase":"suspended","generation":6,"observed_generation":6,"steps":[]}`},
+		{name: "phase active again", method: "PUT", path: "/v1/phase", body: `{"phase":"active","generation":7,"world_id":"wld_1"}`, token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","kind":"bank","phase":"active","generation":7,"observed_generation":7,"steps":[]}`},
 		{name: "health after the phase", method: "GET", path: "/v1/health", token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","status":"ok","world_id":"wld_1"}`},
 		{name: "no faults", method: "GET", path: "/v1/faults", token: participantTok, validate: true, status: 200, want: `{"data":[]}`},
 		{name: "down fault", method: "POST", path: "/v1/faults", key: "flt_one", body: down, token: participantTok, validate: true, status: 201, want: downFault},
@@ -162,10 +178,16 @@ func TestParticipantControlContract(t *testing.T) {
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
+			if r.before != nil {
+				r.before()
+			}
 			got := call(r.method, r.path, r.key, r.body, r.token, r.validate)
 			if got.status != r.status || got.body != r.want {
 				t.Fatalf("got %d %s, want %d %s", got.status, got.body, r.status, r.want)
 			}
 		})
+	}
+	if b := a.cfg.Bank("bank-a"); b.Name != renamed.Name || !b.Suspended() || !a.siteStale.Load() {
+		t.Fatalf("after the reload the bank is %q, suspended %v, site stale %v; want %q, true, true", b.Name, b.Suspended(), a.siteStale.Load(), renamed.Name)
 	}
 }

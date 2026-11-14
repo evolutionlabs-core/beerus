@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -94,7 +95,7 @@ func (s *supervisor) bring(id, print string) {
 		return
 	}
 	s.log.Info("starting participant", "participant", id)
-	s.banks[id] = s.launch(id, print, []string{"run", "--participant", id, "--dir", s.dir, "--core", s.coreURL, "--supervised"})
+	s.banks[id] = s.launch(id, print, []string{config.DatabaseURLEnv + "=" + s.database}, []string{"run", "--participant", id, "--dir", s.dir, "--core", s.coreURL, "--supervised"})
 	s.order = append(s.order, id)
 }
 

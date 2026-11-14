@@ -1198,7 +1198,7 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 		return err
 	}
 	fmt.Fprintf(e.out, "\nControl room        %s\n", connect.RoomURL(c, cl.token))
-	sup := newSupervisor(exe, *dir, c.ControlURL(), cl, e.errOut)
+	sup := newSupervisor(exe, *dir, c.ControlURL(), c.DatabaseURL, cl, e.errOut)
 	sup.startCore()
 	defer sup.shutdown()
 	if err := sup.awaitCore(ctx); err != nil {

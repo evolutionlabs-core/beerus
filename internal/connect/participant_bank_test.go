@@ -44,8 +44,8 @@ func TestParticipantBankContract(t *testing.T) {
 	core := newTestApp(t, fixed)
 	coreURL := startCore(t, core)
 	o := fixed
-	o.Role, o.BankID, o.CoreURL, o.Bind = RoleBank, "bank-a", coreURL, "127.0.0.1"
-	a, err := New(core.cfg, o)
+	o.BankID, o.CoreURL, o.Bind, o.DatabaseURL = "bank-a", coreURL, "127.0.0.1", core.cfg.DatabaseURL
+	a, err := NewBank(t.Context(), core.cfg.Dir, o)
 	if err != nil {
 		t.Fatal(err)
 	}

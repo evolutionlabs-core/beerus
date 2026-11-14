@@ -21,6 +21,20 @@ func stubReply(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": {"application/json"}}}
 }
 
+func bankDirConfig(t *testing.T, banks ...*config.Bank) *config.Config {
+	t.Helper()
+	cfg := &config.Config{Dir: t.TempDir(), Banks: banks, Connect: config.Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, ControlPort: 9002, BrandName: "Connect"}}
+	if err := config.Prepare(cfg, clock.New(nil).Real()); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range banks {
+		if err := cfg.EnsureBankDir(b, clock.New(nil).Real()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return cfg
+}
+
 func TestWishGeneration(t *testing.T) {
 	down := func(ids ...string) []Fault {
 		out := []Fault{}
@@ -46,6 +60,7 @@ func TestWishGeneration(t *testing.T) {
 		{"another reason", "wld_1", bankWish{phase: PhaseActive, reason: "later", downs: down("flt_a", "flt_b")}, false},
 		{"one fault fewer", "wld_1", bankWish{phase: PhaseActive, reason: "ok", downs: down("flt_a")}, false},
 		{"no faults", "wld_1", bankWish{phase: PhaseActive, reason: "ok"}, false},
+		{"another config", "wld_1", bankWish{phase: PhaseActive, reason: "ok", config: "c2", downs: down("flt_a", "flt_b")}, false},
 		{"fields run together", "wld_1", bankWish{phase: PhaseActive + "o", reason: "k", downs: down("flt_a", "flt_b")}, false},
 	}
 	for _, r := range rows {
@@ -82,7 +97,7 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 		return stubReply(404, `{}`), nil
 	})
 	a := &App{
-		cfg:      &config.Config{Banks: []*config.Bank{{ID: "bank-a", Port: 1}, {ID: "bank-b", Port: 2}}},
+		cfg:      bankDirConfig(t, &config.Bank{ID: "bank-a", Port: 1}, &config.Bank{ID: "bank-b", Port: 2}),
 		role:     RoleCore,
 		st:       newState(),
 		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -100,7 +115,11 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 	select {
 	case got := <-phases:
 		want := phaseRequest{Phase: PhaseSuspended, Reason: "Suspended.", WorldID: a.WorldID()}
-		want.Generation = wishGeneration(want.WorldID, bankWish{phase: want.Phase, reason: want.Reason})
+		digest, err := a.cfg.BankFileDigest(a.cfg.Bank("bank-b"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want.Generation = wishGeneration(want.WorldID, bankWish{phase: want.Phase, reason: want.Reason, config: digest})
 		if got != want {
 			t.Fatalf("bank-b was sent %+v, want %+v", got, want)
 		}
