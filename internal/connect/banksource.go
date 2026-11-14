@@ -84,25 +84,6 @@ func (s *ledgerSource) Account(nuban string) (ledger.Account, error) {
 	return s.Bank().L.Account(s.ctx, bank.CustomerAccount(nuban))
 }
 
-func (s *ledgerSource) Reconnect() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	st, err := store.Open(s.ctx, s.cfg.DatabaseURL, s.st.Name())
-	if err != nil {
-		return err
-	}
-	old := s.st
-	s.st = st
-	old.Close()
-	return s.reopen()
-}
-
-func (s *ledgerSource) reopen() error {
-	s.b = bank.New(ledger.New(s.st.Pool, nil), s.inst, s.cfg.Fees())
-	s.settled = time.Time{}
-	return nil
-}
-
 func (a *App) DropBankDatabases(ctx context.Context) error {
 	var errs []error
 	for _, l := range a.ledgers {
