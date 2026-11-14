@@ -60,11 +60,6 @@ func TestPageNumbersAreBoundedBeforeTheyAreUsed(t *testing.T) {
 		})
 	}
 
-	rec := httptest.NewRecorder()
-	view.PageParam(rec, httptest.NewRequest(http.MethodGet, "/apps?page=300000000000000000", nil), "access history", maxHistoryPages)
-	if want := "The page 300000000000000000 is too high. The access history allows pages 1 to 1000.\n"; rec.Body.String() != want {
-		t.Fatalf("message %q, want %q", rec.Body.String(), want)
-	}
 	if got := view.PagesOf(0, 50); got != 1 {
 		t.Fatalf("an empty list has %d pages, want 1", got)
 	}

@@ -3,9 +3,11 @@ package connect
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	"github.com/evolutionlabs-core/beerus/internal/bank/site"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
@@ -19,6 +21,22 @@ func (a *App) hostOf(id string) server.Host {
 		return a.srv
 	}
 	return bankHost{a, id}
+}
+
+func (a *App) BankHandler(id string) http.Handler {
+	a.mu.Lock()
+	b := a.cfg.Bank(id)
+	have := a.ledgerFor(id) != nil
+	brand := a.cfg.Connect.BrandName
+	a.mu.Unlock()
+	if b == nil || !have {
+		return nil
+	}
+	var api http.Handler
+	if a.role == RoleBank {
+		api = a.srv.API()
+	}
+	return site.New(site.Config{Host: a.hostOf(id), Open: a.openBanking(id), Sender: a.sender, Link: a.link, Clock: a.clock, Log: a.log, Brand: brand, API: api})
 }
 
 func (h bankHost) Bank() config.Bank {

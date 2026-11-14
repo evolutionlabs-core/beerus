@@ -162,32 +162,3 @@ func (a *App) revokeRemote(ctx context.Context, b *config.Bank, consent string) 
 	_, err := a.link.Do(ctx, b.URL(), http.MethodPost, "/internal/revoke", map[string]string{"consent_id": consent}, nil)
 	return err
 }
-
-func (a *bankSite) internalRevoke(w http.ResponseWriter, r *http.Request) {
-	if !a.peerAuthorised(w, r) {
-		return
-	}
-	var body struct {
-		ConsentID string `json:"consent_id"`
-	}
-	if err := web.DecodeBody(r, &body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if err := a.ob.RevokeByBank(r.Context(), body.ConsentID, "bank"); err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	ctx := context.WithoutCancel(r.Context())
-	a.sender.Events(ctx)
-	a.sender.Ledger(ctx)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (a *bankSite) peerAuthorised(w http.ResponseWriter, r *http.Request) bool {
-	if !a.link.TokenOK(r) {
-		http.Error(w, "unauthenticated", http.StatusUnauthorized)
-		return false
-	}
-	return true
-}

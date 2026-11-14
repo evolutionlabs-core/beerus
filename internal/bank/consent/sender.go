@@ -84,6 +84,9 @@ func (s *Sender) Events(ctx context.Context) {
 }
 
 func (s *Sender) Ledger(ctx context.Context) {
+	if s.Core == nil {
+		return
+	}
 	s.flushMu.Lock()
 	defer s.flushMu.Unlock()
 	for id, srv := range s.Servers() {
