@@ -120,6 +120,9 @@ func (a *App) recordBank(id string, fn func(r *setup.Resource) bool) {
 
 func (a *App) recordPhase(id, phase string) {
 	a.recordBank(id, func(r *setup.Resource) bool {
+		if r.Phase == PhaseClosing || r.Phase == PhaseTerminating || r.Phase == PhaseClosed {
+			return false
+		}
 		changed := r.Phase != phase
 		r.Phase = phase
 		if phase == PhaseActive || phase == PhaseSuspended {
@@ -255,17 +258,18 @@ func (a *App) provision(b *config.Bank) {
 		}
 		return a.checkBankAPI(b)
 	})
-	a.lifeMu.Lock()
-	leaving := st.Phase == PhaseClosing || st.Phase == PhaseTerminating
-	a.lifeMu.Unlock()
-	if !ok || leaving {
+	if !ok {
 		return
 	}
 	phase := runningPhase(b)
-	a.recordPhase(b.ID, phase)
 	a.lifeMu.Lock()
+	if st.Phase == PhaseClosing || st.Phase == PhaseTerminating {
+		a.lifeMu.Unlock()
+		return
+	}
 	st.Phase, st.Reason, st.Attempts, st.NextAttemptAt = phase, "", 0, nil
 	a.lifeMu.Unlock()
+	a.recordPhase(b.ID, phase)
 }
 
 func (a *App) nameStep(st *BankStatus, id, detail string) {
