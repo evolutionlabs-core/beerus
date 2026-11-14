@@ -291,6 +291,10 @@ paths:
                 account_name: CHIDI OKAFOR
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/nip/credits:
@@ -340,6 +344,10 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '422':
           description: The request is well formed but cannot be done. The code is `idempotency_key_reused` when the session ID was used with different details.
           content:
@@ -375,6 +383,10 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/control/banks/{bank_id}:
@@ -445,6 +457,10 @@ components:
       schema:
         type: string
         enum: ['true']
+    Allow:
+      description: The one method this path accepts.
+      schema:
+        type: string
   parameters:
     BankIDPath:
       name: bank_id
@@ -712,7 +728,8 @@ components:
           description: Pass this as `cursor` to read the next page. It is absent on the last page.
     CreditRequest:
       type: object
-      description: A request from NIBSS to credit a customer. The session ID is the idempotency key.
+      description: A request from NIBSS to credit a customer. The session ID is the idempotency key. A field that is not listed is refused with `400 invalid_request`.
+      additionalProperties: false
       required: [session_id, from_code, from_bank_name, from_nuban, from_name, to_nuban, amount_minor, created_at]
       properties:
         session_id:
@@ -798,6 +815,31 @@ components:
             error:
               code: forbidden
               message: This certificate may not send transfers for bank 090201.
+              request_id: req_01JBC8A5T3ZK
+    NotFound:
+      description: The path is not part of this API. The code is `not_found`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_found
+              message: This path is not part of the NIP API of a bank.
+              request_id: req_01JBC8A5T3ZK
+    MethodNotAllowed:
+      description: The path does not accept this method. The code is `method_not_allowed`, and `Allow` names the method that works.
+      headers:
+        Allow:
+          $ref: '#/components/headers/Allow'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: method_not_allowed
+              message: Use POST for this path.
               request_id: req_01JBC8A5T3ZK
     Unauthenticated:
       description: The control token is missing or wrong. The code is `unauthenticated`.

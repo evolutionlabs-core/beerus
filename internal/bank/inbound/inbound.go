@@ -1,6 +1,7 @@
 package inbound
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -58,10 +59,26 @@ type creditResult struct {
 func New(b *bank.Bank, now func() time.Time, caller Caller, log *slog.Logger) http.Handler {
 	s := &server{bank: b, now: now, caller: caller, log: log}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/nip/account-names/{account_number}", s.guard(s.nameEnquiry))
-	mux.HandleFunc("POST /v1/nip/credits", s.guard(s.credit))
-	mux.HandleFunc("GET /v1/nip/credits/{session_id}", s.guard(s.creditStatus))
-	return mux
+	mux.HandleFunc("/v1/nip/account-names/{account_number}", only(http.MethodGet, s.nameEnquiry))
+	mux.HandleFunc("/v1/nip/credits", only(http.MethodPost, s.credit))
+	mux.HandleFunc("/v1/nip/credits/{session_id}", only(http.MethodGet, s.creditStatus))
+	mux.HandleFunc("/v1/nip/", notFound)
+	return s.guard(mux)
+}
+
+func only(method string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != method {
+			w.Header().Set("Allow", method)
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", fmt.Sprintf("Use %s for this path.", method))
+			return
+		}
+		next(w, r)
+	}
+}
+
+func notFound(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusNotFound, "not_found", "This path is not part of the NIP API of a bank.")
 }
 
 func WriteUnavailable(w http.ResponseWriter) {
@@ -75,8 +92,8 @@ func requestID() string {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
-		http.Error(w, "encode response", http.StatusInternalServerError)
-		return
+		status = http.StatusInternalServerError
+		b = []byte(`{"error":{"code":"internal_error","message":"The response could not be written.","request_id":"` + requestID() + `"}}`)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -100,14 +117,14 @@ func (s *server) authorized(r *http.Request) bool {
 	return leaf.Subject.CommonName == s.caller.CommonName && slices.Contains(leaf.Subject.OrganizationalUnit, s.caller.Role)
 }
 
-func (s *server) guard(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func (s *server) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			writeError(w, http.StatusForbidden, "forbidden", "This certificate may not call the NIP API of this bank. Only NIBSS may.")
 			return
 		}
-		next(w, r)
-	}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func allDigits(s string, n int) bool {
@@ -161,6 +178,19 @@ func readBody(r *http.Request) ([]byte, error) {
 	return b, nil
 }
 
+func decodeCredit(body []byte) (bank.NIPCredit, error) {
+	var c bank.NIPCredit
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
+		return bank.NIPCredit{}, fmt.Errorf("decode credit: %w", err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return bank.NIPCredit{}, errors.New("decode credit: data after the body")
+	}
+	return c, nil
+}
+
 func validate(c bank.NIPCredit) string {
 	switch {
 	case !allDigits(c.SessionID, sessionDigits):
@@ -186,6 +216,9 @@ func validate(c bank.NIPCredit) string {
 }
 
 func reusedMessage(e *bank.SessionReusedError) string {
+	if len(e.Fields) == 0 {
+		return fmt.Sprintf("Session %s was already credited with different details. Repeat the first request.", e.SessionID)
+	}
 	first := make([]string, len(e.Fields))
 	now := make([]string, len(e.Fields))
 	for i, f := range e.Fields {
@@ -206,9 +239,9 @@ func (s *server) credit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "The body could not be read. Send it again.")
 		return
 	}
-	var c bank.NIPCredit
-	if err := json.Unmarshal(body, &c); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", "Send a JSON credit request as the body.")
+	c, err := decodeCredit(body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Send a JSON credit request with only the documented fields as the body.")
 		return
 	}
 	if msg := validate(c); msg != "" {
