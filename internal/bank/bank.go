@@ -13,6 +13,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 const (
@@ -311,18 +312,38 @@ func (b *Bank) ReverseNIP(ctx context.Context, entryID int64, sessionID string, 
 	return p, nil
 }
 
-func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int64, from Counterparty, narration string, at time.Time) (ledger.Posted, error) {
+func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int64, from Counterparty, narration string, at time.Time) (CreditAnswer, error) {
+	ans, err := b.Credit(ctx, NIPCredit{SessionID: sessionID, FromCode: from.BankCode, FromBankName: from.BankName, FromNUBAN: from.AccountNumber, FromName: from.Name, ToNUBAN: to, Amount: amount, Narration: narration, CreatedAt: at}, at)
+	if err != nil {
+		return CreditAnswer{}, err
+	}
+	switch ans.Code {
+	case nip.OK:
+		return ans, nil
+	case nip.InvalidAccount:
+		return ans, fmt.Errorf("credit session %s: %w", sessionID, nip.ErrInvalidAccount)
+	case nip.NoRecord:
+		return ans, fmt.Errorf("credit session %s: %w", sessionID, nip.ErrNoRecord)
+	}
+	return ans, fmt.Errorf("credit session %s refused with code %s", sessionID, ans.Code)
+}
+
+func nipInEntry(sessionID, to string, amount int64, from Counterparty, narration string, at time.Time) (ledger.Entry, error) {
 	if err := positive(amount); err != nil {
-		return ledger.Posted{}, err
+		return ledger.Entry{}, err
 	}
 	if len(sessionID) != 30 {
-		return ledger.Posted{}, fmt.Errorf("%w: session ID must be 30 digits", ledger.ErrInvalid)
+		return ledger.Entry{}, fmt.Errorf("%w: session ID must be 30 digits", ledger.ErrInvalid)
 	}
 	narr := withNarration(fmt.Sprintf("NIP TRF FRM %s/%s/%s", from.Name, from.BankName, sessionID[18:]), narration)
 	lines := []ledger.Line{dr(NIPInward, amount, narr), via(cr(CustomerAccount(to), amount, narr), "nip", &from)}
-	e := entry("nip-in:"+sessionID, "nip_inward", at, narr, lines...)
+	e := entry(nipInKey(sessionID), "nip_inward", at, narr, lines...)
 	e.SessionID = sessionID
-	return b.L.Post(ctx, e)
+	return e, nil
+}
+
+func nipInKey(sessionID string) string {
+	return "nip-in:" + sessionID
 }
 
 func (b *Bank) Settle(ctx context.Context, sessionKey string, outward, inward int64, at time.Time) (ledger.Posted, error) {

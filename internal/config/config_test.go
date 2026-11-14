@@ -1,6 +1,10 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -65,5 +69,49 @@ func TestPortAllocation(t *testing.T) {
 	}
 	if _, err := finish(Config{Banks: []*Bank{{ID: "bank-a", API: BankAPI{DormantDays: -5}}}}); err == nil || !strings.Contains(err.Error(), "dormant_days") {
 		t.Fatalf("negative dormant_days: %v", err)
+	}
+}
+
+func TestNIBSSClientCertificate(t *testing.T) {
+	c, err := finish(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Dir = t.TempDir()
+	now := time.Now()
+	if err := Prepare(c, now); err != nil {
+		t.Fatal(err)
+	}
+	crt, key := c.Path("nibss", "client.crt"), c.Path("nibss", "client.key")
+	pair, err := tls.LoadX509KeyPair(crt, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaf.Subject.CommonName != "beerus-nibss" || len(leaf.Subject.OrganizationalUnit) != 1 || leaf.Subject.OrganizationalUnit[0] != "nibss" {
+		t.Fatalf("subject %v, want CN beerus-nibss and role nibss", leaf.Subject)
+	}
+	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
+		t.Fatalf("usage %v, want client auth only", leaf.ExtKeyUsage)
+	}
+	info, err := os.Stat(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("key mode %v, want 0600", info.Mode().Perm())
+	}
+	if err := Prepare(c, now); err != nil {
+		t.Fatal(err)
+	}
+	again, err := os.ReadFile(crt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again) != string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate[0]})) {
+		t.Fatal("a second prepare replaced the certificate")
 	}
 }

@@ -375,6 +375,8 @@ func (c *Config) EnsureCertificates(now time.Time) error {
 const (
 	AggregatorCN    = "beerus-connect"
 	AggregatorRole  = "aggregator"
+	NIBSSCN         = "beerus-nibss"
+	NIBSSRole       = "nibss"
 	EventSignerName = "events"
 	EventSignerRole = "event-signer"
 )
@@ -393,11 +395,32 @@ func (c *Config) ensureOpenBanking(root *pki.Authority, now time.Time) error {
 			return fmt.Errorf("save aggregator certificate: %w", err)
 		}
 	}
+	if err := c.ensureNIBSS(root, now); err != nil {
+		return err
+	}
 	if _, err := c.SigningKey(); err != nil {
 		return fmt.Errorf("load signing key: %w", err)
 	}
 	if err := c.EnsureBankCertificates(root, now); err != nil {
 		return fmt.Errorf("ensure bank certificates: %w", err)
+	}
+	return nil
+}
+
+func (c *Config) ensureNIBSS(root *pki.Authority, now time.Time) error {
+	dir := c.Path("nibss")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create nibss dir: %w", err)
+	}
+	if !pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
+		return nil
+	}
+	leaf, err := root.IssueClient(NIBSSCN, NIBSSRole, leafLife)
+	if err != nil {
+		return fmt.Errorf("issue NIBSS client certificate: %w", err)
+	}
+	if err := leaf.Save(dir, "client"); err != nil {
+		return fmt.Errorf("save NIBSS client certificate: %w", err)
 	}
 	return nil
 }

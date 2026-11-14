@@ -334,6 +334,16 @@ type lockedAccount struct {
 	events int64
 }
 
+func (l *Ledger) PostTx(ctx context.Context, tx pgx.Tx, e Entry) (Posted, error) {
+	if e.ValueDate.IsZero() {
+		e.ValueDate = e.PostingDate
+	}
+	if err := e.validate(); err != nil {
+		return Posted{}, err
+	}
+	return l.postIn(ctx, tx, e, e.hash())
+}
+
 func (l *Ledger) post(ctx context.Context, e Entry, hash string) (Posted, error) {
 	if p, err := l.existing(ctx, l.pool, e.Key, hash); err == nil || errors.Is(err, ErrIdempotency) {
 		return p, err
@@ -343,6 +353,21 @@ func (l *Ledger) post(ctx context.Context, e Entry, hash string) (Posted, error)
 		return Posted{}, err
 	}
 	defer tx.Rollback(ctx)
+	p, err := l.postIn(ctx, tx, e, hash)
+	if err != nil || p.Replayed {
+		return p, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "journal_entries_one_reversal" {
+			return Posted{}, ErrAlreadyReversed
+		}
+		return Posted{}, err
+	}
+	return p, nil
+}
+
+func (l *Ledger) postIn(ctx context.Context, tx pgx.Tx, e Entry, hash string) (Posted, error) {
 	codes := map[string]bool{}
 	for _, ln := range e.Lines {
 		codes[ln.Account] = true
@@ -484,8 +509,7 @@ func (l *Ledger) post(ctx context.Context, e Entry, hash string) (Posted, error)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`,
 		e.Key, hash, e.Kind, e.PostingDate.Start(), e.ValueDate.Start(), e.PostedAt, e.Narration, session, reverses, limitedAccount, limited).Scan(&entryID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		tx.Rollback(ctx)
-		return l.existing(ctx, l.pool, e.Key, hash)
+		return l.existing(ctx, tx, e.Key, hash)
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "journal_entries_one_reversal" {
@@ -536,12 +560,6 @@ func (l *Ledger) post(ctx context.Context, e Entry, hash string) (Posted, error)
 		if _, err := tx.Exec(ctx, `UPDATE balances SET ledger = $2, events = $3 WHERE account_id = $1`, a.ID, a.ledger, a.events); err != nil {
 			return Posted{}, err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "journal_entries_one_reversal" {
-			return Posted{}, ErrAlreadyReversed
-		}
-		return Posted{}, err
 	}
 	return Posted{EntryID: entryID, PostedAt: e.PostedAt, Balances: balances}, nil
 }
