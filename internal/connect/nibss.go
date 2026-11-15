@@ -18,6 +18,8 @@ import (
 
 const nibssRetry = 10 * time.Second
 
+var errMemberStoreClosed = errors.New("NIBSS is not open yet; try again soon")
+
 func openNIBSS(ctx context.Context, cfg *config.Config, ctl *ctlStore) (*nibss.Store, error) {
 	name := config.DatabaseName(cfg.Dir, setup.SystemNIBSS)
 	if err := ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
@@ -204,7 +206,7 @@ func (a *App) memberGone(ctx context.Context, id string) error {
 	s := a.nibss
 	a.mu.Unlock()
 	if s == nil {
-		return nil
+		return errMemberStoreClosed
 	}
 	s.Attach(id, nil)
 	cur, err := a.memberStatusAt(ctx, s, id)
@@ -235,7 +237,7 @@ func (a *App) driveMember(ctx context.Context, id string, path []string) error {
 	s := a.nibss
 	a.mu.Unlock()
 	if s == nil {
-		return nil
+		return errMemberStoreClosed
 	}
 	cur, err := a.memberStatusAt(ctx, s, id)
 	if err != nil {
@@ -309,19 +311,31 @@ func (a *App) markRemoved(ctx context.Context, lines []bank.FeedLine) error {
 }
 
 type staleMember struct {
-	attempts int
-	next     time.Time
+	generation int64
+	version    int
+	attempts   int
+	next       time.Time
 }
 
-func (a *App) markStale(id string) {
+func (a *App) markStale(id string, generation int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.stale == nil {
 		a.stale = map[string]*staleMember{}
 	}
-	if a.stale[id] == nil {
-		a.stale[id] = &staleMember{}
+	s := a.stale[id]
+	if s == nil {
+		s = &staleMember{}
+		a.stale[id] = s
 	}
+	s.generation, s.attempts, s.next = max(s.generation, generation), 0, time.Time{}
+	s.version++
+}
+
+func (a *App) staleMember(id string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.stale[id] != nil
 }
 
 type provisionJob struct {
@@ -329,21 +343,32 @@ type provisionJob struct {
 	st *BankStatus
 }
 
+type staleJob struct {
+	b          config.Bank
+	generation int64
+	version    int
+}
+
 func (a *App) registerDue(ctx context.Context) {
 	a.syncDirectoryDue(ctx)
 	a.closingCallsDue(ctx)
 	now := a.clock.Real()
 	var jobs []provisionJob
-	var stale []config.Bank
+	var stale []staleJob
 	a.lifeMu.Lock()
 	a.mu.Lock()
+	for id := range a.stale {
+		if a.cfg.Bank(id) == nil {
+			delete(a.stale, id)
+		}
+	}
 	for _, b := range a.cfg.Banks {
 		st := a.status[b.ID]
 		if st != nil && (st.Phase == PhaseProvisioning || st.Phase == PhaseRepairing) && !st.Steps[stepIndex(config.StepDirectory)].Done && (st.NextAttemptAt == nil || !now.Before(*st.NextAttemptAt)) {
 			jobs = append(jobs, provisionJob{*b, st})
 		}
 		if s := a.stale[b.ID]; s != nil && !now.Before(s.next) {
-			stale = append(stale, *b)
+			stale = append(stale, staleJob{*b, s.generation, s.version})
 		}
 	}
 	a.mu.Unlock()
@@ -351,18 +376,43 @@ func (a *App) registerDue(ctx context.Context) {
 	for _, j := range jobs {
 		a.step(j.st, config.StepDirectory, func() error { return a.registerMember(ctx, j.b) })
 	}
-	for _, b := range stale {
-		err := a.registerMember(ctx, b)
-		a.mu.Lock()
-		if s := a.stale[b.ID]; err == nil {
-			delete(a.stale, b.ID)
-		} else if s != nil {
-			s.attempts++
-			s.next = a.clock.Real().Add(backoff(s.attempts))
-		}
-		a.mu.Unlock()
-		if err != nil {
-			a.logNIBSS("bank not updated at NIBSS; retrying", err)
-		}
+	for _, j := range stale {
+		a.finishStale(j, a.registerMember(ctx, j.b))
 	}
+}
+
+func (a *App) finishStale(j staleJob, err error) {
+	a.mu.Lock()
+	s := a.stale[j.b.ID]
+	if s == nil {
+		a.mu.Unlock()
+		return
+	}
+	if err != nil {
+		s.attempts++
+		s.next = a.clock.Real().Add(backoff(s.attempts))
+		a.mu.Unlock()
+		a.logNIBSS("bank not updated at NIBSS; retrying", err)
+		a.updateFailed(j.b.ID, err)
+		return
+	}
+	current := s.version == j.version
+	if current {
+		delete(a.stale, j.b.ID)
+	}
+	a.mu.Unlock()
+	if !current {
+		return
+	}
+	phase := j.b.RunningPhase()
+	a.recordBank(j.b.ID, func(r *setup.Resource) bool {
+		if r.Phase == PhaseClosing || r.Phase == PhaseTerminating || r.Phase == PhaseClosed {
+			return false
+		}
+		r.Phase = phase
+		r.ObservedGeneration = max(r.ObservedGeneration, j.generation)
+		r.Attempts, r.NextAttemptAt = 0, nil
+		clearCondition(r, setup.ConditionDegraded)
+		return true
+	})
 }

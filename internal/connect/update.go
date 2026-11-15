@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -59,7 +60,8 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	}
 	a.lifeMu.Unlock()
 	if renamed || restate {
-		a.markStale(r.ID)
+		a.markStale(r.ID, r.Generation)
+		a.updateFailed(r.ID, errors.New("waiting for NIBSS to take the change"))
 	}
 	if reload {
 		a.reloadSite(b.ID)
@@ -75,6 +77,9 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 		st.Phase = phase
 	}
 	a.lifeMu.Unlock()
+	if a.staleMember(r.ID) {
+		return
+	}
 	a.recordPhase(r.ID, phase, r.Generation)
 }
 

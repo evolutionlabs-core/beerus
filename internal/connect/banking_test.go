@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
@@ -186,4 +189,49 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatalf("the failed credit left session %+v, %v", x, err)
 	}
 
+	liveBase := a.nibssCtl.base
+	outages := []struct {
+		changes []bool
+		status  string
+		phase   string
+	}{
+		{[]bool{true}, nip.StatusSuspended, PhaseSuspended},
+		{[]bool{false, true, false}, nip.StatusActive, PhaseActive},
+	}
+	for _, o := range outages {
+		a.nibssCtl.base = "http://127.0.0.1:1"
+		for _, suspended := range o.changes {
+			if err := a.SetBankSuspended(t.Context(), "bank-b", suspended); err != nil {
+				t.Fatal(err)
+			}
+		}
+		waiting, err := a.Resource(setup.KindBank, "bank-b")
+		degraded := slices.ContainsFunc(waiting.Conditions, func(c setup.Condition) bool { return c.Type == setup.ConditionDegraded && c.Status == "True" })
+		if err != nil || waiting.ObservedGeneration >= waiting.Generation || !degraded {
+			t.Fatalf("%v with NIBSS down was observed: generation %d/%d, degraded %v, %v", o.changes, waiting.ObservedGeneration, waiting.Generation, degraded, err)
+		}
+		a.nibssCtl.base = liveBase
+		pollCtx, stop := context.WithTimeout(t.Context(), testProvisionLimit)
+		tick := time.NewTicker(testProvisionPoll)
+		for settled := false; !settled; {
+			select {
+			case <-pollCtx.Done():
+				t.Fatalf("%v was never confirmed at NIBSS", o.changes)
+			case <-tick.C:
+			}
+			a.reconcileNow(pollCtx)
+			r, err := a.Resource(setup.KindBank, "bank-b")
+			settled = err == nil && !a.staleMember("bank-b") && r.ObservedGeneration == r.Generation
+		}
+		tick.Stop()
+		stop()
+		done, err := a.Resource(setup.KindBank, "bank-b")
+		degraded = slices.ContainsFunc(done.Conditions, func(c setup.Condition) bool { return c.Type == setup.ConditionDegraded && c.Status == "True" })
+		if err != nil || done.ObservedGeneration != done.Generation || degraded || done.Phase != o.phase {
+			t.Fatalf("%v after NIBSS answered: phase %s, generation %d/%d, degraded %v, %v", o.changes, done.Phase, done.ObservedGeneration, done.Generation, degraded, err)
+		}
+		if in, err := a.nibssStore().Institution(t.Context(), done.Allocated.NIPCode); err != nil || in.Status != o.status {
+			t.Fatalf("NIBSS shows bank-b as %+v after %v, want %s: %v", in, o.changes, o.status, err)
+		}
+	}
 }
