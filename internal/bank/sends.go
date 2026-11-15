@@ -68,17 +68,6 @@ func (b *Bank) DueSends(ctx context.Context, at time.Time, limit int) ([]Send, e
 	return out, nil
 }
 
-func (b *Bank) NextSendAt(ctx context.Context) (time.Time, bool, error) {
-	var at *time.Time
-	if err := b.L.Pool().QueryRow(ctx, `SELECT min(next_tsq_at) FROM nip_sends`).Scan(&at); err != nil {
-		return time.Time{}, false, fmt.Errorf("find the next send to check: %w", err)
-	}
-	if at == nil {
-		return time.Time{}, false, nil
-	}
-	return *at, true, nil
-}
-
 func (b *Bank) RescheduleSend(ctx context.Context, sessionID string, next time.Time) error {
 	if _, err := b.L.Pool().Exec(ctx, `UPDATE nip_sends SET attempts = attempts + 1, next_tsq_at = $2 WHERE session_id = $1`, sessionID, next); err != nil {
 		return fmt.Errorf("reschedule send %s: %w", sessionID, err)

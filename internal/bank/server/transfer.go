@@ -2,8 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -216,9 +214,4 @@ type TransferBody struct {
 	Amount    string `json:"amount" yaml:"amount"`
 	Narration string `json:"narration" yaml:"narration"`
 	Closure   bool   `json:"closure,omitempty" yaml:"-"`
-}
-
-func (b TransferBody) Hash(bank string) string {
-	sum := sha256.Sum256([]byte(strings.Join([]string{bank, b.From, b.ToBank, b.To, b.Amount, b.Narration}, "\x00")))
-	return hex.EncodeToString(sum[:])
 }

@@ -55,7 +55,7 @@ func TestDoneStory(t *testing.T) {
 	pending, _ := s.payTry("bank-a", current, "bank-b", ngozi, "15000", nil)
 	check(pending["status"] != "success", "the timeout fault did not leave the transfer pending: %v", pending)
 	resolved := s.ctl("POST", "/nip/sessions/"+fmt.Sprint(pending["session_id"])+"/status", nil)
-	check(resolved["outcome"] == "reversed" && resolved["resolved_at"] != nil, "the status check did not reverse the transfer: %v", resolved)
+	check(resolved["status"] == "25" && resolved["outcome"] == "failed" && resolved["resolved_at"] != nil, "the status check did not fail the transfer: %v", resolved)
 
 	step(2, "Connect bank, pick Bank A, redirect to the bank")
 	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": start.String(), "workspace_id": "ws_adaeze_bakery", "redirect_uri": s.redirect, "state": "st-done"}), 201)

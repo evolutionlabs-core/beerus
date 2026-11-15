@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -299,7 +300,7 @@ func (s *Sender) submit(ctx context.Context, rt Route, sid string, body nibssTra
 		if rerr := s.undo(ctx, b, sid); rerr != nil {
 			return errors.Join(err, rerr)
 		}
-		return Refused(refused.Status, nip.SystemError, refused.Code, errors.New(refused.Message+". Nothing was debited"))
+		return Refused(refused.Status, nip.SystemError, refused.Code, fmt.Errorf("%s. Nothing was debited", strings.TrimSuffix(refused.Message, ".")))
 	case err != nil:
 		s.Log.Warn("NIBSS gave no answer to a transfer; it will be checked", "bank", rt.FromBank, "session", sid, "err", err)
 		return s.later(ctx, b, sid, s.Clock.Real().Add(clock.Backoff(1)), res)

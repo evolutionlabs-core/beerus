@@ -27,6 +27,15 @@ func (s *Stack) position(bank string) map[string]any {
 func (s *Stack) setCap(bank string, minor int64) {
 	s.t.Helper()
 	s.ctl("POST", "/banks/"+bank+"/net-debit-cap", map[string]string{"cap": minorToNaira(minor)})
+	s.limitsReach(bank)
+}
+
+func (s *Stack) limitsReach(bank string) {
+	s.t.Helper()
+	waitFor(s.t, "the limits of "+bank+" to reach NIBSS", func() bool {
+		r := s.ctl("GET", "/resources/bank/"+bank, nil)
+		return r["observed_generation"] == r["generation"]
+	})
 }
 
 func (s *Stack) sessionCredits(bank, nuban, sid string) int {
@@ -116,7 +125,7 @@ func TestNIPSwitch(t *testing.T) {
 	pos := s.position("bank-a")["position_minor"].(float64)
 	s.setCap("bank-a", int64(pos)+100000)
 	over, err := s.payTry("bank-a", from, "bank-b", to, "1500", nil)
-	if err == nil || over["response_code"] != "61" {
+	if err != nil || over["status"] != "reversed" || over["response_code"] != "61" {
 		t.Fatalf("over the cap: %v %v", over, err)
 	}
 	s.advance("72h")
@@ -147,8 +156,8 @@ func TestNetDebitPositionCountsAllTransfers(t *testing.T) {
 		t.Fatalf("a transfer moved the open outward flow from %v to %v", before, got)
 	}
 	s.setCap("bank-a", 1)
-	if _, err := s.payTry("bank-a", from, "bank-b", to, "1", nil); err == nil || !strings.Contains(err.Error(), "net_debit_cap_exceeded") {
-		t.Fatalf("the cap let a transfer through: %v", err)
+	if res, err := s.payTry("bank-a", from, "bank-b", to, "1", nil); err != nil || res["status"] != "reversed" || res["response_code"] != "61" {
+		t.Fatalf("the cap let a transfer through: %v %v", res, err)
 	}
 	row := s.position("bank-a")
 	if row["cap_source"] != "configured" || row["collateral_minor"] != nil {
@@ -221,7 +230,9 @@ func TestStatusQueryReportsReversal(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newStack(t)
-	from, to := s.persona("adaeze").Accounts[0], s.persona("ngozi").Accounts[0]
+	home := s.persona("adaeze")
+	from, to := home.Accounts[0], s.persona("ngozi").Accounts[0]
+	before := s.balances(home)[from]
 	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "bank-b", "outcome": "failed", "count": 1})
 	sent, _ := s.payTry("bank-a", from, "bank-b", to, "25000", nil)
 	sid := fmt.Sprint(sent["session_id"])
@@ -229,10 +240,14 @@ func TestStatusQueryReportsReversal(t *testing.T) {
 		t.Fatalf("a timed-out transfer: %v then %v", sent, tsq)
 	}
 	s.advance("3h")
+	waitFor(t, "the status query to fail the session", func() bool {
+		return s.ctl("GET", "/nip/sessions/"+sid, nil)["status"] == "25"
+	})
 	tsq := s.ctl("GET", "/nip/sessions/"+sid, nil)
-	if tsq["outcome"] != "reversed" || tsq["resolved_at"] == nil {
-		t.Fatalf("after the reversal: %v", tsq)
+	if tsq["outcome"] != "failed" || tsq["resolved_at"] == nil {
+		t.Fatalf("after the failure: %v", tsq)
 	}
+	waitFor(t, "the sender to be reversed", func() bool { return s.balances(home)[from] == before })
 	if n := s.sessionCredits("bank-b", to, sid); n != 0 {
 		t.Fatalf("the beneficiary was credited %d times", n)
 	}
