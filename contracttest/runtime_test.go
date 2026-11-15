@@ -38,6 +38,24 @@ func storedBank(t *testing.T, dir, id string) setup.Resource {
 	return setup.Resource{}
 }
 
+func activeBank(t *testing.T, dir, id string) setup.Resource {
+	t.Helper()
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if r := storedBank(t, dir, id); r.Phase == config.PhaseActive {
+			return r
+		}
+		select {
+		case <-timeout.C:
+			return storedBank(t, dir, id)
+		case <-tick.C:
+		}
+	}
+}
+
 func checkProvisioned(t *testing.T, r setup.Resource) {
 	t.Helper()
 	if r.Phase != config.PhaseActive || r.ObservedGeneration != r.Generation || r.Attempts != 0 || r.NextAttemptAt != nil {
@@ -83,7 +101,7 @@ func TestFreshUpMakesBothBanksActive(t *testing.T) {
 	}
 	s := newBankStack(t)
 	for _, b := range s.cfg.Banks {
-		checkProvisioned(t, storedBank(t, s.cfg.Dir, b.ID))
+		checkProvisioned(t, activeBank(t, s.cfg.Dir, b.ID))
 	}
 	for _, st := range s.ctl("GET", "/banks", nil)["data"].([]any) {
 		m := st.(map[string]any)
@@ -130,8 +148,8 @@ func TestRestartResumesProvisioning(t *testing.T) {
 	waitFor(t, "both banks to be active again", func() bool {
 		return !slices.ContainsFunc(second.app.BankStatuses(), func(b connect.BankStatus) bool { return b.Phase != connect.PhaseActive })
 	})
-	checkProvisioned(t, storedBank(t, cfg.Dir, "bank-b"))
-	checkProvisioned(t, storedBank(t, cfg.Dir, "bank-a"))
+	checkProvisioned(t, activeBank(t, cfg.Dir, "bank-b"))
+	checkProvisioned(t, activeBank(t, cfg.Dir, "bank-a"))
 	for _, b := range second.app.BankStatuses() {
 		if b.Phase != connect.PhaseActive {
 			t.Errorf("%s is %s after the restart", b.ID, b.Phase)
