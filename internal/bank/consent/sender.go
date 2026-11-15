@@ -71,12 +71,12 @@ func (s *Sender) Events(ctx context.Context) {
 		for _, e := range due {
 			if err := s.send(ctx, b, e); err != nil {
 				s.Log.Warn("consent event not delivered; will retry", "bank", id, "consent", e.ConsentID, "attempt", e.Attempts+1, "err", err)
-				if err := srv.Retry(ctx, e, s.Clock.Real().Add(Backoff(e.Attempts))); err != nil {
+				if err := srv.Retry(context.WithoutCancel(ctx), e, s.Clock.Real().Add(Backoff(e.Attempts))); err != nil {
 					s.Log.Error("consent event retry not saved", "bank", id, "consent", e.ConsentID, "err", err)
 				}
 				continue
 			}
-			if err := srv.Delivered(ctx, e); err != nil {
+			if err := srv.Delivered(context.WithoutCancel(ctx), e); err != nil {
 				s.Log.Error("consent event delivery not saved", "bank", id, "consent", e.ConsentID, "err", err)
 			}
 		}
@@ -98,12 +98,12 @@ func (s *Sender) Ledger(ctx context.Context) {
 			ev.Seq = e.ID
 			if err := s.Core(ctx, ev); err != nil {
 				s.Log.Warn("consent ledger not updated; will retry", "bank", id, "consent", e.ConsentID, "attempt", e.Attempts+1, "err", err)
-				if err := srv.Retry(ctx, e, s.Clock.Real().Add(Backoff(e.Attempts))); err != nil {
+				if err := srv.Retry(context.WithoutCancel(ctx), e, s.Clock.Real().Add(Backoff(e.Attempts))); err != nil {
 					s.Log.Error("consent ledger retry not saved", "bank", id, "consent", e.ConsentID, "err", err)
 				}
 				break
 			}
-			if err := srv.Delivered(ctx, e); err != nil {
+			if err := srv.Delivered(context.WithoutCancel(ctx), e); err != nil {
 				s.Log.Error("consent ledger delivery not saved", "bank", id, "consent", e.ConsentID, "err", err)
 				break
 			}
@@ -155,10 +155,14 @@ func (s *Sender) send(ctx context.Context, b *config.Bank, e openbanking.Event) 
 		return err
 	}
 	now := s.Clock.Real()
+	jti, err := web.NewSecret("ev_", 12)
+	if err != nil {
+		return err
+	}
 	jwt, err := openbanking.Sign(key, b.ID, map[string]any{
 		"iss":        b.APIURL(),
 		"aud":        s.WidgetURL,
-		"jti":        web.NewSecret("ev_", 12),
+		"jti":        jti,
 		"iat":        now.Unix(),
 		"exp":        now.Add(eventLife).Unix(),
 		"consent_id": e.ConsentID,

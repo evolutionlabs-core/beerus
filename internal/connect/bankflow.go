@@ -20,8 +20,17 @@ func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSess
 		a.failSession(w, r, ls, "institution_down")
 		return
 	}
-	verifier, challenge := pkcePair()
-	state := web.NewSecret("bs_", 16)
+	verifier, challenge, err := pkcePair()
+	var state string
+	if err == nil {
+		state, err = web.NewSecret("bs_", 16)
+	}
+	if err != nil {
+		defer a.mu.Unlock()
+		a.log.Error("link state", "err", err)
+		a.failSession(w, r, ls, "server_error")
+		return
+	}
 	form := a.parFormLocked(ls, state, challenge)
 	a.mu.Unlock()
 	uri, err := a.bankPAR(b, form)
@@ -167,7 +176,12 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer a.mu.Unlock()
 	slices.Sort(keys)
-	secret := web.NewSecret("oc_", 16)
+	secret, err := web.NewSecret("oc_", 16)
+	if err != nil {
+		a.log.Error("link code", "err", err)
+		a.failSession(w, r, in.ls, "server_error")
+		return
+	}
 	in.ls.CustomerID, in.ls.Accounts, in.ls.BankAccounts = owner, keys, g.Accounts
 	in.ls.BankConsentID, in.ls.ConsentEnds, in.ls.BankFrom = tok.ConsentID, g.Ends, g.From
 	in.ls.Status = "authorised"

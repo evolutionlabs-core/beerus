@@ -161,7 +161,11 @@ func (a *App) assertion(b *config.Bank) (string, error) {
 		return "", err
 	}
 	id := a.cfg.Connect.RegistryID
-	return openbanking.Sign(key, "connect-1", map[string]any{"iss": id, "sub": id, "aud": b.APIURL(), "jti": web.NewSecret("j_", 12), "exp": a.clock.Real().Add(time.Minute).Unix()})
+	jti, err := web.NewSecret("j_", 12)
+	if err != nil {
+		return "", err
+	}
+	return openbanking.Sign(key, "connect-1", map[string]any{"iss": id, "sub": id, "aud": b.APIURL(), "jti": jti, "exp": a.clock.Real().Add(time.Minute).Unix()})
 }
 
 func (a *App) bankCall(b *config.Bank, method, path string, form url.Values, token string, out any) error {
@@ -222,10 +226,13 @@ func (a *App) bankCall(b *config.Bank, method, path string, form url.Values, tok
 	return json.Unmarshal(raw, out)
 }
 
-func pkcePair() (string, string) {
-	verifier := web.NewSecret("", 32)
+func pkcePair() (string, string, error) {
+	verifier, err := web.NewSecret("", 32)
+	if err != nil {
+		return "", "", err
+	}
 	sum := sha256.Sum256([]byte(verifier))
-	return verifier, base64.RawURLEncoding.EncodeToString(sum[:])
+	return verifier, base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
 func (a *App) callbackURL() string {

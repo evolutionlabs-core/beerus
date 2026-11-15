@@ -73,8 +73,11 @@ func (a *App) linkSessionJSON(ls *LinkSession, token string) map[string]any {
 	return m
 }
 
-func (a *App) newLinkSession(p *config.Partner, workspace string, start clock.Date, redirect, state, connectionID, institution string) (*LinkSession, string) {
-	token := web.NewSecret("lt_", 20)
+func (a *App) newLinkSession(p *config.Partner, workspace string, start clock.Date, redirect, state, connectionID, institution string) (*LinkSession, string, error) {
+	token, err := web.NewSecret("lt_", 20)
+	if err != nil {
+		return nil, "", err
+	}
 	real := a.clock.Real()
 	ls := &LinkSession{
 		ID:           web.NewID("lks"),
@@ -93,7 +96,7 @@ func (a *App) newLinkSession(p *config.Partner, workspace string, start clock.Da
 	}
 	a.st.LinkSessions[ls.ID] = ls
 	a.dirty()
-	return ls, token
+	return ls, token, nil
 }
 
 func (a *App) createLinkSession(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +134,12 @@ func (a *App) createLinkSession(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "start_date must not be in the future.")
 		return
 	}
-	ls, token := a.newLinkSession(p, body.WorkspaceID, start, body.RedirectURI, body.State, "", "")
+	ls, token, err := a.newLinkSession(p, body.WorkspaceID, start, body.RedirectURI, body.State, "", "")
+	if err != nil {
+		a.log.Error("link session", "err", err)
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The link session could not be created. Try again.")
+		return
+	}
 	web.WriteJSON(w, http.StatusCreated, a.linkSessionJSON(ls, token))
 }
 
@@ -542,7 +550,12 @@ func (a *App) reauth(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
 		return
 	}
-	ls, token := a.newLinkSession(p, c.WorkspaceID, c.StartDate, body.RedirectURI, body.State, c.ID, c.Institution)
+	ls, token, err := a.newLinkSession(p, c.WorkspaceID, c.StartDate, body.RedirectURI, body.State, c.ID, c.Institution)
+	if err != nil {
+		a.log.Error("link session", "err", err)
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The link session could not be created. Try again.")
+		return
+	}
 	web.WriteJSON(w, http.StatusCreated, a.linkSessionJSON(ls, token))
 }
 

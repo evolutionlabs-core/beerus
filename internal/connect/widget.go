@@ -44,6 +44,18 @@ func (a *App) render(w http.ResponseWriter, name string, status int, data page) 
 	}
 }
 
+func newSession(prefix string) (string, string, error) {
+	raw, err := web.NewSecret(prefix, 20)
+	if err != nil {
+		return "", "", err
+	}
+	csrf, err := web.NewSecret("", 16)
+	if err != nil {
+		return "", "", err
+	}
+	return raw, csrf, nil
+}
+
 func (a *App) message(w http.ResponseWriter, status int, heading, msg string) {
 	a.render(w, "message", status, page{"Heading": heading, "Message": msg})
 }
@@ -139,9 +151,14 @@ func (a *App) widgetOpen(w http.ResponseWriter, r *http.Request) {
 		a.message(w, http.StatusConflict, "This link was already used", "Go back to the app and start again.")
 		return
 	}
+	raw, csrf, err := newSession("ws_")
+	if err != nil {
+		a.log.Error("widget session", "err", err)
+		a.message(w, http.StatusInternalServerError, "Something went wrong", "Try again.")
+		return
+	}
 	ls.TokenUsed = true
-	raw := web.NewSecret("ws_", 20)
-	ws := &WidgetSession{ID: web.HashSecret(raw), LinkSessionID: ls.ID, CSRF: web.NewSecret("", 16), ExpiresReal: ls.ExpiresReal}
+	ws := &WidgetSession{ID: web.HashSecret(raw), LinkSessionID: ls.ID, CSRF: csrf, ExpiresReal: ls.ExpiresReal}
 	a.st.WidgetSessions[ws.ID] = ws
 	a.dirty()
 	a.setCookie(w, widgetCookie, raw, int(linkSessionLife.Seconds()))
@@ -318,8 +335,13 @@ func (a *App) customerLogin(w http.ResponseWriter, r *http.Request) {
 		a.render(w, "customer_login", http.StatusUnauthorized, page{"Title": "Your connections", "Banks": a.openInstitutions(), "Error": "The bank, username or password is wrong."})
 		return
 	}
-	raw := web.NewSecret("cs_", 20)
-	ws := &WidgetSession{ID: web.HashSecret(raw), LinkSessionID: customerKey(bankID, cust.ID), CSRF: web.NewSecret("", 16), ExpiresReal: a.clock.Real().Add(30 * time.Minute)}
+	raw, csrf, err := newSession("cs_")
+	if err != nil {
+		a.log.Error("customer session", "err", err)
+		a.message(w, http.StatusInternalServerError, "Something went wrong", "Try again.")
+		return
+	}
+	ws := &WidgetSession{ID: web.HashSecret(raw), LinkSessionID: customerKey(bankID, cust.ID), CSRF: csrf, ExpiresReal: a.clock.Real().Add(30 * time.Minute)}
 	a.st.WidgetSessions[ws.ID] = ws
 	a.dirty()
 	a.setCookie(w, customerCookie, raw, 1800)

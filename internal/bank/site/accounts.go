@@ -3,6 +3,7 @@ package site
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 
@@ -47,7 +48,7 @@ func (s *site) mine(ctx context.Context, customer string) (*bank.Bank, []account
 	for _, acc := range accts {
 		bal, err := books.L.Balance(ctx, acc.Code)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("read balance of %s: %w", acc.NUBAN, err)
 		}
 		out = append(out, account{Account: acc, Type: acc.Product, Ledger: bal, Available: bal})
 	}

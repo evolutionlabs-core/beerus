@@ -77,12 +77,12 @@ func (ba *auth) sweepLocked(real time.Time) {
 	}
 }
 
-func otp() string {
+func otp() (string, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	if err != nil {
-		panic(err)
+		return "", fmt.Errorf("read random bytes: %w", err)
 	}
-	return fmt.Sprintf("%06d", n.Int64())
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
 func (s *site) sessionFor(r *http.Request) (*session, string) {
@@ -173,8 +173,22 @@ func (s *site) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	raw := web.NewSecret("bs_", 20)
-	sess := &session{Customer: c.ID, Name: c.Name, CSRF: web.NewSecret("", 16), OTP: otp(), OTPExpires: real.Add(otpLife), Expires: real.Add(sessionLife)}
+	raw, err := web.NewSecret("bs_", 20)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	csrf, err := web.NewSecret("", 16)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	code, err := otp()
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	sess := &session{Customer: c.ID, Name: c.Name, CSRF: csrf, OTP: code, OTPExpires: real.Add(otpLife), Expires: real.Add(sessionLife)}
 	ba.mu.Lock()
 	delete(ba.failures, user)
 	ba.sessions[web.HashSecret(raw)] = sess

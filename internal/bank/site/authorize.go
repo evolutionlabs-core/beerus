@@ -33,9 +33,14 @@ func (s *site) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
+	code, err := otp()
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	s.auth.mu.Lock()
 	sess.Verified, sess.Fresh, sess.Attempts = false, "", 0
-	sess.OTP, sess.OTPExpires = otp(), s.Clock.Real().Add(otpLife)
+	sess.OTP, sess.OTPExpires = code, s.Clock.Real().Add(otpLife)
 	s.auth.mu.Unlock()
 	http.Redirect(w, r, "/verify", http.StatusSeeOther)
 }

@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,7 +13,6 @@ import (
 )
 
 type Books struct {
-	mu   sync.Mutex
 	st   *Store
 	b    *bank.Bank
 	Inst bank.Profile
@@ -46,8 +44,6 @@ func (s *Books) Name() string {
 }
 
 func (s *Books) Bank() *bank.Bank {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.b
 }
 
@@ -68,8 +64,6 @@ func (s *Books) Account(ctx context.Context, nuban string) (ledger.Account, erro
 }
 
 func (s *Books) Ping(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.st.Pool.Ping(ctx)
 }
 

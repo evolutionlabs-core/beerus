@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
@@ -25,6 +26,7 @@ const (
 type listeners struct {
 	site *http.Server
 	api  *http.Server
+	wg   sync.WaitGroup
 }
 
 func (p *Participant) Handler() (http.Handler, error) {
@@ -69,8 +71,8 @@ func (p *Participant) start(ctx context.Context) error {
 		site: &http.Server{Handler: p.handler(ob), ReadHeaderTimeout: headerTimeout},
 		api:  &http.Server{Handler: server.OpenAPI(p.srv, ob, p.log), ReadHeaderTimeout: headerTimeout, ReadTimeout: apiReadLimit, WriteTimeout: apiWriteLimit, IdleTimeout: apiIdle, ErrorLog: server.ErrorLog(p.log)},
 	}
-	serve(l.site, siteLn, nil)
-	serve(l.api, apiLn, tc)
+	l.serve(l.site, siteLn, nil)
+	l.serve(l.api, apiLn, tc)
 	p.mu.Lock()
 	p.open, p.serving = ob, l
 	p.mu.Unlock()
@@ -87,6 +89,7 @@ func (p *Participant) stop(ctx context.Context) {
 	}
 	_ = l.site.Shutdown(ctx)
 	_ = l.api.Shutdown(ctx)
+	l.wg.Wait()
 }
 
 func (p *Participant) restartIfStale(ctx context.Context) {
@@ -100,6 +103,7 @@ func (p *Participant) restartIfStale(ctx context.Context) {
 	if l != nil {
 		_ = l.site.Close()
 		_ = l.api.Close()
+		l.wg.Wait()
 	}
 	if err := p.start(ctx); err != nil {
 		p.log.Error("bank site not restarted; retrying", "bank", p.id, "err", err)
@@ -113,11 +117,15 @@ func closeAll(ls []net.Listener) {
 	}
 }
 
-func serve(s *http.Server, ls []net.Listener, tc *tls.Config) {
-	for _, l := range ls {
+func (l *listeners) serve(s *http.Server, ls []net.Listener, tc *tls.Config) {
+	for _, ln := range ls {
 		if tc != nil {
-			l = tls.NewListener(l, tc)
+			ln = tls.NewListener(ln, tc)
 		}
-		go func(l net.Listener) { _ = s.Serve(l) }(l)
+		l.wg.Add(1)
+		go func(ln net.Listener) {
+			defer l.wg.Done()
+			_ = s.Serve(ln)
+		}(ln)
 	}
 }
