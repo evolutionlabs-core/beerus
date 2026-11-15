@@ -35,16 +35,28 @@ func (e *RegistrationConflictError) Error() string {
 	return fmt.Sprintf("bank %s is registered with %s, and this request has %s", e.ID, strings.Join(e.Registered, " and "), strings.Join(e.Requested, " and "))
 }
 
+type InvalidError struct {
+	Message string
+}
+
+func (e *InvalidError) Error() string {
+	return e.Message
+}
+
+func invalid(format string, args ...any) error {
+	return &InvalidError{Message: fmt.Sprintf(format, args...)}
+}
+
 func checkRegister(in nip.Institution) error {
 	switch {
 	case in.ID == "" || strings.TrimSpace(in.Name) == "" || in.Type == "":
-		return errors.New("a bank needs an id, a name and a type")
+		return invalid("a bank needs an id, a name and a type")
 	case !nipCodeRe.MatchString(in.NIPCode):
-		return fmt.Errorf("bank %s: nip_code %q must be 6 digits", in.ID, in.NIPCode)
+		return invalid("bank %s: nip_code %q must be 6 digits", in.ID, in.NIPCode)
 	case !nubanCodeRe.MatchString(in.NUBANCode):
-		return fmt.Errorf("bank %s: nuban_code %q must be 3, 5 or 6 digits", in.ID, in.NUBANCode)
+		return invalid("bank %s: nuban_code %q must be 3, 5 or 6 digits", in.ID, in.NUBANCode)
 	case in.Status != "" && in.Status != nip.StatusActive:
-		return fmt.Errorf("bank %s registers as active, not %s; use SetStatus to change it", in.ID, in.Status)
+		return invalid("bank %s registers as active, not %s; use SetStatus to change it", in.ID, in.Status)
 	}
 	return nil
 }

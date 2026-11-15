@@ -49,7 +49,7 @@ Failures and recovery:
   fault         Make a bank go down or time out
 
 Running Beerus:
-  run           Run one participant: cbn, core or a bank
+  run           Run one participant: cbn, core, nibss or a bank
   compose       Print a Docker Compose file for the setup
   info          Show addresses and partner apps
   doctor        Find and clean up leftovers

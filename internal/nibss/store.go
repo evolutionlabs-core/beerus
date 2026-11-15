@@ -37,6 +37,10 @@ var transitions = map[string][]string{
 	nip.StatusRemoved:     {},
 }
 
+func Transitions(from string) []string {
+	return slices.Clone(transitions[from])
+}
+
 type Participant interface {
 	NameEnquiry(ctx context.Context, nuban string) (string, error)
 }
@@ -251,7 +255,7 @@ func institution(ctx context.Context, q querier, code, lock string) (nip.Institu
 
 func (s *Store) SetStatus(ctx context.Context, id, status string) error {
 	if _, ok := transitions[status]; !ok {
-		return fmt.Errorf("unknown institution status %q", status)
+		return invalid("unknown institution status %q", status)
 	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var cur string

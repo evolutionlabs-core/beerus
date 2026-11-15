@@ -437,7 +437,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '422':
-          description: The bank is already registered with other details. The code is `registration_conflict`.
+          description: The bank is already registered with other details, or another bank holds its code or name. The code is `registration_conflict`.
           content:
             application/json:
               schema:
@@ -505,7 +505,7 @@ paths:
               example:
                 error:
                   code: status_not_allowed
-                  message: 'Bank bank-a is terminating and cannot become active. A closing bank only moves to removed.'
+                  message: 'Bank bank-a is terminating and cannot become active. It can become removed.'
                   request_id: req_01JBC8A5T3ZK
         '503':
           $ref: '#/components/responses/Unavailable'
