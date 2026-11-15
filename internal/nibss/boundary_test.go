@@ -50,15 +50,22 @@ func TestNIBSSProcessDeps(t *testing.T) {
 		}
 	}
 	lines := goList(t, "-f", `{{.ImportPath}} {{join .Deps " "}} {{join .TestImports " "}} {{join .XTestImports " "}}`, "./...")
+	listed := map[string]bool{}
 	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) == 0 {
 			continue
 		}
+		listed[fields[0]] = true
 		for _, dep := range fields[1:] {
 			if bad := reaches(dep); bad != "" {
 				t.Errorf("%s imports %s", fields[0], dep)
 			}
+		}
+	}
+	for _, name := range []string{"gateway", "participant"} {
+		if !listed[modulePath+"/internal/nibss/"+name] {
+			t.Errorf("internal/nibss/%s is not covered by the boundary check", name)
 		}
 	}
 }

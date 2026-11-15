@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -89,27 +90,8 @@ type soloBank struct {
 	nibss   *http.Client
 }
 
-func startSoloBank(t *testing.T, state string) soloBank {
+func seedSoloBank(t *testing.T, ctx context.Context, dbURL, stage string, own *config.Bank, now time.Time) (*bank.Bank, ledger.Account) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("starts a bank process; run without -short")
-	}
-	ctx := context.WithoutCancel(t.Context())
-	dbURL := cmp.Or(os.Getenv(config.DatabaseURLEnv), os.Getenv("BEERUS_TEST_DATABASE_URL"), "postgres:///postgres")
-	now := clock.New(nil).Now()
-	stage := filepath.Join(t.TempDir(), "stage")
-	if err := os.Mkdir(stage, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	ports := freePorts(t, 5)
-	cfg := &config.Config{Dir: stage, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", WidgetPort: ports[2], ControlPort: ports[3], NIBSSPort: ports[4]}}
-	if err := config.Prepare(cfg, now); err != nil {
-		t.Fatal(err)
-	}
-	own := &config.Bank{State: state, ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: ports[0], APIPort: ports[1], Database: config.DatabaseName(stage, "bank-a")}
-	if err := cfg.EnsureBankDir(own, now); err != nil {
-		t.Fatal(err)
-	}
 	other := config.DatabaseName(stage, "bank-b")
 	if err := store.Create(ctx, dbURL, other); err != nil {
 		t.Skipf("no Postgres for the solo bank test (%v); set BEERUS_TEST_DATABASE_URL", err)
@@ -143,6 +125,59 @@ func startSoloBank(t *testing.T, state string) soloBank {
 	if _, err := books.CashDeposit(ctx, "dep-ada", account.NUBAN, soloDeposit, now); err != nil {
 		t.Fatal(err)
 	}
+	return books, account
+}
+
+func runSolo(t *testing.T, id, dir, dbURL string) (*lockedBuffer, <-chan error, func()) {
+	t.Helper()
+	c := newCLIAt(t, dir)
+	run := exec.Command(c.bin, "run", "--participant", id, "--dir", dir)
+	run.Env = c.env(config.DatabaseURLEnv + "=" + dbURL)
+	logs := &lockedBuffer{}
+	run.Stdout, run.Stderr = logs, logs
+	if err := run.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- run.Wait() }()
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			_ = run.Process.Signal(syscall.SIGTERM)
+			select {
+			case <-exited:
+			case <-time.After(soloStop):
+				_ = run.Process.Kill()
+				<-exited
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return logs, exited, stop
+}
+
+func startSoloBank(t *testing.T, state string) soloBank {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("starts a bank process; run without -short")
+	}
+	ctx := context.WithoutCancel(t.Context())
+	dbURL := cmp.Or(os.Getenv(config.DatabaseURLEnv), os.Getenv("BEERUS_TEST_DATABASE_URL"), "postgres:///postgres")
+	now := clock.New(nil).Now()
+	stage := filepath.Join(t.TempDir(), "stage")
+	if err := os.Mkdir(stage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ports := freePorts(t, 5)
+	cfg := &config.Config{Dir: stage, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", WidgetPort: ports[2], ControlPort: ports[3], NIBSSPort: ports[4]}}
+	if err := config.Prepare(cfg, now); err != nil {
+		t.Fatal(err)
+	}
+	own := &config.Bank{State: state, ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: ports[0], APIPort: ports[1], Database: config.DatabaseName(stage, "bank-a")}
+	if err := cfg.EnsureBankDir(own, now); err != nil {
+		t.Fatal(err)
+	}
+	books, account := seedSoloBank(t, ctx, dbURL, stage, own, now)
 
 	clientDir := t.TempDir()
 	copyBankFiles(t, stage, clientDir, "ca/root.crt", "nibss/client.crt", "nibss/client.key")
@@ -158,25 +193,7 @@ func startSoloBank(t *testing.T, state string) soloBank {
 		}
 	}
 	solo := stage
-	c := newCLIAt(t, solo)
-	run := exec.Command(c.bin, "run", "--participant", own.ID, "--dir", solo)
-	run.Env = c.env(config.DatabaseURLEnv + "=" + dbURL)
-	logs := &lockedBuffer{}
-	run.Stdout, run.Stderr = logs, logs
-	if err := run.Start(); err != nil {
-		t.Fatal(err)
-	}
-	exited := make(chan error, 1)
-	go func() { exited <- run.Wait() }()
-	t.Cleanup(func() {
-		_ = run.Process.Signal(syscall.SIGTERM)
-		select {
-		case <-exited:
-		case <-time.After(soloStop):
-			_ = run.Process.Kill()
-			<-exited
-		}
-	})
+	logs, exited, _ := runSolo(t, own.ID, solo, dbURL)
 	site := fmt.Sprintf("http://127.0.0.1:%d", own.Port)
 	api := fmt.Sprintf("https://127.0.0.1:%d", own.APIPort)
 	probe := &bankProbe{t: t, plain: &http.Client{Timeout: controlProbeTimeout}}

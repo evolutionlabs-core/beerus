@@ -19,6 +19,7 @@ const specFile = "openapi.yaml"
 
 var operations = []struct{ id, method, path string }{
 	{"nibssNameEnquiry", http.MethodGet, "/v1/name-enquiries"},
+	{"nibssEnrolBVN", http.MethodPost, "/v1/bvns"},
 	{"nibssFundsTransfer", http.MethodPost, "/v1/transfers"},
 	{"nibssStatusQuery", http.MethodPost, "/v1/transfers/{session_id}/status-queries"},
 	{"nibssBankDirectory", http.MethodGet, "/v1/banks"},

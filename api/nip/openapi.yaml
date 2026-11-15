@@ -8,7 +8,7 @@ info:
 
     ## Who serves what
 
-    - Tag `nibss`: served by the NIBSS participant. Banks call it for a name enquiry, a funds transfer, a status query and the bank directory.
+    - Tag `nibss`: served by the NIBSS participant. Banks call it to enrol a BVN, for a name enquiry, a funds transfer, a status query and the bank directory.
     - Tag `bank`: served by every bank participant. NIBSS calls it to look up an account name, to credit an account and to ask whether a credit happened.
     - Tag `control`: served by the NIBSS participant to the control plane only. It registers banks, as NIBSS operations onboard banks in the real world. It uses the bearer token of the participant control API and not mTLS.
 
@@ -96,7 +96,7 @@ paths:
       operationId: nibssNameEnquiry
       tags: [nibss]
       summary: Look up an account name at any bank
-      description: Asks NIBSS for the account name at a destination bank. NIBSS validates the account number, then asks the destination bank. The outcome is in `response_code`, in a 200 body.
+      description: Asks NIBSS for the account name at a destination bank. NIBSS validates the bank code, the bank status and the account number, then asks the destination bank over mTLS. A bank that is suspended, down, refusing connections or too slow answers `91`. A bank code that is not in the directory answers `96`. The outcome is in `response_code`, in a 200 body. A registered bank may call it, and so may the control plane.
       parameters:
         - $ref: '#/components/parameters/BankCodeQuery'
         - $ref: '#/components/parameters/AccountNumberQuery'
@@ -119,6 +119,49 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/bvns:
+    post:
+      operationId: nibssEnrolBVN
+      tags: [nibss]
+      summary: Enrol a BVN
+      description: Gives a person a BVN. It is an idempotent ensure. The same name, phone number and date of birth always return the same BVN, however many banks send them, and a new person gets the next BVN. NIBSS normalises the phone number and returns it. A registered bank may call it, and so may the control plane for the banks it hosts in one process. A phone number or date of birth that is not valid returns `422 invalid_request` with a message that says what to send.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrolBVN'
+            example:
+              name: Ada Obi
+              phone: '08031234567'
+              dob: '1990-04-21'
+      responses:
+        '200':
+          description: The BVN of this person. A repeat returns the same BVN.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BVN'
+              example:
+                bvn: '22900000013'
+                phone: '2348031234567'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          description: The details cannot be enrolled. The code is `invalid_request`, and the message says what to send.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: invalid_request
+                  message: 'Phone "12345" must start with +234 or 0.'
+                  request_id: req_01JBC8A5T3ZK
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/transfers:
@@ -632,6 +675,33 @@ components:
           type: string
           description: Whether the account holder has a BVN at NIBSS. It is present only when `response_code` is `00`. Beerus does not return this today, so it is a Beerus placeholder.
           enum: [linked, not_linked]
+    EnrolBVN:
+      type: object
+      description: The details of a person to enrol.
+      required: [name, phone, dob]
+      properties:
+        name:
+          type: string
+          description: The full name of the person.
+        phone:
+          type: string
+          description: A Nigerian phone number, such as `08031234567` or `+2348031234567`.
+        dob:
+          type: string
+          description: The date of birth, as `YYYY-MM-DD`.
+          pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    BVN:
+      type: object
+      description: The BVN of a person.
+      required: [bvn, phone]
+      properties:
+        bvn:
+          type: string
+          description: The 11 digit BVN.
+          pattern: '^[0-9]{11}$'
+        phone:
+          type: string
+          description: The phone number as NIBSS normalised it, with the country code and no plus.
     AccountName:
       type: object
       description: The answer to a name enquiry at one bank.

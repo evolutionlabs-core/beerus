@@ -8,40 +8,58 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss/gateway"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 func (p *Participant) directory() http.Handler {
 	api := gateway.New(p.store.Directory, p.log)
-	return web.WithRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		identity, ok := callerIdentity(r)
-		if !ok {
-			web.WriteError(w, r, http.StatusForbidden, "forbidden", "This certificate may not read the bank directory. Only banks may.")
-			return
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/name-enquiries", only(http.MethodGet, p.nameEnquiry))
+	mux.HandleFunc("/v1/bvns", only(http.MethodPost, p.enrolBVN))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if p.admit(w, r, "read the bank directory", false) {
+			api.ServeHTTP(w, r)
 		}
-		admitted, err := p.store.Admits(r.Context(), identity)
-		if err != nil {
-			p.log.ErrorContext(r.Context(), "certificate identity not checked", "err", err)
-			web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "NIBSS is not available right now. Try again soon.")
-			return
-		}
-		if !admitted {
-			web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("This certificate may not read the bank directory. %s is not a bank NIBSS knows.", identity))
-			return
-		}
-		api.ServeHTTP(w, r)
-	}))
+	})
+	return web.WithRequestID(mux)
 }
 
-func callerIdentity(r *http.Request) (string, bool) {
-	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
-		return "", false
+func (p *Participant) admit(w http.ResponseWriter, r *http.Request, action string, control bool) bool {
+	identity, roles, ok := callerIdentity(r)
+	if !ok {
+		web.WriteError(w, r, http.StatusForbidden, "forbidden", "This certificate may not "+action+". Only banks may.")
+		return false
 	}
-	return r.TLS.PeerCertificates[0].Subject.CommonName, true
+	if control && identity == config.AggregatorCN && slices.Contains(roles, config.AggregatorRole) {
+		return true
+	}
+	admitted := false
+	if slices.Contains(roles, config.BankRole) {
+		var err error
+		if admitted, err = p.store.Admits(r.Context(), identity); err != nil {
+			p.log.ErrorContext(r.Context(), "certificate identity not checked", "err", err)
+			web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "NIBSS is not available right now. Try again soon.")
+			return false
+		}
+	}
+	if !admitted {
+		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("This certificate may not %s. %s is not a bank NIBSS knows.", action, identity))
+	}
+	return admitted
+}
+
+func callerIdentity(r *http.Request) (string, []string, bool) {
+	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
+		return "", nil, false
+	}
+	leaf := r.TLS.PeerCertificates[0]
+	return leaf.Subject.CommonName, leaf.Subject.OrganizationalUnit, true
 }
 
 func (p *Participant) listen(port int) ([]net.Listener, error) {

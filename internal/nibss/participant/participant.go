@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -38,6 +39,7 @@ type Participant struct {
 	token string
 	store *nibss.Store
 	tls   *tls.Config
+	banks *bankCaller
 }
 
 func New(ctx context.Context, dir string, o Options) (*Participant, error) {
@@ -57,7 +59,11 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Participant{dir: dir, file: f, log: o.Logger, bind: o.Bind, token: token, tls: tc}
+	banks, err := newBankCaller(own, remoteBind(o.Bind))
+	if err != nil {
+		return nil, err
+	}
+	p := &Participant{dir: dir, file: f, log: o.Logger, bind: o.Bind, token: token, tls: tc, banks: banks}
 	if p.log == nil {
 		p.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
@@ -65,6 +71,11 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 		return nil, fmt.Errorf("open the NIBSS directory: %w", err)
 	}
 	return p, nil
+}
+
+func remoteBind(bind string) bool {
+	ip := net.ParseIP(bind)
+	return bind != "" && (ip == nil || !ip.IsLoopback())
 }
 
 func Run(ctx context.Context, dir string, o Options) error {
