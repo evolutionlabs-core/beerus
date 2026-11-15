@@ -28,6 +28,7 @@ type supervisor struct {
 	log       *slog.Logger
 	logs      *syncWriter
 	core      *child
+	nibss     *child
 	banks     map[string]*child
 	order     []string
 	stopping  map[string]*child
@@ -116,6 +117,10 @@ func (s *supervisor) shutdown() {
 	}
 	for _, c := range s.stopping {
 		<-c.done
+	}
+	if s.nibss != nil {
+		s.nibss.stop()
+		<-s.nibss.done
 	}
 	s.core.stop()
 	<-s.core.done

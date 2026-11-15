@@ -1205,6 +1205,10 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 	if err := sup.awaitCore(ctx); err != nil {
 		return err
 	}
+	sup.startNIBSS()
+	if err := sup.awaitNIBSS(ctx); err != nil {
+		return err
+	}
 	sup.watch(ctx)
 	if *file == "" {
 		if req, err = specRequest(*dir, ""); err != nil {
@@ -1215,6 +1219,7 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 	if err := e.startApply(ctx, cl, req, sup.core.firstExit); err != nil {
 		return err
 	}
+	sup.awaitBanks(ctx)
 	if len(c.Banks) == 0 {
 		fmt.Fprintln(e.out, "\n"+upNoBanks)
 	}
