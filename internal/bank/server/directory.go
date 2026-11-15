@@ -73,8 +73,20 @@ func NIBSSHTTP(dir, id string) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	tc := &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool, ServerName: config.NIBSSHost, MinVersion: tls.VersionTLS12}
-	return &http.Client{Timeout: directoryTimeout, Transport: &http.Transport{TLSClientConfig: tc, IdleConnTimeout: directoryIdle, MaxIdleConnsPerHost: 1}}, nil
+	tc := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      pool,
+		ServerName:   config.NIBSSHost,
+		MinVersion:   tls.VersionTLS12,
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 || cs.PeerCertificates[0].Subject.CommonName != config.NIBSSHost {
+				return errors.New("the server presented another certificate identity than NIBSS")
+			}
+			return nil
+		},
+	}
+	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &http.Client{Timeout: directoryTimeout, CheckRedirect: noRedirect, Transport: &http.Transport{TLSClientConfig: tc, IdleConnTimeout: directoryIdle, MaxIdleConnsPerHost: 1}}, nil
 }
 
 func (s *Server) nibssBase() (string, error) {
