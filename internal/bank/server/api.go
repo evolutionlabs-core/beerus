@@ -106,6 +106,9 @@ func (s *Server) API() http.Handler {
 	mux.HandleFunc("POST /v1/accounts", idempotent(s.banking.HandleOpenAccount))
 	mux.HandleFunc("POST /v1/accounts/{nuban}/close", idempotent(s.banking.HandleCloseAccount))
 	mux.HandleFunc("GET /v1/accounts/{nuban}/statement", s.banking.HandleStatement)
+	mux.HandleFunc("POST /v1/transfers", idempotent(s.banking.HandleTransfer))
+	mux.HandleFunc("POST /v1/transfers/quote", s.banking.HandleQuote)
+	mux.HandleFunc("POST /v1/nip/sends/{session_id}/status-query", s.banking.HandleStatusQuery)
 	mux.HandleFunc("POST /v1/deposits", idempotent(s.banking.HandleCash("deposit")))
 	mux.HandleFunc("POST /v1/withdrawals", idempotent(s.banking.HandleCash("withdrawal")))
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
@@ -202,30 +205,13 @@ func faultPage(r *http.Request) (limit int, cursor string, ok bool) {
 	return limit, r.URL.Query().Get("cursor"), true
 }
 
-func (s *Server) liveFaults() []Fault {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := s.clock.Now()
-	out := []Fault{}
-	for _, f := range s.faults {
-		if f.Live(now) {
-			out = append(out, *f)
-		}
-	}
-	return out
-}
-
-func (s *Server) pruneFaultsLocked(now time.Time) {
-	s.faults = slices.DeleteFunc(s.faults, func(f *Fault) bool { return !f.Live(now) })
-}
-
 func (s *Server) listFaults(w http.ResponseWriter, r *http.Request) {
 	limit, cursor, ok := faultPage(r)
 	if !ok {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("limit must be a number from 1 to %d.", FaultPageMax))
 		return
 	}
-	live := s.liveFaults()
+	live := s.faults.Live(s.clock.Now())
 	start := 0
 	if cursor != "" {
 		i := slices.IndexFunc(live, func(f Fault) bool { return f.ID == cursor })
@@ -260,24 +246,14 @@ func (s *Server) setFault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.ID, f.Bank = FaultID(r.Header.Get("Idempotency-Key")), s.id
-	s.mu.Lock()
-	s.pruneFaultsLocked(now)
-	s.faults = append(s.faults, &f)
-	s.mu.Unlock()
+	s.faults.Add(f, now)
 	web.WriteJSON(w, http.StatusCreated, viewFault(f))
 }
 
 func (s *Server) clearFaults(w http.ResponseWriter, r *http.Request) {
 	prefix := strings.Join([]string{web.ControlOwner, http.MethodPost, "/v1/faults", ""}, " ")
+	cleared := s.faults.Clear(s.clock.Now())
 	s.mu.Lock()
-	now := s.clock.Now()
-	cleared := 0
-	for _, f := range s.faults {
-		if f.Live(now) {
-			cleared++
-		}
-	}
-	s.faults = nil
 	for scope := range s.replays {
 		if strings.HasPrefix(scope, prefix) {
 			delete(s.replays, scope)

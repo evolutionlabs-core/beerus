@@ -125,3 +125,14 @@ func (a *App) idemPutLocked(scope, hash string, status int, contentType string, 
 func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
 	return a.idem.Wrap(idemStore{a}, idemOwner, a.log, next)
 }
+
+func (a *App) idempotentIfKeyed(next http.HandlerFunc) http.HandlerFunc {
+	keyed := a.idempotent(next)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Idempotency-Key") == "" {
+			next(w, r)
+			return
+		}
+		keyed(w, r)
+	}
+}

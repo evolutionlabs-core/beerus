@@ -273,7 +273,7 @@ func (a *App) decideMoney(ctx context.Context, r setup.Resource) (*setup.Conditi
 	if err != nil {
 		return nil, err
 	}
-	choice, to, cond := a.closeChoices(r, imp)
+	choice, to, cond := a.closeChoices(ctx, r, imp)
 	if cond != nil {
 		return cond, nil
 	}
@@ -313,7 +313,7 @@ func (a *App) blocked(reason, format string, args ...any) *setup.Condition {
 	return &setup.Condition{Type: setup.ConditionBlocked, Status: "True", Reason: reason, Message: fmt.Sprintf(format, args...), ChangedAt: a.clock.Real()}
 }
 
-func (a *App) closeChoices(r setup.Resource, imp CloseImpact) (map[string]string, string, *setup.Condition) {
+func (a *App) closeChoices(ctx context.Context, r setup.Resource, imp CloseImpact) (map[string]string, string, *setup.Condition) {
 	choice := map[string]string{}
 	rm := r.Money
 	held := 0
@@ -345,15 +345,15 @@ func (a *App) closeChoices(r setup.Resource, imp CloseImpact) (map[string]string
 		return choice, "", nil
 	}
 	to := a.bankByID(rm.To)
-	now := a.clock.Now()
+	down, faulty := a.faultBanks(ctx, server.FaultDown), a.faultBanks(ctx, "")
 	switch {
 	case to == nil:
 		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s is not a bank in this setup, so money cannot move there. Choose another bank.", rm.To)
-	case a.bankPhase(rm.To) != PhaseActive || a.bankDown(rm.To, now):
+	case a.bankPhase(rm.To) != PhaseActive || down[rm.To]:
 		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s is suspended or down, so money cannot move there. Resume it or choose another bank.", to.Name)
-	case a.bankFaulty(rm.To, now):
+	case faulty[rm.To]:
 		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s has a fault, so the money cannot be moved safely; clear it with beerus fault clear --bank %s.", to.Name, rm.To)
-	case a.bankFaulty(r.ID, now):
+	case faulty[r.ID]:
 		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s has a fault, so the money cannot be moved safely; clear it with beerus fault clear --bank %s.", imp.Bank.Name, r.ID)
 	}
 	return choice, rm.To, nil
@@ -404,7 +404,7 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		if err != nil {
 			return CloseResult{}, err
 		}
-		tr, err := a.Transfer(server.TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: key, Closure: true})
+		tr, err := a.transfer(ctx, server.TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: key, Closure: true})
 		if err != nil {
 			return CloseResult{}, fmt.Errorf("move %s from %s: %w", bank.Naira(bal), acc.NUBAN, err)
 		}

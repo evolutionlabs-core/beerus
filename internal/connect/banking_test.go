@@ -15,7 +15,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
@@ -70,6 +69,23 @@ func funded(t *testing.T, a *App, bankID, name, naira string) string {
 	return acc.NUBAN
 }
 
+func confirmLimits(t *testing.T, a *App, id string) {
+	t.Helper()
+	ctx, stop := context.WithTimeout(t.Context(), testProvisionLimit)
+	defer stop()
+	tick := time.NewTicker(testProvisionPoll)
+	defer tick.Stop()
+	for a.staleMember(id) {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the limits of %s never reached NIBSS", id)
+		case <-tick.C:
+		}
+		a.reconcileNow(ctx)
+		a.registerDue(ctx)
+	}
+}
+
 func TestBankingThroughTheApp(t *testing.T) {
 	a := newTestApp(t, Options{})
 	from := funded(t, a, "bank-a", "Ada Obi", "50000")
@@ -93,7 +109,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatalf("an unknown bank: %d %s", r.status, errMessage(r))
 	}
 
-	q, err := a.Quote(t.Context(), server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 1_000_000})
+	q, err := a.bankSender("bank-a").Quote(t.Context(), server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 1_000_000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,36 +118,36 @@ func TestBankingThroughTheApp(t *testing.T) {
 	}
 
 	body := `{"from":"` + from + `","to_bank":"bank-b","to":"` + to + `","amount":"10000"}`
-	sent := callHandler(t, a.ctlBankTransfer, "bank-a", body, "pay-1")
-	again := callHandler(t, a.ctlBankTransfer, "bank-a", body, "pay-1")
+	sent := callHandler(t, a.idempotentIfKeyed(a.banking.HandleTransfer), "bank-a", body, "pay-1")
+	again := callHandler(t, a.idempotentIfKeyed(a.banking.HandleTransfer), "bank-a", body, "pay-1")
 	if sent.status != http.StatusOK || sent.body["status"] != "success" || sent.body["session_id"] != again.body["session_id"] {
 		t.Fatalf("transfer %d %v, replay %v", sent.status, sent.body, again.body)
 	}
 	if sent.body["total_debit_minor"] != float64(q.TotalDebit) || sent.body["sender_balance_after_minor"] != float64(q.BalanceAfter) {
 		t.Fatalf("the quote said %+v, the transfer did %v", q, sent.body)
 	}
-	reused := callHandler(t, a.ctlBankTransfer, "bank-a", strings.Replace(body, "10000", "9000", 1), "pay-1")
+	reused := callHandler(t, a.idempotentIfKeyed(a.banking.HandleTransfer), "bank-a", strings.Replace(body, "10000", "9000", 1), "pay-1")
 	if reused.status != http.StatusUnprocessableEntity || !strings.HasPrefix(errMessage(reused), "idempotency_key_reused:") {
 		t.Fatalf("a reused key: %d %s", reused.status, errMessage(reused))
 	}
-	broke := callHandler(t, a.ctlBankTransfer, "bank-a", strings.Replace(body, "10000", "1000000", 1), "")
+	broke := callHandler(t, a.idempotentIfKeyed(a.banking.HandleTransfer), "bank-a", strings.Replace(body, "10000", "1000000", 1), "")
 	if broke.status != http.StatusUnprocessableEntity || errMessage(broke) != "insufficient_funds: Account "+from+" does not have enough money for this transfer and its charges." {
 		t.Fatalf("an overdraw: %d %s", broke.status, errMessage(broke))
 	}
 
 	for narration, want := range map[string]string{strings.Repeat("x", 101): "narration has 101 characters; the limit is 100", "a\nb": "narration must not contain control characters"} {
-		_, err := a.Transfer(server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 100, Narration: narration, Key: "bad-narration"})
+		_, err := a.transfer(t.Context(), server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 100, Narration: narration, Key: "bad-narration"})
 		var te *server.TransferError
 		if !errors.As(err, &te) || te.Status != http.StatusUnprocessableEntity || te.Err.Error() != want {
 			t.Fatalf("narration %q: got %v, want 422 %q", narration, err, want)
 		}
 	}
 	direct := server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 100_000, Key: "direct-1"}
-	first, err := a.Transfer(direct)
+	first, err := a.transfer(t.Context(), direct)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := a.Transfer(direct)
+	second, err := a.transfer(t.Context(), direct)
 	if err != nil || second.SessionID != first.SessionID || second.Status != "success" || second.BalanceAfter != first.BalanceAfter || !second.At.Equal(first.At) {
 		t.Fatalf("a repeat with the same key gave %+v, %v; the first was %+v", second, err, first)
 	}
@@ -143,18 +159,18 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatalf("the sender holds %d after a repeated key, want one debit leaving %d: %v", bal, first.BalanceAfter, err)
 	}
 
-	before, err := a.position(a.cfg.Bank("bank-a"))
+	before, err := a.position(t.Context(), a.cfg.Bank("bank-a"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.AddFault(server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeCredited}); err != nil {
+	if _, err := a.AddFault(t.Context(), server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeCredited}); err != nil {
 		t.Fatal(err)
 	}
-	held, err := a.Transfer(server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 200_000, Key: "held-1"})
+	held, err := a.transfer(t.Context(), server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 200_000, Key: "held-1"})
 	if err != nil || held.Status != "pending" {
 		t.Fatalf("a held transfer: %+v, %v", held, err)
 	}
-	after, err := a.position(a.cfg.Bank("bank-a"))
+	after, err := a.position(t.Context(), a.cfg.Bank("bank-a"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,11 +180,13 @@ func TestBankingThroughTheApp(t *testing.T) {
 	if err := a.SetNetDebitCap(context.Background(), "bank-a", after["position_minor"].(int64), 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Transfer(server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 1}); !errors.Is(err, errOverCap) {
-		t.Fatalf("a transfer past the cap with a pending session: %v", err)
+	confirmLimits(t, a, "bank-a")
+	capped, err := a.transfer(t.Context(), server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 1})
+	if err != nil || capped.Status != "reversed" || capped.ResponseCode != "61" || capped.BalanceAfter != held.BalanceAfter {
+		t.Fatalf("a transfer past the cap with a pending session: %+v, %v; the held transfer left %d", capped, err, held.BalanceAfter)
 	}
 
-	if _, err := a.AddFault(server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeCredited}); err != nil {
+	if _, err := a.AddFault(t.Context(), server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeCredited}); err != nil {
 		t.Fatal(err)
 	}
 	bkB, err := bookSource{a}.Book("bank-b")
@@ -181,12 +199,16 @@ func TestBankingThroughTheApp(t *testing.T) {
 	if err := a.SetNetDebitCap(context.Background(), "bank-a", 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	lost, err := a.Transfer(server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 300_000, Key: "lost-1"})
-	if err != nil || lost.Status != "reversed" {
+	confirmLimits(t, a, "bank-a")
+	lost, err := a.transfer(t.Context(), server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 300_000, Key: "lost-1"})
+	if err != nil || lost.Status != "pending" {
 		t.Fatalf("a held credit that failed: %+v, %v", lost, err)
 	}
-	if x, err := a.Session(lost.SessionID); err != nil || x.Outcome != nibss.OutcomeReversed {
+	if x, err := a.QuerySession(t.Context(), lost.SessionID); err != nil || x.Status != "25" || x.Outcome != nip.OutcomeFailed {
 		t.Fatalf("the failed credit left session %+v, %v", x, err)
+	}
+	if bal, err := bk.Bank.BalanceAt(context.Background(), from, a.clock.Now()); err != nil || bal != capped.BalanceAfter {
+		t.Fatalf("the sender holds %d after the failed credit was reversed, want %d: %v", bal, capped.BalanceAfter, err)
 	}
 
 	liveBase := a.nibssCtl.base

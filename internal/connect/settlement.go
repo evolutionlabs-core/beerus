@@ -210,36 +210,6 @@ type position struct {
 	outward, inward int64
 }
 
-func (p position) netDebit() int64 {
-	return max(p.outward-p.inward, 0)
-}
-
-func (a *App) openPosition(sw *nibss.Store, code string) (position, error) {
-	now := a.clock.Now()
-	list, err := sw.Open(context.Background())
-	if err != nil {
-		return position{}, err
-	}
-	var p position
-	for _, x := range list {
-		if x.Status == nibss.SessionOK && x.ResolvedAt != nil && x.ResolvedAt.After(now) {
-			continue
-		}
-		var ok bool
-		switch code {
-		case x.FromCode:
-			if p.outward, ok = bank.AddMinor(p.outward, x.Amount); !ok {
-				return position{}, fmt.Errorf("add open outward sessions of %s: the total is too large", code)
-			}
-		case x.ToCode:
-			if p.inward, ok = bank.AddMinor(p.inward, x.Amount); !ok {
-				return position{}, fmt.Errorf("add open inward sessions of %s: the total is too large", code)
-			}
-		}
-	}
-	return p, nil
-}
-
 func (a *App) settle(now time.Time, adhoc bool) (int, error) {
 	a.mu.Lock()
 	for a.settling {

@@ -23,7 +23,7 @@ func (s bookSource) Book(id string) (server.Book, error) {
 	if b == nil {
 		return server.Book{Name: id, Phase: PhaseClosed}, nil
 	}
-	bk := server.Book{Name: name, Phase: s.a.bankPhase(id), Enrol: s.enrolAt(id)}
+	bk := server.Book{Name: name, Phase: s.a.bankPhase(id), Enrol: s.enrolAt(id), Send: s.a.bankSender(id)}
 	if ls != nil {
 		bk.Bank = ls.Bank()
 	}
@@ -50,4 +50,8 @@ func (s bookSource) Empty() bool {
 
 func (s bookSource) Refusing(id string) bool {
 	return s.a.bankRefusing(id)
+}
+
+func (s bookSource) TakeTimeout(id string) (string, bool) {
+	return s.a.takeTimeout(id)
 }

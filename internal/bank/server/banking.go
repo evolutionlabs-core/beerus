@@ -16,6 +16,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -24,12 +25,14 @@ type Book struct {
 	Phase string
 	Bank  *bank.Bank
 	Enrol func(ctx context.Context, name, phone string, dob clock.Date) (string, string, error)
+	Send  *Sender
 }
 
 type Source interface {
 	Book(id string) (Book, error)
 	Empty() bool
 	Refusing(id string) bool
+	TakeTimeout(id string) (string, bool)
 }
 
 type Banking struct {
@@ -93,7 +96,10 @@ func (s *Banking) bankIDOf(r *http.Request) string {
 	return r.PathValue("id")
 }
 
-const listDefault = 100
+const (
+	listDefault = 100
+	holdLimit   = 30 * time.Second
+)
 
 type CustomerRequest struct {
 	Name     string `json:"name"`
@@ -516,6 +522,45 @@ func (s *Banking) NIP(id string) http.Handler {
 			inbound.WriteUnavailable(w)
 			return
 		}
-		serve(bk.Bank).ServeHTTP(w, r)
+		h := serve(bk.Bank)
+		if holdsCredit(r) {
+			if outcome, held := s.Src.TakeTimeout(id); held {
+				s.hold(w, r, h, outcome)
+				return
+			}
+		}
+		h.ServeHTTP(w, r)
 	})
+}
+
+func holdsCredit(r *http.Request) bool {
+	return (r.Method == http.MethodPost && r.URL.Path == "/v1/nip/credits") || (r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/nip/credits/"))
+}
+
+type discard struct {
+	header http.Header
+}
+
+func (d discard) Header() http.Header {
+	return d.header
+}
+
+func (d discard) Write(b []byte) (int, error) {
+	return len(b), nil
+}
+
+func (d discard) WriteHeader(int) {}
+
+func (s *Banking) hold(w http.ResponseWriter, r *http.Request, h http.Handler, outcome string) {
+	if outcome == nip.OutcomeCredited && r.Method == http.MethodPost {
+		h.ServeHTTP(discard{header: http.Header{}}, r)
+	}
+	timer := time.NewTimer(holdLimit)
+	defer timer.Stop()
+	select {
+	case <-r.Context().Done():
+	case <-timer.C:
+		w.Header().Set("Retry-After", "30")
+		inbound.WriteUnavailable(w)
+	}
 }

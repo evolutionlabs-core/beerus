@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -199,7 +198,6 @@ type State struct {
 	ConsentLedger  []ConsentRecord                        `json:"consent_ledger"`
 	Access         []AccessEvent                          `json:"access"`
 	WorldID        string                                 `json:"world_id"`
-	Faults         []*server.Fault                        `json:"faults"`
 	LinkSessions   map[string]*LinkSession                `json:"link_sessions"`
 	WidgetSessions map[string]*WidgetSession              `json:"widget_sessions"`
 	Connections    map[string]*Connection                 `json:"connections"`
@@ -210,7 +208,6 @@ type State struct {
 	Idem           map[string]*web.Record                 `json:"idempotency"`
 	Seq            int64                                  `json:"seq"`
 	Vault          map[string]*VaultEntry                 `json:"vault,omitempty"`
-	NIP            *NIPState                              `json:"nip,omitempty"`
 }
 
 func newState() *State {
@@ -225,7 +222,6 @@ func newState() *State {
 		Idem:           map[string]*web.Record{},
 		Registry:       map[string]*openbanking.RegistryClient{},
 		Vault:          map[string]*VaultEntry{},
-		NIP:            &NIPState{},
 	}
 }
 
@@ -256,9 +252,6 @@ func (s *State) fill() {
 	}
 	if s.Vault == nil {
 		s.Vault = map[string]*VaultEntry{}
-	}
-	if s.NIP == nil {
-		s.NIP = &NIPState{}
 	}
 	for _, a := range s.Accounts {
 		if len(a.Grants) == 0 && a.ConnectionID != "" && !a.Removed {

@@ -87,6 +87,7 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 		Link:      p.link,
 		Log:       p.log,
 		Clock:     p.clock,
+		SetupKey:  cfg.SetupKey,
 		Phase:     phase,
 		Steps:     steps,
 	})
@@ -145,6 +146,11 @@ func (p *Participant) Serve(ctx context.Context) error {
 	if err := p.start(ctx); err != nil {
 		return err
 	}
+	sends := make(chan struct{})
+	go func() {
+		defer close(sends)
+		p.srv.Sender().Run(ctx)
+	}()
 	tick := time.NewTicker(flushEvery)
 	defer tick.Stop()
 	for {
@@ -153,6 +159,7 @@ func (p *Participant) Serve(ctx context.Context) error {
 			shut, stop := context.WithTimeout(context.WithoutCancel(ctx), shutdownWait)
 			p.stop(shut)
 			stop()
+			<-sends
 			return nil
 		case <-tick.C:
 			p.sender.Events(ctx)

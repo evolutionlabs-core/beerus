@@ -138,18 +138,3 @@ func (s *Server) Enrol(ctx context.Context, name, phone string, dob clock.Date) 
 	}
 	return out.BVN, out.Phone, nil
 }
-
-func (s *Server) Enquire(ctx context.Context, rt Route, nuban string) (string, error) {
-	c, err := s.nibss()
-	if err != nil {
-		return "", err
-	}
-	out, err := c.Enquire(ctx, rt.ToCode, nuban)
-	if err != nil {
-		return "", err
-	}
-	if out.Code != nip.OK {
-		return "", Refused(http.StatusUnprocessableEntity, out.Code, "name_enquiry_failed", errors.New(out.Message))
-	}
-	return out.AccountName, nil
-}

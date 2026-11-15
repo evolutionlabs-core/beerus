@@ -9,7 +9,6 @@ import (
 	"os"
 	"slices"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -79,7 +78,7 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 		return a.blocked(setup.ReasonSettlementPending, "%s", waiting), nil
 	}
 	b := a.bankByID(id)
-	a.sendLocks.Delete(id)
+	a.dropBankState(id)
 	var ls *ledgerSource
 	if b != nil {
 		a.detach(b, config.StepSite)
@@ -134,7 +133,6 @@ func (a *App) dropBankRows(id string) {
 			a.vaultDrop(cid)
 		}
 	}
-	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *server.Fault) bool { return f.Bank == id })
 	for lid, l := range a.st.LinkSessions {
 		if l.Institution == id {
 			delete(a.st.LinkSessions, lid)

@@ -1,10 +1,13 @@
 package contracttest
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net"
+	"net/http"
 	"os"
 	"slices"
 	"strconv"
@@ -366,7 +369,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	}
 	from := open("bank-a", "Tunde Motors Ltd", "08032345678", "1979-07-02", "tunde", "50000")
 	to := open("bank-b", "Chidi Okafor", "08034567890", "1995-05-30", "chidi", "1000")
-	if tr, err := r.app.Transfer(server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 4_000_000, Key: "restart-1"}); err != nil || tr.Status != "success" {
+	if tr, err := sendByControl(t, cfg, "bank-a", "restart-1", map[string]string{"from": from, "to_bank": "bank-b", "to": to, "amount": "40000"}); err != nil || tr["status"] != "success" {
 		t.Fatalf("transfer: %+v %v", tr, err)
 	}
 	if _, err := r.app.PurgeBank("bank-b", false); err != nil {
@@ -434,4 +437,36 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	if rep, err := connect.Doctor(context.Background(), final, false); err != nil || !rep.Clean() || len(rep.Missing) != 0 {
 		t.Fatalf("doctor: %+v %v", rep, err)
 	}
+}
+
+func sendByControl(t *testing.T, cfg *config.Config, bank, key string, body map[string]string) (map[string]any, error) {
+	t.Helper()
+	token, err := config.ReadSecret(cfg.Path("control-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, cfg.ControlURL()+"/banks/"+bank+"/transfers", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	out := map[string]any{}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return out, fmt.Errorf("transfer answered %d %v", resp.StatusCode, out)
+	}
+	return out, nil
 }

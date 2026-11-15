@@ -123,6 +123,13 @@ func (a *App) Serve(ctx context.Context) error {
 			a.runPush(runCtx)
 		}
 	}()
+	sendsDone := make(chan struct{})
+	go func() {
+		defer close(sendsDone)
+		if a.role != RoleCore {
+			a.runSends(runCtx)
+		}
+	}()
 	var serr error
 	select {
 	case <-ctx.Done():
@@ -137,6 +144,7 @@ func (a *App) Serve(ctx context.Context) error {
 	cancel()
 	<-done
 	<-pushDone
+	<-sendsDone
 	a.closeLedgers()
 	return serr
 }

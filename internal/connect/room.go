@@ -269,7 +269,7 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 		}
 		accts = append(accts, v)
 	}
-	down := a.bankDown(id, a.clock.Now())
+	down := a.faultBanks(r.Context(), server.FaultDown)[id]
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.roomRender(w, r, "bank", http.StatusOK, "banks", roomPage{"Title": bk.bank.Name, "Bank": bk.bank, "Accounts": accts, "Totals": t, "Down": down, "Managed": managed, "Status": status, "Next": next, "First": cursor != ""})
@@ -465,7 +465,7 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 	} else {
 		req.Amount = amount
 		var res server.TransferResult
-		res, err = a.Transfer(req)
+		res, err = a.transfer(r.Context(), req)
 		if err == nil {
 			a.SyncAll(r.Context())
 			http.Redirect(w, r, "/ui/accounts/"+url.PathEscape(acctKey(res.FromBank, res.From))+"?transfer="+url.QueryEscape(res.Status), http.StatusSeeOther)
@@ -708,7 +708,7 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 		a.roomFail(w, r, err)
 		return
 	}
-	now := a.clock.Now()
+	down := a.faultBanks(r.Context(), server.FaultDown)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	inst := a.cfg.Bank(id)
@@ -718,7 +718,7 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 	}
 	targets := []*config.Bank{}
 	for _, b := range a.openInstitutions() {
-		if b.ID != id && !a.bankDownLocked(b.ID, now) {
+		if b.ID != id && !down[b.ID] {
 			targets = append(targets, b)
 		}
 	}

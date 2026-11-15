@@ -42,7 +42,8 @@ type App struct {
 	isDirty      atomic.Bool
 	limiters     map[string]*rate.Limiter
 	idem         web.Idempotency
-	sendLocks    sync.Map
+	senders      map[string]*server.Sender
+	faults       map[string]*server.Faults
 	client       *http.Client
 	wake         chan struct{}
 	statePath    string
@@ -338,9 +339,6 @@ func (a *App) stepLocked(ctx context.Context) {
 
 func (a *App) settleDue() {
 	now := a.clock.Now()
-	if err := a.checkSessions(now); err != nil {
-		a.log.Error("NIP status query", "err", err)
-	}
 	if _, err := a.settle(now, false); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}
@@ -357,7 +355,9 @@ func (a *App) sweep() {
 			delete(a.st.Idem, k)
 		}
 	}
-	a.pruneFaultsLocked(a.clock.Now())
+	for _, f := range a.faults {
+		f.Prune(a.clock.Now())
+	}
 	for k, ls := range a.st.LinkSessions {
 		if real.Sub(ls.ExpiresReal) > 7*24*time.Hour {
 			delete(a.st.LinkSessions, k)

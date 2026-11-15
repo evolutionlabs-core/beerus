@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -47,6 +48,67 @@ func (f *Fault) Live(now time.Time) bool {
 		return f.Left > 0
 	}
 	return false
+}
+
+type Faults struct {
+	mu   sync.Mutex
+	list []*Fault
+}
+
+func (f *Faults) Add(fault Fault, now time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.list = slices.DeleteFunc(f.list, func(x *Fault) bool { return !x.Live(now) })
+	f.list = append(f.list, &fault)
+}
+
+func (f *Faults) Live(now time.Time) []Fault {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []Fault{}
+	for _, x := range f.list {
+		if x.Live(now) {
+			out = append(out, *x)
+		}
+	}
+	return out
+}
+
+func (f *Faults) Clear(now time.Time) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cleared := 0
+	for _, x := range f.list {
+		if x.Live(now) {
+			cleared++
+		}
+	}
+	f.list = nil
+	return cleared
+}
+
+func (f *Faults) Down(now time.Time) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.ContainsFunc(f.list, func(x *Fault) bool { return x.Kind == FaultDown && x.Live(now) })
+}
+
+func (f *Faults) TakeTimeout() (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, x := range f.list {
+		if x.Kind == FaultTimeout && x.Left > 0 {
+			x.Left--
+			return x.Outcome, true
+		}
+	}
+	return "", false
+}
+
+func (f *Faults) Prune(now time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.list = slices.DeleteFunc(f.list, func(x *Fault) bool { return !x.Live(now) })
 }
 
 type FaultRequest struct {

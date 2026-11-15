@@ -78,11 +78,11 @@ func (h bankHost) Lookup(id string) *config.Bank {
 }
 
 func (h bankHost) Quote(ctx context.Context, req server.TransferRequest) (server.TransferResult, error) {
-	return h.a.Quote(ctx, req)
+	return h.a.bankSender(h.id).Quote(ctx, req)
 }
 
 func (h bankHost) Transfer(ctx context.Context, req server.TransferRequest) (server.TransferResult, error) {
-	res, err := h.a.Transfer(req)
+	res, err := h.a.bankSender(h.id).Transfer(ctx, req)
 	if err != nil {
 		return res, err
 	}

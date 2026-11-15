@@ -10,42 +10,10 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
-
-type NIPState struct {
-	Sessions int64 `json:"sessions"`
-}
-
-type reply struct {
-	status   int
-	body     []byte
-	replayed bool
-}
-
-func jsonReply(status int, v any) reply {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return reply{status: http.StatusInternalServerError, body: []byte(`{"error":{"code":"internal_error","message":"The response could not be built."}}`)}
-	}
-	return reply{status: status, body: b}
-}
-
-func errReply(r *http.Request, status int, code, msg string) reply {
-	return jsonReply(status, map[string]web.APIError{"error": {Code: code, Message: msg, RequestID: web.RequestID(r)}})
-}
-
-func (p reply) write(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	if p.replayed {
-		w.Header().Set("Idempotent-Replayed", "true")
-	}
-	w.WriteHeader(p.status)
-	_, _ = w.Write(p.body)
-}
 
 func (a *App) NameEnquiry(ctx context.Context, code, nuban string) (nip.NameEnquiry, error) {
 	if a.nibssCtl == nil {
@@ -80,39 +48,37 @@ func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS is not available right now.")
 		return
 	}
-	list, err := sw.Directory(context.Background())
+	list, err := sw.Directory(r.Context())
 	if err != nil {
 		a.log.Error("NIBSS directory", "err", err)
 		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The NIBSS directory could not be read.")
 		return
 	}
-	now := a.clock.Now()
-	a.mu.Lock()
+	down := a.faultBanks(r.Context(), server.FaultDown)
 	out := []map[string]any{}
 	for _, in := range list {
 		if in.Status == nip.StatusRemoved {
 			continue
 		}
 		status := in.Status
-		if status == nip.StatusActive && a.bankDownLocked(in.ID, now) {
+		if status == nip.StatusActive && down[in.ID] {
 			status = "outage"
 		}
 		out = append(out, map[string]any{"nip_code": in.NIPCode, "name": in.Name, "bank_id": in.ID, "status": status})
 	}
-	a.mu.Unlock()
 	web.WriteJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
-func (a *App) position(b *config.Bank) (map[string]any, error) {
+func (a *App) position(ctx context.Context, b *config.Bank) (map[string]any, error) {
 	sw := a.nibssStore()
 	if sw == nil {
 		return nil, errors.New("NIBSS is not available right now")
 	}
-	open, err := a.openPosition(sw, b.NIPCode)
+	open, err := sw.Position(ctx, b.NIPCode)
 	if err != nil {
 		return nil, err
 	}
-	pos := open.netDebit()
+	pos := open.NetDebit()
 	source := "configured"
 	if b.CapIsDefault() {
 		source = "default"
@@ -122,7 +88,7 @@ func (a *App) position(b *config.Bank) (map[string]any, error) {
 		collateral = b.Collateral
 	}
 	now := a.clock.Now()
-	return map[string]any{"bank_id": b.ID, "nip_code": b.NIPCode, "net_debit_cap_minor": b.Cap(), "cap_source": source, "collateral_minor": collateral, "open_outward_minor": open.outward, "open_inward_minor": open.inward, "position_minor": pos, "headroom_minor": b.Cap() - pos, "next_session": ts(a.schedule().next(now))}, nil
+	return map[string]any{"bank_id": b.ID, "nip_code": b.NIPCode, "net_debit_cap_minor": b.Cap(), "cap_source": source, "collateral_minor": collateral, "open_outward_minor": open.Outward, "open_inward_minor": open.Inward, "position_minor": pos, "headroom_minor": b.Cap() - pos, "next_session": ts(a.schedule().next(now))}, nil
 }
 
 func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +97,7 @@ func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	out := []map[string]any{}
 	for _, b := range banks {
-		row, err := a.position(b)
+		row, err := a.position(r.Context(), b)
 		if err != nil {
 			a.log.Error("NIP positions", "err", err)
 			web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The positions could not be worked out.")
@@ -163,15 +129,16 @@ func (a *App) ctlSettleNow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlNIPSession(w http.ResponseWriter, r *http.Request) {
-	a.writeNIPSession(w, r, a.Session)
+	x, err := a.Session(r.Context(), r.PathValue("id"))
+	a.writeNIPSession(w, r, x, err)
 }
 
 func (a *App) ctlNIPSessionStatus(w http.ResponseWriter, r *http.Request) {
-	a.writeNIPSession(w, r, a.QuerySession)
+	x, err := a.QuerySession(r.Context(), r.PathValue("id"))
+	a.writeNIPSession(w, r, x, err)
 }
 
-func (a *App) writeNIPSession(w http.ResponseWriter, r *http.Request, get func(string) (nibss.Session, error)) {
-	x, err := get(r.PathValue("id"))
+func (a *App) writeNIPSession(w http.ResponseWriter, r *http.Request, x any, err error) {
 	switch {
 	case errors.Is(err, nip.ErrNoRecord):
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "No NIP session has that ID.")
@@ -228,95 +195,11 @@ func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	b := a.cfg.Bank(id)
 	a.mu.Unlock()
-	row, err := a.position(b)
+	row, err := a.position(r.Context(), b)
 	if err != nil {
 		a.log.Error("NIP positions", "err", err)
 		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The position could not be worked out.")
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, row)
-}
-
-func (a *App) transferReply(r *http.Request, res server.TransferResult, err error) reply {
-	var te *server.TransferError
-	switch {
-	case errors.As(err, &te):
-		return jsonReply(te.Status, map[string]any{"error": web.APIError{Code: te.ErrCode, Message: web.Sentence(te.Error()), RequestID: web.RequestID(r)}, "response_code": te.Code, "session_id": res.SessionID})
-	case err != nil:
-		a.log.Error("transfer", "path", r.URL.Path, "err", err)
-		return errReply(r, http.StatusInternalServerError, "internal_error", web.SomethingWentWrong)
-	}
-	return jsonReply(http.StatusOK, res)
-}
-
-func (a *App) bankTransfer(r *http.Request, bankID string, body server.TransferBody, key string) reply {
-	amount, err := bank.ParseNaira(body.Amount)
-	if err != nil {
-		return errReply(r, http.StatusBadRequest, "invalid_request", err.Error())
-	}
-	if body.From == "" || body.To == "" {
-		return errReply(r, http.StatusBadRequest, "invalid_request", "from and to are required account numbers.")
-	}
-	if len(key) > 255 {
-		return errReply(r, http.StatusBadRequest, "invalid_request", "An Idempotency-Key must be 1 to 255 characters.")
-	}
-	req := server.TransferRequest{FromBank: bankID, From: body.From, ToBank: body.ToBank, To: body.To, Amount: amount, Narration: body.Narration, Key: key}
-	if key == "" {
-		res, err := a.Transfer(req)
-		return a.transferReply(r, res, err)
-	}
-	scope := "control POST /banks/" + bankID + "/transfers key " + key
-	hash := body.Hash(bankID)
-	entry := a.idem.Acquire(scope)
-	defer a.idem.Release(scope, entry)
-	a.mu.Lock()
-	rec := a.idemGetLocked(scope)
-	a.mu.Unlock()
-	if rec != nil {
-		if rec.Hash != hash {
-			return errReply(r, http.StatusUnprocessableEntity, "idempotency_key_reused", "That Idempotency-Key was used with a different transfer.")
-		}
-		return reply{status: rec.Status, body: rec.Body, replayed: true}
-	}
-	res, err := a.Transfer(req)
-	rep := a.transferReply(r, res, err)
-	if rep.status < http.StatusInternalServerError {
-		a.mu.Lock()
-		a.idemPutLocked(scope, hash, rep.status, "application/json", rep.body)
-		a.dirty()
-		a.mu.Unlock()
-	}
-	return rep
-}
-
-func (a *App) ctlBankQuote(w http.ResponseWriter, r *http.Request) {
-	var body server.TransferBody
-	if err := web.DecodeBody(r, &body); err != nil {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"9010000014","to_bank":"bank-b","to":"9020000011","amount":"25000"}.`)
-		return
-	}
-	amount, err := bank.ParseNaira(body.Amount)
-	if err != nil {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if body.From == "" || body.To == "" {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "from and to are required account numbers.")
-		return
-	}
-	res, err := a.Quote(r.Context(), server.TransferRequest{FromBank: r.PathValue("id"), From: body.From, ToBank: body.ToBank, To: body.To, Amount: amount, Narration: body.Narration})
-	a.transferReply(r, res, err).write(w)
-}
-
-func (a *App) ctlBankTransfer(w http.ResponseWriter, r *http.Request) {
-	var body server.TransferBody
-	if err := web.DecodeBody(r, &body); err != nil {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"9010000014","to_bank":"bank-b","to":"9020000011","amount":"25000"}.`)
-		return
-	}
-	rep := a.bankTransfer(r, r.PathValue("id"), body, r.Header.Get("Idempotency-Key"))
-	rep.write(w)
-	if rep.status == http.StatusOK {
-		a.SyncAll(r.Context())
-	}
 }

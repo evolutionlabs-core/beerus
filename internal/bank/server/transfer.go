@@ -93,7 +93,6 @@ type Route struct {
 	ToName   string
 	FromCode string
 	ToCode   string
-	Cap      int64
 }
 
 const nubanDigits = 10
@@ -121,10 +120,13 @@ func NewRoute(req TransferRequest, from, to *config.Bank, fromPhase, toPhase str
 	if fromPhase != config.PhaseActive && !req.Closure {
 		return Route{}, Refused(http.StatusConflict, nip.Unavailable, "bank_not_active", NotActiveError{from.Name, fromPhase})
 	}
+	if req.Closure && fromPhase != config.PhaseClosing && fromPhase != config.PhaseTerminating {
+		return Route{}, Refused(http.StatusUnprocessableEntity, nip.SystemError, "closure_not_allowed", fmt.Errorf("%s is %s, so it cannot send a closure transfer. Close the bank first", from.Name, fromPhase))
+	}
 	if toPhase == config.PhaseClosed {
 		return Route{}, Refused(http.StatusUnprocessableEntity, nip.Unavailable, "bank_closed", fmt.Errorf("%s is closed and takes no more transfers. Nothing was debited", to.Name))
 	}
-	return Route{FromBank: from.ID, ToBank: to.ID, FromName: from.Name, ToName: to.Name, FromCode: from.NIPCode, ToCode: to.NIPCode, Cap: from.Cap()}, nil
+	return Route{FromBank: from.ID, ToBank: to.ID, FromName: from.Name, ToName: to.Name, FromCode: from.NIPCode, ToCode: to.NIPCode}, nil
 }
 
 func AccountError(side, nuban string, err error) error {
@@ -213,6 +215,7 @@ type TransferBody struct {
 	To        string `json:"to" yaml:"to"`
 	Amount    string `json:"amount" yaml:"amount"`
 	Narration string `json:"narration" yaml:"narration"`
+	Closure   bool   `json:"closure,omitempty" yaml:"-"`
 }
 
 func (b TransferBody) Hash(bank string) string {

@@ -31,6 +31,10 @@ func (f fakeSource) Refusing(string) bool {
 	return f.refusing
 }
 
+func (f fakeSource) TakeTimeout(string) (string, bool) {
+	return "", false
+}
+
 type capture struct {
 	header http.Header
 	status int

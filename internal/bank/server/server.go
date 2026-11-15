@@ -2,10 +2,8 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,7 +12,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -41,7 +38,9 @@ type Server struct {
 	fees      *charges.Schedule
 	books     *bank.Bank
 	banking   *Banking
+	sender    *Sender
 	idem      web.Idempotency
+	faults    Faults
 	phaseGen  atomic.Int64
 	stale     atomic.Bool
 
@@ -53,7 +52,6 @@ type Server struct {
 	mu      sync.Mutex
 	bank    config.Bank
 	worldID string
-	faults  []*Fault
 	replays map[string]*web.Record
 	swept   time.Time
 
@@ -80,6 +78,7 @@ type Config struct {
 	Link      Link
 	Log       *slog.Logger
 	Clock     *clock.Clock
+	SetupKey  uint64
 	Phase     string
 	Steps     []Step
 }
@@ -103,6 +102,18 @@ func New(c Config) *Server {
 		registry:  map[string]*openbanking.RegistryClient{},
 	}
 	s.banking = &Banking{Src: s, Clock: c.Clock, Log: c.Log, ID: s.id}
+	s.sender = NewSender(SenderConfig{
+		Own:      s.Bank,
+		Books:    func() *bank.Bank { return s.books },
+		Fees:     c.Fees,
+		Clock:    c.Clock,
+		Log:      c.Log,
+		SetupKey: c.SetupKey,
+		Phase:    s.phaseOf,
+		Lookup:   s.Lookup,
+		Refresh:  s.RefreshBanks,
+		NIBSS:    s.nibss,
+	})
 	return s
 }
 
@@ -112,6 +123,10 @@ func (s *Server) ID() string {
 
 func (s *Server) Banking() *Banking {
 	return s.banking
+}
+
+func (s *Server) Sender() *Sender {
+	return s.sender
 }
 
 func (s *Server) Bank() config.Bank {
@@ -152,13 +167,14 @@ func (s *Server) Refusing(id string) bool {
 	if s.phaseOf(id) == config.PhaseSuspended {
 		return true
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.downLocked(id, s.clock.Now())
+	return id == s.id && s.faults.Down(s.clock.Now())
 }
 
-func (s *Server) downLocked(id string, at time.Time) bool {
-	return slices.ContainsFunc(s.faults, func(f *Fault) bool { return f.Kind == FaultDown && f.Bank == id && f.Live(at) })
+func (s *Server) TakeTimeout(id string) (string, bool) {
+	if id != s.id {
+		return "", false
+	}
+	return s.faults.TakeTimeout()
 }
 
 func (s *Server) Sweep() {
@@ -174,7 +190,7 @@ func (s *Server) Sweep() {
 			delete(s.replays, k)
 		}
 	}
-	s.pruneFaultsLocked(s.clock.Now())
+	s.faults.Prune(s.clock.Now())
 }
 
 func (s *Server) Book(id string) (Book, error) {
@@ -182,7 +198,7 @@ func (s *Server) Book(id string) (Book, error) {
 		return Book{}, ErrBankNotFound
 	}
 	phase, _ := s.Phase()
-	return Book{Name: s.Bank().Name, Phase: phase, Bank: s.books, Enrol: s.Enrol}, nil
+	return Book{Name: s.Bank().Name, Phase: phase, Bank: s.books, Enrol: s.Enrol, Send: s.sender}, nil
 }
 
 func (s *Server) Empty() bool {
@@ -203,26 +219,9 @@ func (s *Server) Lookup(id string) *config.Bank {
 }
 
 func (s *Server) Quote(ctx context.Context, req TransferRequest) (TransferResult, error) {
-	if err := CheckRequest(req); err != nil {
-		return TransferResult{}, err
-	}
-	if req.ToBank == "" {
-		req.ToBank = req.FromBank
-	}
-	from, to := s.Lookup(req.FromBank), s.Lookup(req.ToBank)
-	var fromPhase, toPhase string
-	if from != nil {
-		fromPhase = s.phaseOf(from.ID)
-	}
-	if to != nil {
-		toPhase = s.phaseOf(to.ID)
-	}
-	rt, err := NewRoute(req, from, to, fromPhase, toPhase)
-	if err != nil {
-		return TransferResult{}, err
-	}
-	if rt.FromBank != s.id {
-		return TransferResult{}, Refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("the books of %s are not open yet", rt.FromName))
-	}
-	return Quoter{Fees: s.fees, Clock: s.clock, Enquirer: s}.Quote(ctx, s.books, rt, req)
+	return s.sender.Quote(ctx, req)
+}
+
+func (s *Server) Transfer(ctx context.Context, req TransferRequest) (TransferResult, error) {
+	return s.sender.Transfer(ctx, req)
 }

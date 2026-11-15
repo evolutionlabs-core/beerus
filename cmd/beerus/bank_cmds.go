@@ -738,10 +738,8 @@ func printSession(s nibss.Session, wasPending bool) {
 		fmt.Printf("Session %s: pending. Beerus will check with NIBSS at %s.\n", s.ID, stamp(*s.NextTSQAt))
 	case s.Status == nibss.SessionPending:
 		fmt.Printf("Session %s: pending.\n", s.ID)
-	case s.Outcome == nibss.OutcomeReversed:
-		fmt.Printf("Session %s: failed with code %s. The sender's debit was reversed.\n", s.ID, s.Status)
 	default:
-		fmt.Printf("Session %s: failed with code %s. The sender's debit is being reversed.\n", s.ID, s.Status)
+		fmt.Printf("Session %s: failed with code %s. The sending bank reverses the debit.\n", s.ID, s.Status)
 	}
 	if wasPending && s.Status != nibss.SessionPending && s.Status != nibss.SessionOK {
 		fmt.Println("The session was pending; this check resolved it.")
