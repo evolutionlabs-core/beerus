@@ -413,6 +413,7 @@ paths:
               $ref: '#/components/schemas/RegisterBank'
             example:
               nip_code: '000014'
+              nuban_code: '014'
               name: Bank A
               type: commercial
               credit_url: https://bank-a.localhost:7451
@@ -423,7 +424,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Bank'
+                $ref: '#/components/schemas/BankEntry'
               example:
                 id: bank-a
                 name: Bank A
@@ -445,6 +446,66 @@ paths:
                 error:
                   code: registration_conflict
                   message: 'Bank bank-a is registered with nip_code 000014 and credit_url https://bank-a.localhost:7451, and this request has credit_url https://bank-a.localhost:7499. Send the registered details.'
+                  request_id: req_01JBC8A5T3ZK
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/control/banks/{bank_id}/status:
+    put:
+      operationId: setBankStatus
+      tags: [control]
+      summary: Change the status of a bank in the NIBSS directory
+      description: The control plane tells NIBSS to suspend a bank, to take it back to `active`, to start its closure with `terminating`, or to remove it. NIBSS allows `active` to `suspended` and back, `active` or `suspended` to `terminating`, and `terminating` to `removed`. A repeat of the current status changes nothing. A bank that is `removed` stays in the directory under its ID, but is not listed to banks. Any other change returns `422 status_not_allowed`, and the message says what to do. An unknown bank returns `404 not_found`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BankIDPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetBankStatus'
+            example:
+              status: suspended
+      responses:
+        '200':
+          description: The bank has the status. It is the directory entry, without the URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BankEntry'
+              example:
+                id: bank-a
+                name: Bank A
+                nip_code: '000014'
+                nuban_code: '014'
+                type: commercial
+                status: suspended
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          description: NIBSS has no bank with this ID. The code is `not_found`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_found
+                  message: Bank bank-z is not in the NIBSS directory. Register it first.
+                  request_id: req_01JBC8A5T3ZK
+        '422':
+          description: The bank cannot take this status from its current one. The code is `status_not_allowed`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: status_not_allowed
+                  message: 'Bank bank-a is terminating and cannot become active. A closing bank only moves to removed.'
                   request_id: req_01JBC8A5T3ZK
         '503':
           $ref: '#/components/responses/Unavailable'
@@ -696,15 +757,54 @@ components:
           type: string
           description: '`active` takes transfers. `suspended` and `terminating` do not.'
           enum: [active, suspended, terminating]
+    BankEntry:
+      type: object
+      description: One bank in the NIBSS directory, with any status. Banks see only the banks that are not `removed`.
+      required: [id, name, nip_code, nuban_code, type, status]
+      properties:
+        id:
+          type: string
+          description: The Beerus ID of the bank.
+        name:
+          type: string
+          description: The bank name.
+        nip_code:
+          type: string
+          description: The 6 digit NIP code.
+        nuban_code:
+          type: string
+          description: The NUBAN code that starts the bank's account numbers.
+        type:
+          type: string
+          description: The kind of bank.
+          enum: [commercial, digital, microfinance]
+        status:
+          type: string
+          description: The status in the directory.
+          enum: [active, suspended, terminating, removed]
+    SetBankStatus:
+      type: object
+      description: The status the control plane wants for a bank.
+      required: [status]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          description: The status to move the bank to.
+          enum: [active, suspended, terminating, removed]
     RegisterBank:
       type: object
       description: What the control plane tells NIBSS about a bank.
-      required: [nip_code, name, type, credit_url, certificate_identity]
+      required: [nip_code, nuban_code, name, type, credit_url, certificate_identity]
       properties:
         nip_code:
           type: string
           description: The 6 digit NIP code the bank was given.
           pattern: '^[0-9]{6}$'
+        nuban_code:
+          type: string
+          description: The 3, 5 or 6 digit NUBAN code the bank was given. This field is a Beerus addition, because Beerus allocates the code and NIBSS does not.
+          pattern: '^([0-9]{3}|[0-9]{5}|[0-9]{6})$'
         name:
           type: string
           description: The bank name.
