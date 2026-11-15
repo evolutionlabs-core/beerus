@@ -22,8 +22,6 @@ const (
 	requestIDChars = 12
 )
 
-var ErrUnavailable = errors.New("the NIBSS directory is not open")
-
 type Lister func(ctx context.Context) ([]nip.Institution, error)
 
 type server struct {
