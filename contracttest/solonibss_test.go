@@ -15,10 +15,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pb33f/libopenapi"
 	validator "github.com/pb33f/libopenapi-validator"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -26,10 +28,16 @@ import (
 )
 
 const (
+	soloSetupKey   = 1<<63 + 5
 	soloNIBSSWorld = "wld_solo"
 	nipSpec        = "../api/nip/openapi.yaml"
 	participantAPI = "../api/participant/openapi.yaml"
 )
+
+var soloBanks = map[string]struct{ name, code, nuban string }{
+	"bank-a": {"Bank A", "000014", "014"},
+	"bank-b": {"Bank B", "000015", "015"},
+}
 
 var requestIDText = regexp.MustCompile(`"request_id":"req_[A-Za-z0-9]+"`)
 
@@ -67,20 +75,40 @@ func nibssClient(t *testing.T, dir, certDir string) *http.Client {
 	return &http.Client{Transport: tr, Timeout: controlProbeTimeout}
 }
 
+type soloMember struct {
+	bank  *config.Bank
+	nuban string
+	stop  func()
+	logs  *lockedBuffer
+	books *bank.Bank
+}
+
 type soloNIBSS struct {
 	t       *testing.T
 	dir     string
+	dbURL   string
 	control string
 	token   string
 	dirURL  string
 	plain   *http.Client
 	specs   map[string]validator.Validator
-	apiPort int
-	nuban   string
-	stop    func()
+	members map[string]*soloMember
+	exited  <-chan error
+	logs    *lockedBuffer
 }
 
-func startSoloNIBSS(t *testing.T, withBank bool) (*soloNIBSS, map[string]*http.Client) {
+type soloTiming struct {
+	after    time.Duration
+	attempts int
+}
+
+var soloDefaultTiming = soloTiming{after: time.Minute, attempts: 2}
+
+func soloBankConfig(stage, id, name, code, nuban string, ports []int) *config.Bank {
+	return &config.Bank{ID: id, Name: name, Type: "commercial", NIPCode: code, NUBANCode: nuban, HistoryDays: 730, Port: ports[0], APIPort: ports[1], Database: config.DatabaseName(stage, id)}
+}
+
+func startSoloNIBSS(t *testing.T, timing soloTiming, withBanks ...string) (*soloNIBSS, map[string]*http.Client) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("starts a NIBSS process; run without -short")
@@ -92,8 +120,8 @@ func startSoloNIBSS(t *testing.T, withBank bool) (*soloNIBSS, map[string]*http.C
 	if err := os.Mkdir(stage, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	ports := freePorts(t, 4)
-	cfg := &config.Config{Dir: stage, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: ports[0], NIBSSControlPort: ports[1]}}
+	ports := freePorts(t, 2+2*len(withBanks))
+	cfg := &config.Config{Dir: stage, SetupKey: soloSetupKey, TSQAfter: timing.after, TSQAttempts: timing.attempts, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: ports[0], NIBSSControlPort: ports[1]}}
 	if err := config.Prepare(cfg, now); err != nil {
 		t.Fatal(err)
 	}
@@ -108,29 +136,28 @@ func startSoloNIBSS(t *testing.T, withBank bool) (*soloNIBSS, map[string]*http.C
 	clients := map[string]*http.Client{}
 	clientDir := t.TempDir()
 	copyBankFiles(t, stage, clientDir, "ca/root.crt")
-	own := &config.Bank{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000014", NUBANCode: "014", HistoryDays: 730, Port: ports[2], APIPort: ports[3], Database: config.DatabaseName(stage, "bank-a")}
-	for _, id := range []string{"bank-a", "bank-z"} {
+	members := map[string]*soloMember{}
+	for i, id := range append(slices.Clone(withBanks), "bank-z") {
 		b := &config.Bank{ID: id, Name: id, Type: "commercial", Port: 1, APIPort: 2, Database: config.DatabaseName(stage, id)}
-		if withBank && id == own.ID {
-			b = own
+		if i < len(withBanks) {
+			b = soloBankConfig(stage, id, soloBanks[id].name, soloBanks[id].code, soloBanks[id].nuban, ports[2+2*i:4+2*i])
 		}
 		if err := cfg.EnsureBankDir(b, now); err != nil {
 			t.Fatal(err)
 		}
 		copyBankFiles(t, stage, clientDir, "banks/"+id+"/client.crt", "banks/"+id+"/client.key")
 		clients[id] = nibssClient(t, clientDir, filepath.Join("banks", id))
-	}
-	nuban := ""
-	if withBank {
-		_, account := seedSoloBank(t, ctx, dbURL, stage, own, now)
-		nuban = account.NUBAN
+		if i < len(withBanks) {
+			books, account := seedSoloBank(t, ctx, dbURL, stage, b, now)
+			members[id] = &soloMember{bank: b, nuban: account.NUBAN, books: books}
+		}
 	}
 	entries, err := os.ReadDir(stage)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if e.Name() != config.NIBSSID && !(withBank && e.Name() == "banks") {
+		if e.Name() != config.NIBSSID && !(len(withBanks) > 0 && e.Name() == "banks") {
 			if err := os.RemoveAll(filepath.Join(stage, e.Name())); err != nil {
 				t.Fatal(err)
 			}
@@ -141,21 +168,18 @@ func startSoloNIBSS(t *testing.T, withBank bool) (*soloNIBSS, map[string]*http.C
 		t.Fatal(err)
 	}
 	logs, exited, _ := runSolo(t, config.NIBSSID, stage, dbURL)
-	stop := func() {}
-	if withBank {
-		_, _, stop = runSolo(t, own.ID, stage, dbURL)
-	}
 	s := &soloNIBSS{
 		t:       t,
 		dir:     stage,
+		dbURL:   dbURL,
 		control: fmt.Sprintf("http://127.0.0.1:%d", ports[1]),
 		token:   token,
 		dirURL:  fmt.Sprintf("https://127.0.0.1:%d", ports[0]),
 		plain:   &http.Client{Timeout: controlProbeTimeout},
 		specs:   map[string]validator.Validator{"nip": specValidator(t, nipSpec), "participant": specValidator(t, participantAPI)},
-		apiPort: own.APIPort,
-		nuban:   nuban,
-		stop:    stop,
+		members: members,
+		exited:  exited,
+		logs:    logs,
 	}
 	waitFor(t, "NIBSS to answer on its own", func() bool {
 		select {
@@ -166,21 +190,43 @@ func startSoloNIBSS(t *testing.T, withBank bool) (*soloNIBSS, map[string]*http.C
 		code, _ := s.call("participant", s.plain, http.MethodGet, s.control+"/v1/health", s.token, "")
 		return code == http.StatusOK
 	})
-	if withBank {
-		waitFor(t, "the bank to answer on its own", func() bool {
-			code, _ := s.call("", s.plain, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/health", own.Port), "", "")
-			return code == http.StatusOK
-		})
+	for _, id := range withBanks {
+		s.startBank(id)
 	}
 	return s, clients
 }
 
+func (s *soloNIBSS) startBank(id string) {
+	s.t.Helper()
+	m := s.members[id]
+	logs, exited, stop := runSolo(s.t, id, s.dir, s.dbURL)
+	m.logs, m.stop = logs, stop
+	waitFor(s.t, id+" to answer on its own", func() bool {
+		select {
+		case err := <-exited:
+			s.t.Fatalf("%s exited: %v\n%s", id, err, logs.String())
+		default:
+		}
+		code, _ := s.call("", s.plain, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/health", m.bank.Port), "", "")
+		return code == http.StatusOK
+	})
+}
+
 func (s *soloNIBSS) call(spec string, client *http.Client, method, url, token, body string) (int, string) {
+	s.t.Helper()
+	status, _, got := s.callWith(spec, client, method, url, token, body, nil)
+	return status, got
+}
+
+func (s *soloNIBSS) callWith(spec string, client *http.Client, method, url, token, body string, header http.Header) (int, http.Header, string) {
 	s.t.Helper()
 	build := func() *http.Request {
 		req, err := http.NewRequest(method, url, strings.NewReader(body))
 		if err != nil {
 			s.t.Fatal(err)
+		}
+		for k, v := range header {
+			req.Header[k] = v
 		}
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
@@ -192,7 +238,7 @@ func (s *soloNIBSS) call(spec string, client *http.Client, method, url, token, b
 	}
 	resp, err := client.Do(build())
 	if err != nil {
-		return 0, err.Error()
+		return 0, nil, err.Error()
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
@@ -205,11 +251,11 @@ func (s *soloNIBSS) call(spec string, client *http.Client, method, url, token, b
 			s.t.Fatalf("%s %s answered %d %s, which breaks the %s contract: %v", method, url, resp.StatusCode, raw, spec, errs)
 		}
 	}
-	return resp.StatusCode, requestIDText.ReplaceAllString(strings.TrimSpace(string(raw)), `"request_id":"req_ID"`)
+	return resp.StatusCode, resp.Header, requestIDText.ReplaceAllString(strings.TrimSpace(string(raw)), `"request_id":"req_ID"`)
 }
 
 func TestSoloNIBSS(t *testing.T) {
-	s, banks := startSoloNIBSS(t, false)
+	s, banks := startSoloNIBSS(t, soloDefaultTiming)
 	register := `{"nip_code":"000014","nuban_code":"014","name":"Bank A","type":"commercial","credit_url":"https://bank-a.localhost:7451","certificate_identity":"bank-a"}`
 	moved := strings.Replace(register, "7451", "7499", 1)
 	entry := func(status string) string {
@@ -272,8 +318,9 @@ func TestSoloNIBSS(t *testing.T) {
 }
 
 func TestSoloNIBSSNames(t *testing.T) {
-	s, banks := startSoloNIBSS(t, true)
-	register := fmt.Sprintf(`{"nip_code":"000014","nuban_code":"014","name":"Bank A","type":"commercial","credit_url":"https://bank-a.localhost:%d","certificate_identity":"bank-a"}`, s.apiPort)
+	s, banks := startSoloNIBSS(t, soloDefaultTiming, "bank-a")
+	a := s.members["bank-a"]
+	register := fmt.Sprintf(`{"nip_code":"000014","nuban_code":"014","name":"Bank A","type":"commercial","credit_url":"https://bank-a.localhost:%d","certificate_identity":"bank-a"}`, a.bank.APIPort)
 	bankURL := s.control + "/v1/control/banks/bank-a"
 	if status, got := s.call("nip", s.plain, "PUT", bankURL, s.token, register); status != 200 {
 		t.Fatalf("register: %d %s", status, got)
@@ -296,7 +343,7 @@ func TestSoloNIBSSNames(t *testing.T) {
 		return s.dirURL + "/v1/name-enquiries?bank_code=" + code + "&account_number=" + nuban
 	}
 	unknownNUBAN := world.NUBAN("014", 99)
-	badDigit := s.nuban[:9] + string('0'+(s.nuban[9]-'0'+1)%10)
+	badDigit := a.nuban[:9] + string('0'+(a.nuban[9]-'0'+1)%10)
 	person := `{"name":"Ada Obi","phone":"08031234567","dob":"1990-04-21"}`
 	other := `{"name":"Tunde Bello","phone":"08031234567","dob":"1990-04-21"}`
 	suspend := func(status string) func() {
@@ -317,16 +364,16 @@ func TestSoloNIBSSNames(t *testing.T) {
 		status int
 		want   string
 	}{
-		{"real name", banks["bank-a"], "GET", enquiry("000014", s.nuban), "", nil, 200, answer("00", "Successful.", "ADA OBI", "Bank A", s.nuban)},
+		{"real name", banks["bank-a"], "GET", enquiry("000014", a.nuban), "", nil, 200, answer("00", "Successful.", "ADA OBI", "Bank A", a.nuban)},
 		{"bad check digit", banks["bank-a"], "GET", enquiry("000014", badDigit), "", nil, 200, answer("07", "That is not a valid account number at Bank A.", "", "Bank A", badDigit)},
 		{"short number", banks["bank-a"], "GET", enquiry("000014", "123456789"), "", nil, 400, errBody("invalid_request", "account_number must have 10 digits.")},
-		{"short bank code", banks["bank-a"], "GET", enquiry("14", s.nuban), "", nil, 400, errBody("invalid_request", "bank_code must have 6 digits.")},
+		{"short bank code", banks["bank-a"], "GET", enquiry("14", a.nuban), "", nil, 400, errBody("invalid_request", "bank_code must have 6 digits.")},
 		{"unknown account", banks["bank-a"], "GET", enquiry("000014", unknownNUBAN), "", nil, 200, answer("25", "No such account at Bank A.", "", "Bank A", unknownNUBAN)},
-		{"unknown bank code", banks["bank-a"], "GET", enquiry("000111", s.nuban), "", nil, 200, `{"response_code":"96","message":"Bank code 000111 is not in the NIBSS directory.","bank_code":"000111","account_number":"` + s.nuban + `"}`},
+		{"unknown bank code", banks["bank-a"], "GET", enquiry("000111", a.nuban), "", nil, 200, `{"response_code":"96","message":"Bank code 000111 is not in the NIBSS directory.","bank_code":"000111","account_number":"` + a.nuban + `"}`},
 		{"no account number", banks["bank-a"], "GET", s.dirURL + "/v1/name-enquiries?bank_code=000014", "", nil, 400, errBody("invalid_request", "account_number must have 10 digits.")},
-		{"stranger", banks["bank-z"], "GET", enquiry("000014", s.nuban), "", nil, 403, errBody("forbidden", "This certificate may not ask for account names. bank-z is not a bank NIBSS knows.")},
-		{"suspended bank", banks["bank-a"], "GET", enquiry("000014", s.nuban), "", suspend("suspended"), 200, answer("91", "Bank A is not available right now.", "", "Bank A", s.nuban)},
-		{"resumed bank", banks["bank-a"], "GET", enquiry("000014", s.nuban), "", suspend("active"), 200, answer("00", "Successful.", "ADA OBI", "Bank A", s.nuban)},
+		{"stranger", banks["bank-z"], "GET", enquiry("000014", a.nuban), "", nil, 403, errBody("forbidden", "This certificate may not ask for account names. bank-z is not a bank NIBSS knows.")},
+		{"suspended bank", banks["bank-a"], "GET", enquiry("000014", a.nuban), "", suspend("suspended"), 200, answer("91", "Bank A is not available right now.", "", "Bank A", a.nuban)},
+		{"resumed bank", banks["bank-a"], "GET", enquiry("000014", a.nuban), "", suspend("active"), 200, answer("00", "Successful.", "ADA OBI", "Bank A", a.nuban)},
 		{"enrol a BVN", banks["bank-a"], "POST", s.dirURL + "/v1/bvns", person, nil, 200, `{"bvn":"22900000013","phone":"2348031234567"}`},
 		{"enrol the same person", banks["bank-a"], "POST", s.dirURL + "/v1/bvns", person, nil, 200, `{"bvn":"22900000013","phone":"2348031234567"}`},
 		{"enrol another person", banks["bank-a"], "POST", s.dirURL + "/v1/bvns", other, nil, 200, `{"bvn":"22900000021","phone":"2348031234567"}`},
@@ -335,7 +382,7 @@ func TestSoloNIBSSNames(t *testing.T) {
 		{"enrol with bad JSON", banks["bank-a"], "POST", s.dirURL + "/v1/bvns", `{"name":`, nil, 400, errBody("invalid_request", `Send {"name":"Ada Obi","phone":"08031234567","dob":"1990-04-21"}.`)},
 		{"enrol as a stranger", banks["bank-z"], "POST", s.dirURL + "/v1/bvns", person, nil, 403, errBody("forbidden", "This certificate may not enrol a BVN. bank-z is not a bank NIBSS knows.")},
 		{"bank behind another certificate", banks["bank-a"], "GET", enquiry("000015", impostorNUBAN), "", impostor, 200, `{"response_code":"91","message":"Bank Z is not available right now.","bank_code":"000015","bank_name":"Bank Z","account_number":"` + impostorNUBAN + `"}`},
-		{"bank stopped", banks["bank-a"], "GET", enquiry("000014", s.nuban), "", s.stop, 200, answer("91", "Bank A is not available right now.", "", "Bank A", s.nuban)},
+		{"bank stopped", banks["bank-a"], "GET", enquiry("000014", a.nuban), "", a.stop, 200, answer("91", "Bank A is not available right now.", "", "Bank A", a.nuban)},
 	}
 	control := []struct {
 		name   string
@@ -344,9 +391,9 @@ func TestSoloNIBSSNames(t *testing.T) {
 		status int
 		want   string
 	}{
-		{"control name", s.control + "/v1/control/name-enquiries?bank_code=000014&account_number=" + s.nuban, s.token, 200, answer("00", "Successful.", "ADA OBI", "Bank A", s.nuban)},
-		{"control without a token", s.control + "/v1/control/name-enquiries?bank_code=000014&account_number=" + s.nuban, "", 401, errBody("unauthenticated", "A valid control token is required.")},
-		{"control with a wrong token", s.control + "/v1/control/name-enquiries?bank_code=000014&account_number=" + s.nuban, "ctl_wrong", 401, errBody("unauthenticated", "A valid control token is required.")},
+		{"control name", s.control + "/v1/control/name-enquiries?bank_code=000014&account_number=" + a.nuban, s.token, 200, answer("00", "Successful.", "ADA OBI", "Bank A", a.nuban)},
+		{"control without a token", s.control + "/v1/control/name-enquiries?bank_code=000014&account_number=" + a.nuban, "", 401, errBody("unauthenticated", "A valid control token is required.")},
+		{"control with a wrong token", s.control + "/v1/control/name-enquiries?bank_code=000014&account_number=" + a.nuban, "ctl_wrong", 401, errBody("unauthenticated", "A valid control token is required.")},
 		{"control with a short number", s.control + "/v1/control/name-enquiries?bank_code=000014&account_number=123", s.token, 400, errBody("invalid_request", "account_number must have 10 digits.")},
 	}
 	for _, r := range control {

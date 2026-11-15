@@ -92,11 +92,6 @@ type soloBank struct {
 
 func seedSoloBank(t *testing.T, ctx context.Context, dbURL, stage string, own *config.Bank, now time.Time) (*bank.Bank, ledger.Account) {
 	t.Helper()
-	other := config.DatabaseName(stage, "bank-b")
-	if err := store.Create(ctx, dbURL, other); err != nil {
-		t.Skipf("no Postgres for the solo bank test (%v); set BEERUS_TEST_DATABASE_URL", err)
-	}
-	t.Cleanup(func() { _ = store.DropDatabases(ctx, dbURL, []string{other}) })
 	st, err := store.Open(ctx, dbURL, own.Database, openbanking.Migrate)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +164,7 @@ func startSoloBank(t *testing.T, state string) soloBank {
 		t.Fatal(err)
 	}
 	ports := freePorts(t, 5)
-	cfg := &config.Config{Dir: stage, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", WidgetPort: ports[2], ControlPort: ports[3], NIBSSPort: ports[4]}}
+	cfg := &config.Config{Dir: stage, SetupKey: soloSetupKey, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", WidgetPort: ports[2], ControlPort: ports[3], NIBSSPort: ports[4]}}
 	if err := config.Prepare(cfg, now); err != nil {
 		t.Fatal(err)
 	}
@@ -177,6 +172,11 @@ func startSoloBank(t *testing.T, state string) soloBank {
 	if err := cfg.EnsureBankDir(own, now); err != nil {
 		t.Fatal(err)
 	}
+	other := config.DatabaseName(stage, "bank-b")
+	if err := store.Create(ctx, dbURL, other); err != nil {
+		t.Skipf("no Postgres for the solo bank test (%v); set BEERUS_TEST_DATABASE_URL", err)
+	}
+	t.Cleanup(func() { _ = store.DropDatabases(ctx, dbURL, []string{other}) })
 	books, account := seedSoloBank(t, ctx, dbURL, stage, own, now)
 
 	clientDir := t.TempDir()
