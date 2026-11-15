@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	bankCallTimeout = 5 * time.Second
-	bankDialTimeout = 3 * time.Second
+	bankCallTimeout = 2 * time.Second
+	bankDialTimeout = time.Second
 	bankIdleTimeout = 90 * time.Second
 	bankIdleConns   = 2
 	maxBankBody     = 64 << 10
@@ -82,6 +82,9 @@ func (c *bankCaller) nameAt(ctx context.Context, m nibss.Member, nuban string) (
 		return "", fmt.Errorf("ask %s for a name: %w", m.ID, errors.Join(nip.ErrUnavailable, err))
 	}
 	defer resp.Body.Close()
+	if err := checkBankCertificate(resp, m); err != nil {
+		return "", err
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBankBody+1))
 	if err != nil {
 		return "", fmt.Errorf("read the name from %s: %w", m.ID, errors.Join(nip.ErrUnavailable, err))
@@ -107,4 +110,14 @@ func (c *bankCaller) nameAt(ctx context.Context, m nibss.Member, nuban string) (
 		return "", fmt.Errorf("%s: %w", m.ID, nip.ErrUnavailable)
 	}
 	return "", fmt.Errorf("%s answered response code %q", m.ID, out.ResponseCode)
+}
+
+func checkBankCertificate(resp *http.Response, m nibss.Member) error {
+	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+		return fmt.Errorf("%s did not present a certificate", m.ID)
+	}
+	if got, want := resp.TLS.PeerCertificates[0].Subject.CommonName, config.BankHost(m.CertificateIdentity); got != want {
+		return fmt.Errorf("%s presented the certificate of %s, not %s", m.ID, got, want)
+	}
+	return nil
 }

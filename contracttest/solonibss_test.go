@@ -304,6 +304,11 @@ func TestSoloNIBSSNames(t *testing.T) {
 	suspend := func(status string) func() {
 		return func() { s.call("nip", s.plain, "PUT", bankURL+"/status", s.token, `{"status":"`+status+`"}`) }
 	}
+	impostor := func() {
+		body := strings.NewReplacer("000014", "000015", `"014"`, `"015"`, "Bank A", "Bank Z", `"bank-a"`, `"bank-z"`).Replace(register)
+		s.call("nip", s.plain, "PUT", s.control+"/v1/control/banks/bank-z", s.token, body)
+	}
+	impostorNUBAN := world.NUBAN("015", 1)
 	rows := []struct {
 		name   string
 		client *http.Client
@@ -331,6 +336,7 @@ func TestSoloNIBSSNames(t *testing.T) {
 		{"enrol with a bad date", banks["bank-a"], "POST", s.dirURL + "/v1/bvns", `{"name":"Ada Obi","phone":"08031234567","dob":"1990-02-30"}`, nil, 422, errBody("invalid_request", `Dob "1990-02-30" must be a date like 1990-04-21.`)},
 		{"enrol with bad JSON", banks["bank-a"], "POST", s.dirURL + "/v1/bvns", `{"name":`, nil, 400, errBody("invalid_request", `Send {"name":"Ada Obi","phone":"08031234567","dob":"1990-04-21"}.`)},
 		{"enrol as a stranger", banks["bank-z"], "POST", s.dirURL + "/v1/bvns", person, nil, 403, errBody("forbidden", "This certificate may not enrol a BVN. bank-z is not a bank NIBSS knows.")},
+		{"bank behind another certificate", banks["bank-a"], "GET", enquiry("000015", impostorNUBAN), "", impostor, 200, `{"response_code":"91","message":"Bank Z is not available right now.","bank_code":"000015","bank_name":"Bank Z","account_number":"` + impostorNUBAN + `"}`},
 		{"bank stopped", banks["bank-a"], "GET", enquiry("000014", s.nuban), "", s.stop, 200, answer("91", "Bank A is not available right now.", "", "Bank A", s.nuban)},
 	}
 	for _, r := range rows {

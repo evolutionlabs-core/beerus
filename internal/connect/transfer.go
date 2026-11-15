@@ -94,14 +94,14 @@ func (a *App) Quote(ctx context.Context, req server.TransferRequest) (server.Tra
 }
 
 func (a *App) Enquire(ctx context.Context, rt server.Route, nuban string) (string, error) {
-	return a.enquiredName(ctx, rt, nuban)
+	return a.enquiredName(ctx, rt, nuban, "")
 }
 
-func (a *App) enquiredName(ctx context.Context, rt server.Route, nuban string) (string, error) {
+func (a *App) enquiredName(ctx context.Context, rt server.Route, nuban, tail string) (string, error) {
 	out, err := a.NameEnquiry(ctx, rt.ToCode, nuban)
 	var away *server.UnavailableError
 	if errors.As(err, &away) {
-		return "", server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "nibss_unavailable", errors.New(away.Msg))
+		return "", server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "nibss_unavailable", errors.New("NIBSS is not available right now"+tail))
 	}
 	if err != nil {
 		return "", err
@@ -182,7 +182,7 @@ func (a *App) nipTransfer(rt transferRoute, req server.TransferRequest, res serv
 	name := prior.To.Name
 	if found {
 		res.At = prior.At.In(clock.Lagos)
-	} else if name, err = a.enquiredName(ctx, rt.Route, req.To); err != nil {
+	} else if name, err = a.enquiredName(ctx, rt.Route, req.To, ", so nothing was debited"); err != nil {
 		return res, err
 	}
 	res.Kind, res.ToName = "nip", name

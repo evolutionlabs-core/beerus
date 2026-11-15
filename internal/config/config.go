@@ -95,8 +95,12 @@ func (b *Bank) URL() string {
 	return fmt.Sprintf("http://%s.localhost:%d", b.ID, b.Port)
 }
 
+func BankHost(id string) string {
+	return id + ".localhost"
+}
+
 func (b *Bank) APIURL() string {
-	return fmt.Sprintf("https://%s.localhost:%d", b.ID, b.APIPort)
+	return fmt.Sprintf("https://%s:%d", BankHost(b.ID), b.APIPort)
 }
 
 func (b *Bank) Style() string {
@@ -459,7 +463,7 @@ func (c *Config) ensureBankCerts(root *pki.Authority, b *Bank, now time.Time) er
 		return fmt.Errorf("create bank dir %s: %w", dir, err)
 	}
 	if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
-		leaf, err := root.IssueServer([]string{b.ID + ".localhost", "localhost"}, leafLife)
+		leaf, err := root.IssueServer([]string{BankHost(b.ID), "localhost"}, leafLife)
 		if err != nil {
 			return fmt.Errorf("issue server certificate for bank %s: %w", b.ID, err)
 		}
