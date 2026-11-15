@@ -36,6 +36,9 @@ var operations = []struct{ id, method, path string }{
 	{"accountStatement", http.MethodGet, "/v1/accounts/{nuban}/statement"},
 	{"depositCash", http.MethodPost, "/v1/deposits"},
 	{"withdrawCash", http.MethodPost, "/v1/withdrawals"},
+	{"sendTransfer", http.MethodPost, "/v1/transfers"},
+	{"quoteTransfer", http.MethodPost, "/v1/transfers/quote"},
+	{"queryTransferStatus", http.MethodPost, "/v1/nip/sends/{session_id}/status-query"},
 }
 
 type found struct {

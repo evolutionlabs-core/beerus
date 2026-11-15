@@ -267,7 +267,7 @@ paths:
       operationId: setParticipantFault
       tags: [faults]
       summary: Make the participant fail
-      description: Adds a fault. A `down` fault makes the participant answer NIP calls with `91`, for the time in `for` or until it is cleared. A `timeout` fault makes the participant do the work but give no answer, for the next `count` inbound calls, and `outcome` says what it did. It applies to every inbound call the participant serves, the CBN included. This is what `beerus fault` does today. The idempotency key is the `Idempotency-Key` header, and a repeat returns the first fault. Beerus has `down` and `timeout`. It has no `slow` fault.
+      description: Adds a fault. A `down` fault makes the participant answer NIP calls with `91`, for the time in `for` or until it is cleared. A `timeout` fault makes the participant hold its answer until the caller gives up, for the next `count` credit or credit status calls from NIBSS, and `outcome` says what it did before it went silent. `credited` posts the credit and then says nothing. `failed` and `unknown` credit nothing. Every held call uses up one of the `count`. The bank holds the fault itself, so a restart of the bank clears it. This is what `beerus fault` does today. The idempotency key is the `Idempotency-Key` header, and a repeat returns the first fault. Beerus has `down` and `timeout`. It has no `slow` fault.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -661,6 +661,151 @@ paths:
           $ref: '#/components/responses/BankConflict'
         '422':
           $ref: '#/components/responses/BankUnprocessable'
+  /v1/transfers:
+    post:
+      operationId: sendTransfer
+      tags: [bank]
+      summary: Send a transfer from an account of this bank
+      description: The bank checks the request, asks NIBSS for the name at the destination bank, debits the account with its charges, and sends the funds transfer to NIBSS over mTLS as itself. A transfer between two accounts of this bank is posted at once and never leaves the bank. The answer has the session and the charges. `status` is `success` when the destination bank credited, `reversed` when NIBSS refused or the destination bank did not credit, and the bank has put the money back, or `pending` when nobody has answered yet. A pending transfer is checked again by the bank at `next_check_at`, and `POST /v1/nip/sends/{session_id}/status-query` checks it at once. `closure` is true for a transfer that moves money out of a bank that is closing. The bank sends it only while it is `closing` or `terminating`, and NIBSS honours it only while the bank is `terminating`. It takes the `Idempotency-Key`. A repeat with the same key and body returns the first answer with an `Idempotent-Replayed` header.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferBody'
+            example:
+              from: '9010000014'
+              to_bank: bank-b
+              to: '9020000011'
+              amount: '25000'
+              narration: Rent for November
+      responses:
+        '200':
+          description: The transfer was done, reversed or left pending, or this is a replay of the first answer.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResult'
+              example:
+                kind: nip
+                from_bank: bank-a
+                from: '9010000014'
+                to_bank: bank-b
+                to: '9020000011'
+                to_name: ADA OBI
+                session_id: '000014261114103000123456789012'
+                status: success
+                response_code: '00'
+                amount_minor: 2500000
+                fee_minor: 1000
+                vat_minor: 75
+                stamp_duty_minor: 5000
+                total_debit_minor: 2506075
+                sender_balance_after_minor: 7493925
+                at: '2026-11-14T10:30:00+01:00'
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '409':
+          $ref: '#/components/responses/BankConflict'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/transfers/quote:
+    post:
+      operationId: quoteTransfer
+      tags: [bank]
+      summary: Price a transfer without sending it
+      description: Takes the same body as a transfer and says what it would cost and leave, with the name at the destination bank. It debits nothing and starts no session. It takes no `Idempotency-Key`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferBody'
+            example:
+              from: '9010000014'
+              to_bank: bank-b
+              to: '9020000011'
+              amount: '25000'
+      responses:
+        '200':
+          description: The quote. It has no `session_id`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResult'
+              example:
+                kind: nip
+                from_bank: bank-a
+                from: '9010000014'
+                to_bank: bank-b
+                to: '9020000011'
+                to_name: ADA OBI
+                status: ''
+                response_code: ''
+                amount_minor: 2500000
+                fee_minor: 1000
+                vat_minor: 75
+                stamp_duty_minor: 5000
+                total_debit_minor: 2506075
+                sender_balance_after_minor: 7493925
+                at: '2026-11-14T10:30:00+01:00'
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '409':
+          $ref: '#/components/responses/BankConflict'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/nip/sends/{session_id}/status-query:
+    post:
+      operationId: queryTransferStatus
+      tags: [bank]
+      summary: Ask NIBSS about a transfer this bank sent
+      description: The bank sends a status query to NIBSS for the session now, whatever the time of the next check. A session that is still `pending` stays so, and NIBSS counts the query. A session that NIBSS has resolved as failed is reversed at this bank before the answer. A `404` from NIBSS makes the bank send the transfer again with the same `session_id`. The answer is the session as NIBSS holds it. `404 not_found` means this bank never sent the session and holds no open send for it.
+      parameters:
+        - $ref: '#/components/parameters/SessionIDPath'
+      responses:
+        '200':
+          description: The session as NIBSS holds it now.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SendSession'
+              example:
+                session_id: '000014261114103000123456789012'
+                from_code: '000014'
+                to_code: '090201'
+                from_nuban: '9010000014'
+                to_nuban: '9020000011'
+                amount_minor: 2500000
+                narration: Rent for November
+                status: '00'
+                outcome: credited
+                tsq_attempts: 1
+                created_at: '2026-11-14T10:30:00+01:00'
+                resolved_at: '2026-11-14T10:32:00+01:00'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
 components:
   securitySchemes:
     bearerAuth:
@@ -674,6 +819,15 @@ components:
         type: string
         enum: ['true']
   parameters:
+    SessionIDPath:
+      name: session_id
+      in: path
+      required: true
+      description: The 30 digit NIP session ID.
+      schema:
+        type: string
+        pattern: '^[0-9]{30}$'
+      example: '000014261114103000123456789012'
     StepIDPath:
       name: step_id
       in: path
@@ -1165,6 +1319,150 @@ components:
         next_cursor:
           type: string
           description: Pass this as `cursor` to read the next page. It is absent on the last page.
+    TransferBody:
+      type: object
+      description: A transfer to make or to price.
+      required: [from, to, amount]
+      additionalProperties: false
+      properties:
+        from:
+          type: string
+          description: The 10-digit account number to debit. It is an account of this bank.
+        to_bank:
+          type: string
+          description: The ID of the destination bank. It defaults to this bank.
+        to:
+          type: string
+          description: The 10-digit account number to credit.
+        amount:
+          type: string
+          description: The amount in naira, such as `25000` or `25,000.50`, with at most two decimals. It must be above zero.
+        narration:
+          type: string
+          description: The payer's note, with at most 100 characters.
+        closure:
+          type: boolean
+          description: True for a transfer that moves money out of a bank that is closing. It carries no charges and skips the net debit cap.
+    TransferResult:
+      type: object
+      description: What a transfer did, or what a quote says it would do.
+      required: [kind, from_bank, from, to_bank, to, to_name, status, response_code, amount_minor, fee_minor, vat_minor, stamp_duty_minor, total_debit_minor, sender_balance_after_minor, at]
+      properties:
+        kind:
+          type: string
+          description: '`internal` between two accounts of one bank, `nip` through NIBSS.'
+          enum: [internal, nip]
+        from_bank:
+          type: string
+          description: The ID of the sending bank.
+        from:
+          type: string
+          description: The account that was debited.
+        to_bank:
+          type: string
+          description: The ID of the destination bank.
+        to:
+          type: string
+          description: The account to credit.
+        to_name:
+          type: string
+          description: The account name at the destination bank.
+        session_id:
+          type: string
+          description: The 30 digit NIP session ID. It is absent for an internal transfer and for a quote.
+        status:
+          type: string
+          description: '`success`, `reversed` or `pending`. It is empty on a quote.'
+          enum: ['', success, reversed, pending]
+        response_code:
+          type: string
+          description: '`00` on success, the NIP code that failed the transfer when it was reversed, and `pending` while nobody has answered. It is empty on a quote.'
+        amount_minor:
+          type: integer
+          format: int64
+          description: The amount in kobo.
+        fee_minor:
+          type: integer
+          format: int64
+          description: The NIP charge in kobo.
+        vat_minor:
+          type: integer
+          format: int64
+          description: The VAT on the charge in kobo.
+        stamp_duty_minor:
+          type: integer
+          format: int64
+          description: The stamp duty in kobo.
+        total_debit_minor:
+          type: integer
+          format: int64
+          description: The amount and the charges, in kobo.
+        sender_balance_after_minor:
+          type: integer
+          format: int64
+          description: The balance of the account after the transfer, in kobo.
+        next_check_at:
+          type: string
+          format: date-time
+          description: When the bank checks a pending transfer with NIBSS again.
+        at:
+          type: string
+          format: date-time
+          description: When the transfer started.
+    SendSession:
+      type: object
+      description: One NIP session as NIBSS holds it. The NIP API describes it as `Session`.
+      required: [session_id, from_code, to_code, from_nuban, to_nuban, amount_minor, narration, status, tsq_attempts, created_at]
+      properties:
+        session_id:
+          type: string
+          description: The 30 digit NIP session ID.
+        from_code:
+          type: string
+          description: The NIP code of the sending bank.
+        to_code:
+          type: string
+          description: The NIP code of the destination bank.
+        from_nuban:
+          type: string
+          description: The account that was debited.
+        to_nuban:
+          type: string
+          description: The account to credit.
+        amount_minor:
+          type: integer
+          format: int64
+          description: The amount in kobo.
+        narration:
+          type: string
+          description: The payer's note.
+        status:
+          type: string
+          description: '`pending`, or the two digit response code the session ended with.'
+        outcome:
+          type: string
+          description: '`credited`, `failed` or `unknown`. It is absent while a pending session has no known outcome.'
+        tsq_attempts:
+          type: integer
+          description: How many status queries NIBSS has counted.
+        next_tsq_at:
+          type: string
+          format: date-time
+          description: When NIBSS expects the next status query.
+        created_at:
+          type: string
+          format: date-time
+          description: When the session started.
+        resolved_at:
+          type: string
+          format: date-time
+          description: When the session got its final code.
+        settlement_session:
+          type: string
+          description: The settlement session that includes this session.
+        closure:
+          type: boolean
+          description: True for a transfer that moves money out of a closing bank.
     CashRequest:
       type: object
       description: Cash to deposit or withdraw.
