@@ -11,26 +11,14 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-const (
-	backoffFirst = time.Second
-	backoffMax   = 5 * time.Minute
-)
-
 func stepIndex(id string) int {
 	return slices.IndexFunc(config.BankSteps(), func(s config.BankStep) bool { return s.ID == id })
-}
-
-func backoff(attempts int) time.Duration {
-	d := backoffFirst
-	for i := 1; i < attempts && d < backoffMax; i++ {
-		d *= 2
-	}
-	return min(d, backoffMax)
 }
 
 func newStatus(b *config.Bank, done bool) *BankStatus {
@@ -132,7 +120,7 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 	if err != nil {
 		st.Steps[i].Error = err.Error()
 		st.Attempts++
-		next := now.Add(backoff(st.Attempts))
+		next := now.Add(clock.Backoff(st.Attempts))
 		st.NextAttemptAt = &next
 	} else {
 		st.Steps[i].Done, st.Steps[i].Error = true, ""

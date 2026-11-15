@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -122,7 +123,7 @@ func (a *App) advanceFinalizers(ctx context.Context, lists map[string][]finalize
 			switch {
 			case err != nil:
 				cur.Attempts++
-				next := now.Add(backoff(cur.Attempts))
+				next := now.Add(clock.Backoff(cur.Attempts))
 				cur.NextAttemptAt = &next
 				setCondition(cur, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: setup.ReasonStepFailed, Message: fmt.Sprintf("%s: %v", name, err), ChangedAt: now})
 			case cond != nil:

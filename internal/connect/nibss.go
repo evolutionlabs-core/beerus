@@ -10,6 +10,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -78,7 +79,7 @@ func (a *App) syncDirectoryDue(ctx context.Context) {
 	defer a.mu.Unlock()
 	if err != nil {
 		a.dirAttempts++
-		a.dirNext = a.clock.Real().Add(backoff(a.dirAttempts))
+		a.dirNext = a.clock.Real().Add(clock.Backoff(a.dirAttempts))
 		a.logNIBSS("NIBSS directory out of date; retrying", err)
 		return
 	}
@@ -380,7 +381,7 @@ func (a *App) finishStale(j staleJob, err error) {
 	}
 	if err != nil {
 		s.attempts++
-		s.next = a.clock.Real().Add(backoff(s.attempts))
+		s.next = a.clock.Real().Add(clock.Backoff(s.attempts))
 		a.mu.Unlock()
 		a.logNIBSS("bank not updated at NIBSS; retrying", err)
 		a.updateFailed(j.b.ID, err)

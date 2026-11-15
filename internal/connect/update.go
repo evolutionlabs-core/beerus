@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -87,7 +88,7 @@ func (a *App) updateFailed(id string, err error) {
 	now := a.clock.Real()
 	a.recordBank(id, func(r *setup.Resource) bool {
 		r.Attempts++
-		next := now.Add(backoff(r.Attempts))
+		next := now.Add(clock.Backoff(r.Attempts))
 		r.NextAttemptAt = &next
 		setCondition(r, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: setup.ReasonStepFailed, Message: fmt.Sprintf("update: %v", err), ChangedAt: now})
 		return true

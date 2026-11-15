@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 const (
@@ -153,7 +154,7 @@ func (a *App) pushBank(ctx context.Context, id, base string, wake <-chan struct{
 			return
 		default:
 			attempts++
-			delay = min(backoff(attempts), pushRetryMax)
+			delay = min(clock.Backoff(attempts), pushRetryMax)
 			if msg := err.Error(); warned != msg {
 				warned = msg
 				a.log.Warn("bank not synced; retrying", "bank", id, "err", err)
