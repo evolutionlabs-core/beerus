@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -27,6 +28,7 @@ const (
 
 type Options struct {
 	Logger      *slog.Logger
+	Real        func() time.Time
 	Bind        string
 	DatabaseURL string
 }
@@ -35,6 +37,7 @@ type Participant struct {
 	dir   string
 	file  config.NIBSSFile
 	log   *slog.Logger
+	clock *clock.Clock
 	bind  string
 	token string
 	store *nibss.Store
@@ -63,7 +66,7 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Participant{dir: dir, file: f, log: o.Logger, bind: o.Bind, token: token, tls: tc, banks: banks}
+	p := &Participant{dir: dir, file: f, log: o.Logger, clock: clock.New(o.Real), bind: o.Bind, token: token, tls: tc, banks: banks}
 	if p.log == nil {
 		p.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}

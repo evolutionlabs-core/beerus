@@ -169,7 +169,7 @@ paths:
       operationId: nibssFundsTransfer
       tags: [nibss]
       summary: Send a funds transfer
-      description: Records a NIP session and credits the destination bank. The sending bank has already debited its customer. The idempotency key is `session_id`. A repeat with the same details returns the first result, and the same `session_id` with different details returns `422 idempotency_key_reused`. If the destination bank gives no answer the session stays `pending`, and the sending bank sends a status query. If the sending bank is over its net debit cap, NIBSS answers with status `61` and outcome `failed`. That is final, and the sending bank reverses its own customer at once. This cap answer is a Beerus placeholder. `closure` is honoured only when the control plane has marked the sending bank `terminating`. Otherwise NIBSS answers `422 closure_not_allowed`.
+      description: Records a NIP session and credits the destination bank. The sending bank has already debited its customer. The idempotency key is `session_id`. A repeat with the same details returns the first result, and the same `session_id` with different details returns `422 idempotency_key_reused`. NIBSS calls the destination bank next. `00` makes the session `00` and `credited`. A refusal code such as `07`, `25` or `57` makes it final with that code and `failed`. A destination bank that answers `503`, or is suspended, closed or unknown, makes it `91` or `96` and `failed`, and nothing was credited. If the destination bank gives no answer, because the call timed out or the connection failed, the session stays `pending` with outcome `unknown` and a `next_tsq_at`, and the sending bank sends a status query. NIBSS runs no background loop of its own. If the sending bank is over its net debit cap, NIBSS answers with status `61` and outcome `failed`. That is final, and the sending bank reverses its own customer at once. NIBSS reads the cap from the control plane, and answers `503` until it has one. NIBSS counts the open sessions of the sending bank, so two transfers sent at the same time cannot both pass the cap. This cap answer is a Beerus placeholder. `closure` is honoured only when the control plane has marked the sending bank `terminating`. Otherwise NIBSS answers `422 closure_not_allowed`.
       requestBody:
         required: true
         content:
@@ -181,6 +181,7 @@ paths:
               from_code: '000014'
               to_code: '090201'
               from_nuban: '9010000014'
+              from_name: ADA OBI
               to_nuban: '9020000011'
               amount_minor: 2500000
               narration: Rent for November
@@ -214,7 +215,7 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '422':
-          description: The request is well formed but cannot be done. The code is `idempotency_key_reused` when the session ID was used with different details, or `closure_not_allowed` when `closure` is true and the sending bank is not `terminating`.
+          description: The request is well formed but cannot be done. The code is `idempotency_key_reused` when the session ID was used with different details, or `closure_not_allowed` when `closure` is true and the sending bank is not `terminating`, or `unknown_bank` when `to_code` is not in the directory.
           content:
             application/json:
               schema:
@@ -587,6 +588,54 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/control/banks/{bank_id}/limits:
+    put:
+      operationId: setBankLimits
+      tags: [control]
+      summary: Set the net debit cap and collateral of a bank
+      description: The control plane tells NIBSS the net debit cap and the collateral of a bank, as the CBN sets them in the real world. It is an idempotent ensure keyed by `bank_id`. NIBSS keeps the figures and uses the cap on every funds transfer from the bank. Until a cap is set, NIBSS answers `503` to the funds transfers of the bank. An unknown bank returns `404 not_found`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BankIDPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Limits'
+            example:
+              net_debit_cap_minor: 500000000
+              collateral_minor: 0
+      responses:
+        '200':
+          description: NIBSS holds these limits for the bank.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Limits'
+              example:
+                net_debit_cap_minor: 500000000
+                collateral_minor: 0
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          description: NIBSS has no bank with this ID. The code is `not_found`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_found
+                  message: Bank bank-z is not in the NIBSS directory. Register it first.
+                  request_id: req_01JBC8A5T3ZK
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '503':
+          $ref: '#/components/responses/Unavailable'
 components:
   securitySchemes:
     mutualTLS:
@@ -749,13 +798,13 @@ components:
     TransferRequest:
       type: object
       description: A funds transfer from the sending bank. The session ID is the idempotency key.
-      required: [session_id, from_code, to_code, from_nuban, to_nuban, amount_minor]
+      required: [session_id, from_code, to_code, from_nuban, from_name, to_nuban, amount_minor]
       properties:
         session_id:
           $ref: '#/components/schemas/SessionID'
         from_code:
           type: string
-          description: The NIP code of the sending bank. It must match the caller's certificate.
+          description: The NIP code of the sending bank. It must match the caller's certificate, and it starts the `session_id`.
           pattern: '^[0-9]{6}$'
         to_code:
           type: string
@@ -765,6 +814,9 @@ components:
           type: string
           description: The 10 digit account number that was debited.
           pattern: '^[0-9]{10}$'
+        from_name:
+          type: string
+          description: The name of the account holder that was debited. NIBSS passes it to the destination bank.
         to_nuban:
           type: string
           description: The 10 digit account number to credit.
@@ -897,6 +949,22 @@ components:
           type: string
           description: The status to move the bank to.
           enum: [active, suspended, terminating, removed]
+    Limits:
+      type: object
+      description: The limits the control plane sets for a bank.
+      required: [net_debit_cap_minor, collateral_minor]
+      additionalProperties: false
+      properties:
+        net_debit_cap_minor:
+          type: integer
+          format: int64
+          description: The net debit cap in kobo. A transfer that would take the open net debit of the bank above it is refused with `61`. The figure is a Beerus placeholder.
+          minimum: 0
+        collateral_minor:
+          type: integer
+          format: int64
+          description: The collateral the bank holds against its cap, in kobo. It is a Beerus placeholder.
+          minimum: 0
     RegisterBank:
       type: object
       description: What the control plane tells NIBSS about a bank.

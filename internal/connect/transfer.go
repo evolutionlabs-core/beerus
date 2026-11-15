@@ -236,7 +236,7 @@ func (a *App) beginSend(ctx context.Context, sw *nibss.Store, rt transferRoute, 
 			x.Outcome, x.NextTSQAt = held, &next
 		}
 	}
-	sess, err := sw.Begin(ctx, x)
+	sess, _, err := sw.Begin(ctx, x)
 	if err != nil && p.Replayed {
 		return nibss.Session{}, false, fmt.Errorf("begin NIP session %s: %w", sid, err)
 	}

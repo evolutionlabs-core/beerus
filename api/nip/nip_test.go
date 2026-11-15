@@ -29,6 +29,7 @@ var operations = []struct{ id, method, path string }{
 	{"controlNameEnquiry", http.MethodGet, "/v1/control/name-enquiries"},
 	{"registerBank", http.MethodPut, "/v1/control/banks/{bank_id}"},
 	{"setBankStatus", http.MethodPut, "/v1/control/banks/{bank_id}/status"},
+	{"setBankLimits", http.MethodPut, "/v1/control/banks/{bank_id}/limits"},
 }
 
 type found struct {

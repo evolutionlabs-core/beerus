@@ -53,6 +53,7 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	a.mu.Lock()
 	renamed := b.Name != want.Name
 	restate := b.State != want.State
+	relimit := b.NetDebitCap != want.NetDebitCap || b.Collateral != want.Collateral
 	reload := renamed || b.API != want.API
 	b.Name, b.State, b.NetDebitCap, b.Collateral, b.API = want.Name, want.State, want.NetDebitCap, want.Collateral, want.API
 	a.mu.Unlock()
@@ -60,7 +61,7 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 		st.Name = want.Name
 	}
 	a.lifeMu.Unlock()
-	if renamed || restate {
+	if renamed || restate || relimit {
 		a.markStale(r.ID, r.Generation)
 		a.updateFailed(r.ID, errors.New("waiting for NIBSS to take the change"))
 	}

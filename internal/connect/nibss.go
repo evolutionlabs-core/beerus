@@ -162,6 +162,9 @@ func (a *App) registerMember(ctx context.Context, b config.Bank) error {
 			return fmt.Errorf("set NIBSS status of %s: %w", b.ID, err)
 		}
 	}
+	if err := a.nibssCtl.setLimits(ctx, b); err != nil {
+		return fmt.Errorf("set NIBSS limits of %s: %w", b.ID, err)
+	}
 	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
 		r := findResource(st, setup.KindBank, b.ID)
 		if r == nil || r.Steps[config.StepDirectory] == stepDone {

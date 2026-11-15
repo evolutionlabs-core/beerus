@@ -22,6 +22,8 @@ func (p *Participant) directory() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/name-enquiries", only(http.MethodGet, p.nameEnquiry))
 	mux.HandleFunc("/v1/bvns", only(http.MethodPost, p.enrolBVN))
+	mux.HandleFunc("/v1/transfers", only(http.MethodPost, p.transfer))
+	mux.HandleFunc("/v1/transfers/{session_id}/status-queries", only(http.MethodPost, p.statusQuery))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if p.admit(w, r, "read the bank directory") {
 			api.ServeHTTP(w, r)
@@ -31,10 +33,15 @@ func (p *Participant) directory() http.Handler {
 }
 
 func (p *Participant) admit(w http.ResponseWriter, r *http.Request, action string) bool {
+	_, ok := p.identify(w, r, action)
+	return ok
+}
+
+func (p *Participant) identify(w http.ResponseWriter, r *http.Request, action string) (string, bool) {
 	identity, roles, ok := callerIdentity(r)
 	if !ok {
 		web.WriteError(w, r, http.StatusForbidden, "forbidden", "This certificate may not "+action+". Only banks may.")
-		return false
+		return "", false
 	}
 	admitted := false
 	if slices.Contains(roles, config.BankRole) {
@@ -42,13 +49,13 @@ func (p *Participant) admit(w http.ResponseWriter, r *http.Request, action strin
 		if admitted, err = p.store.Admits(r.Context(), identity); err != nil {
 			p.log.ErrorContext(r.Context(), "certificate identity not checked", "err", err)
 			web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "NIBSS is not available right now. Try again soon.")
-			return false
+			return "", false
 		}
 	}
 	if !admitted {
 		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("This certificate may not %s. %s is not a bank NIBSS knows.", action, identity))
 	}
-	return admitted
+	return identity, admitted
 }
 
 func callerIdentity(r *http.Request) (string, []string, bool) {

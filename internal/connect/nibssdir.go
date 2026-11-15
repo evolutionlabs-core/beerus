@@ -48,7 +48,7 @@ func (a *App) serveNIBSS(ctx context.Context, errc chan<- error) (<-chan struct{
 		close(done)
 		return done, nil
 	}
-	p, err := participant.New(ctx, a.cfg.Dir, participant.Options{Logger: a.log, DatabaseURL: a.cfg.DatabaseURL})
+	p, err := participant.New(ctx, a.cfg.Dir, participant.Options{Logger: a.log, Real: a.clock.Real, DatabaseURL: a.cfg.DatabaseURL})
 	if err != nil {
 		return nil, err
 	}

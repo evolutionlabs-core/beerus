@@ -49,6 +49,11 @@ type registerBody struct {
 	CertificateIdentity string `json:"certificate_identity"`
 }
 
+type limitsBody struct {
+	NetDebitCap int64 `json:"net_debit_cap_minor"`
+	Collateral  int64 `json:"collateral_minor"`
+}
+
 type statusBody struct {
 	Status string `json:"status"`
 }
@@ -75,6 +80,10 @@ func (n *nibssAdmin) register(ctx context.Context, b config.Bank) (nip.Instituti
 
 func (n *nibssAdmin) setStatus(ctx context.Context, id, status string) error {
 	return n.put(ctx, nibssBanksPath+url.PathEscape(id)+"/status", statusBody{Status: status}, nil)
+}
+
+func (n *nibssAdmin) setLimits(ctx context.Context, b config.Bank) error {
+	return n.put(ctx, nibssBanksPath+url.PathEscape(b.ID)+"/limits", limitsBody{NetDebitCap: b.Cap(), Collateral: b.Collateral}, nil)
 }
 
 func (n *nibssAdmin) put(ctx context.Context, path string, in, out any) error {
