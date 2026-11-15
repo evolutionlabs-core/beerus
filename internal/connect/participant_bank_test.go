@@ -45,7 +45,7 @@ func startCore(t *testing.T, core *App) string {
 
 func TestParticipantBankContract(t *testing.T) {
 	fixed := Options{Real: func() time.Time { return participantNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	core := newTestApp(t, fixed)
+	core, stopNIBSS := newTestAppWithNIBSS(t, fixed)
 	coreURL := startCore(t, core)
 	a, err := participant.New(t.Context(), core.cfg.Dir, participant.Options{Real: fixed.Real, Logger: fixed.Logger, BankID: "bank-a", CoreURL: coreURL, Bind: "127.0.0.1", DatabaseURL: core.cfg.DatabaseURL})
 	if err != nil {
@@ -148,6 +148,11 @@ func TestParticipantBankContract(t *testing.T) {
 	step("close the customer", "POST", "/v1/customers/"+adaID+"/close", "close-4", "", 200, fmt.Sprintf(`{"customer":%q,"status":"closed"}`, adaID))
 	step("close nobody", "POST", "/v1/customers/cus_nobody/close", "close-5", "", 404, apiErr("not_found", "No such customer."))
 	step("open an account for a closed customer", "POST", "/v1/accounts", "acc-closed", fmt.Sprintf(`{"customer":%q,"type":"current"}`, adaID), 422, apiErr("customer_closed", "Customer is closed: "+adaID+"."))
+	stopNIBSS()
+	refused("customer while NIBSS is unreachable", "POST", "/v1/customers", "cus-late", `{"name":"Chi Eze","phone":"08030000002","dob":"1992-02-02"}`, 503, apiErr("unavailable", "Bank A cannot reach NIBSS right now. Try again in a minute."))
+	if got := call("GET", "/v1/customers?limit=1000", "", "", tok, false); got.status != 200 || strings.Contains(got.body, "Chi Eze") {
+		t.Errorf("customer created without a BVN: %d %s", got.status, got.body)
+	}
 	if got := call("PUT", "/v1/phase", "", `{"phase":"suspended","reason":"Suspended by the operator.","generation":2,"world_id":"wld_1"}`, tok, true); got.status != 200 {
 		t.Fatalf("suspend: %d %s", got.status, got.body)
 	}

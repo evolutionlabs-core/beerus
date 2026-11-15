@@ -3,6 +3,7 @@ package connect
 import (
 	"context"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -169,6 +170,8 @@ func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
+	ports := testPorts(t, 2)
+	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort = ports[0], ports[1], ports[2], ports[3], ports[4]
 	if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
 		t.Fatal(err)
 	}
@@ -180,11 +183,39 @@ func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 }
 
 const (
+	testPortLow  = 20000
+	testPortHigh = 45000
+)
+
+func testPorts(t *testing.T, banks int) []int {
+	t.Helper()
+	need := 5 + banks
+	for range 200 {
+		base := testPortLow + rand.IntN(testPortHigh-testPortLow-need-config.DefaultAPIPortOffset)
+		free := true
+		for p := base; p < base+need && free; p++ {
+			free = portFree(p) && (p < base+5 || portFree(p+config.DefaultAPIPortOffset))
+		}
+		if free {
+			return []int{base, base + 1, base + 2, base + 3, base + 4}
+		}
+	}
+	t.Fatal("no free block of ports for the app")
+	return nil
+}
+
+const (
 	testProvisionLimit = 30 * time.Second
 	testProvisionPoll  = 50 * time.Millisecond
 )
 
 func newTestApp(t *testing.T, o Options) *App {
+	t.Helper()
+	a, _ := newTestAppWithNIBSS(t, o)
+	return a
+}
+
+func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("opens bank databases; run without -short")
@@ -213,10 +244,11 @@ func newTestApp(t *testing.T, o Options) *App {
 		cancel()
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
+	stopNIBSS := sync.OnceFunc(func() {
 		cancel()
 		<-done
 	})
+	t.Cleanup(stopNIBSS)
 	waitCtx, stop := context.WithTimeout(ctx, testProvisionLimit)
 	defer stop()
 	tick := time.NewTicker(testProvisionPoll)
@@ -236,7 +268,7 @@ func newTestApp(t *testing.T, o Options) *App {
 		}
 		t.Cleanup(func() { _ = api.Close() })
 	}
-	return a
+	return a, stopNIBSS
 }
 
 func nibssAnswers(ctx context.Context, a *App) bool {
