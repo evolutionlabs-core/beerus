@@ -214,9 +214,9 @@ func (s *site) verifySubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	ba := s.auth
 	ba.mu.Lock()
-	defer ba.mu.Unlock()
 	if s.Clock.Real().After(sess.OTPExpires) {
 		delete(ba.sessions, h)
+		ba.mu.Unlock()
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
@@ -224,17 +224,23 @@ func (s *site) verifySubmit(w http.ResponseWriter, r *http.Request) {
 		sess.Attempts++
 		if sess.Attempts >= maxAttempts {
 			delete(ba.sessions, h)
+			ba.mu.Unlock()
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		s.render(w, "bank_verify", http.StatusUnauthorized, nil, data{"Title": "Verify it's you", "OTP": sess.OTP, "Error": "That code is wrong."})
+		code := sess.OTP
+		ba.mu.Unlock()
+		s.render(w, "bank_verify", http.StatusUnauthorized, nil, data{"Title": "Verify it's you", "OTP": code, "Error": "That code is wrong."})
 		return
 	}
 	sess.Verified = true
 	sess.OTP = ""
+	ba.mu.Unlock()
 	if ck, err := r.Cookie(oauthCookie); err == nil && ck.Value != "" {
 		if v, err := url.ParseQuery(ck.Value); err == nil {
+			ba.mu.Lock()
 			sess.Fresh = v.Get("request_uri")
+			ba.mu.Unlock()
 			http.Redirect(w, r, "/authorize/consent", http.StatusSeeOther)
 			return
 		}

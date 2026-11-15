@@ -1,10 +1,10 @@
 package web
 
 import (
-	"fmt"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 )
 
 func NewSecret(prefix string, n int) (string, error) {

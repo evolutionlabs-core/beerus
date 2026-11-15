@@ -59,11 +59,12 @@ Beerus is a copy of Nigeria's banking infrastructure in one Go binary: banks, NI
 - **A change that cannot be saved is undone** in memory before the error is returned.
 
 ## Concurrency
-- **Lock order:** `applyMu` → `stepMu` → `recMu` → `lifeMu` → `sendLock` → `bankFileMu` → `mu` → `regMu` → `dirMu` → `ctlMu`. Never take an earlier lock while holding a later one. `server.Server` keeps its own `lifeMu`, `mu`, `regMu` and `dirMu` in this order. The only call it makes into `connect` is `Reloaded`, and it makes it holding `lifeMu` alone.
+- **Lock order:** `applyMu` → `stepMu` → `flushMu` → `recMu` → `lifeMu` → `sendLock` → `bankFileMu` → `mu` → `regMu` → `dirMu` → `ctlMu`. Never take an earlier lock while holding a later one. `flushMu` is taken only under `stepMu` or alone, and while it is held the sender takes `mu` and `obMu` for a moment each. `server.Server` keeps its own `lifeMu`, `mu`, `regMu` and `dirMu` in this order, and calls nothing in `connect`.
 - **`sendLock`** is per sending bank. It is the one lock allowed across the bank and NIBSS DB calls for the cap check and debit.
 - **`bankFileMu`** serialises writes of a bank's own directory (`bank.json`, certificates). It is held across those file writes only. Take it holding no later lock.
-- **Leaf locks** (`idemMu`, and the mutex inside a `refresher`) are taken last and never held while taking another lock.
-- **No lock across slow work,** `sendLock` and `bankFileMu` aside: no network call, DB query, file write, sleep or `writeJSON` under a shared lock. Copy what you need, unlock, do the I/O, relock and apply.
+- **`flushMu`** serialises the consent sender, so one outbox row is never sent twice at once. It is held across the signed POST to the widget.
+- **Leaf locks** (`idemMu`, `obMu`, `consent.Sender.mu`, `participant.Participant.mu`, the site `auth.mu`, and the mutex inside a `refresher`) are taken last and never held while taking another lock.
+- **No lock across slow work,** `sendLock`, `bankFileMu` and `flushMu` aside: no network call, DB query, file write, sleep or `writeJSON` under a shared lock. Copy what you need, unlock, do the I/O, relock and apply.
 - **`defer mu.Unlock()`** right after `Lock()` unless the function has to release early.
 - **Flags read across locks are atomics.**
 - **Every goroutine has an owner and a stop condition,** usually a context. The code that starts it waits for it on shutdown.
