@@ -229,6 +229,13 @@ func newTestApp(t *testing.T, o Options) *App {
 		}
 		a.Step(waitCtx)
 	}
+	for _, b := range a.cfg.Banks {
+		api, err := a.startBankAPI(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = api.Close() })
+	}
 	return a
 }
 
