@@ -29,7 +29,8 @@ func (a *App) bankHandler(id string) http.Handler {
 }
 
 func (h bankHost) Bank() config.Bank {
-	return h.a.bankCopy(h.id)
+	b, _ := h.a.bankCopy(h.id)
+	return b
 }
 
 func (h bankHost) Phase() (string, string) {

@@ -180,7 +180,7 @@ func (a *App) reconcileBanks(ctx context.Context) {
 	for _, b := range pending {
 		a.provision(ctx, b)
 	}
-	a.reconcileChanges(ctx)
+	a.reconcileChanges()
 	a.advanceFinalizers(ctx, finalizerLists)
 }
 
@@ -214,9 +214,7 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	a.lifeMu.Unlock()
 	ok := a.step(st, config.StepAllocate, func() error {
 		return a.claimBank(b)
-	}) && a.step(st, config.StepDirectory, func() error {
-		return a.registerMember(ctx, a.bankCopy(b.ID))
-	}) && a.step(st, config.StepDatabase, func() error {
+	}) && a.directoryDone(st) && a.step(st, config.StepDatabase, func() error {
 		return store.Create(ctx, a.cfg.DatabaseURL, b.Database)
 	}) && a.step(st, config.StepLedgerSchema, func() error {
 		n, err := store.Migrate(ctx, a.cfg.DatabaseURL, b.Database, ledger.Migrate)
@@ -255,13 +253,24 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	}
 	phase := b.RunningPhase()
 	a.lifeMu.Lock()
+	closing := st.Phase == PhaseClosing || st.Phase == PhaseTerminating
+	a.lifeMu.Unlock()
+	if closing {
+		return
+	}
+	a.recordPhase(b.ID, phase, gen)
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
 	if st.Phase == PhaseClosing || st.Phase == PhaseTerminating {
-		a.lifeMu.Unlock()
 		return
 	}
 	st.Phase, st.Reason, st.Attempts, st.NextAttemptAt = phase, "", 0, nil
-	a.lifeMu.Unlock()
-	a.recordPhase(b.ID, phase, gen)
+}
+
+func (a *App) directoryDone(st *BankStatus) bool {
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	return st.Steps[stepIndex(config.StepDirectory)].Done
 }
 
 func (a *App) nameStep(st *BankStatus, id, detail string) {

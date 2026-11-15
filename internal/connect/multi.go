@@ -24,10 +24,14 @@ func (a *App) ctlConsentRecord(w http.ResponseWriter, r *http.Request) {
 
 const probeTimeout = 5 * time.Second
 
-func (a *App) bankCopy(id string) config.Bank {
+func (a *App) bankCopy(id string) (config.Bank, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return *a.cfg.Bank(id)
+	b := a.cfg.Bank(id)
+	if b == nil {
+		return config.Bank{}, false
+	}
+	return *b, true
 }
 
 func (a *App) revokeRemote(ctx context.Context, b *config.Bank, consent string) error {

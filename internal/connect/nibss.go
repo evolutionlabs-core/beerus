@@ -71,9 +71,6 @@ func (a *App) syncDirectoryDue(ctx context.Context) {
 	if !due {
 		return
 	}
-	if err := a.refreshDirectory(ctx); err != nil {
-		a.log.Error("NIBSS directory not read", "err", err)
-	}
 	err := a.syncDirectory(ctx, s)
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -126,7 +123,6 @@ func (a *App) syncDirectory(ctx context.Context, s *nibss.Store) error {
 			}
 		}
 	}
-	errs = append(errs, a.refreshDirectory(ctx))
 	return errors.Join(errs...)
 }
 
@@ -176,7 +172,7 @@ func (a *App) registerMember(ctx context.Context, b config.Bank) error {
 	}); err != nil {
 		return err
 	}
-	return a.refreshDirectory(ctx)
+	return nil
 }
 
 func (a *App) attachMember(ls *ledgerSource) {
@@ -192,7 +188,7 @@ func (a *App) setMemberStatus(ctx context.Context, id, status string) error {
 	if err := a.nibssCtl.setStatus(ctx, id, status); err != nil {
 		return fmt.Errorf("set NIBSS status of %s to %s: %w", id, status, err)
 	}
-	return a.refreshDirectory(ctx)
+	return nil
 }
 
 func (a *App) stopRouting(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
@@ -243,29 +239,6 @@ func (a *App) removeMember(ctx context.Context, id string) error {
 		}
 		cur = status
 	}
-	return a.refreshDirectory(ctx)
-}
-
-func (a *App) refreshDirectory(ctx context.Context) error {
-	a.mu.Lock()
-	s := a.nibss
-	a.mu.Unlock()
-	if s == nil {
-		return nil
-	}
-	list, err := s.Directory(ctx)
-	if err != nil {
-		return fmt.Errorf("read the NIBSS directory: %w", err)
-	}
-	members := make([]nip.Participant, 0, len(list))
-	for _, in := range list {
-		if in.Status != nip.StatusRemoved {
-			members = append(members, nip.Participant{Code: in.NIPCode, Name: in.Name, BankID: in.ID})
-		}
-	}
-	a.mu.Lock()
-	a.members = members
-	a.mu.Unlock()
 	return nil
 }
 
@@ -293,4 +266,62 @@ func (a *App) markRemoved(ctx context.Context, lines []bank.FeedLine) error {
 		}
 	}
 	return nil
+}
+
+type staleMember struct {
+	attempts int
+	next     time.Time
+}
+
+func (a *App) markStale(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.stale == nil {
+		a.stale = map[string]*staleMember{}
+	}
+	if a.stale[id] == nil {
+		a.stale[id] = &staleMember{}
+	}
+}
+
+type provisionJob struct {
+	b  config.Bank
+	st *BankStatus
+}
+
+func (a *App) registerDue(ctx context.Context) {
+	a.syncDirectoryDue(ctx)
+	now := a.clock.Real()
+	var jobs []provisionJob
+	var stale []config.Bank
+	a.lifeMu.Lock()
+	a.mu.Lock()
+	for _, b := range a.cfg.Banks {
+		st := a.status[b.ID]
+		if st != nil && (st.Phase == PhaseProvisioning || st.Phase == PhaseRepairing) && !st.Steps[stepIndex(config.StepDirectory)].Done && (st.NextAttemptAt == nil || !now.Before(*st.NextAttemptAt)) {
+			jobs = append(jobs, provisionJob{*b, st})
+		}
+		if s := a.stale[b.ID]; s != nil && !now.Before(s.next) {
+			stale = append(stale, *b)
+		}
+	}
+	a.mu.Unlock()
+	a.lifeMu.Unlock()
+	for _, j := range jobs {
+		a.step(j.st, config.StepDirectory, func() error { return a.registerMember(ctx, j.b) })
+	}
+	for _, b := range stale {
+		err := a.registerMember(ctx, b)
+		a.mu.Lock()
+		if s := a.stale[b.ID]; err == nil {
+			delete(a.stale, b.ID)
+		} else if s != nil {
+			s.attempts++
+			s.next = a.clock.Real().Add(backoff(s.attempts))
+		}
+		a.mu.Unlock()
+		if err != nil {
+			a.logNIBSS("bank not updated at NIBSS; retrying", err)
+		}
+	}
 }

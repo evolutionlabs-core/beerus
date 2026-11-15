@@ -3,6 +3,7 @@ package connect
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -216,15 +217,33 @@ func newTestApp(t *testing.T, o Options) *App {
 		cancel()
 		<-done
 	})
-	deadline := time.Now().Add(testProvisionLimit)
-	for provisioning(a) {
-		if time.Now().After(deadline) {
+	waitCtx, stop := context.WithTimeout(ctx, testProvisionLimit)
+	defer stop()
+	tick := time.NewTicker(testProvisionPoll)
+	defer tick.Stop()
+	for !nibssAnswers(waitCtx, a) || provisioning(a) {
+		select {
+		case <-waitCtx.Done():
 			t.Fatalf("banks still provisioning: %+v", a.BankStatuses())
+		case <-tick.C:
 		}
-		a.Step(ctx)
-		time.Sleep(testProvisionPoll)
+		a.Step(waitCtx)
 	}
 	return a
+}
+
+func nibssAnswers(ctx context.Context, a *App) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.nibssCtl.base+"/v1/health", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+a.nibssCtl.link.Token)
+	resp, err := a.nibssCtl.link.Client.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 func provisioning(a *App) bool {

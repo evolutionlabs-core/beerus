@@ -22,7 +22,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
-	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -63,7 +62,7 @@ type App struct {
 	dirSynced    bool
 	dirAttempts  int
 	dirNext      time.Time
-	members      []nip.Participant
+	stale        map[string]*staleMember
 	settling     bool
 	settleDone   *sync.Cond
 	lifeMu       sync.Mutex
@@ -302,6 +301,11 @@ func (a *App) Run(ctx context.Context) {
 }
 
 func (a *App) Step(ctx context.Context) {
+	a.registerDue(ctx)
+	a.stepLocked(ctx)
+}
+
+func (a *App) stepLocked(ctx context.Context) {
 	a.stepMu.Lock()
 	defer a.stepMu.Unlock()
 	if a.recMu.TryLock() {
@@ -312,7 +316,6 @@ func (a *App) Step(ctx context.Context) {
 	if err := a.ensureNIBSSDir(); err != nil {
 		a.log.Error("NIBSS directory not written", "err", err)
 	}
-	a.syncDirectoryDue(ctx)
 	if err := a.ensureRTGS(); err != nil {
 		a.log.Error("CBN ledger", "err", err)
 	}
