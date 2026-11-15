@@ -218,6 +218,8 @@ type NIPSend struct {
 	At        time.Time
 	NoCharges bool
 	Narration string
+	Request   []byte
+	CheckAt   time.Time
 }
 
 func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.Transfer, error) {
@@ -253,7 +255,7 @@ func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.T
 	if !s.NoCharges {
 		e.LimitedAmount = s.Amount
 	}
-	p, err := b.L.Post(ctx, e)
+	p, err := b.L.PostThen(ctx, e, func(tx pgx.Tx) error { return insertSend(ctx, tx, s) })
 	return p, c, err
 }
 

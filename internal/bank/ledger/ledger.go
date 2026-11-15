@@ -278,6 +278,10 @@ func (e Entry) validate() error {
 }
 
 func (l *Ledger) Post(ctx context.Context, e Entry) (Posted, error) {
+	return l.PostThen(ctx, e, nil)
+}
+
+func (l *Ledger) PostThen(ctx context.Context, e Entry, then func(pgx.Tx) error) (Posted, error) {
 	if e.ValueDate.IsZero() {
 		e.ValueDate = e.PostingDate
 	}
@@ -286,7 +290,7 @@ func (l *Ledger) Post(ctx context.Context, e Entry) (Posted, error) {
 	}
 	hash := e.hash()
 	for attempt := 0; ; attempt++ {
-		p, err := l.post(ctx, e, hash)
+		p, err := l.post(ctx, e, hash, then)
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && (pgErr.Code == "40P01" || pgErr.Code == "40001") && attempt < 5 {
 			continue
@@ -344,7 +348,7 @@ func (l *Ledger) PostTx(ctx context.Context, tx pgx.Tx, e Entry) (Posted, error)
 	return l.postIn(ctx, tx, e, e.hash())
 }
 
-func (l *Ledger) post(ctx context.Context, e Entry, hash string) (Posted, error) {
+func (l *Ledger) post(ctx context.Context, e Entry, hash string, then func(pgx.Tx) error) (Posted, error) {
 	if p, err := l.existing(ctx, l.pool, e.Key, hash); err == nil || errors.Is(err, ErrIdempotency) {
 		return p, err
 	}
@@ -356,6 +360,11 @@ func (l *Ledger) post(ctx context.Context, e Entry, hash string) (Posted, error)
 	p, err := l.postIn(ctx, tx, e, hash)
 	if err != nil || p.Replayed {
 		return p, err
+	}
+	if then != nil {
+		if err := then(tx); err != nil {
+			return Posted{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		var pgErr *pgconn.PgError
