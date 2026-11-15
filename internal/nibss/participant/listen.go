@@ -23,21 +23,18 @@ func (p *Participant) directory() http.Handler {
 	mux.HandleFunc("/v1/name-enquiries", only(http.MethodGet, p.nameEnquiry))
 	mux.HandleFunc("/v1/bvns", only(http.MethodPost, p.enrolBVN))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if p.admit(w, r, "read the bank directory", false) {
+		if p.admit(w, r, "read the bank directory") {
 			api.ServeHTTP(w, r)
 		}
 	})
 	return web.WithRequestID(mux)
 }
 
-func (p *Participant) admit(w http.ResponseWriter, r *http.Request, action string, control bool) bool {
+func (p *Participant) admit(w http.ResponseWriter, r *http.Request, action string) bool {
 	identity, roles, ok := callerIdentity(r)
 	if !ok {
 		web.WriteError(w, r, http.StatusForbidden, "forbidden", "This certificate may not "+action+". Only banks may.")
 		return false
-	}
-	if control && identity == config.AggregatorCN && slices.Contains(roles, config.AggregatorRole) {
-		return true
 	}
 	admitted := false
 	if slices.Contains(roles, config.BankRole) {

@@ -59,7 +59,6 @@ func TestNIPSwitch(t *testing.T) {
 	}{
 		"unknown account": {enquiry("000002", world.NUBAN("002", 99)), "25"},
 		"bad check digit": {enquiry("000002", "0000000001"), "07"},
-		"short number":    {enquiry("000002", "123"), "07"},
 		"unknown bank":    {enquiry("000111", to), "96"},
 		"no such bank":    {enquiry("000003", world.NUBAN("003", 1)), "96"},
 	} {

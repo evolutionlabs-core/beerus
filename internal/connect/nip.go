@@ -47,12 +47,11 @@ func (p reply) write(w http.ResponseWriter) {
 	_, _ = w.Write(p.body)
 }
 
-func (a *App) NameEnquiry(ctx context.Context, code, nuban string) (server.NameEnquiry, error) {
-	c, err := a.nibssClient()
-	if err != nil {
-		return server.NameEnquiry{}, err
+func (a *App) NameEnquiry(ctx context.Context, code, nuban string) (nip.NameEnquiry, error) {
+	if a.nibssCtl == nil {
+		return nip.NameEnquiry{}, &server.UnavailableError{Msg: nibssAway}
 	}
-	return c.Enquire(ctx, code, nuban)
+	return a.nibssCtl.names().Enquire(ctx, code, nuban)
 }
 
 func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +61,11 @@ func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := a.NameEnquiry(r.Context(), code, nuban)
+	var refused *server.PeerError
+	if errors.As(err, &refused) && refused.Status == http.StatusBadRequest {
+		web.WriteError(w, r, http.StatusBadRequest, refused.Code, refused.Message)
+		return
+	}
 	if err != nil {
 		a.log.Error("name enquiry", "err", err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS could not answer the name enquiry. Try again soon.")

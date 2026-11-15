@@ -294,7 +294,6 @@ func TestCallee(t *testing.T) {
 	}{
 		{"999002", good, nil, ""},
 		{"999002", bad, nip.ErrInvalidAccount, bad + " is not a valid account number at Bank B: 07 invalid account"},
-		{"999002", "12345", nip.ErrInvalidAccount, "an account number has 10 digits: 07 invalid account"},
 		{"999123", good, nip.ErrUnknownInstitution, "bank code 999123 is not in the NIBSS directory"},
 	}
 	for _, c := range cases {

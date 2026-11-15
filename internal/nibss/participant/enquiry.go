@@ -3,29 +3,43 @@ package participant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"regexp"
 
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
-type nameEnquiry struct {
-	Code        string `json:"response_code"`
-	Message     string `json:"message"`
-	BankCode    string `json:"bank_code"`
-	BankName    string `json:"bank_name,omitempty"`
-	AccountNo   string `json:"account_number"`
-	AccountName string `json:"account_name,omitempty"`
-}
+const (
+	nubanDigits   = 10
+	nipCodeDigits = 6
+)
+
+var (
+	nubanRe   = regexp.MustCompile(`^[0-9]{10}$`)
+	nipCodeRe = regexp.MustCompile(`^[0-9]{6}$`)
+)
 
 func (p *Participant) nameEnquiry(w http.ResponseWriter, r *http.Request) {
-	if !p.admit(w, r, "ask for account names", true) {
-		return
+	if p.admit(w, r, "ask for account names") {
+		p.answerEnquiry(w, r)
 	}
+}
+
+func (p *Participant) controlNameEnquiry(w http.ResponseWriter, r *http.Request) {
+	p.answerEnquiry(w, r)
+}
+
+func (p *Participant) answerEnquiry(w http.ResponseWriter, r *http.Request) {
 	code, nuban := r.URL.Query().Get("bank_code"), r.URL.Query().Get("account_number")
-	if code == "" || nuban == "" {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "bank_code and account_number are required.")
+	switch {
+	case !nipCodeRe.MatchString(code):
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("bank_code must have %d digits.", nipCodeDigits))
+		return
+	case !nubanRe.MatchString(nuban):
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("account_number must have %d digits.", nubanDigits))
 		return
 	}
 	out, err := p.enquire(r.Context(), code, nuban)
@@ -36,8 +50,8 @@ func (p *Participant) nameEnquiry(w http.ResponseWriter, r *http.Request) {
 	web.WriteJSON(w, http.StatusOK, out)
 }
 
-func (p *Participant) enquire(ctx context.Context, code, nuban string) (nameEnquiry, error) {
-	out := nameEnquiry{BankCode: code, AccountNo: nuban}
+func (p *Participant) enquire(ctx context.Context, code, nuban string) (nip.NameEnquiry, error) {
+	out := nip.NameEnquiry{BankCode: code, AccountNo: nuban}
 	m, err := p.store.Callee(ctx, code, nuban)
 	if errors.Is(err, nip.ErrUnknownInstitution) {
 		out.Code, out.Message = nip.SystemError, "Bank code "+code+" is not in the NIBSS directory."

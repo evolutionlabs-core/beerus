@@ -19,9 +19,6 @@ func (s *Store) Callee(ctx context.Context, code, nuban string) (Member, error) 
 	if err != nil {
 		return Member{}, fmt.Errorf("look up institution %s: %w", code, err)
 	}
-	if !nubanRe.MatchString(nuban) {
-		return m, fmt.Errorf("an account number has 10 digits: %w", nip.ErrInvalidAccount)
-	}
 	if m.Status != nip.StatusActive {
 		return m, fmt.Errorf("%s is %s: %w", m.Name, m.Status, nip.ErrUnavailable)
 	}

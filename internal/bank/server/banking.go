@@ -27,7 +27,7 @@ type Book struct {
 
 type Source interface {
 	Book(id string) (Book, error)
-	Enrol(ctx context.Context, name, phone string, dob clock.Date) (string, string, error)
+	Enrol(ctx context.Context, bankID, name, phone string, dob clock.Date) (string, string, error)
 	Empty() bool
 	Refusing(id string) bool
 }
@@ -170,7 +170,7 @@ func (s *Banking) CreateCustomer(ctx context.Context, bankID string, req Custome
 			return bank.Customer{}, err
 		}
 	}
-	bvn, phone, err := s.Src.Enrol(ctx, req.Name, req.Phone, dob)
+	bvn, phone, err := s.Src.Enrol(ctx, bankID, req.Name, req.Phone, dob)
 	if err != nil {
 		return bank.Customer{}, err
 	}

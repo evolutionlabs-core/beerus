@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -48,6 +49,12 @@ func newBankCaller(own string, remote bool) (*bankCaller, error) {
 	tc := &tls.Config{
 		RootCAs:    pool,
 		MinVersion: tls.VersionTLS12,
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 || cs.PeerCertificates[0].Subject.CommonName != cs.ServerName {
+				return fmt.Errorf("bank at %s presented another certificate identity", cs.ServerName)
+			}
+			return nil
+		},
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			pair, err := tls.LoadX509KeyPair(certPath, keyPath)
 			if err != nil {
@@ -69,10 +76,15 @@ func newBankCaller(own string, remote bool) (*bankCaller, error) {
 			return dialer.DialContext(ctx, network, addr)
 		},
 	}
-	return &bankCaller{client: &http.Client{Timeout: bankCallTimeout, Transport: tr}}, nil
+	redirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &bankCaller{client: &http.Client{Timeout: bankCallTimeout, Transport: tr, CheckRedirect: redirect}}, nil
 }
 
 func (c *bankCaller) nameAt(ctx context.Context, m nibss.Member, nuban string) (string, error) {
+	u, err := url.Parse(m.CreditURL)
+	if err != nil || u.Hostname() != config.BankHost(m.CertificateIdentity) {
+		return "", fmt.Errorf("credit_url of %s is not the host of %s", m.ID, m.CertificateIdentity)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(m.CreditURL, "/")+bankNamesPath+nuban, nil)
 	if err != nil {
 		return "", fmt.Errorf("build name enquiry for %s: %w", m.ID, err)
@@ -82,9 +94,6 @@ func (c *bankCaller) nameAt(ctx context.Context, m nibss.Member, nuban string) (
 		return "", fmt.Errorf("ask %s for a name: %w", m.ID, errors.Join(nip.ErrUnavailable, err))
 	}
 	defer resp.Body.Close()
-	if err := checkBankCertificate(resp, m); err != nil {
-		return "", err
-	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBankBody+1))
 	if err != nil {
 		return "", fmt.Errorf("read the name from %s: %w", m.ID, errors.Join(nip.ErrUnavailable, err))
@@ -110,14 +119,4 @@ func (c *bankCaller) nameAt(ctx context.Context, m nibss.Member, nuban string) (
 		return "", fmt.Errorf("%s: %w", m.ID, nip.ErrUnavailable)
 	}
 	return "", fmt.Errorf("%s answered response code %q", m.ID, out.ResponseCode)
-}
-
-func checkBankCertificate(resp *http.Response, m nibss.Member) error {
-	if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
-		return fmt.Errorf("%s did not present a certificate", m.ID)
-	}
-	if got, want := resp.TLS.PeerCertificates[0].Subject.CommonName, config.BankHost(m.CertificateIdentity); got != want {
-		return fmt.Errorf("%s presented the certificate of %s, not %s", m.ID, got, want)
-	}
-	return nil
 }

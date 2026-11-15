@@ -49,6 +49,7 @@ func (p *Participant) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", only(http.MethodGet, p.health))
 	mux.HandleFunc("/v1/status", only(http.MethodGet, p.status))
+	mux.HandleFunc("/v1/control/name-enquiries", only(http.MethodGet, p.controlNameEnquiry))
 	mux.HandleFunc("/v1/control/banks/{bank_id}", only(http.MethodPut, p.register))
 	mux.HandleFunc("/v1/control/banks/{bank_id}/status", only(http.MethodPut, p.setStatus))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

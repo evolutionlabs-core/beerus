@@ -14,7 +14,11 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
-const nibssBanksPath = "/v1/control/banks/"
+const (
+	nibssBanksPath = "/v1/control/banks/"
+	nibssAway      = "NIBSS is not available right now. Try again soon."
+	nibssHost      = "127.0.0.1"
+)
 
 type nibssAdmin struct {
 	link server.Link
@@ -46,6 +50,10 @@ type registerBody struct {
 
 type statusBody struct {
 	Status string `json:"status"`
+}
+
+func (n *nibssAdmin) names() server.NIBSSClient {
+	return server.NIBSSClient{HTTP: n.link.Client, Base: n.base, Token: n.link.Token, EnquiriesPath: server.ControlEnquiriesPath, Away: nibssAway}
 }
 
 func (n *nibssAdmin) register(ctx context.Context, b config.Bank) (nip.Institution, error) {

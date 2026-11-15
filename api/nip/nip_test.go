@@ -26,6 +26,7 @@ var operations = []struct{ id, method, path string }{
 	{"bankAccountNameEnquiry", http.MethodGet, "/v1/nip/account-names/{account_number}"},
 	{"bankCredit", http.MethodPost, "/v1/nip/credits"},
 	{"bankCreditStatus", http.MethodGet, "/v1/nip/credits/{session_id}"},
+	{"controlNameEnquiry", http.MethodGet, "/v1/control/name-enquiries"},
 	{"registerBank", http.MethodPut, "/v1/control/banks/{bank_id}"},
 	{"setBankStatus", http.MethodPut, "/v1/control/banks/{bank_id}/status"},
 }

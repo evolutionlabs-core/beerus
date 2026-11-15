@@ -30,8 +30,8 @@ func (s bookSource) Book(id string) (server.Book, error) {
 	return bk, nil
 }
 
-func (s bookSource) Enrol(ctx context.Context, name, phone string, dob clock.Date) (string, string, error) {
-	c, err := s.a.nibssClient()
+func (s bookSource) Enrol(ctx context.Context, bankID, name, phone string, dob clock.Date) (string, string, error) {
+	c, err := s.a.bankNIBSS(bankID)
 	if err != nil {
 		return "", "", err
 	}

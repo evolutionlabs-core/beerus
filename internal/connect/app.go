@@ -83,7 +83,7 @@ type App struct {
 	pools        map[string]*ledgerSource
 	vault        *vault
 	obHTTP       *http.Client
-	nibssHTTP    *http.Client
+	nibssBanks   map[string]*http.Client
 	role         string
 	coreURL      string
 	pushWake     chan struct{}

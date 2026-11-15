@@ -52,21 +52,29 @@ func (s *Server) directoryClient() (*http.Client, error) {
 	if have != nil {
 		return have, nil
 	}
-	cert, err := tls.LoadX509KeyPair(filepath.Join(s.dir, "banks", s.id, "client.crt"), filepath.Join(s.dir, "banks", s.id, "client.key"))
+	built, err := NIBSSHTTP(s.dir, s.id)
+	if err != nil {
+		return nil, err
+	}
+	s.dirMu.Lock()
+	defer s.dirMu.Unlock()
+	if s.dirClient == nil {
+		s.dirClient = built
+	}
+	return s.dirClient, nil
+}
+
+func NIBSSHTTP(dir, id string) (*http.Client, error) {
+	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "banks", id, "client.crt"), filepath.Join(dir, "banks", id, "client.key"))
 	if err != nil {
 		return nil, fmt.Errorf("load bank client certificate: %w", err)
 	}
-	pool, err := pki.LoadPool(filepath.Join(s.dir, "banks", s.id, config.BankCAFile))
+	pool, err := pki.LoadPool(filepath.Join(dir, "banks", id, config.BankCAFile))
 	if err != nil {
 		return nil, err
 	}
 	tc := &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool, ServerName: config.NIBSSHost, MinVersion: tls.VersionTLS12}
-	s.dirMu.Lock()
-	defer s.dirMu.Unlock()
-	if s.dirClient == nil {
-		s.dirClient = &http.Client{Timeout: directoryTimeout, Transport: &http.Transport{TLSClientConfig: tc, IdleConnTimeout: directoryIdle, MaxIdleConnsPerHost: 1}}
-	}
-	return s.dirClient, nil
+	return &http.Client{Timeout: directoryTimeout, Transport: &http.Transport{TLSClientConfig: tc, IdleConnTimeout: directoryIdle, MaxIdleConnsPerHost: 1}}, nil
 }
 
 func (s *Server) nibssBase() (string, error) {

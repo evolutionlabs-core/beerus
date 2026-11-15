@@ -25,7 +25,7 @@ func (f fakeSource) Book(string) (Book, error) {
 	return f.book, f.err
 }
 
-func (f fakeSource) Enrol(context.Context, string, string, clock.Date) (string, string, error) {
+func (f fakeSource) Enrol(context.Context, string, string, string, clock.Date) (string, string, error) {
 	return "", "", errors.New("not used")
 }
 

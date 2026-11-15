@@ -103,6 +103,10 @@ func (a *App) enquiredName(ctx context.Context, rt server.Route, nuban, tail str
 	if errors.As(err, &away) {
 		return "", server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "nibss_unavailable", errors.New("NIBSS is not available right now"+tail))
 	}
+	var refused *server.PeerError
+	if errors.As(err, &refused) {
+		return "", server.Refused(http.StatusBadGateway, nip.SystemError, "bad_gateway", errors.New("NIBSS refused the name enquiry"))
+	}
 	if err != nil {
 		return "", err
 	}
@@ -131,7 +135,7 @@ func (a *App) internalTransfer(rt transferRoute, req server.TransferRequest, res
 	return res, err
 }
 
-func enquiryResult(name string, out server.NameEnquiry) (string, error) {
+func enquiryResult(name string, out nip.NameEnquiry) (string, error) {
 	switch out.Code {
 	case nip.OK:
 		return out.AccountName, nil

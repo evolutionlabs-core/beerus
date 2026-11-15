@@ -34,7 +34,7 @@ info:
     - `57`: transaction not permitted, for example a restricted account.
     - `61`: transfer limit exceeded, used when a bank reaches its net debit cap.
     - `91`: institution unavailable.
-    - `96`: system malfunction.
+    - `96`: system malfunction. It is also used for a bank code that is not in the NIBSS directory.
 
     A session `status` is `pending` or one of these codes. `pending` is not a response code.
 
@@ -96,7 +96,7 @@ paths:
       operationId: nibssNameEnquiry
       tags: [nibss]
       summary: Look up an account name at any bank
-      description: Asks NIBSS for the account name at a destination bank. NIBSS validates the bank code, the bank status and the account number, then asks the destination bank over mTLS. A bank that is suspended, down, refusing connections or too slow answers `91`. A bank code that is not in the directory answers `96`. The outcome is in `response_code`, in a 200 body. A registered bank may call it, and so may the control plane.
+      description: Asks NIBSS for the account name at a destination bank. NIBSS validates the bank code, the bank status and the account number, then asks the destination bank over mTLS. A bank that is suspended, down, refusing connections or too slow answers `91`. A bank code that is not in the directory answers `96`. The outcome is in `response_code`, in a 200 body. A registered bank may call it.
       parameters:
         - $ref: '#/components/parameters/BankCodeQuery'
         - $ref: '#/components/parameters/AccountNumberQuery'
@@ -126,7 +126,7 @@ paths:
       operationId: nibssEnrolBVN
       tags: [nibss]
       summary: Enrol a BVN
-      description: Gives a person a BVN. It is an idempotent ensure. The same name, phone number and date of birth always return the same BVN, however many banks send them, and a new person gets the next BVN. NIBSS normalises the phone number and returns it. A registered bank may call it, and so may the control plane for the banks it hosts in one process. A phone number or date of birth that is not valid returns `422 invalid_request` with a message that says what to send.
+      description: Gives a person a BVN. It is an idempotent ensure. The same name, phone number and date of birth always return the same BVN, however many banks send them, and a new person gets the next BVN. NIBSS normalises the phone number and returns it. A registered bank may call it. A phone number or date of birth that is not valid returns `422 invalid_request` with a message that says what to send.
       requestBody:
         required: true
         content:
@@ -436,6 +436,37 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '409':
           $ref: '#/components/responses/BankClosed'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/control/name-enquiries:
+    get:
+      operationId: controlNameEnquiry
+      tags: [control]
+      summary: Look up an account name at any bank for the control plane
+      description: The same enquiry as `nibssNameEnquiry`, for the control plane. It uses the bearer token of the participant control API and not mTLS, and it answers the same body.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BankCodeQuery'
+        - $ref: '#/components/parameters/AccountNumberQuery'
+      responses:
+        '200':
+          description: The enquiry was answered. Read `response_code` for the outcome.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NameEnquiryResult'
+              example:
+                response_code: '00'
+                message: Successful.
+                bank_code: '000014'
+                bank_name: Bank A
+                account_number: '9010000014'
+                account_name: ADA OBI
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/control/banks/{bank_id}:

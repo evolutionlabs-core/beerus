@@ -8,25 +8,15 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
-type bvnRequest struct {
-	Name  string `json:"name"`
-	Phone string `json:"phone"`
-	DOB   string `json:"dob"`
-}
-
-type bvnReply struct {
-	BVN   string `json:"bvn"`
-	Phone string `json:"phone"`
-}
-
 func (p *Participant) enrolBVN(w http.ResponseWriter, r *http.Request) {
-	if !p.admit(w, r, "enrol a BVN", true) {
+	if !p.admit(w, r, "enrol a BVN") {
 		return
 	}
-	var req bvnRequest
+	var req nip.BVNRequest
 	if err := web.DecodeBody(r, &req); err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"Ada Obi","phone":"08031234567","dob":"1990-04-21"}.`)
 		return
@@ -49,5 +39,5 @@ func (p *Participant) enrolBVN(w http.ResponseWriter, r *http.Request) {
 		p.unavailable(w, r, "BVN not enrolled", err)
 		return
 	}
-	web.WriteJSON(w, http.StatusOK, bvnReply{BVN: bvn, Phone: phone})
+	web.WriteJSON(w, http.StatusOK, nip.BVNReply{BVN: bvn, Phone: phone})
 }

@@ -120,8 +120,6 @@ func startSoloNIBSS(t *testing.T, withBank bool) (*soloNIBSS, map[string]*http.C
 		copyBankFiles(t, stage, clientDir, "banks/"+id+"/client.crt", "banks/"+id+"/client.key")
 		clients[id] = nibssClient(t, clientDir, filepath.Join("banks", id))
 	}
-	copyBankFiles(t, stage, clientDir, "connect/client.crt", "connect/client.key")
-	clients["control"] = nibssClient(t, clientDir, "connect")
 	nuban := ""
 	if withBank {
 		_, account := seedSoloBank(t, ctx, dbURL, stage, own, now)
@@ -320,17 +318,17 @@ func TestSoloNIBSSNames(t *testing.T) {
 		want   string
 	}{
 		{"real name", banks["bank-a"], "GET", enquiry("000014", s.nuban), "", nil, 200, answer("00", "Successful.", "ADA OBI", "Bank A", s.nuban)},
-		{"real name for the control plane", banks["control"], "GET", enquiry("000014", s.nuban), "", nil, 200, answer("00", "Successful.", "ADA OBI", "Bank A", s.nuban)},
 		{"bad check digit", banks["bank-a"], "GET", enquiry("000014", badDigit), "", nil, 200, answer("07", "That is not a valid account number at Bank A.", "", "Bank A", badDigit)},
-		{"short number", banks["bank-a"], "GET", enquiry("000014", "123456789"), "", nil, 200, answer("07", "That is not a valid account number at Bank A.", "", "Bank A", "123456789")},
+		{"short number", banks["bank-a"], "GET", enquiry("000014", "123456789"), "", nil, 400, errBody("invalid_request", "account_number must have 10 digits.")},
+		{"short bank code", banks["bank-a"], "GET", enquiry("14", s.nuban), "", nil, 400, errBody("invalid_request", "bank_code must have 6 digits.")},
 		{"unknown account", banks["bank-a"], "GET", enquiry("000014", unknownNUBAN), "", nil, 200, answer("25", "No such account at Bank A.", "", "Bank A", unknownNUBAN)},
 		{"unknown bank code", banks["bank-a"], "GET", enquiry("000111", s.nuban), "", nil, 200, `{"response_code":"96","message":"Bank code 000111 is not in the NIBSS directory.","bank_code":"000111","account_number":"` + s.nuban + `"}`},
-		{"no account number", banks["bank-a"], "GET", s.dirURL + "/v1/name-enquiries?bank_code=000014", "", nil, 400, errBody("invalid_request", "bank_code and account_number are required.")},
+		{"no account number", banks["bank-a"], "GET", s.dirURL + "/v1/name-enquiries?bank_code=000014", "", nil, 400, errBody("invalid_request", "account_number must have 10 digits.")},
 		{"stranger", banks["bank-z"], "GET", enquiry("000014", s.nuban), "", nil, 403, errBody("forbidden", "This certificate may not ask for account names. bank-z is not a bank NIBSS knows.")},
 		{"suspended bank", banks["bank-a"], "GET", enquiry("000014", s.nuban), "", suspend("suspended"), 200, answer("91", "Bank A is not available right now.", "", "Bank A", s.nuban)},
 		{"resumed bank", banks["bank-a"], "GET", enquiry("000014", s.nuban), "", suspend("active"), 200, answer("00", "Successful.", "ADA OBI", "Bank A", s.nuban)},
 		{"enrol a BVN", banks["bank-a"], "POST", s.dirURL + "/v1/bvns", person, nil, 200, `{"bvn":"22900000013","phone":"2348031234567"}`},
-		{"enrol the same person", banks["control"], "POST", s.dirURL + "/v1/bvns", person, nil, 200, `{"bvn":"22900000013","phone":"2348031234567"}`},
+		{"enrol the same person", banks["bank-a"], "POST", s.dirURL + "/v1/bvns", person, nil, 200, `{"bvn":"22900000013","phone":"2348031234567"}`},
 		{"enrol another person", banks["bank-a"], "POST", s.dirURL + "/v1/bvns", other, nil, 200, `{"bvn":"22900000021","phone":"2348031234567"}`},
 		{"enrol with a bad phone", banks["bank-a"], "POST", s.dirURL + "/v1/bvns", `{"name":"Ada Obi","phone":"12345","dob":"1990-04-21"}`, nil, 422, errBody("invalid_request", `Phone "12345" must start with +234 or 0.`)},
 		{"enrol with a bad date", banks["bank-a"], "POST", s.dirURL + "/v1/bvns", `{"name":"Ada Obi","phone":"08031234567","dob":"1990-02-30"}`, nil, 422, errBody("invalid_request", `Dob "1990-02-30" must be a date like 1990-04-21.`)},
@@ -338,6 +336,24 @@ func TestSoloNIBSSNames(t *testing.T) {
 		{"enrol as a stranger", banks["bank-z"], "POST", s.dirURL + "/v1/bvns", person, nil, 403, errBody("forbidden", "This certificate may not enrol a BVN. bank-z is not a bank NIBSS knows.")},
 		{"bank behind another certificate", banks["bank-a"], "GET", enquiry("000015", impostorNUBAN), "", impostor, 200, `{"response_code":"91","message":"Bank Z is not available right now.","bank_code":"000015","bank_name":"Bank Z","account_number":"` + impostorNUBAN + `"}`},
 		{"bank stopped", banks["bank-a"], "GET", enquiry("000014", s.nuban), "", s.stop, 200, answer("91", "Bank A is not available right now.", "", "Bank A", s.nuban)},
+	}
+	control := []struct {
+		name   string
+		url    string
+		token  string
+		status int
+		want   string
+	}{
+		{"control name", s.control + "/v1/control/name-enquiries?bank_code=000014&account_number=" + s.nuban, s.token, 200, answer("00", "Successful.", "ADA OBI", "Bank A", s.nuban)},
+		{"control without a token", s.control + "/v1/control/name-enquiries?bank_code=000014&account_number=" + s.nuban, "", 401, errBody("unauthenticated", "A valid control token is required.")},
+		{"control with a wrong token", s.control + "/v1/control/name-enquiries?bank_code=000014&account_number=" + s.nuban, "ctl_wrong", 401, errBody("unauthenticated", "A valid control token is required.")},
+		{"control with a short number", s.control + "/v1/control/name-enquiries?bank_code=000014&account_number=123", s.token, 400, errBody("invalid_request", "account_number must have 10 digits.")},
+	}
+	for _, r := range control {
+		status, got := s.call("nip", s.plain, "GET", r.url, r.token, "")
+		if status != r.status || got != r.want {
+			t.Errorf("%s: got %d %s, want %d %s", r.name, status, got, r.status, r.want)
+		}
 	}
 	for _, r := range rows {
 		if r.before != nil {
