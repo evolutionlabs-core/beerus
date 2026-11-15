@@ -184,20 +184,10 @@ func (a *App) attachMember(ls *ledgerSource) {
 	}
 }
 
-func (a *App) setMemberStatus(ctx context.Context, id, status string) error {
-	if err := a.nibssCtl.setStatus(ctx, id, status); err != nil {
-		return fmt.Errorf("set NIBSS status of %s to %s: %w", id, status, err)
-	}
-	return nil
-}
-
 func (a *App) stopRouting(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	sw := a.nibssStore()
 	if sw == nil {
 		return nil, errors.New("NIBSS is not open, so routing to the bank cannot be stopped; try again soon")
-	}
-	if err := a.setMemberStatus(ctx, r.ID, nip.StatusTerminating); err != nil {
-		return nil, err
 	}
 	in, err := sw.Institution(ctx, r.Allocated.NIPCode)
 	if err != nil {
@@ -209,7 +199,7 @@ func (a *App) stopRouting(ctx context.Context, r setup.Resource) (*setup.Conditi
 	return nil, nil
 }
 
-func (a *App) removeMember(ctx context.Context, id string) error {
+func (a *App) memberGone(ctx context.Context, id string) error {
 	a.mu.Lock()
 	s := a.nibss
 	a.mu.Unlock()
@@ -217,17 +207,41 @@ func (a *App) removeMember(ctx context.Context, id string) error {
 		return nil
 	}
 	s.Attach(id, nil)
+	cur, err := a.memberStatusAt(ctx, s, id)
+	if err != nil {
+		return err
+	}
+	if cur != "" && cur != nip.StatusRemoved {
+		return fmt.Errorf("NIBSS shows %s as %s, not %s", id, cur, nip.StatusRemoved)
+	}
+	return nil
+}
+
+func (a *App) memberStatusAt(ctx context.Context, s *nibss.Store, id string) (string, error) {
 	list, err := s.Directory(ctx)
 	if err != nil {
-		return fmt.Errorf("read the NIBSS directory: %w", err)
+		return "", fmt.Errorf("read the NIBSS directory: %w", err)
 	}
-	cur := ""
 	for _, in := range list {
 		if in.ID == id {
-			cur = in.Status
+			return in.Status, nil
 		}
 	}
-	for _, status := range []string{nip.StatusTerminating, nip.StatusRemoved} {
+	return "", nil
+}
+
+func (a *App) driveMember(ctx context.Context, id string, path []string) error {
+	a.mu.Lock()
+	s := a.nibss
+	a.mu.Unlock()
+	if s == nil {
+		return nil
+	}
+	cur, err := a.memberStatusAt(ctx, s, id)
+	if err != nil {
+		return err
+	}
+	for _, status := range path {
 		if cur == nip.StatusRemoved || cur == "" {
 			break
 		}
@@ -240,6 +254,32 @@ func (a *App) removeMember(ctx context.Context, id string) error {
 		cur = status
 	}
 	return nil
+}
+
+func (a *App) closingCallsDue(ctx context.Context) {
+	st, err := a.ctl.status()
+	if err != nil {
+		a.log.Error("read control.json", "err", err)
+		return
+	}
+	now := a.clock.Real()
+	for _, r := range st.Resources {
+		if r.Kind != setup.KindBank || (r.Phase != config.PhaseClosing && r.Phase != config.PhaseTerminating) || (r.NextAttemptAt != nil && now.Before(*r.NextAttemptAt)) {
+			continue
+		}
+		var path []string
+		switch nextFinalizer(r) {
+		case setup.FinalizerStopRouting:
+			path = []string{nip.StatusTerminating}
+		case setup.FinalizerPurgeOwned:
+			path = []string{nip.StatusTerminating, nip.StatusRemoved}
+		default:
+			continue
+		}
+		if err := a.driveMember(ctx, r.ID, path); err != nil {
+			a.logNIBSS("bank closing not sent to NIBSS; retrying", err)
+		}
+	}
 }
 
 const removedSuffix = " (removed)"
@@ -291,6 +331,7 @@ type provisionJob struct {
 
 func (a *App) registerDue(ctx context.Context) {
 	a.syncDirectoryDue(ctx)
+	a.closingCallsDue(ctx)
 	now := a.clock.Real()
 	var jobs []provisionJob
 	var stale []config.Bank
