@@ -2,8 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -23,10 +21,6 @@ type fakeSource struct {
 
 func (f fakeSource) Book(string) (Book, error) {
 	return f.book, f.err
-}
-
-func (f fakeSource) Enrol(context.Context, string, string, string, clock.Date) (string, string, error) {
-	return "", "", errors.New("not used")
 }
 
 func (f fakeSource) Empty() bool {

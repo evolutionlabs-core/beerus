@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,14 +21,10 @@ const (
 	nibssEnquiriesPath = "/v1/name-enquiries"
 )
 
-const ControlEnquiriesPath = "/v1/control/name-enquiries"
-
 type NIBSSClient struct {
-	HTTP          *http.Client
-	Base          string
-	Away          string
-	Token         string
-	EnquiriesPath string
+	HTTP *http.Client
+	Base string
+	Away string
 }
 
 func (c NIBSSClient) Do(ctx context.Context, method, path string, query url.Values, in, out any) (int, error) {
@@ -51,9 +46,6 @@ func (c NIBSSClient) Do(ctx context.Context, method, path string, query url.Valu
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
-	}
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -116,7 +108,7 @@ func (c NIBSSClient) Enrol(ctx context.Context, name, phone string, dob clock.Da
 func (c NIBSSClient) Enquire(ctx context.Context, code, nuban string) (nip.NameEnquiry, error) {
 	var out nip.NameEnquiry
 	q := url.Values{"bank_code": {code}, "account_number": {nuban}}
-	_, err := c.Do(ctx, http.MethodGet, cmp.Or(c.EnquiriesPath, nibssEnquiriesPath), q, nil, &out)
+	_, err := c.Do(ctx, http.MethodGet, nibssEnquiriesPath, q, nil, &out)
 	if err != nil {
 		return out, fmt.Errorf("ask NIBSS for a name: %w", err)
 	}
@@ -135,7 +127,7 @@ func (s *Server) nibss() (NIBSSClient, error) {
 	return NIBSSClient{HTTP: hc, Base: base, Away: s.Bank().Name + " cannot reach NIBSS right now. Try again in a minute."}, nil
 }
 
-func (s *Server) Enrol(ctx context.Context, _, name, phone string, dob clock.Date) (string, string, error) {
+func (s *Server) Enrol(ctx context.Context, name, phone string, dob clock.Date) (string, string, error) {
 	c, err := s.nibss()
 	if err != nil {
 		return "", "", err

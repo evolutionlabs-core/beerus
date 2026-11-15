@@ -479,7 +479,12 @@ func (a *App) detach(b *config.Bank, from string) {
 				break
 			}
 		}
+		hc := a.nibssBanks[b.ID]
+		delete(a.nibssBanks, b.ID)
 		a.mu.Unlock()
+		if hc != nil {
+			hc.CloseIdleConnections()
+		}
 		if ls != nil {
 			ls.Close()
 		}

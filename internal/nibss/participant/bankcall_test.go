@@ -10,12 +10,15 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
+
+const bankTestBudget = 100 * time.Millisecond
 
 func TestBankCallsAnswerWithTheRightCode(t *testing.T) {
 	now := clock.New(nil).Now()
@@ -31,7 +34,7 @@ func TestBankCallsAnswerWithTheRightCode(t *testing.T) {
 	if err := cfg.EnsureBankDir(own, now); err != nil {
 		t.Fatal(err)
 	}
-	callers, err := newBankCaller(config.NIBSSDir(stage), false)
+	callers, err := newBankCaller(config.NIBSSDir(stage), false, bankTestBudget)
 	if err != nil {
 		t.Fatal(err)
 	}

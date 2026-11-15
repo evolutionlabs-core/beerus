@@ -52,23 +52,33 @@ func TestTransferRequestsAndRoutes(t *testing.T) {
 		name      string
 		amount    int64
 		narration string
+		to        string
 		message   string
 		status    int
 	}{
-		{"zero", 0, "", "amount must be above zero", http.StatusBadRequest},
-		{"negative", -5, "", "amount must be above zero", http.StatusBadRequest},
-		{"long narration", 1, strings.Repeat("a", 101), "narration has 101 characters; the limit is 100", http.StatusUnprocessableEntity},
-		{"control character", 1, "a\tb", "narration must not contain control characters", http.StatusUnprocessableEntity},
-		{"fine", 1, strings.Repeat("a", 100), "", 0},
+		{"zero", 0, "", "0000000012", "amount must be above zero", http.StatusBadRequest},
+		{"negative", -5, "", "0000000012", "amount must be above zero", http.StatusBadRequest},
+		{"long narration", 1, strings.Repeat("a", 101), "0000000012", "narration has 101 characters; the limit is 100", http.StatusUnprocessableEntity},
+		{"control character", 1, "a\tb", "0000000012", "narration must not contain control characters", http.StatusUnprocessableEntity},
+		{"short account", 1, "", "123456789", "that is not a valid account number, so nothing was debited", http.StatusUnprocessableEntity},
+		{"letters in the account", 1, "", "00000000AB", "that is not a valid account number, so nothing was debited", http.StatusUnprocessableEntity},
+		{"fine", 1, strings.Repeat("a", 100), "0000000012", "", 0},
 	}
 	for _, c := range checks {
-		err := CheckRequest(TransferRequest{Amount: c.amount, Narration: c.narration})
+		err := CheckRequest(TransferRequest{Amount: c.amount, Narration: c.narration, To: c.to})
 		var te *TransferError
 		switch {
 		case c.message == "" && err != nil:
 			t.Errorf("%s: %v", c.name, err)
-		case c.message != "" && (!errors.As(err, &te) || te.Status != c.status || te.Error() != c.message || te.Code != nip.SystemError):
+		case c.message != "" && (!errors.As(err, &te) || te.Status != c.status || te.Error() != c.message || te.Code != wantCode(c.message)):
 			t.Errorf("%s: %v", c.name, err)
 		}
 	}
+}
+
+func wantCode(message string) string {
+	if strings.Contains(message, "account number") {
+		return nip.InvalidAccount
+	}
+	return nip.SystemError
 }

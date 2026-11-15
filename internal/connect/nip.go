@@ -51,7 +51,7 @@ func (a *App) NameEnquiry(ctx context.Context, code, nuban string) (nip.NameEnqu
 	if a.nibssCtl == nil {
 		return nip.NameEnquiry{}, &server.UnavailableError{Msg: nibssAway}
 	}
-	return a.nibssCtl.names().Enquire(ctx, code, nuban)
+	return a.nibssCtl.enquire(ctx, code, nuban)
 }
 
 func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {

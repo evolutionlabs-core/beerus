@@ -69,6 +69,9 @@ func TestNIPSwitch(t *testing.T) {
 	if ne := enquiry("000111", to); ne["message"] != "Bank code 000111 is not in the NIBSS directory." {
 		t.Fatalf("unknown bank: %v", ne)
 	}
+	if _, err := s.payTry("bank-a", from, "bank-b", "123", "100", nil); err == nil || !strings.Contains(err.Error(), `"response_code":"07"`) || !strings.Contains(err.Error(), "That is not a valid account number, so nothing was debited.") {
+		t.Fatalf("transfer to a short account number: %v", err)
+	}
 	s.ctl("POST", "/banks/bank-b/suspend", nil)
 	if ne := enquiry("000002", to); ne["response_code"] != "91" {
 		t.Fatalf("suspended bank: %v", ne)

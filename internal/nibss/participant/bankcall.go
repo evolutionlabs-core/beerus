@@ -40,7 +40,7 @@ type bankName struct {
 	AccountName  string `json:"account_name"`
 }
 
-func newBankCaller(own string, remote bool) (*bankCaller, error) {
+func newBankCaller(own string, remote bool, timeout time.Duration) (*bankCaller, error) {
 	pool, err := pki.LoadPool(filepath.Join(own, config.NIBSSCAFile))
 	if err != nil {
 		return nil, err
@@ -77,7 +77,7 @@ func newBankCaller(own string, remote bool) (*bankCaller, error) {
 		},
 	}
 	redirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &bankCaller{client: &http.Client{Timeout: bankCallTimeout, Transport: tr, CheckRedirect: redirect}}, nil
+	return &bankCaller{client: &http.Client{Timeout: timeout, Transport: tr, CheckRedirect: redirect}}, nil
 }
 
 func (c *bankCaller) nameAt(ctx context.Context, m nibss.Member, nuban string) (string, error) {

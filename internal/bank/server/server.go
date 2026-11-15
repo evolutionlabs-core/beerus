@@ -182,7 +182,7 @@ func (s *Server) Book(id string) (Book, error) {
 		return Book{}, ErrBankNotFound
 	}
 	phase, _ := s.Phase()
-	return Book{Name: s.Bank().Name, Phase: phase, Bank: s.books}, nil
+	return Book{Name: s.Bank().Name, Phase: phase, Bank: s.books, Enrol: s.Enrol}, nil
 }
 
 func (s *Server) Empty() bool {

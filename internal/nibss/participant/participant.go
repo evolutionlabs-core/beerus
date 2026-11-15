@@ -59,7 +59,7 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 	if err != nil {
 		return nil, err
 	}
-	banks, err := newBankCaller(own, remoteBind(o.Bind))
+	banks, err := newBankCaller(own, remoteBind(o.Bind), bankCallTimeout)
 	if err != nil {
 		return nil, err
 	}

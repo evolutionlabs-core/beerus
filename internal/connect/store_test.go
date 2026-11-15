@@ -165,13 +165,18 @@ func TestNewSetupKeyIsRandom(t *testing.T) {
 
 func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	t.Helper()
-	dir := t.TempDir()
 	local := DefaultLocal()
+	ports := testPorts(t, 2)
+	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort = ports[0], ports[1], ports[2], ports[3], ports[4]
+	return initConfigWith(t, today, local)
+}
+
+func initConfigWith(t *testing.T, today clock.Date, local setup.Local) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
-	ports := testPorts(t, 2)
-	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort = ports[0], ports[1], ports[2], ports[3], ports[4]
 	if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +189,7 @@ func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 
 const (
 	testPortLow  = 20000
-	testPortHigh = 45000
+	testPortHigh = 32000
 )
 
 func testPorts(t *testing.T, banks int) []int {
@@ -209,21 +214,11 @@ const (
 	testProvisionPoll  = 50 * time.Millisecond
 )
 
-func newTestApp(t *testing.T, o Options) *App {
-	t.Helper()
-	a, _ := newTestAppWithNIBSS(t, o)
-	return a
-}
+const testBindTries = 4
 
-func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
+func startTestNIBSS(t *testing.T, o Options) (*App, context.Context, func(), error) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("opens bank databases; run without -short")
-	}
 	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
-	if o.Logger == nil {
-		o.Logger = slog.New(slog.DiscardHandler)
-	}
 	conn, err := pgx.Connect(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		t.Skipf("no Postgres for app tests (%v); set BEERUS_TEST_DATABASE_URL", err)
@@ -239,16 +234,61 @@ func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
 		}
 	})
 	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
-	done, err := a.serveNIBSS(ctx, make(chan error, 1))
+	errc := make(chan error, 1)
+	done, err := a.serveNIBSS(ctx, errc)
 	if err != nil {
 		cancel()
-		t.Fatal(err)
+		return nil, nil, nil, err
 	}
-	stopNIBSS := sync.OnceFunc(func() {
+	stop := sync.OnceFunc(func() {
 		cancel()
 		<-done
 	})
-	t.Cleanup(stopNIBSS)
+	t.Cleanup(stop)
+	tick := time.NewTicker(testProvisionPoll)
+	defer tick.Stop()
+	upCtx, upStop := context.WithTimeout(ctx, testProvisionLimit)
+	defer upStop()
+	for !nibssAnswers(upCtx, a) {
+		select {
+		case <-upCtx.Done():
+			stop()
+			return nil, nil, nil, upCtx.Err()
+		case err := <-errc:
+			stop()
+			return nil, nil, nil, err
+		case <-tick.C:
+		}
+	}
+	return a, ctx, stop, nil
+}
+
+func newTestApp(t *testing.T, o Options) *App {
+	t.Helper()
+	a, _ := newTestAppWithNIBSS(t, o)
+	return a
+}
+
+func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("opens bank databases; run without -short")
+	}
+	if o.Logger == nil {
+		o.Logger = slog.New(slog.DiscardHandler)
+	}
+	var a *App
+	var ctx context.Context
+	var stopNIBSS func()
+	for try := 0; ; try++ {
+		var err error
+		if a, ctx, stopNIBSS, err = startTestNIBSS(t, o); err == nil {
+			break
+		}
+		if try == testBindTries {
+			t.Fatal(err)
+		}
+	}
 	waitCtx, stop := context.WithTimeout(ctx, testProvisionLimit)
 	defer stop()
 	tick := time.NewTicker(testProvisionPoll)

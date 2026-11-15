@@ -96,9 +96,14 @@ type Route struct {
 	Cap      int64
 }
 
+const nubanDigits = 10
+
 func CheckRequest(req TransferRequest) error {
 	if req.Amount <= 0 {
 		return Refused(http.StatusBadRequest, nip.SystemError, "invalid_request", errors.New("amount must be above zero"))
+	}
+	if len(req.To) != nubanDigits || strings.Trim(req.To, "0123456789") != "" {
+		return Refused(http.StatusUnprocessableEntity, nip.InvalidAccount, "invalid_account", fmt.Errorf("that is not a valid account number, so nothing was debited"))
 	}
 	if err := bank.CheckNarration(req.Narration); err != nil {
 		return Refused(http.StatusUnprocessableEntity, nip.SystemError, "invalid_request", err)

@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	nibssBanksPath = "/v1/control/banks/"
-	nibssAway      = "NIBSS is not available right now. Try again soon."
-	nibssHost      = "127.0.0.1"
+	nibssBanksPath     = "/v1/control/banks/"
+	nibssEnquiriesPath = "/v1/control/name-enquiries"
+	nibssAway          = "NIBSS is not available right now. Try again soon."
+	nibssHost          = "127.0.0.1"
 )
 
 type nibssAdmin struct {
@@ -52,8 +53,18 @@ type statusBody struct {
 	Status string `json:"status"`
 }
 
-func (n *nibssAdmin) names() server.NIBSSClient {
-	return server.NIBSSClient{HTTP: n.link.Client, Base: n.base, Token: n.link.Token, EnquiriesPath: server.ControlEnquiriesPath, Away: nibssAway}
+func (n *nibssAdmin) enquire(ctx context.Context, code, nuban string) (nip.NameEnquiry, error) {
+	var out nip.NameEnquiry
+	q := url.Values{"bank_code": {code}, "account_number": {nuban}}
+	_, err := n.link.Do(ctx, n.base, http.MethodGet, nibssEnquiriesPath+"?"+q.Encode(), nil, &out)
+	var peer *server.PeerError
+	switch {
+	case err == nil || errors.Is(err, context.Canceled):
+		return out, err
+	case errors.As(err, &peer) && peer.Status != http.StatusServiceUnavailable:
+		return out, err
+	}
+	return out, &server.UnavailableError{Msg: nibssAway, Err: err}
 }
 
 func (n *nibssAdmin) register(ctx context.Context, b config.Bank) (nip.Institution, error) {

@@ -23,23 +23,25 @@ func (s bookSource) Book(id string) (server.Book, error) {
 	if b == nil {
 		return server.Book{Name: id, Phase: PhaseClosed}, nil
 	}
-	bk := server.Book{Name: name, Phase: s.a.bankPhase(id)}
+	bk := server.Book{Name: name, Phase: s.a.bankPhase(id), Enrol: s.enrolAt(id)}
 	if ls != nil {
 		bk.Bank = ls.Bank()
 	}
 	return bk, nil
 }
 
-func (s bookSource) Enrol(ctx context.Context, bankID, name, phone string, dob clock.Date) (string, string, error) {
-	c, err := s.a.bankNIBSS(bankID)
-	if err != nil {
-		return "", "", err
+func (s bookSource) enrolAt(bankID string) func(context.Context, string, string, clock.Date) (string, string, error) {
+	return func(ctx context.Context, name, phone string, dob clock.Date) (string, string, error) {
+		c, err := s.a.bankNIBSS(bankID)
+		if err != nil {
+			return "", "", err
+		}
+		out, err := c.Enrol(ctx, name, phone, dob)
+		if err != nil {
+			return "", "", err
+		}
+		return out.BVN, out.Phone, nil
 	}
-	out, err := c.Enrol(ctx, name, phone, dob)
-	if err != nil {
-		return "", "", err
-	}
-	return out.BVN, out.Phone, nil
 }
 
 func (s bookSource) Empty() bool {

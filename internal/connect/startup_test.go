@@ -35,7 +35,7 @@ func TestOldDirIsRefused(t *testing.T) {
 
 func TestInitWritesTheDefaultSetup(t *testing.T) {
 	today := clock.Date{Y: 2026, M: 11, D: 3}
-	cfg := initTestConfig(t, today)
+	cfg := initConfigWith(t, today, DefaultLocal())
 	for _, f := range []string{SpecFile, LocalFile, statusFile, "control-token"} {
 		fi, err := os.Stat(cfg.Path(f))
 		if err != nil {
@@ -59,7 +59,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 	want := []struct {
 		id, typ, nip, nuban string
 		port, api           int
-	}{{"bank-a", "commercial", "000001", "001", cfg.Connect.PartnerPort + 5, cfg.Connect.PartnerPort + 5 + config.DefaultAPIPortOffset}, {"bank-b", "digital", "000002", "002", cfg.Connect.PartnerPort + 6, cfg.Connect.PartnerPort + 6 + config.DefaultAPIPortOffset}}
+	}{{"bank-a", "commercial", "000001", "001", 7445, 7455}, {"bank-b", "digital", "000002", "002", 7446, 7456}}
 	for i, w := range want {
 		b := cfg.Banks[i]
 		if b.ID != w.id || b.Type != w.typ || b.NIPCode != w.nip || b.NUBANCode != w.nuban || b.Port != w.port || b.APIPort != w.api || b.Database == "" {
