@@ -129,6 +129,7 @@ type Config struct {
 	NIPSessions int           `yaml:"nip_sessions,omitempty"`
 	TSQAfter    time.Duration `yaml:"-"`
 	TSQAttempts int           `yaml:"-"`
+	SetupKey    uint64        `yaml:"-"`
 	Ports       Ports         `yaml:"ports,omitempty"`
 	Connect     Connect       `yaml:"connect"`
 	Partners    []*Partner    `yaml:"partners"`

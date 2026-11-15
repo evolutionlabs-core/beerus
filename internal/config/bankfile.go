@@ -43,6 +43,7 @@ type BankFile struct {
 	NIBSSPort        int         `json:"nibss_port"`
 	BrandName        string      `json:"brand_name"`
 	CoreURL          string      `json:"core_url"`
+	SetupKey         uint64      `json:"setup_key,string"`
 }
 
 type BankFileAPI struct {
@@ -94,6 +95,7 @@ func (c *Config) bankFile(b *Bank) BankFile {
 		NIBSSPort:        c.Connect.NIBSSPort,
 		BrandName:        c.Connect.BrandName,
 		CoreURL:          c.ControlURL(),
+		SetupKey:         c.SetupKey,
 	}
 }
 
@@ -135,6 +137,8 @@ func (f BankFile) check(dir, id string) error {
 		return errors.New("port and api_port must be above zero")
 	case f.Database != DatabaseName(dir, id):
 		return fmt.Errorf("database is %q, but core names the database of %s %q", f.Database, id, DatabaseName(dir, id))
+	case f.SetupKey == 0:
+		return errors.New("setup_key is not set; start Beerus with beerus up to write it again")
 	case f.State != stateActive && f.State != "suspended" && f.State != "closed":
 		return fmt.Errorf("state %q is not active, suspended or closed", f.State)
 	}
@@ -173,6 +177,7 @@ func (f BankFile) Config(dir, databaseURL string) (*Config, error) {
 		Dir:         dir,
 		DatabaseURL: databaseURL,
 		Banks:       []*Bank{f.Bank()},
+		SetupKey:    f.SetupKey,
 		Connect:     Connect{Host: f.Host, WidgetPort: f.WidgetPort, WidgetTLS: f.WidgetTLS, NIBSSPort: f.NIBSSPort, BrandName: f.BrandName},
 	}
 	c.buildFees(pack)

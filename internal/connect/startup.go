@@ -341,6 +341,7 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 		NIPSessions: spec.NIP.Sessions,
 		TSQAfter:    tsqAfter,
 		TSQAttempts: tsqAttempts,
+		SetupKey:    st.SetupKey,
 		Ports:       config.Ports{APIOffset: local.Ports.APIOffset, Window: local.Ports.Window},
 		Connect: config.Connect{
 			Host:         orDefault(ln.Host, defaultConnectHost),

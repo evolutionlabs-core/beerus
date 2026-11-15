@@ -9,7 +9,7 @@ import (
 
 func TestNIBSSFileEnsureAndLoad(t *testing.T) {
 	now := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
-	c := &Config{Dir: t.TempDir(), Connect: Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, NIBSSControlPort: 9003, ControlPort: 9002, BrandName: "Connect"}}
+	c := &Config{Dir: t.TempDir(), Connect: Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, NIBSSControlPort: 9003, ControlPort: 9002, BrandName: "Connect"}, TSQAfter: 2 * time.Minute, TSQAttempts: 3}
 	if err := Prepare(c, now); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestNIBSSFileEnsureAndLoad(t *testing.T) {
 		t.Fatalf("the control token changed on a repeat: %v", err)
 	}
 	got, err := LoadNIBSSFile(c.Dir)
-	if want := (NIBSSFile{Database: DatabaseName(c.Dir, NIBSSID), Port: 9001, ControlPort: 9004, WorldID: "wld_b"}); err != nil || got != want {
+	if want := (NIBSSFile{Database: DatabaseName(c.Dir, NIBSSID), Port: 9001, ControlPort: 9004, WorldID: "wld_b", TSQAfter: "2m0s", TSQAttempts: 3}); err != nil || got != want {
 		t.Fatalf("loaded %+v, %v, want %+v", got, err, want)
 	}
 	rows := []struct {
@@ -48,7 +48,8 @@ func TestNIBSSFileEnsureAndLoad(t *testing.T) {
 	}{
 		{"no ports", `{"database":"` + DatabaseName(c.Dir, NIBSSID) + `"}`, "port and control_port must be above zero"},
 		{"same port twice", `{"database":"` + DatabaseName(c.Dir, NIBSSID) + `","port":9001,"control_port":9001}`, "port and control_port are both 9001; they must differ"},
-		{"another database", `{"database":"beerus_other","port":9001,"control_port":9004}`, `database is "beerus_other", but core names the NIBSS database "` + DatabaseName(c.Dir, NIBSSID) + `"`},
+		{"another database", `{"database":"beerus_other","port":9001,"control_port":9004,"tsq_after":"2m0s","tsq_attempts":3}`, `database is "beerus_other", but core names the NIBSS database "` + DatabaseName(c.Dir, NIBSSID) + `"`},
+		{"no status query timing", `{"database":"` + DatabaseName(c.Dir, NIBSSID) + `","port":9001,"control_port":9004}`, `tsq_after and tsq_attempts need a duration above zero and a number above zero, not "" and 0`},
 		{"not JSON", `{`, "unexpected end of JSON input"},
 	}
 	for _, r := range rows {

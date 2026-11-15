@@ -9,7 +9,7 @@ import (
 
 func TestBankFileEnsureAndLoad(t *testing.T) {
 	now := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
-	c := &Config{Dir: t.TempDir(), Connect: Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, ControlPort: 9002, BrandName: "Connect"}}
+	c := &Config{Dir: t.TempDir(), Connect: Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, ControlPort: 9002, BrandName: "Connect"}, SetupKey: 1<<63 + 5}
 	if err := Prepare(c, now); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestBankFileEnsureAndLoad(t *testing.T) {
 	}{
 		{name: "loaded as written", id: "bank-a", check: func(t *testing.T, f BankFile) {
 			got := f.Bank()
-			if *got != *b || f.NetDebitCapMinor != 5_000_000 || f.State != "suspended" || f.CoreURL != "http://127.0.0.1:9002" || f.NIBSSPort != 9001 || f.BrandName != "Connect" {
+			if *got != *b || f.NetDebitCapMinor != 5_000_000 || f.State != "suspended" || f.CoreURL != "http://127.0.0.1:9002" || f.NIBSSPort != 9001 || f.BrandName != "Connect" || f.SetupKey != 1<<63+5 {
 				t.Fatalf("loaded %+v and %+v", f, got)
 			}
 		}},
@@ -84,6 +84,15 @@ func TestBankFileEnsureAndLoad(t *testing.T) {
 	}
 	if _, err := LoadBankFile(c.Dir, "bank-a"); err == nil || err.Error() != path+`: id is "bank-b", want "bank-a"` {
 		t.Fatalf("another bank's file: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"id":"bank-a","port":1,"api_port":2,"database":"d","state":"active"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"id":"bank-a","port":1,"api_port":2,"database":"`+DatabaseName(c.Dir, "bank-a")+`","state":"active"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadBankFile(c.Dir, "bank-a"); err == nil || err.Error() != path+": setup_key is not set; start Beerus with beerus up to write it again" {
+		t.Fatalf("no setup key: %v", err)
 	}
 	if err := os.WriteFile(path, []byte(`{"id":"bank-a","port":1,"api_port":2,"database":"d","state":"active"}`), 0o600); err != nil {
 		t.Fatal(err)
