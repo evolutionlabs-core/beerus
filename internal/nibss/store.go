@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -27,7 +28,7 @@ var validName = regexp.MustCompile(`^beerus_[a-z0-9_]{1,50}$`)
 
 const maxConns = 8
 
-var errTransition = errors.New("status change not allowed")
+var ErrTransition = errors.New("status change not allowed")
 
 var transitions = map[string][]string{
 	nip.StatusActive:      {nip.StatusSuspended, nip.StatusTerminating},
@@ -138,7 +139,11 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("read NIBSS migrations: %w", err)
 	}
-	p, err := goose.NewProvider(goose.DialectPostgres, db, sub)
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return 0, fmt.Errorf("make NIBSS migration lock: %w", err)
+	}
+	p, err := goose.NewProvider(goose.DialectPostgres, db, sub, goose.WithSessionLocker(locker))
 	if err != nil {
 		return 0, fmt.Errorf("load NIBSS migrations: %w", err)
 	}
@@ -174,6 +179,34 @@ type querier interface {
 }
 
 const institutionCols = `id, name, nip_code, nuban_code, type, status`
+
+const memberCols = institutionCols + `, credit_url, certificate_identity`
+
+func scanMember(row pgx.Row) (Member, error) {
+	var m Member
+	err := row.Scan(&m.ID, &m.Name, &m.NIPCode, &m.NUBANCode, &m.Type, &m.Status, &m.CreditURL, &m.CertificateIdentity)
+	return m, err
+}
+
+func (s *Store) Member(ctx context.Context, id string) (Member, error) {
+	m, err := scanMember(s.pool.QueryRow(ctx, `SELECT `+memberCols+` FROM institutions WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Member{}, fmt.Errorf("bank id %s is %w", id, nip.ErrUnknownInstitution)
+	}
+	if err != nil {
+		return Member{}, fmt.Errorf("look up institution %s: %w", id, err)
+	}
+	return m, nil
+}
+
+func (s *Store) Admits(ctx context.Context, identity string) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM institutions WHERE certificate_identity = $1 AND status <> 'removed')`, identity).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("look up certificate identity %s: %w", identity, err)
+	}
+	return ok, nil
+}
 
 func scanInstitution(row pgx.Row) (nip.Institution, error) {
 	var in nip.Institution
@@ -233,7 +266,7 @@ func (s *Store) SetStatus(ctx context.Context, id, status string) error {
 			return nil
 		}
 		if !slices.Contains(transitions[cur], status) {
-			return fmt.Errorf("institution %s is %s and cannot become %s: %w", id, cur, status, errTransition)
+			return fmt.Errorf("institution %s is %s and cannot become %s: %w", id, cur, status, ErrTransition)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE institutions SET status = $2, updated_at = now() WHERE id = $1`, id, status); err != nil {
 			return fmt.Errorf("set institution %s status: %w", id, err)

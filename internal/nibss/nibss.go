@@ -51,7 +51,7 @@ type ConsentEvent struct {
 type Switch interface {
 	Directory(ctx context.Context) ([]nip.Institution, error)
 	Institution(ctx context.Context, code string) (nip.Institution, error)
-	Register(ctx context.Context, in nip.Institution) error
+	Register(ctx context.Context, m Member) error
 	SetStatus(ctx context.Context, id, status string) error
 	EnrolBVN(ctx context.Context, name, phone string, dob clock.Date) (string, error)
 	NameEnquiry(ctx context.Context, code, nuban string) (string, error)

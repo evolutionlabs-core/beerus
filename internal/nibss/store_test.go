@@ -94,7 +94,7 @@ func testStore(t testing.TB) *Store {
 
 func register(t testing.TB, s *Store, id, name, code, nuban string) {
 	t.Helper()
-	if err := s.Register(context.Background(), nip.Institution{ID: id, Name: name, NIPCode: code, NUBANCode: nuban, Type: "commercial"}); err != nil {
+	if err := s.Register(context.Background(), member(id, name, code, nuban)); err != nil {
 		t.Fatal(err)
 	}
 }

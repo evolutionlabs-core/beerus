@@ -177,7 +177,7 @@ func (s *Store) Resolve(ctx context.Context, id, status, outcome string, at time
 			return nil
 		case curStatus == SessionPending:
 			if (curOutcome == nip.OutcomeCredited && status != SessionOK) || (curOutcome == nip.OutcomeFailed && status == SessionOK) {
-				return fmt.Errorf("session %s holds outcome %s and cannot resolve as %s: %w", id, curOutcome, status, errTransition)
+				return fmt.Errorf("session %s holds outcome %s and cannot resolve as %s: %w", id, curOutcome, status, ErrTransition)
 			}
 			if at.Before(created) {
 				return fmt.Errorf("session %s cannot resolve at %s, before it began at %s", id, at.In(clock.Lagos).Format(time.RFC3339), created.In(clock.Lagos).Format(time.RFC3339))
@@ -186,7 +186,7 @@ func (s *Store) Resolve(ctx context.Context, id, status, outcome string, at time
 		case curStatus == status && curOutcome == nip.OutcomeFailed && outcome == OutcomeReversed:
 			_, err = tx.Exec(ctx, `UPDATE nip_sessions SET outcome = $2 WHERE session_id = $1`, id, outcome)
 		default:
-			return fmt.Errorf("session %s is %s/%s and cannot become %s/%s: %w", id, curStatus, curOutcome, status, outcome, errTransition)
+			return fmt.Errorf("session %s is %s/%s and cannot become %s/%s: %w", id, curStatus, curOutcome, status, outcome, ErrTransition)
 		}
 		if err != nil {
 			return fmt.Errorf("resolve session %s: %w", id, err)
@@ -208,7 +208,7 @@ func (s *Store) RevokeCredit(ctx context.Context, id string) error {
 		return err
 	}
 	if x.Outcome != nip.OutcomeFailed {
-		return fmt.Errorf("session %s is %s/%s, so its credit cannot be revoked: %w", id, x.Status, x.Outcome, errTransition)
+		return fmt.Errorf("session %s is %s/%s, so its credit cannot be revoked: %w", id, x.Status, x.Outcome, ErrTransition)
 	}
 	return nil
 }

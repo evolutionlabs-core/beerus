@@ -133,7 +133,7 @@ func (a *App) registerMember(b *config.Bank) error {
 		return fmt.Errorf("register %s: the NIBSS directory is not open yet", b.ID)
 	}
 	ctx := context.Background()
-	if err := s.Register(ctx, memberOf(b)); err != nil {
+	if err := s.Register(ctx, nibss.Member{Institution: memberOf(b)}); err != nil {
 		return fmt.Errorf("register %s with NIBSS: %w", b.ID, err)
 	}
 	if in, err := s.Institution(ctx, b.NIPCode); err != nil || in.Status != nip.StatusTerminating {
