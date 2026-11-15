@@ -54,7 +54,6 @@ type Switch interface {
 	Register(ctx context.Context, m Member) error
 	SetStatus(ctx context.Context, id, status string) error
 	EnrolBVN(ctx context.Context, name, phone string, dob clock.Date) (string, error)
-	NameEnquiry(ctx context.Context, code, nuban string) (string, error)
 	Begin(ctx context.Context, s Session) (Session, error)
 	Resolve(ctx context.Context, id, status, outcome string, at time.Time) error
 	TSQ(ctx context.Context, id string, next time.Time) (Session, error)

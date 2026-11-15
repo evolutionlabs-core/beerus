@@ -94,15 +94,19 @@ func (a *App) Quote(ctx context.Context, req server.TransferRequest) (server.Tra
 }
 
 func (a *App) Enquire(ctx context.Context, rt server.Route, nuban string) (string, error) {
-	sw := a.nibssStore()
-	if sw == nil {
-		return "", server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "nibss_unavailable", errors.New("NIBSS is not available right now"))
+	return a.enquiredName(ctx, rt, nuban)
+}
+
+func (a *App) enquiredName(ctx context.Context, rt server.Route, nuban string) (string, error) {
+	out, err := a.NameEnquiry(ctx, rt.ToCode, nuban)
+	var away *server.UnavailableError
+	if errors.As(err, &away) {
+		return "", server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "nibss_unavailable", errors.New(away.Msg))
 	}
-	name, err := sw.NameEnquiry(ctx, rt.ToCode, nuban)
 	if err != nil {
-		return "", enquiryError(rt.ToName, err)
+		return "", err
 	}
-	return name, nil
+	return enquiryResult(rt.ToName, out)
 }
 
 func (a *App) internalTransfer(rt transferRoute, req server.TransferRequest, res server.TransferResult) (server.TransferResult, error) {
@@ -127,18 +131,18 @@ func (a *App) internalTransfer(rt transferRoute, req server.TransferRequest, res
 	return res, err
 }
 
-func enquiryError(name string, err error) error {
-	switch {
-	case errors.Is(err, nip.ErrUnavailable):
-		return server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("%s is not available right now, so nothing was debited", name))
-	case errors.Is(err, nip.ErrInvalidAccount):
-		return server.Refused(http.StatusUnprocessableEntity, nip.InvalidAccount, "invalid_account", fmt.Errorf("that is not a valid account at %s, so nothing was debited", name))
-	case errors.Is(err, nip.ErrNoRecord):
-		return server.Refused(http.StatusUnprocessableEntity, nip.NoRecord, "no_record", fmt.Errorf("%s has no such account, so nothing was debited", name))
-	case errors.Is(err, nip.ErrUnknownInstitution):
-		return server.Refused(http.StatusUnprocessableEntity, nip.SystemError, "unknown_bank", err)
+func enquiryResult(name string, out server.NameEnquiry) (string, error) {
+	switch out.Code {
+	case nip.OK:
+		return out.AccountName, nil
+	case nip.Unavailable:
+		return "", server.Refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("%s is not available right now, so nothing was debited", name))
+	case nip.InvalidAccount:
+		return "", server.Refused(http.StatusUnprocessableEntity, nip.InvalidAccount, "invalid_account", fmt.Errorf("that is not a valid account at %s, so nothing was debited", name))
+	case nip.NoRecord:
+		return "", server.Refused(http.StatusUnprocessableEntity, nip.NoRecord, "no_record", fmt.Errorf("%s has no such account, so nothing was debited", name))
 	}
-	return err
+	return "", server.Refused(http.StatusUnprocessableEntity, nip.SystemError, "unknown_bank", errors.New(out.Message))
 }
 
 func (a *App) sendLock(bankID string) *sync.Mutex {
@@ -178,8 +182,8 @@ func (a *App) nipTransfer(rt transferRoute, req server.TransferRequest, res serv
 	name := prior.To.Name
 	if found {
 		res.At = prior.At.In(clock.Lagos)
-	} else if name, err = sw.NameEnquiry(ctx, rt.ToCode, req.To); err != nil {
-		return res, enquiryError(rt.ToName, err)
+	} else if name, err = a.enquiredName(ctx, rt.Route, req.To); err != nil {
+		return res, err
 	}
 	res.Kind, res.ToName = "nip", name
 	if _, err := server.TotalDebit(req.Amount, a.cfg.Fees().ForTransfer(req.Amount)); err != nil {

@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"regexp"
 	"slices"
-	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -41,16 +40,9 @@ func Transitions(from string) []string {
 	return slices.Clone(transitions[from])
 }
 
-type Participant interface {
-	NameEnquiry(ctx context.Context, nuban string) (string, error)
-}
-
 type Store struct {
 	pool  *pgxpool.Pool
 	phone countrypack.Phone
-
-	mu           sync.RWMutex
-	participants map[string]Participant
 }
 
 var _ Switch = (*Store)(nil)
@@ -118,7 +110,7 @@ func newStore(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 	if _, err := migrate(ctx, pool); err != nil {
 		return nil, err
 	}
-	return &Store{pool: pool, phone: p.Phone, participants: map[string]Participant{}}, nil
+	return &Store{pool: pool, phone: p.Phone}, nil
 }
 
 func Migrate(ctx context.Context, url, name string) (int, error) {
@@ -156,22 +148,6 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 		return 0, fmt.Errorf("run NIBSS migrations: %w", err)
 	}
 	return len(results), nil
-}
-
-func (s *Store) Attach(id string, p Participant) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if p == nil {
-		delete(s.participants, id)
-		return
-	}
-	s.participants[id] = p
-}
-
-func (s *Store) participant(id string) Participant {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.participants[id]
 }
 
 func (s *Store) Close() {

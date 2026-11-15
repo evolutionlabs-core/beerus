@@ -83,6 +83,7 @@ type App struct {
 	pools        map[string]*ledgerSource
 	vault        *vault
 	obHTTP       *http.Client
+	nibssHTTP    *http.Client
 	role         string
 	coreURL      string
 	pushWake     chan struct{}
@@ -183,9 +184,6 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	a.nibssStore()
 	if err := a.prepareNIBSS(); err != nil {
 		return nil, err
-	}
-	for _, l := range a.ledgers {
-		a.attachMember(l)
 	}
 	if err := a.ensureRTGS(); err != nil {
 		return nil, err

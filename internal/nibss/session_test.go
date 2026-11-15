@@ -3,8 +3,6 @@ package nibss
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync"
 	"testing"
 	"time"
 
@@ -284,48 +282,30 @@ func TestSettlement(t *testing.T) {
 	}
 }
 
-type fakeBank map[string]string
-
-func (f fakeBank) NameEnquiry(ctx context.Context, nuban string) (string, error) {
-	switch name := f[nuban]; name {
-	case "":
-		return "", fmt.Errorf("no account %s: %w", nuban, nip.ErrNoRecord)
-	case "BROKEN":
-		return "", errors.New("ledger down")
-	default:
-		return name, nil
-	}
-}
-
-func TestNameEnquiry(t *testing.T) {
+func TestCallee(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
 	good := world.NUBAN("902", 1234567)
-	broken := world.NUBAN("902", 7)
-	missing := world.NUBAN("902", 8)
 	bad := good[:9] + string('0'+(good[9]-'0'+1)%10)
-	_, err := s.NameEnquiry(ctx, "999002", good)
-	wantErr(t, err, "Bank B is offline: 91 institution unavailable")
-	s.Attach("bank-b", fakeBank{"x": "WRONG"})
-	s.Attach("bank-b", fakeBank{good: "ADAEZE OKAFOR", broken: "BROKEN"})
-	name, err := s.NameEnquiry(ctx, "999002", good)
-	if err != nil || name != "ADAEZE OKAFOR" {
-		t.Fatalf("attached bank: %q, %v", name, err)
-	}
 	cases := []struct {
 		code, nuban string
 		is          error
 		want        string
 	}{
-		{"999002", missing, nip.ErrNoRecord, "no account " + missing + ": 25 no record"},
-		{"999002", broken, nil, "name enquiry at Bank B: ledger down"},
+		{"999002", good, nil, ""},
 		{"999002", bad, nip.ErrInvalidAccount, bad + " is not a valid account number at Bank B: 07 invalid account"},
 		{"999002", "12345", nip.ErrInvalidAccount, "an account number has 10 digits: 07 invalid account"},
 		{"999123", good, nip.ErrUnknownInstitution, "bank code 999123 is not in the NIBSS directory"},
 	}
 	for _, c := range cases {
-		_, err := s.NameEnquiry(ctx, c.code, c.nuban)
-		if c.is != nil && !errors.Is(err, c.is) {
+		m, err := s.Callee(ctx, c.code, c.nuban)
+		if c.is == nil {
+			if err != nil || m.ID != "bank-b" {
+				t.Errorf("%s/%s: %q, %v", c.code, c.nuban, m.ID, err)
+			}
+			continue
+		}
+		if !errors.Is(err, c.is) {
 			t.Errorf("%s/%s: %v, want %v", c.code, c.nuban, err, c.is)
 		}
 		wantErr(t, err, c.want)
@@ -333,36 +313,11 @@ func TestNameEnquiry(t *testing.T) {
 	if err := s.SetStatus(ctx, "bank-b", nip.StatusSuspended); err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.NameEnquiry(ctx, "999002", good)
+	m, err := s.Callee(ctx, "999002", good)
 	wantErr(t, err, "Bank B is suspended: 91 institution unavailable")
-	if err := s.SetStatus(ctx, "bank-b", nip.StatusActive); err != nil {
-		t.Fatal(err)
+	if m.Name != "Bank B" {
+		t.Errorf("suspended bank is named %q, want Bank B", m.Name)
 	}
-	s.Attach("bank-b", nil)
-	_, err = s.NameEnquiry(ctx, "999002", good)
-	wantErr(t, err, "Bank B is offline: 91 institution unavailable")
-}
-
-func TestAttachConcurrent(t *testing.T) {
-	ctx := context.Background()
-	s := sessionStore(t)
-	good := world.NUBAN("902", 1234567)
-	s.Attach("bank-b", fakeBank{good: "ADAEZE OKAFOR"})
-	var wg sync.WaitGroup
-	for i := range 8 {
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			s.Attach("bank-b", fakeBank{good: "ADAEZE OKAFOR"})
-		}()
-		go func() {
-			defer wg.Done()
-			if name, err := s.NameEnquiry(ctx, "999002", good); err != nil || name != "ADAEZE OKAFOR" {
-				t.Errorf("call %d: %q, %v", i, name, err)
-			}
-		}()
-	}
-	wg.Wait()
 }
 
 func TestResolveKeepsWithheldOutcome(t *testing.T) {

@@ -303,7 +303,6 @@ func (a *App) openLedger(b *config.Bank) error {
 		a.addLedger(ls)
 		a.mu.Unlock()
 	}
-	a.attachMember(ls)
 	return nil
 }
 
@@ -480,11 +479,7 @@ func (a *App) detach(b *config.Bank, from string) {
 				break
 			}
 		}
-		s := a.nibss
 		a.mu.Unlock()
-		if s != nil {
-			s.Attach(b.ID, nil)
-		}
 		if ls != nil {
 			ls.Close()
 		}

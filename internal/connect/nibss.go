@@ -177,15 +177,6 @@ func (a *App) registerMember(ctx context.Context, b config.Bank) error {
 	return nil
 }
 
-func (a *App) attachMember(ls *ledgerSource) {
-	a.mu.Lock()
-	s := a.nibss
-	a.mu.Unlock()
-	if s != nil && ls != nil {
-		s.Attach(ls.Inst.ID, member{a, ls})
-	}
-}
-
 func (a *App) stopRouting(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	sw := a.nibssStore()
 	if sw == nil {
@@ -208,7 +199,6 @@ func (a *App) memberGone(ctx context.Context, id string) error {
 	if s == nil {
 		return errMemberStoreClosed
 	}
-	s.Attach(id, nil)
 	cur, err := a.memberStatusAt(ctx, s, id)
 	if err != nil {
 		return err

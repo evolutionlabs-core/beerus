@@ -1,14 +1,12 @@
 package connect
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"slices"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
-	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -131,18 +129,6 @@ func (a *App) ctlClearFaults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, map[string]any{"cleared": a.ClearFaults(bank)})
-}
-
-type member struct {
-	a  *App
-	ls *ledgerSource
-}
-
-func (m member) NameEnquiry(ctx context.Context, nuban string) (string, error) {
-	if m.a.bankDown(m.ls.Inst.ID, m.a.clock.Now()) {
-		return "", fmt.Errorf("%s is down: %w", m.ls.Inst.Name, nip.ErrUnavailable)
-	}
-	return m.ls.Bank().NameEnquiry(ctx, nuban)
 }
 
 func (a *App) bankRefusing(id string) bool {

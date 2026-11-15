@@ -31,7 +31,15 @@ func (s bookSource) Book(id string) (server.Book, error) {
 }
 
 func (s bookSource) Enrol(ctx context.Context, name, phone string, dob clock.Date) (string, string, error) {
-	return s.a.enrolBVN(ctx, name, phone, dob)
+	c, err := s.a.nibssClient()
+	if err != nil {
+		return "", "", err
+	}
+	out, err := c.Enrol(ctx, name, phone, dob)
+	if err != nil {
+		return "", "", err
+	}
+	return out.BVN, out.Phone, nil
 }
 
 func (s bookSource) Empty() bool {

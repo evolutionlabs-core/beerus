@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"slices"
 
@@ -48,36 +47,12 @@ func (p reply) write(w http.ResponseWriter) {
 	_, _ = w.Write(p.body)
 }
 
-func (a *App) NameEnquiry(code, nuban string) (server.NameEnquiry, error) {
-	out := server.NameEnquiry{BankCode: code, AccountNo: nuban}
-	sw := a.nibssStore()
-	if sw == nil {
-		return out, errors.New("NIBSS is not available right now")
-	}
-	ctx := context.Background()
-	in, err := sw.Institution(ctx, code)
-	if errors.Is(err, nip.ErrUnknownInstitution) {
-		out.Message = fmt.Sprintf("Bank code %s is not in the NIBSS directory.", code)
-		return out, nil
-	}
+func (a *App) NameEnquiry(ctx context.Context, code, nuban string) (server.NameEnquiry, error) {
+	c, err := a.nibssClient()
 	if err != nil {
-		return out, err
+		return server.NameEnquiry{}, err
 	}
-	out.BankName = in.Name
-	name, err := sw.NameEnquiry(ctx, code, nuban)
-	switch {
-	case err == nil:
-		out.Code, out.Message, out.AccountName = nip.OK, "Successful.", name
-	case errors.Is(err, nip.ErrUnavailable):
-		out.Code, out.Message = nip.Unavailable, in.Name+" is not available right now."
-	case errors.Is(err, nip.ErrInvalidAccount):
-		out.Code, out.Message = nip.InvalidAccount, "That is not a valid account number at "+in.Name+"."
-	case errors.Is(err, nip.ErrNoRecord):
-		out.Code, out.Message = nip.NoRecord, "No such account at "+in.Name+"."
-	default:
-		return out, err
-	}
-	return out, nil
+	return c.Enquire(ctx, code, nuban)
 }
 
 func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +61,7 @@ func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "bank_code and account_number are required.")
 		return
 	}
-	out, err := a.NameEnquiry(code, nuban)
+	out, err := a.NameEnquiry(r.Context(), code, nuban)
 	if err != nil {
 		a.log.Error("name enquiry", "err", err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS could not answer the name enquiry. Try again soon.")

@@ -12,7 +12,6 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
-	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
 var (
@@ -21,34 +20,6 @@ var (
 	nubanRe    = regexp.MustCompile(`^[0-9]{10}$`)
 	resolvedRe = regexp.MustCompile(`^[0-9]{2}$`)
 )
-
-func (s *Store) NameEnquiry(ctx context.Context, code, nuban string) (string, error) {
-	in, err := s.Institution(ctx, code)
-	if err != nil {
-		return "", err
-	}
-	if !nubanRe.MatchString(nuban) {
-		return "", fmt.Errorf("an account number has 10 digits: %w", nip.ErrInvalidAccount)
-	}
-	if in.Status != nip.StatusActive {
-		return "", fmt.Errorf("%s is %s: %w", in.Name, in.Status, nip.ErrUnavailable)
-	}
-	if !world.ValidNUBAN(in.NUBANCode, nuban) {
-		return "", fmt.Errorf("%s is not a valid account number at %s: %w", nuban, in.Name, nip.ErrInvalidAccount)
-	}
-	p := s.participant(in.ID)
-	if p == nil {
-		return "", fmt.Errorf("%s is offline: %w", in.Name, nip.ErrUnavailable)
-	}
-	name, err := p.NameEnquiry(ctx, nuban)
-	if errors.Is(err, nip.ErrInvalidAccount) || errors.Is(err, nip.ErrNoRecord) || errors.Is(err, nip.ErrUnavailable) {
-		return "", err
-	}
-	if err != nil {
-		return "", fmt.Errorf("name enquiry at %s: %w", in.Name, err)
-	}
-	return name, nil
-}
 
 const sessionCols = `session_id, from_code, to_code, from_nuban, to_nuban, amount_minor, narration, status, outcome, tsq_attempts, next_tsq_at, created_at, resolved_at, settlement_session, closure`
 
