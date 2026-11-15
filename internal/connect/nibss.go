@@ -16,7 +16,10 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-const nibssRetry = 10 * time.Second
+const (
+	nibssRetry     = 10 * time.Second
+	directoryRetry = 3 * time.Second
+)
 
 func openNIBSS(ctx context.Context, cfg *config.Config, ctl *ctlStore) (*nibss.Store, error) {
 	name := config.DatabaseName(cfg.Dir, setup.SystemNIBSS)
@@ -60,44 +63,71 @@ func (a *App) nibssStore() *nibss.Store {
 	}
 	a.nibss = s
 	a.mu.Unlock()
-	if err := a.syncDirectory(s); err != nil {
-		a.log.Error("NIBSS directory out of date", "err", err)
+	if err := a.refreshDirectory(context.Background()); err != nil {
+		a.log.Error("NIBSS directory not read", "err", err)
 	}
 	return s
 }
 
-func (a *App) syncDirectory(s *nibss.Store) error {
-	ctx := context.Background()
+func (a *App) syncDirectoryDue(ctx context.Context) {
+	a.mu.Lock()
+	s := a.nibss
+	due := s != nil && !a.dirSynced && a.clock.Real().Sub(a.dirTried) >= directoryRetry
+	if due {
+		a.dirTried = a.clock.Real()
+	}
+	a.mu.Unlock()
+	if !due {
+		return
+	}
+	if err := a.syncDirectory(ctx, s); err != nil {
+		a.logNIBSS("NIBSS directory out of date; retrying", err)
+		return
+	}
+	a.mu.Lock()
+	a.dirSynced = true
+	a.mu.Unlock()
+}
+
+func (a *App) logNIBSS(msg string, err error) {
+	var down *nibssDownError
+	if errors.As(err, &down) {
+		a.log.Warn(msg, "err", err)
+		return
+	}
+	a.log.Error(msg, "err", err)
+}
+
+func (a *App) syncDirectory(ctx context.Context, s *nibss.Store) error {
 	list, err := s.Directory(ctx)
 	if err != nil {
 		return fmt.Errorf("read the NIBSS directory: %w", err)
 	}
-	want := map[string]string{}
 	a.mu.Lock()
-	for _, b := range a.cfg.Banks {
-		want[b.ID] = memberStatus(b)
-	}
+	banks := slices.Clone(a.cfg.Banks)
 	a.mu.Unlock()
+	member := map[string]bool{}
+	var errs []error
+	for _, b := range banks {
+		member[b.ID] = true
+		errs = append(errs, a.registerMember(ctx, b))
+	}
 	for _, in := range list {
-		status, member := want[in.ID]
-		switch {
-		case in.Status == nip.StatusRemoved:
-		case !member:
-			for _, next := range []string{nip.StatusTerminating, nip.StatusRemoved} {
-				if in.Status == next {
-					continue
-				}
-				if err := s.SetStatus(ctx, in.ID, next); err != nil {
-					return fmt.Errorf("set NIBSS status of %s to %s: %w", in.ID, next, err)
-				}
+		if in.Status == nip.StatusRemoved || member[in.ID] {
+			continue
+		}
+		for _, next := range []string{nip.StatusTerminating, nip.StatusRemoved} {
+			if in.Status == next {
+				continue
 			}
-		case in.Status != status && in.Status != nip.StatusTerminating:
-			if err := s.SetStatus(ctx, in.ID, status); err != nil {
-				return fmt.Errorf("set NIBSS status of %s to %s: %w", in.ID, status, err)
+			if err := a.nibssCtl.setStatus(ctx, in.ID, next); err != nil {
+				errs = append(errs, fmt.Errorf("set NIBSS status of %s to %s: %w", in.ID, next, err))
+				break
 			}
 		}
 	}
-	return a.refreshDirectory(ctx)
+	errs = append(errs, a.refreshDirectory(ctx))
+	return errors.Join(errs...)
 }
 
 func (a *App) dropNIBSS(ctx context.Context) error {
@@ -127,17 +157,13 @@ func memberStatus(b *config.Bank) string {
 	return nip.StatusActive
 }
 
-func (a *App) registerMember(b *config.Bank) error {
-	s := a.nibssStore()
-	if s == nil {
-		return fmt.Errorf("register %s: the NIBSS directory is not open yet", b.ID)
-	}
-	ctx := context.Background()
-	if err := s.Register(ctx, nibss.Member{Institution: memberOf(b)}); err != nil {
+func (a *App) registerMember(ctx context.Context, b *config.Bank) error {
+	in, err := a.nibssCtl.register(ctx, b)
+	if err != nil {
 		return fmt.Errorf("register %s with NIBSS: %w", b.ID, err)
 	}
-	if in, err := s.Institution(ctx, b.NIPCode); err != nil || in.Status != nip.StatusTerminating {
-		if err := s.SetStatus(ctx, b.ID, memberStatus(b)); err != nil {
+	if in.Status != nip.StatusTerminating && in.Status != memberStatus(b) {
+		if err := a.nibssCtl.setStatus(ctx, b.ID, memberStatus(b)); err != nil {
 			return fmt.Errorf("set NIBSS status of %s: %w", b.ID, err)
 		}
 	}
@@ -167,13 +193,7 @@ func (a *App) attachMember(ls *ledgerSource) {
 }
 
 func (a *App) setMemberStatus(ctx context.Context, id, status string) error {
-	a.mu.Lock()
-	s := a.nibss
-	a.mu.Unlock()
-	if s == nil {
-		return nil
-	}
-	if err := s.SetStatus(ctx, id, status); err != nil {
+	if err := a.nibssCtl.setStatus(ctx, id, status); err != nil {
 		return fmt.Errorf("set NIBSS status of %s to %s: %w", id, status, err)
 	}
 	return a.refreshDirectory(ctx)
@@ -222,7 +242,7 @@ func (a *App) removeMember(ctx context.Context, id string) error {
 		if cur == status {
 			continue
 		}
-		if err := s.SetStatus(ctx, id, status); err != nil {
+		if err := a.nibssCtl.setStatus(ctx, id, status); err != nil {
 			return fmt.Errorf("set NIBSS status of %s to %s: %w", id, status, err)
 		}
 		cur = status

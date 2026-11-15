@@ -4,12 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
-	"github.com/evolutionlabs-core/beerus/internal/nibss/gateway"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
@@ -44,10 +44,6 @@ func (a *App) Serve(ctx context.Context) error {
 			return err
 		}
 	}
-	ntls, err := a.NIBSSTLS()
-	if err != nil {
-		return err
-	}
 	type srv struct {
 		s   *http.Server
 		tls *tls.Config
@@ -61,7 +57,6 @@ func (a *App) Serve(ctx context.Context) error {
 		{a.cfg.Connect.PartnerPort, a.PartnerHandler(), ptls},
 		{a.cfg.Connect.WidgetPort, a.WidgetHandler(), wtls},
 		{a.cfg.Connect.ControlPort, a.ControlHandler(), nil},
-		{a.cfg.Connect.NIBSSPort, gateway.New(a.listDirectory, a.log), ntls},
 	}
 	servers := []srv{}
 	for _, sp := range specs {
@@ -113,6 +108,16 @@ func (a *App) Serve(ctx context.Context) error {
 		a.Run(runCtx)
 		close(done)
 	}()
+	nibssDone := make(chan struct{})
+	go func() {
+		defer close(nibssDone)
+		if a.nibssProc == nil {
+			return
+		}
+		if err := a.nibssProc.Serve(runCtx); err != nil {
+			errc <- fmt.Errorf("serve NIBSS: %w", err)
+		}
+	}()
 	pushDone := make(chan struct{})
 	go func() {
 		defer close(pushDone)
@@ -134,6 +139,7 @@ func (a *App) Serve(ctx context.Context) error {
 	cancel()
 	<-done
 	<-pushDone
+	<-nibssDone
 	a.closeLedgers()
 	return serr
 }

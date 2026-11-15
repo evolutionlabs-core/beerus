@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -57,7 +58,7 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	}
 	a.lifeMu.Unlock()
 	if renamed || restate {
-		if err := a.registerMember(b); err != nil {
+		if err := a.registerMember(context.Background(), b); err != nil {
 			a.updateFailed(r.ID, err)
 			return
 		}

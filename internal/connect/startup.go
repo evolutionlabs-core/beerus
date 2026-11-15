@@ -216,6 +216,10 @@ func nibssPort(ln setup.LocalConnect, st setup.Status) (int, error) {
 	}
 	holders := map[int]string{ln.PartnerPort: "connect.partner_port", ln.WidgetPort: "connect.widget_port", ln.ControlPort: "connect.control_port", ln.HealthPort: "connect.health_port"}
 	for _, r := range st.Resources {
+		if r.Kind == setup.KindSystem {
+			holders[r.Allocated.Port] = r.ID + " control API"
+			continue
+		}
 		holders[r.Allocated.Port] = r.ID + " online banking"
 		holders[r.Allocated.APIPort] = r.ID + " open banking API"
 	}
@@ -353,6 +357,9 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 			RegistryID:   orDefault(spec.Connect.RegistryID, defaultRegistryID),
 			CACNumber:    orDefault(spec.Connect.CACNumber, defaultCACNumber),
 		},
+	}
+	if r := findResource(&st, setup.KindSystem, setup.SystemNIBSS); r != nil {
+		c.Connect.NIBSSControlPort = r.Allocated.Port
 	}
 	if len(spec.Holidays.Add)+len(spec.Holidays.Remove) > 0 {
 		c.Holidays = &config.Holidays{Add: spec.Holidays.Add, Remove: spec.Holidays.Remove}

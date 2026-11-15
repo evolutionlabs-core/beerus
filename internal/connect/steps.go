@@ -135,7 +135,12 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 	if err != nil {
 		st.Steps[i].Error = err.Error()
 		st.Attempts++
-		next := now.Add(backoff(st.Attempts))
+		delay := backoff(st.Attempts)
+		var down *nibssDownError
+		if errors.As(err, &down) {
+			delay = backoffFirst
+		}
+		next := now.Add(delay)
 		st.NextAttemptAt = &next
 	} else {
 		st.Steps[i].Done, st.Steps[i].Error = true, ""
@@ -218,7 +223,7 @@ func (a *App) provision(b *config.Bank) {
 	ok := a.step(st, config.StepAllocate, func() error {
 		return a.claimBank(b)
 	}) && a.step(st, config.StepDirectory, func() error {
-		return a.registerMember(b)
+		return a.registerMember(context.Background(), b)
 	}) && a.step(st, config.StepDatabase, func() error {
 		return store.Create(context.Background(), a.cfg.DatabaseURL, b.Database)
 	}) && a.step(st, config.StepLedgerSchema, func() error {
