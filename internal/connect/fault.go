@@ -6,17 +6,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
-
-type remoteFaults struct {
-	Data       []server.FaultView `json:"data"`
-	NextCursor string             `json:"next_cursor"`
-}
 
 func (a *App) faultSet(id string) *server.Faults {
 	a.mu.Lock()
@@ -35,14 +32,24 @@ func (a *App) AddFault(ctx context.Context, req server.FaultRequest) (server.Fau
 	if !ok {
 		return server.Fault{}, errNotFound
 	}
-	f, err := server.NewFault(req, a.clock.Now())
+	now := a.clock.Now()
+	f, err := server.NewFault(req, now)
 	if err != nil {
 		return server.Fault{}, err
 	}
 	f.Bank = req.Bank
-	if a.role != RoleCore {
+	switch {
+	case f.Kind == server.FaultDown:
+		f.ID = server.FaultID(fmt.Sprintf("%s|%s|%d", f.Bank, f.Kind, f.At.UnixNano()))
+		a.mu.Lock()
+		a.st.Faults = append(a.st.Faults, &f)
+		a.dirty()
+		a.mu.Unlock()
+		a.pokePush()
+		return f, nil
+	case a.role != RoleCore:
 		f.ID = server.FaultID(web.NewID("flt"))
-		a.faultSet(b.ID).Add(f, a.clock.Now())
+		a.faultSet(b.ID).Add(f, now)
 		return f, nil
 	}
 	req.Bank = ""
@@ -57,7 +64,34 @@ func faultOf(bank string, v server.FaultView) server.Fault {
 	return server.Fault{ID: v.ID, Kind: v.Kind, Bank: bank, Outcome: v.Outcome, Left: v.Left, Until: v.UntilAt, At: v.CreatedAt}
 }
 
+func (a *App) downFaults(id string) []server.Fault {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.clock.Now()
+	out := []server.Fault{}
+	for _, f := range a.st.Faults {
+		if f.Bank == id && f.Kind == server.FaultDown && f.Live(now) {
+			out = append(out, *f)
+		}
+	}
+	return out
+}
+
 func (a *App) Faults(ctx context.Context) ([]server.Fault, error) {
+	a.mu.Lock()
+	now := a.clock.Now()
+	out := []server.Fault{}
+	for _, f := range a.st.Faults {
+		if f.Live(now) {
+			out = append(out, *f)
+		}
+	}
+	a.mu.Unlock()
+	timeouts, err := a.timeoutFaults(ctx)
+	return append(out, timeouts...), err
+}
+
+func (a *App) timeoutFaults(ctx context.Context) ([]server.Fault, error) {
 	out := []server.Fault{}
 	var errs []error
 	for _, b := range a.bankList() {
@@ -71,7 +105,7 @@ func (a *App) Faults(ctx context.Context) ([]server.Fault, error) {
 		if !pushable(a.bankPhase(b.ID)) {
 			continue
 		}
-		list, err := a.bankFaults(ctx, b)
+		list, err := a.bankTimeouts(ctx, b)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("list faults of %s: %w", b.ID, err))
 			continue
@@ -81,7 +115,7 @@ func (a *App) Faults(ctx context.Context) ([]server.Fault, error) {
 	return out, errors.Join(errs...)
 }
 
-func (a *App) bankFaults(ctx context.Context, b *config.Bank) ([]server.Fault, error) {
+func (a *App) bankTimeouts(ctx context.Context, b *config.Bank) ([]server.Fault, error) {
 	out := []server.Fault{}
 	cursor := ""
 	for {
@@ -94,7 +128,9 @@ func (a *App) bankFaults(ctx context.Context, b *config.Bank) ([]server.Fault, e
 			return nil, err
 		}
 		for _, v := range page.Data {
-			out = append(out, faultOf(b.ID, v))
+			if v.Kind == server.FaultTimeout {
+				out = append(out, faultOf(b.ID, v))
+			}
 		}
 		if page.NextCursor == "" {
 			return out, nil
@@ -104,51 +140,92 @@ func (a *App) bankFaults(ctx context.Context, b *config.Bank) ([]server.Fault, e
 }
 
 func (a *App) ClearFaults(ctx context.Context, bank string) (int, error) {
-	n := 0
+	a.mu.Lock()
+	now := a.clock.Now()
+	cleared := 0
+	keep := a.st.Faults[:0]
+	for _, f := range a.st.Faults {
+		switch {
+		case !f.Live(now):
+		case bank == "" || f.Bank == bank:
+			cleared++
+		default:
+			keep = append(keep, f)
+		}
+	}
+	a.st.Faults = keep
+	a.dirty()
+	a.mu.Unlock()
+	a.pokePush()
 	var errs []error
 	for _, b := range a.bankList() {
 		if bank != "" && b.ID != bank {
 			continue
 		}
-		if a.role != RoleCore {
-			n += a.faultSet(b.ID).Clear(a.clock.Now())
-			continue
-		}
-		if !pushable(a.bankPhase(b.ID)) {
-			continue
-		}
-		var out struct {
-			Cleared int `json:"cleared"`
-		}
-		if _, err := a.link.Request(ctx, b.URL(), http.MethodDelete, "/v1/faults", nil, nil, &out); err != nil {
-			errs = append(errs, fmt.Errorf("clear faults of %s: %w", b.ID, err))
-			continue
-		}
-		n += out.Cleared
+		n, err := a.clearTimeouts(ctx, b)
+		cleared += n
+		errs = append(errs, err)
 	}
-	return n, errors.Join(errs...)
+	return cleared, errors.Join(errs...)
+}
+
+func (a *App) clearTimeouts(ctx context.Context, b *config.Bank) (int, error) {
+	if a.role != RoleCore {
+		return a.faultSet(b.ID).Clear(a.clock.Now()), nil
+	}
+	if !pushable(a.bankPhase(b.ID)) {
+		return 0, nil
+	}
+	held, err := a.bankTimeouts(ctx, b)
+	if err != nil {
+		return 0, fmt.Errorf("list faults of %s: %w", b.ID, err)
+	}
+	if len(held) == 0 {
+		return 0, nil
+	}
+	if _, err := a.link.Request(ctx, b.URL(), http.MethodDelete, "/v1/faults", nil, nil, nil); err != nil {
+		return 0, fmt.Errorf("clear faults of %s: %w", b.ID, err)
+	}
+	return len(held), nil
 }
 
 func (a *App) faultBanks(ctx context.Context, kind string) map[string]bool {
 	out := map[string]bool{}
-	list, err := a.Faults(ctx)
+	a.mu.Lock()
+	now := a.clock.Now()
+	for _, f := range a.st.Faults {
+		if f.Live(now) && (kind == "" || f.Kind == kind) {
+			out[f.Bank] = true
+		}
+	}
+	a.mu.Unlock()
+	if kind == server.FaultDown {
+		return out
+	}
+	timeouts, err := a.timeoutFaults(ctx)
 	if err != nil {
 		a.log.Warn("faults not all listed", "err", err)
 	}
-	for _, f := range list {
-		if kind == "" || f.Kind == kind {
-			out[f.Bank] = true
-		}
+	for _, f := range timeouts {
+		out[f.Bank] = true
 	}
 	return out
 }
 
+func (a *App) bankDown(id string) bool {
+	return len(a.downFaults(id)) > 0
+}
+
 func (a *App) bankRefusing(id string) bool {
-	return a.bankPhase(id) == PhaseSuspended || a.faultSet(id).Down(a.clock.Now())
+	return a.bankPhase(id) == PhaseSuspended || a.bankDown(id)
 }
 
 func (a *App) takeTimeout(id string) (string, bool) {
 	return a.faultSet(id).TakeTimeout()
+}
+
+func (a *App) pruneFaultsLocked(now time.Time) {
+	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *server.Fault) bool { return !f.Live(now) })
 }
 
 func (a *App) ctlFaults(w http.ResponseWriter, r *http.Request) {

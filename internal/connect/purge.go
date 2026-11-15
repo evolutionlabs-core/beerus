@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -139,6 +140,7 @@ func (a *App) dropBankRows(id string) {
 		}
 	}
 	a.st.Revokes = slices.DeleteFunc(a.st.Revokes, func(p PendingRevoke) bool { return p.Bank == id })
+	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *server.Fault) bool { return f.Bank == id })
 	a.dirty()
 }
 

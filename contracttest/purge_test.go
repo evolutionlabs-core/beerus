@@ -52,9 +52,11 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	conn := s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
 	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "abuja-digital", "outcome": "credited", "count": 1})
-	if sent, _ := s.payTry("bank-a", home.Accounts[0], "abuja-digital", target, "100", nil); sent["status"] == "success" {
+	sent, _ := s.payTry("bank-a", home.Accounts[0], "abuja-digital", target, "100", nil)
+	if sent["status"] != "pending" {
 		t.Fatalf("the timeout fault did not leave the transfer pending: %v", sent)
 	}
+	s.ctl("POST", "/nip/sessions/"+fmt.Sprint(sent["session_id"])+"/status", nil)
 	databases := func() []string {
 		names, err := store.List(context.Background(), s.cfg.DatabaseURL, bank.Database)
 		if err != nil {

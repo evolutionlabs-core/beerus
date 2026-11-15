@@ -39,7 +39,14 @@ func bankDirConfig(t *testing.T, banks ...*config.Bank) *config.Config {
 }
 
 func TestWishGeneration(t *testing.T) {
-	base := wishGeneration("wld_1", bankWish{phase: PhaseActive, reason: "ok"})
+	down := func(ids ...string) []server.Fault {
+		out := []server.Fault{}
+		for _, id := range ids {
+			out = append(out, server.Fault{ID: id, Kind: server.FaultDown})
+		}
+		return out
+	}
+	base := wishGeneration("wld_1", bankWish{phase: PhaseActive, reason: "ok", downs: down("flt_a", "flt_b")})
 	if base <= 0 || base >= 1<<62 {
 		t.Fatalf("generation %d is not a positive 62 bit number", base)
 	}
@@ -49,12 +56,15 @@ func TestWishGeneration(t *testing.T) {
 		wish  bankWish
 		same  bool
 	}{
-		{"same wish", "wld_1", bankWish{phase: PhaseActive, reason: "ok"}, true},
-		{"another world", "wld_2", bankWish{phase: PhaseActive, reason: "ok"}, false},
-		{"another phase", "wld_1", bankWish{phase: PhaseSuspended, reason: "ok"}, false},
-		{"another reason", "wld_1", bankWish{phase: PhaseActive, reason: "later"}, false},
-		{"another config", "wld_1", bankWish{phase: PhaseActive, reason: "ok", config: "c2"}, false},
-		{"fields run together", "wld_1", bankWish{phase: PhaseActive + "o", reason: "k"}, false},
+		{"same wish", "wld_1", bankWish{phase: PhaseActive, reason: "ok", downs: down("flt_a", "flt_b")}, true},
+		{"faults in another order", "wld_1", bankWish{phase: PhaseActive, reason: "ok", downs: down("flt_b", "flt_a")}, true},
+		{"another world", "wld_2", bankWish{phase: PhaseActive, reason: "ok", downs: down("flt_a", "flt_b")}, false},
+		{"another phase", "wld_1", bankWish{phase: PhaseSuspended, reason: "ok", downs: down("flt_a", "flt_b")}, false},
+		{"another reason", "wld_1", bankWish{phase: PhaseActive, reason: "later", downs: down("flt_a", "flt_b")}, false},
+		{"one fault fewer", "wld_1", bankWish{phase: PhaseActive, reason: "ok", downs: down("flt_a")}, false},
+		{"no faults", "wld_1", bankWish{phase: PhaseActive, reason: "ok"}, false},
+		{"another config", "wld_1", bankWish{phase: PhaseActive, reason: "ok", config: "c2", downs: down("flt_a", "flt_b")}, false},
+		{"fields run together", "wld_1", bankWish{phase: PhaseActive + "o", reason: "k", downs: down("flt_a", "flt_b")}, false},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
@@ -76,6 +86,8 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /v1/status":
 			return stubReply(200, `{"phase":"active","observed_generation":0}`), nil
+		case "GET /v1/faults":
+			return stubReply(200, `{"data":[]}`), nil
 		case "PUT /v1/phase":
 			var body server.PhaseRequest
 			raw, _ := io.ReadAll(r.Body)

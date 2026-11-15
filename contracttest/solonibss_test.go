@@ -137,9 +137,10 @@ func startSoloNIBSS(t *testing.T, timing soloTiming, withBanks ...string) (*solo
 	clientDir := t.TempDir()
 	copyBankFiles(t, stage, clientDir, "ca/root.crt")
 	members := map[string]*soloMember{}
-	for i, id := range append(slices.Clone(withBanks), "bank-z") {
+	for _, id := range []string{"bank-a", "bank-b", "bank-z"} {
+		i := slices.Index(withBanks, id)
 		b := &config.Bank{ID: id, Name: id, Type: "commercial", Port: 1, APIPort: 2, Database: config.DatabaseName(stage, id)}
-		if i < len(withBanks) {
+		if i >= 0 {
 			b = soloBankConfig(stage, id, soloBanks[id].name, soloBanks[id].code, soloBanks[id].nuban, ports[2+2*i:4+2*i])
 		}
 		if err := cfg.EnsureBankDir(b, now); err != nil {
@@ -147,7 +148,7 @@ func startSoloNIBSS(t *testing.T, timing soloTiming, withBanks ...string) (*solo
 		}
 		copyBankFiles(t, stage, clientDir, "banks/"+id+"/client.crt", "banks/"+id+"/client.key")
 		clients[id] = nibssClient(t, clientDir, filepath.Join("banks", id))
-		if i < len(withBanks) {
+		if i >= 0 {
 			books, account := seedSoloBank(t, ctx, dbURL, stage, b, now)
 			members[id] = &soloMember{bank: b, nuban: account.NUBAN, books: books}
 		}

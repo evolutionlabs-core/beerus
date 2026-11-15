@@ -355,6 +355,7 @@ func (a *App) sweep() {
 			delete(a.st.Idem, k)
 		}
 	}
+	a.pruneFaultsLocked(a.clock.Now())
 	for _, f := range a.faults {
 		f.Prune(a.clock.Now())
 	}
