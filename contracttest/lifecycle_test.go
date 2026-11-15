@@ -280,19 +280,23 @@ func TestBankRepairsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.advance("24h")
-	deadline := time.Now().Add(30 * time.Second)
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
 	for {
 		st := s.waitPhase("bank-b", connect.PhaseActive, 30*time.Second)
 		rebuilt, _ := time.Parse(time.RFC3339Nano, fmt.Sprint(st["steps"].([]any)[2].(map[string]any)["at"]))
 		if rebuilt.After(dropped) {
 			break
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-timeout.C:
 			t.Fatalf("bank-b was not rebuilt: %v", st)
+		case <-tick.C:
 		}
-		time.Sleep(200 * time.Millisecond)
 	}
-	checkProvisioned(t, storedBank(t, s.cfg.Dir, "bank-b"))
+	checkProvisioned(t, activeBank(t, s.cfg.Dir, "bank-b"))
 	s.syncNow()
 	if r := s.call("GET", "/v1/accounts/"+acct+"/balance", nil); r.Status != 409 || r.Code() != "reauth_required" {
 		t.Fatalf("consents live in the bank database, so a rebuilt bank should ask for consent again: %d %s", r.Status, r.Body)
@@ -312,7 +316,7 @@ func TestBankRepairsDrift(t *testing.T) {
 	if _, err := db.Exec(context.Background(), "DROP DATABASE "+s.cfg.Bank("bank-b").Database+" WITH (FORCE)"); err != nil {
 		t.Fatal(err)
 	}
-	deadline = time.Now().Add(60 * time.Second)
+	timeout.Reset(60 * time.Second)
 	for {
 		st := s.waitPhase("bank-b", connect.PhaseTerminating, 30*time.Second)
 		if ne := s.ctl("GET", "/nip/name-enquiry?bank_code="+s.cfg.Bank("bank-b").NIPCode+"&account_number="+p.Accounts[0], nil); ne["response_code"] != "91" {
@@ -322,10 +326,11 @@ func TestBankRepairsDrift(t *testing.T) {
 		if rebuilt.After(dropped) {
 			break
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-timeout.C:
 			t.Fatalf("bank-b was not rebuilt while terminating: %v", st)
+		case <-tick.C:
 		}
-		time.Sleep(200 * time.Millisecond)
 	}
 	checkSettled(t, s.app)
 }
