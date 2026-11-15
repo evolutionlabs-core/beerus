@@ -123,8 +123,7 @@ func accountInfo(acc ledger.Account) openbanking.AccountInfo {
 	return openbanking.AccountInfo{ID: acc.NUBAN, Name: acc.Name, Type: acc.Product, Currency: acc.Currency}
 }
 
-func (d bankData) Accounts(customer string) ([]openbanking.AccountInfo, error) {
-	ctx := context.Background()
+func (d bankData) Accounts(ctx context.Context, customer string) ([]openbanking.AccountInfo, error) {
 	l, err := d.ledger()
 	if err != nil {
 		return nil, err
@@ -143,14 +142,12 @@ func (d bankData) Accounts(customer string) ([]openbanking.AccountInfo, error) {
 	return out, nil
 }
 
-func (d bankData) Account(nuban string) (openbanking.AccountInfo, error) {
-	ctx := context.Background()
+func (d bankData) Account(ctx context.Context, nuban string) (openbanking.AccountInfo, error) {
 	acc, _, err := d.find(ctx, nuban)
 	return accountInfo(acc), err
 }
 
-func (d bankData) Balance(nuban string) (openbanking.Balance, error) {
-	ctx := context.Background()
+func (d bankData) Balance(ctx context.Context, nuban string) (openbanking.Balance, error) {
 	acc, l, err := d.find(ctx, nuban)
 	if err != nil {
 		return openbanking.Balance{}, err
@@ -162,8 +159,7 @@ func (d bankData) Balance(nuban string) (openbanking.Balance, error) {
 	return openbanking.Balance{Ledger: bal, Available: bal, Currency: acc.Currency}, nil
 }
 
-func (d bankData) BalanceOn(nuban string, day clock.Date) (int64, error) {
-	ctx := context.Background()
+func (d bankData) BalanceOn(ctx context.Context, nuban string, day clock.Date) (int64, error) {
 	_, l, err := d.find(ctx, nuban)
 	if err != nil {
 		return 0, err
@@ -171,8 +167,7 @@ func (d bankData) BalanceOn(nuban string, day clock.Date) (int64, error) {
 	return l.EndOfDay(ctx, nuban, day)
 }
 
-func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking.Txn, error) {
-	ctx := context.Background()
+func (d bankData) Transactions(ctx context.Context, nuban string, from, to clock.Date) ([]openbanking.Txn, error) {
 	_, l, err := d.find(ctx, nuban)
 	if err != nil {
 		return nil, err
@@ -195,8 +190,8 @@ func (d bankData) Transactions(nuban string, from, to clock.Date) ([]openbanking
 	return out, nil
 }
 
-func (d bankData) Ping() error {
-	ctx, cancel := context.WithTimeout(context.Background(), dataPingTimeout)
+func (d bankData) Ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, dataPingTimeout)
 	defer cancel()
 	l, err := d.ledger()
 	if err != nil {

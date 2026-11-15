@@ -36,23 +36,23 @@ func (r fakeRegistry) ClientByCert(cn string) (*Client, bool) {
 
 type fakeData struct{}
 
-func (fakeData) Accounts(customer string) ([]AccountInfo, error) {
+func (fakeData) Accounts(_ context.Context, customer string) ([]AccountInfo, error) {
 	return []AccountInfo{{ID: "0123456789", Name: "Current", Type: "current", Currency: "NGN"}, {ID: "0123456790", Name: "Savings", Type: "savings", Currency: "NGN"}}, nil
 }
 
-func (fakeData) Account(id string) (AccountInfo, error) {
+func (fakeData) Account(_ context.Context, id string) (AccountInfo, error) {
 	return AccountInfo{ID: id, Name: "Current", Type: "current", Currency: "NGN"}, nil
 }
 
-func (fakeData) Balance(string) (Balance, error) {
+func (fakeData) Balance(context.Context, string) (Balance, error) {
 	return Balance{Ledger: 5000, Available: 4000, Currency: "NGN"}, nil
 }
 
-func (fakeData) BalanceOn(string, clock.Date) (int64, error) {
+func (fakeData) BalanceOn(context.Context, string, clock.Date) (int64, error) {
 	return 4200, nil
 }
 
-func (fakeData) Transactions(string, clock.Date, clock.Date) ([]Txn, error) {
+func (fakeData) Transactions(context.Context, string, clock.Date, clock.Date) ([]Txn, error) {
 	d, _ := clock.ParseDate("2026-01-05")
 	out := []Txn{}
 	for i := 0; i < 5; i++ {
@@ -61,7 +61,7 @@ func (fakeData) Transactions(string, clock.Date, clock.Date) ([]Txn, error) {
 	return out, nil
 }
 
-func (fakeData) Ping() error {
+func (fakeData) Ping(context.Context) error {
 	return nil
 }
 

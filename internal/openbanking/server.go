@@ -248,7 +248,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := s.caller(w, r); !ok {
 		return
 	}
-	if err := s.cfg.Data.Ping(); err != nil {
+	if err := s.cfg.Data.Ping(r.Context()); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "down"})
 		return
 	}
@@ -544,7 +544,7 @@ func (s *Server) Approve(ctx context.Context, requestURI, customer string, accou
 	if !ok {
 		return "", ErrInvalidRequest
 	}
-	mine, err := s.cfg.Data.Accounts(customer)
+	mine, err := s.cfg.Data.Accounts(ctx, customer)
 	if err != nil {
 		return "", err
 	}

@@ -122,7 +122,7 @@ func (s *Server) account(w http.ResponseWriter, r *http.Request, g granted) (Acc
 		fail(w, http.StatusForbidden, "account_not_consented", "The customer did not share this account.")
 		return AccountInfo{}, false
 	}
-	info, err := s.cfg.Data.Account(id)
+	info, err := s.cfg.Data.Account(r.Context(), id)
 	if err != nil {
 		fail(w, http.StatusNotFound, "account_not_found", "No such account.")
 		return AccountInfo{}, false
@@ -133,7 +133,7 @@ func (s *Server) account(w http.ResponseWriter, r *http.Request, g granted) (Acc
 func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request, g granted) {
 	out := []AccountInfo{}
 	for _, id := range g.consent.Accounts {
-		if info, err := s.cfg.Data.Account(id); err == nil {
+		if info, err := s.cfg.Data.Account(r.Context(), id); err == nil {
 			out = append(out, info)
 		}
 	}
@@ -170,7 +170,7 @@ func (s *Server) getBalances(w http.ResponseWriter, r *http.Request, g granted) 
 			fail(w, http.StatusBadRequest, "invalid_request", "as_of must be a past date inside the bank's history, in YYYY-MM-DD form.")
 			return
 		}
-		ledger, err := s.cfg.Data.BalanceOn(info.ID, d)
+		ledger, err := s.cfg.Data.BalanceOn(r.Context(), info.ID, d)
 		if err != nil {
 			fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
 			return
@@ -181,7 +181,7 @@ func (s *Server) getBalances(w http.ResponseWriter, r *http.Request, g granted) 
 		writeJSON(w, http.StatusOK, map[string]any{"account_id": info.ID, "as_of": d.String(), "ledger_balance": money(ledger, info.Currency)})
 		return
 	}
-	b, err := s.cfg.Data.Balance(info.ID)
+	b, err := s.cfg.Data.Balance(r.Context(), info.ID)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
 		return
@@ -276,7 +276,7 @@ func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, g grant
 		}
 		after = &c
 	}
-	rows, err := s.cfg.Data.Transactions(info.ID, from, to)
+	rows, err := s.cfg.Data.Transactions(r.Context(), info.ID, from, to)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
 		return

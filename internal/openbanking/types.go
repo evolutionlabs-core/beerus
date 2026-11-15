@@ -166,10 +166,10 @@ type Counterparty struct {
 }
 
 type Data interface {
-	Accounts(customer string) ([]AccountInfo, error)
-	Account(nuban string) (AccountInfo, error)
-	Balance(nuban string) (Balance, error)
-	BalanceOn(nuban string, d clock.Date) (int64, error)
-	Transactions(nuban string, from, to clock.Date) ([]Txn, error)
-	Ping() error
+	Accounts(ctx context.Context, customer string) ([]AccountInfo, error)
+	Account(ctx context.Context, nuban string) (AccountInfo, error)
+	Balance(ctx context.Context, nuban string) (Balance, error)
+	BalanceOn(ctx context.Context, nuban string, d clock.Date) (int64, error)
+	Transactions(ctx context.Context, nuban string, from, to clock.Date) ([]Txn, error)
+	Ping(ctx context.Context) error
 }

@@ -1,6 +1,7 @@
 package site
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -89,8 +90,8 @@ type consentChoice struct {
 	Checked        bool
 }
 
-func (s *site) renderConsent(w http.ResponseWriter, sess *session, status int, req *openbanking.Request, errMsg string) {
-	mine, err := s.Open.Data().Accounts(sess.Customer)
+func (s *site) renderConsent(ctx context.Context, w http.ResponseWriter, sess *session, status int, req *openbanking.Request, errMsg string) {
+	mine, err := s.Open.Data().Accounts(ctx, sess.Customer)
 	if err != nil {
 		s.Log.Error("consent page", "bank", s.id, "err", err)
 		http.Error(w, "Something went wrong at the bank. Try again soon.", http.StatusInternalServerError)
@@ -127,7 +128,7 @@ func (s *site) consentPage(w http.ResponseWriter, r *http.Request) {
 	if req == nil {
 		return
 	}
-	s.renderConsent(w, sess, http.StatusOK, req, "")
+	s.renderConsent(r.Context(), w, sess, http.StatusOK, req, "")
 }
 
 func (s *site) consentSubmit(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +149,7 @@ func (s *site) consentSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case errors.Is(err, openbanking.ErrNoAccounts):
-		s.renderConsent(w, sess, http.StatusBadRequest, req, "Choose at least one account.")
+		s.renderConsent(r.Context(), w, sess, http.StatusBadRequest, req, "Choose at least one account.")
 		return
 	case err != nil:
 		s.oauthError(w, sess, http.StatusBadRequest, openbanking.ErrInvalidRequest.Error())
