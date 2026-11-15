@@ -3,10 +3,8 @@ package server
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -29,15 +27,6 @@ const (
 type directoryAnswer struct {
 	Data       []nip.Institution `json:"data"`
 	NextCursor string            `json:"next_cursor"`
-}
-
-type directoryError struct {
-	status int
-	code   string
-}
-
-func (e *directoryError) Error() string {
-	return fmt.Sprintf("NIBSS answered %d %s", e.status, e.code)
 }
 
 func (s *Server) Directory() []*config.Bank {
@@ -80,7 +69,7 @@ func (s *Server) directoryClient() (*http.Client, error) {
 	return s.dirClient, nil
 }
 
-func (s *Server) directoryURL(cursor string) (string, error) {
+func (s *Server) nibssBase() (string, error) {
 	core, err := url.Parse(s.coreURL)
 	if err != nil || core.Hostname() == "" {
 		return "", fmt.Errorf("core URL %q has no host", s.coreURL)
@@ -88,49 +77,17 @@ func (s *Server) directoryURL(cursor string) (string, error) {
 	if s.nibssPort == 0 {
 		return "", fmt.Errorf("%s sets no nibss_port", config.BankFilePath(s.dir, s.id))
 	}
+	return "https://" + net.JoinHostPort(core.Hostname(), strconv.Itoa(s.nibssPort)), nil
+}
+
+func (s *Server) directoryFetch(ctx context.Context, c NIBSSClient, cursor string) (directoryAnswer, error) {
+	var page directoryAnswer
 	q := url.Values{"limit": {strconv.Itoa(directoryPage)}}
 	if cursor != "" {
 		q.Set("cursor", cursor)
 	}
-	host := net.JoinHostPort(core.Hostname(), strconv.Itoa(s.nibssPort))
-	return "https://" + host + "/v1/banks?" + q.Encode(), nil
-}
-
-func (s *Server) directoryFetch(ctx context.Context, client *http.Client, cursor string) (directoryAnswer, error) {
-	var page directoryAnswer
-	target, err := s.directoryURL(cursor)
-	if err != nil {
-		return page, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return page, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return page, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxPeerBody+1))
-	if err != nil {
-		return page, fmt.Errorf("read the directory answer: %w", err)
-	}
-	if len(raw) > MaxPeerBody {
-		return page, fmt.Errorf("the directory answer is larger than %d MiB", MaxPeerBody>>20)
-	}
-	if resp.StatusCode != http.StatusOK {
-		var e struct {
-			Error struct {
-				Code string `json:"code"`
-			} `json:"error"`
-		}
-		_ = json.Unmarshal(raw, &e)
-		return page, &directoryError{status: resp.StatusCode, code: e.Error.Code}
-	}
-	if err := json.Unmarshal(raw, &page); err != nil {
-		return page, fmt.Errorf("decode the directory answer: %w", err)
-	}
-	return page, nil
+	_, err := c.Do(ctx, http.MethodGet, "/v1/banks", q, nil, &page)
+	return page, err
 }
 
 func (s *Server) RefreshBanks(ctx context.Context) error {
@@ -147,14 +104,14 @@ func (s *Server) RefreshBanks(ctx context.Context) error {
 }
 
 func (s *Server) fetchDirectory(ctx context.Context) error {
-	client, err := s.directoryClient()
+	c, err := s.nibss()
 	if err != nil {
 		return err
 	}
-	banks, err := s.directoryPages(ctx, client)
-	var bad *directoryError
-	if errors.As(err, &bad) && bad.code == "invalid_cursor" {
-		banks, err = s.directoryPages(ctx, client)
+	banks, err := s.directoryPages(ctx, c)
+	var bad *PeerError
+	if errors.As(err, &bad) && bad.Code == "invalid_cursor" {
+		banks, err = s.directoryPages(ctx, c)
 	}
 	if err != nil {
 		return err
@@ -165,11 +122,11 @@ func (s *Server) fetchDirectory(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) directoryPages(ctx context.Context, client *http.Client) ([]*config.Bank, error) {
+func (s *Server) directoryPages(ctx context.Context, c NIBSSClient) ([]*config.Bank, error) {
 	banks := []*config.Bank{}
 	cursor := ""
 	for {
-		page, err := s.directoryFetch(ctx, client, cursor)
+		page, err := s.directoryFetch(ctx, c, cursor)
 		if err != nil {
 			return nil, err
 		}
