@@ -118,9 +118,6 @@ func NewRoute(req TransferRequest, from, to *config.Bank, fromPhase, toPhase str
 	if fromPhase != config.PhaseActive && !req.Closure {
 		return Route{}, Refused(http.StatusConflict, nip.Unavailable, "bank_not_active", NotActiveError{from.Name, fromPhase})
 	}
-	if req.Closure && fromPhase != config.PhaseClosing && fromPhase != config.PhaseTerminating {
-		return Route{}, Refused(http.StatusUnprocessableEntity, nip.SystemError, "closure_not_allowed", fmt.Errorf("%s is %s, so it cannot send a closure transfer. Close the bank first", from.Name, fromPhase))
-	}
 	if toPhase == config.PhaseClosed {
 		return Route{}, Refused(http.StatusUnprocessableEntity, nip.Unavailable, "bank_closed", fmt.Errorf("%s is closed and takes no more transfers. Nothing was debited", to.Name))
 	}

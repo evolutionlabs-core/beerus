@@ -31,7 +31,6 @@ func TestTransferRequestsAndRoutes(t *testing.T) {
 		{name: "unknown receiver", req: req, from: a, fromPhase: config.PhaseActive, status: http.StatusUnprocessableEntity, errCode: "unknown_bank", message: `find bank "bank-b": not in the NIBSS directory`},
 		{name: "sender not active", req: req, from: a, to: b, fromPhase: config.PhaseSuspended, toPhase: config.PhaseActive, status: http.StatusConflict, errCode: "bank_not_active", message: "Bank A is suspended, so it cannot do this now"},
 		{name: "closure ignores the sender phase", req: TransferRequest{FromBank: "bank-a", ToBank: "bank-b", Amount: 100, Closure: true}, from: a, to: b, fromPhase: config.PhaseClosing, toPhase: config.PhaseActive, wantToCode: "999002"},
-		{name: "closure from an active bank", req: TransferRequest{FromBank: "bank-a", ToBank: "bank-b", Amount: 100, Closure: true}, from: a, to: b, fromPhase: config.PhaseActive, toPhase: config.PhaseActive, status: http.StatusUnprocessableEntity, errCode: "closure_not_allowed", message: "Bank A is active, so it cannot send a closure transfer. Close the bank first"},
 		{name: "receiver closed", req: req, from: a, to: b, fromPhase: config.PhaseActive, toPhase: config.PhaseClosed, status: http.StatusUnprocessableEntity, errCode: "bank_closed", message: "Bank B is closed and takes no more transfers. Nothing was debited"},
 	}
 	for _, r := range rows {

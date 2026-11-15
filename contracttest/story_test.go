@@ -267,8 +267,8 @@ func TestStory(t *testing.T) {
 		t.Fatalf("the pending transfer names two sessions: %v", pending)
 	}
 	sh.expect("beerus fault list", `No faults\.\n`)
-	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 0\n\}\n`)
 	sh.expect("beerus nip status "+pending[0], `Session `+pending[0]+`: was pending; now success at `+hm+` WAT\nAmount ₦1,000\.00 from `+nubA+` \(bank code 000001\) to `+nubAdaB+` \(bank code 000002\), started at `+hm+` WAT\.\n`)
+	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 0\n\}\n`)
 	sh.expect("beerus nip settle-now", `Settled 1 session at `+hm+` WAT\.\n`)
 	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 1\n\}\n`)
 	sh.expect("beerus nip status "+first, `Session `+first+`: success at `+hm+` WAT\nAmount ₦6,000\.00 from `+nubA+` \(bank code 000001\) to `+nubChidi+` \(bank code 000002\), started at `+hm+` WAT\.\nSettled in settlement session `+settleAt+`\.\n`)
@@ -294,6 +294,7 @@ func TestStory(t *testing.T) {
 	sh.expect("beerus fault timeout --bank bank-b --outcome credited", `Fault flt_\w+ on bank-b: the next transfer times out \(outcome credited\)\.\n`)
 	late := sh.expect("beerus transfer --from "+nubA+" --to "+nubAdaB+" --to-bank bank-b --amount 300", `Sending ₦300\.00 to Adaeze Okafor at Bank B\.\nSession (\d+): pending\. Beerus will check with NIBSS at `+hm+` WAT\. Run beerus nip status \d+\.\nNo charges\. Total debit ₦300\.00\. Balance ₦486,689\.25\.\n`)[0]
 
+	sh.expect("beerus nip status "+late, `Session `+late+`: was pending; now success at `+hm+` WAT\nAmount ₦300\.00 from `+nubA+` \(bank code 000001\) to `+nubAdaB+` \(bank code 000002\), started at `+hm+` WAT\.\n`)
 	dropBank(t, dir, "bank-b")
 	if got := c.fails("apply"); got != "beerus: The plan removes bank-b. Nothing was changed. Run again with --prune to remove it." {
 		t.Errorf("removal without --prune: %q", got)
@@ -326,7 +327,6 @@ func TestStory(t *testing.T) {
 		t.Errorf("re-adding bank-b while it is terminating: %q", got)
 	}
 
-	sh.expect("beerus nip status "+late, `Session `+late+`: was pending; now success at `+hm+` WAT\nAmount ₦300\.00 from `+nubA+` \(bank code 000001\) to `+nubAdaB+` \(bank code 000002\), started at `+hm+` WAT\.\n`)
 	sh.expect("beerus nip settle-now", `Settled 1 session at `+hm+` WAT\.\n`)
 	moneyDecision := `bank bank-b: MoneyDecisionNeeded: Bank B holds ₦9,300.00 for 2 customers. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.`
 	waitFor(t, "the money decision to be asked", func() bool { return strings.Contains(c.ok("get", "banks"), moneyDecision) })
