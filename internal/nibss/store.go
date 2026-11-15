@@ -179,6 +179,17 @@ func (s *Store) Member(ctx context.Context, id string) (Member, error) {
 	return m, nil
 }
 
+func (s *Store) MemberAt(ctx context.Context, code string) (Member, error) {
+	m, err := scanMember(s.pool.QueryRow(ctx, `SELECT `+memberCols+` FROM institutions WHERE nip_code = $1`, code))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Member{}, fmt.Errorf("bank code %s is %w", code, nip.ErrUnknownInstitution)
+	}
+	if err != nil {
+		return Member{}, fmt.Errorf("look up institution %s: %w", code, err)
+	}
+	return m, nil
+}
+
 func (s *Store) Admits(ctx context.Context, identity string) (bool, error) {
 	var ok bool
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM institutions WHERE certificate_identity = $1 AND status <> 'removed')`, identity).Scan(&ok)

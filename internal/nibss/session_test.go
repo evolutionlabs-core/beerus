@@ -3,6 +3,7 @@ package nibss
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -18,7 +19,17 @@ func sessionStore(t *testing.T) *Store {
 	s := testStore(t)
 	register(t, s, "bank-a", "Bank A", "999001", "901")
 	register(t, s, "bank-b", "Bank B", "999002", "902")
+	for _, id := range []string{"bank-a", "bank-b"} {
+		if err := s.SetLimits(context.Background(), id, Limits{NetDebitCap: 100_000_000}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return s
+}
+
+func begin(ctx context.Context, s *Store, x Session) (Session, error) {
+	got, _, err := s.Begin(ctx, x)
+	return got, err
 }
 
 func transfer(id, to string, at time.Time) Session {
@@ -32,21 +43,21 @@ func TestSessionSuccess(t *testing.T) {
 	s := sessionStore(t)
 	x := transfer("s1", "999002", t0)
 	x.NextTSQAt = ptr(t0.Add(2 * time.Minute))
-	got, err := s.Begin(ctx, x)
+	got, err := begin(ctx, s, x)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Status != SessionPending || got.Outcome != "" || got.ResolvedAt != nil || !got.CreatedAt.Equal(t0) || !got.NextTSQAt.Equal(t0.Add(2*time.Minute)) {
 		t.Fatalf("begin: %+v", got)
 	}
-	again, err := s.Begin(ctx, transfer("s1", "999002", t0.Add(time.Hour)))
+	again, err := begin(ctx, s, transfer("s1", "999002", t0.Add(time.Hour)))
 	if err != nil || again.Status != SessionPending || !again.CreatedAt.Equal(t0) {
 		t.Fatalf("resend: %+v, %v", again, err)
 	}
 	changed := transfer("s1", "999002", t0)
 	changed.Amount++
-	_, err = s.Begin(ctx, changed)
-	wantErr(t, err, "session s1: session id reused with different details")
+	_, err = begin(ctx, s, changed)
+	wantErr(t, err, "session s1: session id reused with different amount_minor")
 
 	q, err := s.TSQ(ctx, "s1", t0.Add(4*time.Minute))
 	if err != nil || q.TSQAttempts != 1 || q.Status != SessionPending || !q.NextTSQAt.Equal(t0.Add(4*time.Minute)) {
@@ -69,7 +80,7 @@ func TestSessionSuccess(t *testing.T) {
 func TestSessionFailureThenReversal(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
-	if _, err := s.Begin(ctx, transfer("s2", "999002", t0)); err != nil {
+	if _, err := begin(ctx, s, transfer("s2", "999002", t0)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Resolve(ctx, "s2", "91", nip.OutcomeFailed, t0); err != nil {
@@ -89,7 +100,7 @@ func TestSessionFailureThenReversal(t *testing.T) {
 func TestResolveRejectsBadInput(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
-	if _, err := s.Begin(ctx, transfer("s3", "999002", t0)); err != nil {
+	if _, err := begin(ctx, s, transfer("s3", "999002", t0)); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
@@ -143,7 +154,7 @@ func TestBeginRejectsBadInput(t *testing.T) {
 		{mod(func(x *Session) { x.FromCode = "999003" }), "bank code 999003 is not in the NIBSS directory"},
 	}
 	for _, c := range cases {
-		_, err := s.Begin(ctx, c.x)
+		_, err := begin(ctx, s, c.x)
 		wantErr(t, err, c.want)
 	}
 }
@@ -151,41 +162,123 @@ func TestBeginRejectsBadInput(t *testing.T) {
 func TestBeginStatusGates(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
-	if err := s.SetStatus(ctx, "bank-b", nip.StatusSuspended); err != nil {
+	rows := []struct {
+		name    string
+		prepare func()
+		id      string
+		from    string
+		to      string
+		closure bool
+		status  string
+		outcome string
+		err     string
+	}{
+		{name: "to suspended", prepare: func() { setStatus(t, s, "bank-b", nip.StatusSuspended) }, id: "g1", from: "999001", to: "999002", status: "91", outcome: "failed"},
+		{name: "both active", prepare: func() { setStatus(t, s, "bank-b", nip.StatusActive) }, id: "g2", from: "999001", to: "999002", status: SessionPending},
+		{name: "closure from active", id: "g3", from: "999001", to: "999002", closure: true, err: "Bank A is active, so it cannot send a closure transfer"},
+		{name: "from terminating", prepare: func() { setStatus(t, s, "bank-a", nip.StatusTerminating) }, id: "g4", from: "999001", to: "999002", status: "91", outcome: "failed"},
+		{name: "closure from terminating", id: "g5", from: "999001", to: "999002", closure: true, status: SessionPending},
+		{name: "closure to terminating", prepare: func() { setStatus(t, s, "bank-b", nip.StatusTerminating) }, id: "g6", from: "999001", to: "999002", closure: true, status: "91", outcome: "failed"},
+		{name: "from removed", prepare: func() { setStatus(t, s, "bank-a", nip.StatusRemoved) }, id: "g7", from: "999001", to: "999002", closure: true, err: "Bank A is removed, so it cannot send a closure transfer"},
+	}
+	for _, r := range rows {
+		if r.prepare != nil {
+			r.prepare()
+		}
+		x := transfer(r.id, r.to, t0)
+		x.FromCode, x.Closure = r.from, r.closure
+		got, err := begin(ctx, s, x)
+		if r.err != "" {
+			var closure *ClosureError
+			if !errors.As(err, &closure) || err.Error() != r.err {
+				t.Errorf("%s: got %v, want %s", r.name, err, r.err)
+			}
+			continue
+		}
+		if err != nil || got.Status != r.status || got.Outcome != r.outcome || (r.status != SessionPending) != (got.ResolvedAt != nil) {
+			t.Errorf("%s: %+v, %v", r.name, got, err)
+		}
+		if r.status == "91" {
+			again, err := s.Session(ctx, r.id)
+			if err != nil || again.Status != "91" || again.Outcome != nip.OutcomeFailed {
+				t.Errorf("%s: stored %+v, %v", r.name, again, err)
+			}
+		}
+	}
+}
+
+func setStatus(t *testing.T, s *Store, id, status string) {
+	t.Helper()
+	if err := s.SetStatus(context.Background(), id, status); err != nil {
 		t.Fatal(err)
 	}
-	_, err := s.Begin(ctx, transfer("g1", "999002", t0))
-	if !errors.Is(err, nip.ErrUnavailable) {
-		t.Fatalf("to suspended: %v", err)
-	}
-	wantErr(t, err, "Bank B is suspended: 91 institution unavailable")
-	if err := s.SetStatus(ctx, "bank-b", nip.StatusActive); err != nil {
+}
+
+func TestBeginCapReplayAndNoAnswer(t *testing.T) {
+	ctx := context.Background()
+	s := sessionStore(t)
+	if err := s.SetLimits(ctx, "bank-a", Limits{NetDebitCap: 1_200_000, Collateral: 5}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetStatus(ctx, "bank-a", nip.StatusTerminating); err != nil {
-		t.Fatal(err)
+	rows := []struct {
+		id       string
+		amount   int64
+		closure  bool
+		status   string
+		replayed bool
+	}{
+		{"c1", 500_000, false, SessionPending, false},
+		{"c2", 700_000, false, SessionPending, false},
+		{"c3", 1, false, "61", false},
+		{"c3", 1, false, "61", true},
+		{"c4", 5_000_000, false, "61", false},
+		{"c5", math.MaxInt64, false, "61", false},
 	}
-	_, err = s.Begin(ctx, transfer("g2", "999002", t0))
-	wantErr(t, err, "Bank A is terminating: 91 institution unavailable")
-	closing := transfer("g3", "999002", t0)
-	closing.Closure = true
-	got, err := s.Begin(ctx, closing)
-	if err != nil || !got.Closure || got.Status != SessionPending {
-		t.Fatalf("closure from terminating: %+v, %v", got, err)
+	for _, r := range rows {
+		x := transfer(r.id, "999002", t0)
+		x.Amount, x.Closure = r.amount, r.closure
+		got, replayed, err := s.Begin(ctx, x)
+		if err != nil || got.Status != r.status || replayed != r.replayed {
+			t.Fatalf("%s: %+v replayed %v, %v", r.id, got, replayed, err)
+		}
 	}
-	if err := s.SetStatus(ctx, "bank-a", nip.StatusRemoved); err != nil {
-		t.Fatal(err)
+	pos, err := s.Position(ctx, "999001")
+	if err != nil || pos.Outward != 1_200_000 || pos.Inward != 0 {
+		t.Fatalf("position of the sender: %+v, %v", pos, err)
 	}
-	closing.ID = "g4"
-	_, err = s.Begin(ctx, closing)
-	wantErr(t, err, "Bank A is removed: 91 institution unavailable")
-	if err := s.SetStatus(ctx, "bank-b", nip.StatusTerminating); err != nil {
-		t.Fatal(err)
+	if pos, err = s.Position(ctx, "999002"); err != nil || pos.Inward != 1_200_000 || pos.NetDebit() != 0 {
+		t.Fatalf("position of the receiver: %+v, %v", pos, err)
 	}
-	back := transfer("g5", "999001", t0)
-	back.FromCode, back.Closure = "999002", true
-	_, err = s.Begin(ctx, back)
-	wantErr(t, err, "Bank A is removed: 91 institution unavailable")
+	if err := s.SetLimits(ctx, "bank-z", Limits{}); !errors.Is(err, nip.ErrUnknownInstitution) {
+		t.Fatalf("limits of an unknown bank: %v", err)
+	}
+	wantErr(t, s.SetLimits(ctx, "bank-a", Limits{NetDebitCap: -1}), "bank bank-a: net_debit_cap_minor and collateral_minor must not be negative")
+	changed := transfer("c1", "999002", t0)
+	changed.Amount, changed.Narration = 1, "other"
+	_, _, err = s.Begin(ctx, changed)
+	var reused *ReusedError
+	if !errors.As(err, &reused) || len(reused.Fields) != 2 || reused.Fields[0] != (FieldDiff{"amount_minor", "500000", "1"}) || reused.Fields[1] != (FieldDiff{"narration", `"rent"`, `"other"`}) {
+		t.Fatalf("reused: %v", err)
+	}
+
+	next := t0.Add(2 * time.Minute)
+	got, err := s.NoAnswer(ctx, "c1", next)
+	if err != nil || got.Status != SessionPending || got.Outcome != nip.OutcomeUnknown || !got.NextTSQAt.Equal(next) {
+		t.Fatalf("no answer: %+v, %v", got, err)
+	}
+	if got, err = s.NoAnswer(ctx, "c1", next.Add(time.Hour)); err != nil || !got.NextTSQAt.Equal(next) {
+		t.Fatalf("no answer twice: %+v, %v", got, err)
+	}
+	if _, err := s.NoAnswer(ctx, "nope", next); !errors.Is(err, nip.ErrNoRecord) {
+		t.Fatalf("no answer for an unknown session: %v", err)
+	}
+	register(t, s, "bank-c", "Bank C", "999003", "903")
+	nolimit := transfer("n1", "999002", t0)
+	nolimit.FromCode = "999003"
+	_, _, err = s.Begin(ctx, nolimit)
+	if !errors.Is(err, ErrNoLimits) {
+		t.Fatalf("a bank with no cap: %v", err)
+	}
 }
 
 func TestDueOrder(t *testing.T) {
@@ -194,7 +287,7 @@ func TestDueOrder(t *testing.T) {
 	begin := func(id string, created time.Time, next *time.Time, outcome string) {
 		x := transfer(id, "999002", created)
 		x.NextTSQAt, x.Outcome = next, outcome
-		if _, err := s.Begin(ctx, x); err != nil {
+		if _, err := begin(ctx, s, x); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -246,7 +339,7 @@ func TestSettlement(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
 	for i, id := range []string{"u1", "u2", "u3", "u4"} {
-		if _, err := s.Begin(ctx, transfer(id, "999002", t0)); err != nil {
+		if _, err := begin(ctx, s, transfer(id, "999002", t0)); err != nil {
 			t.Fatal(err)
 		}
 		if id == "u4" {
@@ -325,7 +418,7 @@ func TestResolveKeepsWithheldOutcome(t *testing.T) {
 	begin := func(id, held string) {
 		x := transfer(id, "999002", t0)
 		x.Outcome, x.NextTSQAt = held, ptr(t0.Add(time.Minute))
-		if _, err := s.Begin(ctx, x); err != nil {
+		if _, err := begin(ctx, s, x); err != nil {
 			t.Fatal(err)
 		}
 	}

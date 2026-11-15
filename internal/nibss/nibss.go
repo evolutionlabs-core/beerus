@@ -54,9 +54,12 @@ type Switch interface {
 	Register(ctx context.Context, m Member) error
 	SetStatus(ctx context.Context, id, status string) error
 	EnrolBVN(ctx context.Context, name, phone string, dob clock.Date) (string, error)
-	Begin(ctx context.Context, s Session) (Session, error)
+	Begin(ctx context.Context, s Session) (Session, bool, error)
 	Resolve(ctx context.Context, id, status, outcome string, at time.Time) error
 	TSQ(ctx context.Context, id string, next time.Time) (Session, error)
+	NoAnswer(ctx context.Context, id string, next time.Time) (Session, error)
+	SetLimits(ctx context.Context, id string, l Limits) error
+	Position(ctx context.Context, code string) (Position, error)
 	Session(ctx context.Context, id string) (Session, error)
 	Due(ctx context.Context, at time.Time) ([]Session, error)
 	Unsettled(ctx context.Context, upTo time.Time) ([]Session, error)

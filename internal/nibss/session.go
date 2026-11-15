@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -15,8 +18,6 @@ import (
 )
 
 var (
-	errSessionReused = errors.New("session id reused with different details")
-
 	nubanRe    = regexp.MustCompile(`^[0-9]{10}$`)
 	resolvedRe = regexp.MustCompile(`^[0-9]{2}$`)
 )
@@ -51,68 +52,151 @@ func checkBegin(x Session) error {
 	return nil
 }
 
-func (s *Store) Begin(ctx context.Context, x Session) (Session, error) {
+type FieldDiff struct {
+	Field string
+	First string
+	Now   string
+}
+
+type ReusedError struct {
+	ID     string
+	Fields []FieldDiff
+}
+
+func (e *ReusedError) Error() string {
+	names := make([]string, len(e.Fields))
+	for i, f := range e.Fields {
+		names[i] = f.Field
+	}
+	return fmt.Sprintf("session %s: session id reused with different %s", e.ID, strings.Join(names, ", "))
+}
+
+type ClosureError struct {
+	Name   string
+	Status string
+}
+
+func (e *ClosureError) Error() string {
+	return fmt.Sprintf("%s is %s, so it cannot send a closure transfer", e.Name, e.Status)
+}
+
+func (s *Store) Begin(ctx context.Context, x Session) (Session, bool, error) {
 	if err := checkBegin(x); err != nil {
-		return Session{}, err
+		return Session{}, false, err
 	}
 	var out Session
+	replayed := false
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		from, limit, err := lockSender(ctx, tx, x.FromCode)
+		if err != nil {
+			return err
+		}
 		stored, err := scanSession(tx.QueryRow(ctx, `SELECT `+sessionCols+` FROM nip_sessions WHERE session_id = $1`, x.ID))
 		if err == nil {
-			if !sameRequest(stored, x) {
-				return fmt.Errorf("session %s: %w", x.ID, errSessionReused)
-			}
-			out = stored
-			return nil
+			out, replayed = stored, true
+			return checkSame(stored, x)
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("look up session %s: %w", x.ID, err)
 		}
-		from, err := sessionBank(ctx, tx, x.FromCode)
-		if err != nil {
-			return err
-		}
-		to, err := sessionBank(ctx, tx, x.ToCode)
-		if err != nil {
-			return err
-		}
-		if from.Status != nip.StatusActive && !(x.Closure && from.Status == nip.StatusTerminating) {
-			return fmt.Errorf("%s is %s: %w", from.Name, from.Status, nip.ErrUnavailable)
-		}
-		if to.Status != nip.StatusActive {
-			return fmt.Errorf("%s is %s: %w", to.Name, to.Status, nip.ErrUnavailable)
-		}
-		x.Status = SessionPending
-		out, err = scanSession(tx.QueryRow(ctx, `
-INSERT INTO nip_sessions (session_id, from_code, to_code, from_nuban, to_nuban, amount_minor, narration, status, outcome, next_tsq_at, created_at, resolved_at, closure)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-ON CONFLICT (session_id) DO NOTHING
-RETURNING `+sessionCols,
-			x.ID, x.FromCode, x.ToCode, x.FromNUBAN, x.ToNUBAN, x.Amount, x.Narration, x.Status, x.Outcome, x.NextTSQAt, x.CreatedAt, x.ResolvedAt, x.Closure))
-		if errors.Is(err, pgx.ErrNoRows) {
-			out, err = scanSession(tx.QueryRow(ctx, `SELECT `+sessionCols+` FROM nip_sessions WHERE session_id = $1`, x.ID))
-			if err == nil && !sameRequest(out, x) {
-				return fmt.Errorf("session %s: %w", x.ID, errSessionReused)
-			}
-		}
-		if err != nil {
-			return fmt.Errorf("record session %s: %w", x.ID, err)
-		}
-		return nil
+		out, err = insertNew(ctx, tx, x, from, limit)
+		return err
 	})
+	if err != nil {
+		return Session{}, false, err
+	}
+	return out, replayed, nil
+}
+
+func lockSender(ctx context.Context, tx pgx.Tx, code string) (nip.Institution, *int64, error) {
+	var from nip.Institution
+	var limit *int64
+	err := tx.QueryRow(ctx, `SELECT `+institutionCols+`, net_debit_cap_minor FROM institutions WHERE nip_code = $1 FOR UPDATE`, code).
+		Scan(&from.ID, &from.Name, &from.NIPCode, &from.NUBANCode, &from.Type, &from.Status, &limit)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return from, nil, fmt.Errorf("bank code %s is %w", code, nip.ErrUnknownInstitution)
+	}
+	if err != nil {
+		return from, nil, fmt.Errorf("look up institution %s: %w", code, err)
+	}
+	return from, limit, nil
+}
+
+func insertNew(ctx context.Context, tx pgx.Tx, x Session, from nip.Institution, limit *int64) (Session, error) {
+	to, err := institution(ctx, tx, x.ToCode, "")
 	if err != nil {
 		return Session{}, err
 	}
-	return out, nil
+	if x.Closure && from.Status != nip.StatusTerminating {
+		return Session{}, &ClosureError{Name: from.Name, Status: from.Status}
+	}
+	if code, err := refusal(ctx, tx, x, from, to, limit); err != nil || code != "" {
+		if err != nil {
+			return Session{}, err
+		}
+		x.Status, x.Outcome, x.NextTSQAt = code, nip.OutcomeFailed, nil
+		resolved := x.CreatedAt
+		x.ResolvedAt = &resolved
+	} else {
+		x.Status = SessionPending
+	}
+	return scanSession(tx.QueryRow(ctx, `
+INSERT INTO nip_sessions (session_id, from_code, to_code, from_nuban, to_nuban, amount_minor, narration, status, outcome, next_tsq_at, created_at, resolved_at, closure)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING `+sessionCols,
+		x.ID, x.FromCode, x.ToCode, x.FromNUBAN, x.ToNUBAN, x.Amount, x.Narration, x.Status, x.Outcome, x.NextTSQAt, x.CreatedAt, x.ResolvedAt, x.Closure))
 }
 
-func sessionBank(ctx context.Context, tx pgx.Tx, code string) (nip.Institution, error) {
-	return institution(ctx, tx, code, "FOR SHARE")
+func refusal(ctx context.Context, tx pgx.Tx, x Session, from, to nip.Institution, limit *int64) (string, error) {
+	if from.Status != nip.StatusActive && !x.Closure || to.Status != nip.StatusActive {
+		return nip.Unavailable, nil
+	}
+	if x.Closure {
+		return "", nil
+	}
+	if limit == nil {
+		return "", fmt.Errorf("%s: %w", from.Name, ErrNoLimits)
+	}
+	p, err := position(ctx, tx, x.FromCode)
+	if err != nil {
+		return "", err
+	}
+	need, ok := addMinor(p.NetDebit(), x.Amount)
+	if !ok || need > *limit {
+		return nip.OverCap, nil
+	}
+	return "", nil
 }
 
-func sameRequest(a, b Session) bool {
-	return a.FromCode == b.FromCode && a.ToCode == b.ToCode && a.FromNUBAN == b.FromNUBAN && a.ToNUBAN == b.ToNUBAN &&
-		a.Amount == b.Amount && a.Narration == b.Narration && a.Closure == b.Closure
+func addMinor(a, b int64) (int64, bool) {
+	if b > math.MaxInt64-a {
+		return 0, false
+	}
+	return a + b, true
+}
+
+func checkSame(stored, x Session) error {
+	var diffs []FieldDiff
+	text := func(field, first, now string) {
+		if first != now {
+			diffs = append(diffs, FieldDiff{field, strconv.Quote(first), strconv.Quote(now)})
+		}
+	}
+	text("from_code", stored.FromCode, x.FromCode)
+	text("to_code", stored.ToCode, x.ToCode)
+	text("from_nuban", stored.FromNUBAN, x.FromNUBAN)
+	text("to_nuban", stored.ToNUBAN, x.ToNUBAN)
+	if stored.Amount != x.Amount {
+		diffs = append(diffs, FieldDiff{"amount_minor", strconv.FormatInt(stored.Amount, 10), strconv.FormatInt(x.Amount, 10)})
+	}
+	text("narration", stored.Narration, x.Narration)
+	if stored.Closure != x.Closure {
+		diffs = append(diffs, FieldDiff{"closure", strconv.FormatBool(stored.Closure), strconv.FormatBool(x.Closure)})
+	}
+	if len(diffs) == 0 {
+		return nil
+	}
+	return &ReusedError{ID: x.ID, Fields: diffs}
 }
 
 func checkResolve(id, status, outcome string, at time.Time) error {
@@ -200,6 +284,23 @@ RETURNING `+sessionCols, id, next))
 	}
 	if err != nil {
 		return Session{}, fmt.Errorf("query session %s: %w", id, err)
+	}
+	return x, nil
+}
+
+func (s *Store) NoAnswer(ctx context.Context, id string, next time.Time) (Session, error) {
+	if next.IsZero() {
+		return Session{}, fmt.Errorf("session %s needs the next status query time", id)
+	}
+	x, err := scanSession(s.pool.QueryRow(ctx, `
+UPDATE nip_sessions SET outcome = $3, next_tsq_at = $2
+WHERE session_id = $1 AND status = 'pending' AND outcome = ''
+RETURNING `+sessionCols, id, next, nip.OutcomeUnknown))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return s.Session(ctx, id)
+	}
+	if err != nil {
+		return Session{}, fmt.Errorf("record no answer for session %s: %w", id, err)
 	}
 	return x, nil
 }
