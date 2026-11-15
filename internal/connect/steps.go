@@ -253,18 +253,13 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	}
 	phase := b.RunningPhase()
 	a.lifeMu.Lock()
-	closing := st.Phase == PhaseClosing || st.Phase == PhaseTerminating
-	a.lifeMu.Unlock()
-	if closing {
-		return
-	}
-	a.recordPhase(b.ID, phase, gen)
-	a.lifeMu.Lock()
-	defer a.lifeMu.Unlock()
 	if st.Phase == PhaseClosing || st.Phase == PhaseTerminating {
+		a.lifeMu.Unlock()
 		return
 	}
 	st.Phase, st.Reason, st.Attempts, st.NextAttemptAt = phase, "", 0, nil
+	a.lifeMu.Unlock()
+	a.recordPhase(b.ID, phase, gen)
 }
 
 func (a *App) directoryDone(st *BankStatus) bool {
