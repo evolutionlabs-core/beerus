@@ -144,7 +144,6 @@ func (p *planner) setupAction() (Action, bool) {
 		}
 	}
 	add("nip.tsq_after", orString(a.Spec.NIP.TSQAfter, def.NIP.TSQAfter), orString(d.Spec.NIP.TSQAfter, def.NIP.TSQAfter))
-	add("nip.tsq_attempts", strconv.Itoa(orInt(a.Spec.NIP.TSQAttempts, def.NIP.TSQAttempts)), strconv.Itoa(orInt(d.Spec.NIP.TSQAttempts, def.NIP.TSQAttempts)))
 	add("connect.legal_name", orString(a.Spec.Connect.LegalName, def.Connect.LegalName), orString(d.Spec.Connect.LegalName, def.Connect.LegalName))
 	add("connect.brand_name", orString(a.Spec.Connect.BrandName, def.Connect.BrandName), orString(d.Spec.Connect.BrandName, def.Connect.BrandName))
 	add("connect.registry_id", orString(a.Spec.Connect.RegistryID, def.Connect.RegistryID), orString(d.Spec.Connect.RegistryID, def.Connect.RegistryID))

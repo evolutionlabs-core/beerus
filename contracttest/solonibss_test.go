@@ -97,18 +97,13 @@ type soloNIBSS struct {
 	logs    *lockedBuffer
 }
 
-type soloTiming struct {
-	after    time.Duration
-	attempts int
-}
-
-var soloDefaultTiming = soloTiming{after: time.Minute, attempts: 2}
+const soloTSQAfter = time.Minute
 
 func soloBankConfig(stage, id, name, code, nuban string, ports []int) *config.Bank {
 	return &config.Bank{ID: id, Name: name, Type: "commercial", NIPCode: code, NUBANCode: nuban, HistoryDays: 730, Port: ports[0], APIPort: ports[1], Database: config.DatabaseName(stage, id)}
 }
 
-func startSoloNIBSS(t *testing.T, timing soloTiming, withBanks ...string) (*soloNIBSS, map[string]*http.Client) {
+func startSoloNIBSS(t *testing.T, tsqAfter time.Duration, withBanks ...string) (*soloNIBSS, map[string]*http.Client) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("starts a NIBSS process; run without -short")
@@ -121,7 +116,7 @@ func startSoloNIBSS(t *testing.T, timing soloTiming, withBanks ...string) (*solo
 		t.Fatal(err)
 	}
 	ports := freePorts(t, 2+2*len(withBanks))
-	cfg := &config.Config{Dir: stage, SetupKey: soloSetupKey, TSQAfter: timing.after, TSQAttempts: timing.attempts, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: ports[0], NIBSSControlPort: ports[1]}}
+	cfg := &config.Config{Dir: stage, SetupKey: soloSetupKey, TSQAfter: tsqAfter, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: ports[0], NIBSSControlPort: ports[1]}}
 	if err := config.Prepare(cfg, now); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +251,7 @@ func (s *soloNIBSS) callWith(spec string, client *http.Client, method, url, toke
 }
 
 func TestSoloNIBSS(t *testing.T) {
-	s, banks := startSoloNIBSS(t, soloDefaultTiming)
+	s, banks := startSoloNIBSS(t, soloTSQAfter)
 	register := `{"nip_code":"000014","nuban_code":"014","name":"Bank A","type":"commercial","credit_url":"https://bank-a.localhost:7451","certificate_identity":"bank-a"}`
 	moved := strings.Replace(register, "7451", "7499", 1)
 	entry := func(status string) string {
@@ -319,7 +314,7 @@ func TestSoloNIBSS(t *testing.T) {
 }
 
 func TestSoloNIBSSNames(t *testing.T) {
-	s, banks := startSoloNIBSS(t, soloDefaultTiming, "bank-a")
+	s, banks := startSoloNIBSS(t, soloTSQAfter, "bank-a")
 	a := s.members["bank-a"]
 	register := fmt.Sprintf(`{"nip_code":"000014","nuban_code":"014","name":"Bank A","type":"commercial","credit_url":"https://bank-a.localhost:%d","certificate_identity":"bank-a"}`, a.bank.APIPort)
 	bankURL := s.control + "/v1/control/banks/bank-a"

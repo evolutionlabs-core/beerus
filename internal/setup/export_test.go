@@ -12,7 +12,7 @@ func TestDefaultSpecLeavesCodesAndLegalFieldsOut(t *testing.T) {
 		Kind:       KindSetup,
 		Metadata:   Metadata{Name: "beerus"},
 		Spec: Body{
-			NIP: NIP{Sessions: 4, TSQAfter: "2m", TSQAttempts: 3},
+			NIP: NIP{Sessions: 4, TSQAfter: "2m"},
 		},
 	}
 	if !reflect.DeepEqual(clearPos(got), want) {

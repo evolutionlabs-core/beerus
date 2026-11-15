@@ -326,10 +326,6 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 	if err != nil {
 		return nil, fmt.Errorf("nip.tsq_after %q: %w", spec.NIP.TSQAfter, err)
 	}
-	tsqAttempts := spec.NIP.TSQAttempts
-	if tsqAttempts == 0 {
-		tsqAttempts = def.NIP.TSQAttempts
-	}
 	ln := local.Connect
 	nibss, err := nibssPort(ln, st)
 	if err != nil {
@@ -340,7 +336,6 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 		DatabaseURL: local.DatabaseURL,
 		NIPSessions: spec.NIP.Sessions,
 		TSQAfter:    tsqAfter,
-		TSQAttempts: tsqAttempts,
 		SetupKey:    st.SetupKey,
 		Ports:       config.Ports{APIOffset: local.Ports.APIOffset, Window: local.Ports.Window},
 		Connect: config.Connect{

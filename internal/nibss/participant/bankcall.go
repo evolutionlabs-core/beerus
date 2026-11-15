@@ -162,7 +162,7 @@ func (c *bankCaller) credit(ctx context.Context, m nibss.Member, in creditBody) 
 	if err != nil {
 		return "", err
 	}
-	if status == http.StatusServiceUnavailable {
+	if status == http.StatusServiceUnavailable || status == http.StatusConflict {
 		return nip.Unavailable, nil
 	}
 	return creditCode(m, status, raw)

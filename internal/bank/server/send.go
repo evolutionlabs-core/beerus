@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +31,10 @@ const (
 	transfersPath = "/v1/transfers"
 )
 
-var ErrNoSend = errors.New("no such send")
+var (
+	ErrNoSend      = errors.New("no such send")
+	ErrSendRefused = errors.New("NIBSS refused the send")
+)
 
 type NIPSession struct {
 	ID          string     `json:"session_id"`
@@ -110,28 +112,6 @@ func (s *Sender) route(ctx context.Context, req TransferRequest) (Route, error) 
 	return rt, nil
 }
 
-func (s *Sender) Quote(ctx context.Context, req TransferRequest) (TransferResult, error) {
-	if err := CheckRequest(req); err != nil {
-		return TransferResult{}, err
-	}
-	if req.ToBank == "" {
-		req.ToBank = req.FromBank
-	}
-	rt, err := s.route(ctx, req)
-	if err != nil {
-		return TransferResult{}, err
-	}
-	return Quoter{Fees: s.Fees, Clock: s.Clock, Enquirer: quoteEnquirer{s}}.Quote(ctx, s.Books(), rt, req)
-}
-
-type quoteEnquirer struct {
-	s *Sender
-}
-
-func (q quoteEnquirer) Enquire(ctx context.Context, rt Route, nuban string) (string, error) {
-	return q.s.enquire(ctx, rt, nuban, "")
-}
-
 func (s *Sender) Transfer(ctx context.Context, req TransferRequest) (TransferResult, error) {
 	if err := CheckRequest(req); err != nil {
 		return TransferResult{}, err
@@ -169,40 +149,6 @@ func (s *Sender) internal(ctx context.Context, rt Route, req TransferRequest, re
 	res.Kind, res.Status, res.ResponseCode, res.ToName, res.TotalDebit = "internal", nip.Success, nip.OK, to.Name, req.Amount
 	res.BalanceAfter, err = b.BalanceAt(ctx, req.From, res.At)
 	return res, err
-}
-
-func (s *Sender) enquire(ctx context.Context, rt Route, nuban, tail string) (string, error) {
-	c, err := s.NIBSS()
-	if err != nil {
-		return "", err
-	}
-	out, err := c.Enquire(ctx, rt.ToCode, nuban)
-	var away *UnavailableError
-	if errors.As(err, &away) {
-		return "", Refused(http.StatusServiceUnavailable, nip.Unavailable, "nibss_unavailable", errors.New("NIBSS is not available right now"+tail))
-	}
-	var refused *PeerError
-	if errors.As(err, &refused) {
-		return "", Refused(http.StatusBadGateway, nip.SystemError, "bad_gateway", errors.New("NIBSS refused the name enquiry"))
-	}
-	if err != nil {
-		return "", err
-	}
-	return enquiryResult(rt.ToName, out)
-}
-
-func enquiryResult(name string, out nip.NameEnquiry) (string, error) {
-	switch out.Code {
-	case nip.OK:
-		return out.AccountName, nil
-	case nip.Unavailable:
-		return "", Refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("%s is not available right now, so nothing was debited", name))
-	case nip.InvalidAccount:
-		return "", Refused(http.StatusUnprocessableEntity, nip.InvalidAccount, "invalid_account", fmt.Errorf("that is not a valid account at %s, so nothing was debited", name))
-	case nip.NoRecord:
-		return "", Refused(http.StatusUnprocessableEntity, nip.NoRecord, "no_record", fmt.Errorf("%s has no such account, so nothing was debited", name))
-	}
-	return "", Refused(http.StatusUnprocessableEntity, nip.SystemError, "unknown_bank", errors.New(out.Message))
 }
 
 func (s *Sender) external(ctx context.Context, rt Route, req TransferRequest, res TransferResult) (TransferResult, error) {
@@ -305,7 +251,7 @@ func (s *Sender) submit(ctx context.Context, rt Route, sid string, body nibssTra
 		s.Log.Warn("NIBSS gave no answer to a transfer; it will be checked", "bank", rt.FromBank, "session", sid, "err", err)
 		return s.later(ctx, b, sid, s.Clock.Real().Add(clock.Backoff(1)), res)
 	}
-	return s.conclude(ctx, b, sid, sess, res)
+	return s.conclude(ctx, b, sid, sess, 0, res)
 }
 
 func (s *Sender) later(ctx context.Context, b *bank.Bank, sid string, next time.Time, res *TransferResult) error {
@@ -317,14 +263,14 @@ func (s *Sender) later(ctx context.Context, b *bank.Bank, sid string, next time.
 	return nil
 }
 
-func (s *Sender) conclude(ctx context.Context, b *bank.Bank, sid string, sess NIPSession, res *TransferResult) error {
+func (s *Sender) conclude(ctx context.Context, b *bank.Bank, sid string, sess NIPSession, attempts int, res *TransferResult) error {
 	switch sess.Status {
 	case sessionOK:
 		res.Status, res.ResponseCode = nip.Success, nip.OK
 		return b.FinishSend(ctx, sid)
 	case sessionOpen:
-		next := s.Clock.Real().Add(clock.Backoff(1))
-		if sess.NextTSQAt != nil {
+		next := s.Clock.Real().Add(clock.Backoff(attempts + 1))
+		if sess.NextTSQAt != nil && sess.NextTSQAt.After(next) {
 			next = *sess.NextTSQAt
 		}
 		return s.later(ctx, b, sid, next, res)
@@ -345,82 +291,4 @@ func (s *Sender) undo(ctx context.Context, b *bank.Bank, sid string) error {
 		return err
 	}
 	return b.FinishSend(ctx, sid)
-}
-
-func (s *Sender) Run(ctx context.Context) {
-	tick := time.NewTicker(sendPoll)
-	defer tick.Stop()
-	for {
-		if err := s.Tick(ctx); err != nil && ctx.Err() == nil {
-			s.Log.Error("sends not checked", "bank", s.Own().ID, "err", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
-	}
-}
-
-func (s *Sender) Tick(ctx context.Context) error {
-	b := s.Books()
-	if b == nil {
-		return nil
-	}
-	due, err := b.DueSends(ctx, s.Clock.Real(), sendBatch)
-	if err != nil {
-		return err
-	}
-	for _, row := range due {
-		if _, err := s.check(ctx, b, row); err != nil && ctx.Err() == nil {
-			s.Log.Warn("send not checked; retrying", "bank", s.Own().ID, "session", row.SessionID, "err", err)
-		}
-	}
-	return nil
-}
-
-func (s *Sender) check(ctx context.Context, b *bank.Bank, row bank.Send) (NIPSession, error) {
-	sess, err := s.ask(ctx, row.SessionID, row.Request)
-	if err != nil {
-		if rerr := b.RescheduleSend(ctx, row.SessionID, s.Clock.Real().Add(clock.Backoff(row.Attempts+1))); rerr != nil {
-			return NIPSession{}, errors.Join(err, rerr)
-		}
-		return NIPSession{}, err
-	}
-	res := TransferResult{}
-	return sess, s.conclude(ctx, b, row.SessionID, sess, &res)
-}
-
-func (s *Sender) ask(ctx context.Context, sid string, request json.RawMessage) (NIPSession, error) {
-	c, err := s.NIBSS()
-	if err != nil {
-		return NIPSession{}, err
-	}
-	var sess NIPSession
-	_, err = c.Do(ctx, http.MethodPost, transfersPath+"/"+url.PathEscape(sid)+"/status-queries", nil, nil, &sess)
-	var gone *PeerError
-	if errors.As(err, &gone) && gone.Status == http.StatusNotFound && len(request) > 0 {
-		_, err = c.Do(ctx, http.MethodPost, transfersPath, nil, request, &sess)
-	}
-	return sess, err
-}
-
-func (s *Sender) StatusQuery(ctx context.Context, sid string) (NIPSession, error) {
-	b := s.Books()
-	if b == nil {
-		return NIPSession{}, fmt.Errorf("the books of %s are not open yet", s.Own().Name)
-	}
-	row, open, err := b.OpenSend(ctx, sid)
-	if err != nil {
-		return NIPSession{}, err
-	}
-	if open {
-		return s.check(ctx, b, row)
-	}
-	sess, err := s.ask(ctx, sid, nil)
-	var gone *PeerError
-	if errors.As(err, &gone) && gone.Status == http.StatusNotFound {
-		return NIPSession{}, fmt.Errorf("%s has no send %s: %w", s.Own().Name, sid, ErrNoSend)
-	}
-	return sess, err
 }

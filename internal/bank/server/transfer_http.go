@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -90,14 +91,21 @@ func (s *Banking) HandleStatusQuery(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sess, err := send.StatusQuery(r.Context(), r.PathValue("session_id"))
+	sid := r.PathValue("session_id")
+	if !nip.ValidSessionID(sid) {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "session_id must have 30 digits.")
+		return
+	}
+	sess, err := send.StatusQuery(r.Context(), sid)
 	var peer *PeerError
 	var away *UnavailableError
 	switch {
 	case errors.Is(err, ErrNoSend):
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "This bank has no send with that session ID.")
+	case errors.Is(err, ErrSendRefused):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "send_refused", "NIBSS refused the transfer, so the debit was reversed.")
 	case errors.As(err, &away), errors.As(err, &peer):
-		s.Log.Warn("status query not answered", "session", r.PathValue("session_id"), "err", err)
+		s.Log.Warn("status query not answered", "session", sid, "err", err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS could not be asked about the session. Try again soon.")
 	case err != nil:
 		s.Error(w, r, err)

@@ -201,8 +201,5 @@ func (p *Participant) query(ctx context.Context, sess nibss.Session) (nibss.Sess
 		return p.settle(ctx, sess.ID, code)
 	}
 	p.log.WarnContext(ctx, "bank gave no answer to a status query", "bank", to.ID, "session", sess.ID, "attempts", sess.TSQAttempts, "err", err)
-	if sess.TSQAttempts < p.file.TSQAttempts {
-		return sess, nil
-	}
-	return p.settle(ctx, sess.ID, nip.Unavailable)
+	return sess, nil
 }

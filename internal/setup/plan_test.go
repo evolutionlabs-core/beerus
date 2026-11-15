@@ -20,7 +20,7 @@ func spec() Spec {
 		Kind:       KindSetup,
 		Metadata:   Metadata{Name: "beerus"},
 		Spec: Body{
-			NIP: NIP{Sessions: 4, TSQAfter: "2m", TSQAttempts: 3},
+			NIP: NIP{Sessions: 4, TSQAfter: "2m"},
 			Connect: ConnectLegal{
 				LegalName:  "Beerus Connect Ltd",
 				BrandName:  "Beerus",
@@ -358,12 +358,11 @@ func TestBuildChangeableFields(t *testing.T) {
 		{
 			name: "nip tsq and connect",
 			desired: func(s *Spec) {
-				s.Spec.NIP.TSQAfter, s.Spec.NIP.TSQAttempts = "5m", 4
+				s.Spec.NIP.TSQAfter = "5m"
 				s.Spec.Connect = ConnectLegal{LegalName: "Acme Connect Ltd", BrandName: "Acme", RegistryID: "OB-0002", CACNumber: "RC-000002"}
 			},
 			want: []Action{{Op: OpUpdate, Kind: KindSetup, ID: "beerus", Fields: []FieldChange{
 				{Path: "nip.tsq_after", From: "2m", To: "5m"},
-				{Path: "nip.tsq_attempts", From: "3", To: "4"},
 				{Path: "connect.legal_name", From: "Beerus Connect Ltd", To: "Acme Connect Ltd"},
 				{Path: "connect.brand_name", From: "Beerus", To: "Acme"},
 				{Path: "connect.registry_id", From: "OB-0001", To: "OB-0002"},

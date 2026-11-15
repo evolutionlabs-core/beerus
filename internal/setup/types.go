@@ -95,9 +95,8 @@ type Body struct {
 }
 
 type NIP struct {
-	Sessions    int    `yaml:"sessions,omitempty" json:"sessions,omitempty"`
-	TSQAfter    string `yaml:"tsq_after,omitempty" json:"tsq_after,omitempty"`
-	TSQAttempts int    `yaml:"tsq_attempts,omitempty" json:"tsq_attempts,omitempty"`
+	Sessions int    `yaml:"sessions,omitempty" json:"sessions,omitempty"`
+	TSQAfter string `yaml:"tsq_after,omitempty" json:"tsq_after,omitempty"`
 }
 
 type Holidays struct {

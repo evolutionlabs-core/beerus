@@ -32,9 +32,9 @@ type soloSend struct {
 	fees    int64
 }
 
-func startSoloSend(t *testing.T, timing soloTiming) *soloSend {
+func startSoloSend(t *testing.T, tsqAfter time.Duration) *soloSend {
 	t.Helper()
-	s, clients := startSoloNIBSS(t, timing, "bank-a", "bank-b")
+	s, clients := startSoloNIBSS(t, tsqAfter, "bank-a", "bank-b")
 	out := &soloSend{soloNIBSS: s, clients: clients, banks: &http.Client{Timeout: soloSendClient}}
 	charges := banktest.Fees(t).ForTransfer(soloSendAmount)
 	out.fees = charges.Fee + charges.VAT + charges.StampDuty
@@ -137,7 +137,7 @@ func (s *soloSend) direct(client, path, body string) (int, http.Header, string) 
 }
 
 func TestSoloSendThroughNIBSS(t *testing.T) {
-	s := startSoloSend(t, soloDefaultTiming)
+	s := startSoloSend(t, soloTSQAfter)
 	a0, b0 := s.balance("bank-a"), s.balance("bank-b")
 	debit := int64(soloSendAmount) + s.fees
 	errText := func(code, message string) string {
@@ -224,15 +224,16 @@ func TestSoloSendThroughNIBSS(t *testing.T) {
 			status, got := s.query(held)
 			return status, fmt.Sprintf("%v %v %v", got["status"], got["outcome"], got["tsq_attempts"])
 		}, 200, func() string { return "00 credited 1" }, func() int64 { return a0 - 2*debit }, func() int64 { return b0 + 2*soloSendAmount }},
-		{"a status query to the attempt limit, reversed once", func() (int, string) {
+		{"a silent bank is never given up on, then answers 25 and is reversed once", func() (int, string) {
 			s.fault("bank-b", `{"kind":"timeout","outcome":"unknown","count":3}`)
 			_, _, sent := s.send("send-silent", soloSendAmount)
 			silent := fmt.Sprint(sent["session_id"])
 			_, first := s.query(silent)
 			_, second := s.query(silent)
 			_, third := s.query(silent)
-			return http.StatusOK, fmt.Sprintf("%v %v %v|%v %v|%v %v", sent["status"], first["status"], first["tsq_attempts"], second["status"], second["tsq_attempts"], third["status"], third["tsq_attempts"])
-		}, 200, func() string { return "pending pending 1|91 2|91 2" }, func() int64 { return a0 - 2*debit }, func() int64 { return b0 + 2*soloSendAmount }},
+			_, fourth := s.query(silent)
+			return http.StatusOK, fmt.Sprintf("%v %v %v|%v %v|%v %v|%v %v", sent["status"], first["status"], first["tsq_attempts"], second["status"], second["tsq_attempts"], third["status"], third["tsq_attempts"], fourth["status"], fourth["tsq_attempts"])
+		}, 200, func() string { return "pending pending 1|pending 2|25 3|25 3" }, func() int64 { return a0 - 2*debit }, func() int64 { return b0 + 2*soloSendAmount }},
 		{"a status query for a session NIBSS never saw", func() (int, string) {
 			status, _, got := s.direct("bank-a", "/v1/transfers/"+unknown+"/status-queries", "")
 			return status, got
@@ -267,7 +268,7 @@ func TestSoloSendThroughNIBSS(t *testing.T) {
 }
 
 func TestSoloSendSurvivesRestarts(t *testing.T) {
-	s := startSoloSend(t, soloTiming{after: 3 * time.Second, attempts: 50})
+	s := startSoloSend(t, 3*time.Second)
 	a0, b0 := s.balance("bank-a"), s.balance("bank-b")
 	debit := int64(soloSendAmount) + s.fees
 	pending := func(outcome, key string) string {
@@ -287,8 +288,10 @@ func TestSoloSendSurvivesRestarts(t *testing.T) {
 
 	credited := pending("credited", "restart-credited")
 	s.members["bank-b"].stop()
-	if status, got := s.query(credited); status != http.StatusOK || got["status"] != "pending" {
-		t.Fatalf("a status query with bank B stopped: %d %v", status, got)
+	for range 4 {
+		if status, got := s.query(credited); status != http.StatusOK || got["status"] != "pending" {
+			t.Fatalf("a status query with bank B stopped: %d %v", status, got)
+		}
 	}
 	s.startBank("bank-b")
 	if status, got := s.query(credited); status != http.StatusOK || got["status"] != "00" || got["outcome"] != "credited" {
@@ -308,6 +311,15 @@ func TestSoloSendSurvivesRestarts(t *testing.T) {
 		}
 	}
 	check("reversed once", a0-debit, b0+soloSendAmount)
+
+	stuck := "000014261115120000000000000077"
+	request := s.transferBody(stuck, soloSendAmount, true)
+	a := s.members["bank-a"]
+	if _, _, err := a.books.SendNIP(context.Background(), bank.NIPSend{Key: "crash-1", From: a.nuban, Amount: soloSendAmount, SessionID: stuck, To: bank.Counterparty{Name: "ADA OBI", AccountNumber: s.members["bank-b"].nuban, BankCode: "000015", BankName: "Bank B"}, At: time.Now(), NoCharges: true, Request: []byte(request), CheckAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	waitForWithin(t, soloRestartFor, "bank A to reverse a send that NIBSS refuses to take", func() bool { return s.open("bank-a") == 0 })
+	check("a refused resend is reversed once", a0-debit, b0+soloSendAmount)
 
 	resumed := pending("credited", "restart-a")
 	s.members["bank-a"].stop()

@@ -777,7 +777,7 @@ paths:
       operationId: queryTransferStatus
       tags: [bank]
       summary: Ask NIBSS about a transfer this bank sent
-      description: The bank sends a status query to NIBSS for the session now, whatever the time of the next check. A session that is still `pending` stays so, and NIBSS counts the query. A session that NIBSS has resolved as failed is reversed at this bank before the answer. A `404` from NIBSS makes the bank send the transfer again with the same `session_id`. The answer is the session as NIBSS holds it. `404 not_found` means this bank never sent the session and holds no open send for it.
+      description: The bank sends a status query to NIBSS for the session now, whatever the time of the next check. A session that is still `pending` stays so, and NIBSS counts the query. A session that NIBSS has resolved as failed is reversed at this bank before the answer. A `404` from NIBSS makes the bank send the transfer again with the same `session_id`. If NIBSS refuses that resend, the bank reverses the debit and answers `422 send_refused`. A `session_id` that is not 30 digits gets `400 invalid_request`. The answer is the session as NIBSS holds it. `404 not_found` means this bank never sent the session and holds no open send for it.
       parameters:
         - $ref: '#/components/parameters/SessionIDPath'
       responses:
@@ -800,10 +800,14 @@ paths:
                 tsq_attempts: 1
                 created_at: '2026-11-14T10:30:00+01:00'
                 resolved_at: '2026-11-14T10:32:00+01:00'
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '404':
           $ref: '#/components/responses/BankNotFound'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
         '503':
           $ref: '#/components/responses/Unavailable'
 components:

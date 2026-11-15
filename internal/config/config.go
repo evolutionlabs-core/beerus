@@ -128,7 +128,6 @@ type Config struct {
 	Banks       []*Bank       `yaml:"banks,omitempty"`
 	NIPSessions int           `yaml:"nip_sessions,omitempty"`
 	TSQAfter    time.Duration `yaml:"-"`
-	TSQAttempts int           `yaml:"-"`
 	SetupKey    uint64        `yaml:"-"`
 	Ports       Ports         `yaml:"ports,omitempty"`
 	Connect     Connect       `yaml:"connect"`
@@ -268,8 +267,8 @@ func HashKey(key string) string {
 }
 
 func (c *Config) Finish() error {
-	if c.TSQAfter <= 0 || c.TSQAttempts <= 0 {
-		return fmt.Errorf("nip status queries need a wait and a number of tries, not %s and %d", c.TSQAfter, c.TSQAttempts)
+	if c.TSQAfter <= 0 {
+		return fmt.Errorf("nip status queries need a wait above zero, not %s", c.TSQAfter)
 	}
 	if err := c.validateSessions(); err != nil {
 		return err

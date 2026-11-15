@@ -26,7 +26,6 @@ type NIBSSFile struct {
 	ControlPort int    `json:"control_port"`
 	WorldID     string `json:"world_id"`
 	TSQAfter    string `json:"tsq_after"`
-	TSQAttempts int    `json:"tsq_attempts"`
 }
 
 func (f NIBSSFile) StatusQueryAfter() time.Duration {
@@ -85,8 +84,8 @@ func (f NIBSSFile) check(dir string) error {
 		return fmt.Errorf("port and control_port are both %d; they must differ", f.Port)
 	case f.Database != DatabaseName(dir, NIBSSID):
 		return fmt.Errorf("database is %q, but core names the NIBSS database %q", f.Database, DatabaseName(dir, NIBSSID))
-	case !validDuration(f.TSQAfter) || f.TSQAttempts <= 0:
-		return fmt.Errorf("tsq_after and tsq_attempts need a duration above zero and a number above zero, not %q and %d", f.TSQAfter, f.TSQAttempts)
+	case !validDuration(f.TSQAfter):
+		return fmt.Errorf("tsq_after needs a duration above zero, not %q", f.TSQAfter)
 	}
 	return nil
 }
@@ -103,7 +102,6 @@ func (c *Config) nibssFileBytes(worldID string) ([]byte, error) {
 		ControlPort: c.Connect.NIBSSControlPort,
 		WorldID:     worldID,
 		TSQAfter:    c.TSQAfter.String(),
-		TSQAttempts: c.TSQAttempts,
 	}, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode NIBSS config: %w", err)

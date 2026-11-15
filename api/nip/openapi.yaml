@@ -44,8 +44,6 @@ info:
 
     - `pending` with no `outcome`: NIBSS has not heard from the destination bank.
     - `pending` with `outcome` `unknown`: the destination bank gave no answer. NIBSS will ask it.
-    - `pending` with `outcome` `credited`: the destination bank credited, but NIBSS has not recorded the answer yet. It becomes `00`.
-    - `pending` with `outcome` `failed`: the destination bank refused or never credited, but NIBSS has not recorded the answer yet. It becomes a failure code.
     - `00` with `outcome` `credited`: final. The money moved.
     - Any other code, such as `61` or `91`, with `outcome` `failed`: final. The money did not move.
 
@@ -54,7 +52,7 @@ info:
     ## Status queries
 
     - While a session is `pending`, the sending bank keeps sending status queries at `next_tsq_at`. Every query counts in `tsq_attempts`.
-    - After the last attempt NIBSS gives a final answer. The number of attempts and the spacing between them are Beerus placeholders, set in the Beerus config.
+    - NIBSS never ends a session without the destination bank's answer. While the destination bank gives no answer, the session stays `pending` with outcome `unknown`, however many queries it took. The sending bank keeps asking, with a growing wait that is capped. The wait and its cap are Beerus placeholders.
     - `00` is final. Every other code that is not `pending` is final too, `61` included. On a final failure the sending bank may reverse straight away.
     - `404` means NIBSS never received the transfer. The sending bank sends `POST /v1/transfers` again with the same `session_id`.
     - Once a destination bank answers `25` to a status query for a session, it refuses any later credit for that session with `25`, so a late retry can never pay twice.
@@ -242,7 +240,7 @@ paths:
       operationId: nibssStatusQuery
       tags: [nibss]
       summary: Ask for the status of a transfer
-      description: Asks NIBSS where a session stands. NIBSS counts the query in `tsq_attempts`. For a pending session it asks the destination bank, then resolves the session as credited or failed. It is safe to repeat, and each query counts in `tsq_attempts`. Only the sending bank of the session may ask. Keep asking at `next_tsq_at` while the status is `pending`. After the last attempt, which is a Beerus placeholder, NIBSS gives a final answer. `00` and every other code that is not `pending` are final. On a final failure the sending bank reverses its own customer and NIBSS is not told. A `404` means NIBSS never received the transfer. Send `POST /v1/transfers` again with the same `session_id`.
+      description: Asks NIBSS where a session stands. For a pending session it asks the destination bank, then resolves the session as credited or failed. It is safe to repeat, and each query counts in `tsq_attempts`. Only the sending bank of the session may ask. Keep asking at `next_tsq_at` while the status is `pending`. NIBSS gives a final answer only when the destination bank answers: `00` when it credited, `25` when it holds no credit. A destination bank that stays silent leaves the session `pending`. `00` and every other code that is not `pending` are final. On a final failure the sending bank reverses its own customer and NIBSS is not told. A `404` means NIBSS never received the transfer. Send `POST /v1/transfers` again with the same `session_id`.
       parameters:
         - $ref: '#/components/parameters/SessionIdPath'
       responses:
