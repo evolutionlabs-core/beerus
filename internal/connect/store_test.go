@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -177,6 +178,11 @@ func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	return cfg
 }
 
+const (
+	testProvisionLimit = 30 * time.Second
+	testProvisionPoll  = 50 * time.Millisecond
+)
+
 func newTestApp(t *testing.T, o Options) *App {
 	t.Helper()
 	if testing.Short() {
@@ -200,7 +206,29 @@ func newTestApp(t *testing.T, o Options) *App {
 			t.Errorf("drop databases: %v", err)
 		}
 	})
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	done, err := a.serveNIBSS(ctx, make(chan error, 1))
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	deadline := time.Now().Add(testProvisionLimit)
+	for provisioning(a) {
+		if time.Now().After(deadline) {
+			t.Fatalf("banks still provisioning: %+v", a.BankStatuses())
+		}
+		a.Step(ctx)
+		time.Sleep(testProvisionPoll)
+	}
 	return a
+}
+
+func provisioning(a *App) bool {
+	return slices.ContainsFunc(a.BankStatuses(), func(st BankStatus) bool { return st.Phase == PhaseProvisioning })
 }
 
 func TestWriteFilesRestoresExactlyTheSavedSet(t *testing.T) {

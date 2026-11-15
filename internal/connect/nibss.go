@@ -16,10 +16,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-const (
-	nibssRetry     = 10 * time.Second
-	directoryRetry = 3 * time.Second
-)
+const nibssRetry = 10 * time.Second
 
 func openNIBSS(ctx context.Context, cfg *config.Config, ctl *ctlStore) (*nibss.Store, error) {
 	name := config.DatabaseName(cfg.Dir, setup.SystemNIBSS)
@@ -63,30 +60,30 @@ func (a *App) nibssStore() *nibss.Store {
 	}
 	a.nibss = s
 	a.mu.Unlock()
-	if err := a.refreshDirectory(context.Background()); err != nil {
-		a.log.Error("NIBSS directory not read", "err", err)
-	}
 	return s
 }
 
 func (a *App) syncDirectoryDue(ctx context.Context) {
 	a.mu.Lock()
 	s := a.nibss
-	due := s != nil && !a.dirSynced && a.clock.Real().Sub(a.dirTried) >= directoryRetry
-	if due {
-		a.dirTried = a.clock.Real()
-	}
+	due := s != nil && !a.dirSynced && !a.clock.Real().Before(a.dirNext)
 	a.mu.Unlock()
 	if !due {
 		return
 	}
-	if err := a.syncDirectory(ctx, s); err != nil {
+	if err := a.refreshDirectory(ctx); err != nil {
+		a.log.Error("NIBSS directory not read", "err", err)
+	}
+	err := a.syncDirectory(ctx, s)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err != nil {
+		a.dirAttempts++
+		a.dirNext = a.clock.Real().Add(backoff(a.dirAttempts))
 		a.logNIBSS("NIBSS directory out of date; retrying", err)
 		return
 	}
-	a.mu.Lock()
-	a.dirSynced = true
-	a.mu.Unlock()
+	a.dirSynced, a.dirAttempts = true, 0
 }
 
 func (a *App) logNIBSS(msg string, err error) {
@@ -104,7 +101,10 @@ func (a *App) syncDirectory(ctx context.Context, s *nibss.Store) error {
 		return fmt.Errorf("read the NIBSS directory: %w", err)
 	}
 	a.mu.Lock()
-	banks := slices.Clone(a.cfg.Banks)
+	banks := make([]config.Bank, 0, len(a.cfg.Banks))
+	for _, b := range a.cfg.Banks {
+		banks = append(banks, *b)
+	}
 	a.mu.Unlock()
 	member := map[string]bool{}
 	var errs []error
@@ -146,10 +146,6 @@ func (a *App) dropNIBSS(ctx context.Context) error {
 	return a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
 }
 
-func memberOf(b *config.Bank) nip.Institution {
-	return nip.Institution{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Type: b.Type}
-}
-
 func memberStatus(b *config.Bank) string {
 	if b.Suspended() || b.Closed() {
 		return nip.StatusSuspended
@@ -157,13 +153,13 @@ func memberStatus(b *config.Bank) string {
 	return nip.StatusActive
 }
 
-func (a *App) registerMember(ctx context.Context, b *config.Bank) error {
+func (a *App) registerMember(ctx context.Context, b config.Bank) error {
 	in, err := a.nibssCtl.register(ctx, b)
 	if err != nil {
 		return fmt.Errorf("register %s with NIBSS: %w", b.ID, err)
 	}
-	if in.Status != nip.StatusTerminating && in.Status != memberStatus(b) {
-		if err := a.nibssCtl.setStatus(ctx, b.ID, memberStatus(b)); err != nil {
+	if in.Status != nip.StatusTerminating && in.Status != memberStatus(&b) {
+		if err := a.nibssCtl.setStatus(ctx, b.ID, memberStatus(&b)); err != nil {
 			return fmt.Errorf("set NIBSS status of %s: %w", b.ID, err)
 		}
 	}

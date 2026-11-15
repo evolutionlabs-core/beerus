@@ -51,7 +51,7 @@ func newStatus(b *config.Bank, done bool) *BankStatus {
 	return st
 }
 
-func (a *App) initLifecycle(unready map[string]bool) []*config.Bank {
+func (a *App) initLifecycle() {
 	a.status = map[string]*BankStatus{}
 	a.sites = map[string]*siteServer{}
 	a.strikes = map[string]int{}
@@ -59,7 +59,6 @@ func (a *App) initLifecycle(unready map[string]bool) []*config.Bank {
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 	}
-	var resume []*config.Bank
 	for _, b := range a.cfg.Banks {
 		st := newStatus(b, a.ledgerFor(b.ID) != nil)
 		a.status[b.ID] = st
@@ -71,7 +70,7 @@ func (a *App) initLifecycle(unready map[string]bool) []*config.Bank {
 		if b.Closed() {
 			continue
 		}
-		if !unready[b.ID] && (r == nil || (r.Phase != PhaseProvisioning && r.Phase != PhaseRepairing)) {
+		if r == nil || (r.Phase != PhaseProvisioning && r.Phase != PhaseRepairing) {
 			continue
 		}
 		st.Phase = PhaseProvisioning
@@ -81,9 +80,7 @@ func (a *App) initLifecycle(unready map[string]bool) []*config.Bank {
 		for i := range st.Steps {
 			st.Steps[i].Done = st.Steps[i].ID == config.StepAllocate && r != nil && r.Steps[config.StepAllocate] == stepDone
 		}
-		resume = append(resume, b)
 	}
-	return resume
 }
 
 func (a *App) recordBank(id string, fn func(r *setup.Resource) bool) {
@@ -135,12 +132,7 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 	if err != nil {
 		st.Steps[i].Error = err.Error()
 		st.Attempts++
-		delay := backoff(st.Attempts)
-		var down *nibssDownError
-		if errors.As(err, &down) {
-			delay = backoffFirst
-		}
-		next := now.Add(delay)
+		next := now.Add(backoff(st.Attempts))
 		st.NextAttemptAt = &next
 	} else {
 		st.Steps[i].Done, st.Steps[i].Error = true, ""
@@ -186,9 +178,9 @@ func (a *App) reconcileBanks(ctx context.Context) {
 	}
 	a.lifeMu.Unlock()
 	for _, b := range pending {
-		a.provision(b)
+		a.provision(ctx, b)
 	}
-	a.reconcileChanges()
+	a.reconcileChanges(ctx)
 	a.advanceFinalizers(ctx, finalizerLists)
 }
 
@@ -215,7 +207,7 @@ func (a *App) bankGeneration(id string) int64 {
 	return 0
 }
 
-func (a *App) provision(b *config.Bank) {
+func (a *App) provision(ctx context.Context, b *config.Bank) {
 	gen := a.bankGeneration(b.ID)
 	a.lifeMu.Lock()
 	st := a.status[b.ID]
@@ -223,18 +215,18 @@ func (a *App) provision(b *config.Bank) {
 	ok := a.step(st, config.StepAllocate, func() error {
 		return a.claimBank(b)
 	}) && a.step(st, config.StepDirectory, func() error {
-		return a.registerMember(context.Background(), b)
+		return a.registerMember(ctx, a.bankCopy(b.ID))
 	}) && a.step(st, config.StepDatabase, func() error {
-		return store.Create(context.Background(), a.cfg.DatabaseURL, b.Database)
+		return store.Create(ctx, a.cfg.DatabaseURL, b.Database)
 	}) && a.step(st, config.StepLedgerSchema, func() error {
-		n, err := store.Migrate(context.Background(), a.cfg.DatabaseURL, b.Database, ledger.Migrate)
+		n, err := store.Migrate(ctx, a.cfg.DatabaseURL, b.Database, ledger.Migrate)
 		if err != nil {
 			return err
 		}
 		a.nameStep(st, config.StepLedgerSchema, migrationCount(n))
 		return nil
 	}) && a.step(st, config.StepOpenBankingSchema, func() error {
-		n, err := store.Migrate(context.Background(), a.cfg.DatabaseURL, b.Database, openbanking.Migrate)
+		n, err := store.Migrate(ctx, a.cfg.DatabaseURL, b.Database, openbanking.Migrate)
 		if err != nil {
 			return err
 		}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"time"
 
@@ -65,27 +64,4 @@ func (s *supervisor) nibssHealth(ctx context.Context, client *http.Client) error
 		return errors.New("NIBSS answered " + resp.Status)
 	}
 	return nil
-}
-
-func (s *supervisor) awaitBanks(ctx context.Context) {
-	deadline := time.NewTimer(startTimeout)
-	defer deadline.Stop()
-	tick := time.NewTicker(startRetry)
-	defer tick.Stop()
-	for {
-		banks, err := s.readBanks(ctx)
-		if err == nil && !slices.ContainsFunc(banks, func(b bankState) bool {
-			return b.Phase == config.PhaseProvisioning || b.Phase == config.PhaseRepairing
-		}) {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-deadline.C:
-			s.log.Warn("banks are still provisioning; Beerus keeps retrying them")
-			return
-		case <-tick.C:
-		}
-	}
 }

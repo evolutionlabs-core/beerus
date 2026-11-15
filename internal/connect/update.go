@@ -8,14 +8,14 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-func (a *App) reconcileNow() {
+func (a *App) reconcileNow(ctx context.Context) {
 	a.recMu.Lock()
 	defer a.recMu.Unlock()
-	a.reconcileChanges()
+	a.reconcileChanges(ctx)
 	a.pokePush()
 }
 
-func (a *App) reconcileChanges() {
+func (a *App) reconcileChanges(ctx context.Context) {
 	st, err := a.ctl.status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
@@ -28,14 +28,14 @@ func (a *App) reconcileChanges() {
 		}
 		switch {
 		case r.Kind == setup.KindBank && (r.Phase == PhaseActive || r.Phase == PhaseSuspended):
-			a.updateBank(st.Applied, r)
+			a.updateBank(ctx, st.Applied, r)
 		case r.Kind == setup.KindPartner && r.Phase == PhaseActive:
 			a.updatePartner(r.ID)
 		}
 	}
 }
 
-func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
+func (a *App) updateBank(ctx context.Context, applied setup.Spec, r setup.Resource) {
 	sb, ok := bankIn(applied, r.ID)
 	if !ok {
 		return
@@ -58,7 +58,7 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	}
 	a.lifeMu.Unlock()
 	if renamed || restate {
-		if err := a.registerMember(context.Background(), b); err != nil {
+		if err := a.registerMember(ctx, a.bankCopy(r.ID)); err != nil {
 			a.updateFailed(r.ID, err)
 			return
 		}

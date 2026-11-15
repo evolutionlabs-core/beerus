@@ -22,7 +22,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
-	"github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -60,10 +59,10 @@ type App struct {
 	nibssTried   time.Time
 	nibssOpening bool
 	nibssCtl     *nibssAdmin
-	nibssProc    *participant.Participant
 	nibssEnsured time.Time
 	dirSynced    bool
-	dirTried     time.Time
+	dirAttempts  int
+	dirNext      time.Time
 	members      []nip.Participant
 	settling     bool
 	settleDone   *sync.Cond
@@ -183,20 +182,8 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		a.addLedger(ls)
 	}
 	a.nibssStore()
-	if err := a.startNIBSS(context.Background()); err != nil {
+	if err := a.prepareNIBSS(); err != nil {
 		return nil, err
-	}
-	unregistered := map[string]bool{}
-	for _, b := range cfg.Banks {
-		err := a.registerMember(context.Background(), b)
-		var down *nibssDownError
-		switch {
-		case errors.As(err, &down):
-			a.log.Warn("NIBSS is not ready for the bank; retrying in the background", "bank", b.ID, "err", err)
-		case err != nil:
-			a.log.Error("bank not in the NIBSS directory; retrying in the background", "bank", b.ID, "err", err)
-			unregistered[b.ID] = true
-		}
 	}
 	for _, l := range a.ledgers {
 		a.attachMember(l)
@@ -205,9 +192,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		return nil, err
 	}
 	a.settleDue()
-	for _, b := range a.initLifecycle(unregistered) {
-		a.provision(b)
-	}
+	a.initLifecycle()
 	return a, nil
 }
 

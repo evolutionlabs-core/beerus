@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -44,6 +43,17 @@ func (a *App) Serve(ctx context.Context) error {
 			return err
 		}
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	errc := make(chan error, 8)
+	nibssDone, err := a.serveNIBSS(runCtx, errc)
+	if err != nil {
+		cancel()
+		return err
+	}
+	defer func() {
+		cancel()
+		<-nibssDone
+	}()
 	type srv struct {
 		s   *http.Server
 		tls *tls.Config
@@ -88,7 +98,6 @@ func (a *App) Serve(ctx context.Context) error {
 			return err
 		}
 	}
-	errc := make(chan error, 8)
 	for _, s := range servers {
 		for _, l := range s.ls {
 			ln := l
@@ -102,21 +111,10 @@ func (a *App) Serve(ctx context.Context) error {
 			}(s.s, ln)
 		}
 	}
-	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		a.Run(runCtx)
 		close(done)
-	}()
-	nibssDone := make(chan struct{})
-	go func() {
-		defer close(nibssDone)
-		if a.nibssProc == nil {
-			return
-		}
-		if err := a.nibssProc.Serve(runCtx); err != nil {
-			errc <- fmt.Errorf("serve NIBSS: %w", err)
-		}
 	}()
 	pushDone := make(chan struct{})
 	go func() {
@@ -139,7 +137,6 @@ func (a *App) Serve(ctx context.Context) error {
 	cancel()
 	<-done
 	<-pushDone
-	<-nibssDone
 	a.closeLedgers()
 	return serr
 }

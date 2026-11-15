@@ -208,9 +208,8 @@ func TestStory(t *testing.T) {
 	if got := c.ok("diff"); got != "No changes.\n" {
 		t.Errorf("diff after up: %q", got)
 	}
-	if got := c.ok("get", "banks"); !regexp.MustCompile(`^ID +NAME +PHASE +READY +GEN +MESSAGE\nbank-a +Bank A +active +yes +1 *\nbank-b +Bank B +active +yes +1 *\nbank-c +Bank C +active +yes +1 *\n$`).MatchString(got) {
-		t.Errorf("get banks after up: %q", got)
-	}
+	banksUp := regexp.MustCompile(`^ID +NAME +PHASE +READY +GEN +MESSAGE\nbank-a +Bank A +active +yes +1 *\nbank-b +Bank B +active +yes +1 *\nbank-c +Bank C +active +yes +1 *\n$`)
+	waitFor(t, "the banks to be active after up", func() bool { return banksUp.MatchString(c.ok("get", "banks")) })
 	if got := c.fails("clock"); got != "beerus: unknown command \"clock\". Run beerus help." {
 		t.Errorf("clock: %q", got)
 	}

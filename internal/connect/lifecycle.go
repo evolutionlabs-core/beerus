@@ -248,7 +248,7 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 	return st, nil
 }
 
-func (a *App) SetBankSuspended(id string, suspended bool) error {
+func (a *App) SetBankSuspended(ctx context.Context, id string, suspended bool) error {
 	err := a.applyEdit(func(sp *setup.Spec) error {
 		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
 		if i < 0 {
@@ -267,7 +267,7 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 	if err != nil {
 		return err
 	}
-	a.reconcileNow()
+	a.reconcileNow(ctx)
 	a.pokePush()
 	return nil
 }
@@ -373,7 +373,7 @@ func (a *App) ctlCreateBank(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool) {
 	id := r.PathValue("id")
-	if err := a.SetBankSuspended(id, suspended); err != nil {
+	if err := a.SetBankSuspended(r.Context(), id, suspended); err != nil {
 		a.bankError(w, r, err)
 		return
 	}

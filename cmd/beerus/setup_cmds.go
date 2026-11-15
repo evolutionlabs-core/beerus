@@ -1219,7 +1219,6 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 	if err := e.startApply(ctx, cl, req, sup.core.firstExit); err != nil {
 		return err
 	}
-	sup.awaitBanks(ctx)
 	if len(c.Banks) == 0 {
 		fmt.Fprintln(e.out, "\n"+upNoBanks)
 	}

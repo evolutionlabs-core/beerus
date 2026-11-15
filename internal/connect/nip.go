@@ -204,7 +204,7 @@ func (a *App) writeNIPSession(w http.ResponseWriter, r *http.Request, get func(s
 	}
 }
 
-func (a *App) SetNetDebitCap(id string, cap, collateral int64) error {
+func (a *App) SetNetDebitCap(ctx context.Context, id string, cap, collateral int64) error {
 	err := a.applyEdit(func(sp *setup.Spec) error {
 		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
 		if i < 0 {
@@ -216,7 +216,7 @@ func (a *App) SetNetDebitCap(id string, cap, collateral int64) error {
 	if err != nil {
 		return err
 	}
-	a.reconcileNow()
+	a.reconcileNow(ctx)
 	return nil
 }
 
@@ -242,7 +242,7 @@ func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	id := r.PathValue("id")
-	if err := a.SetNetDebitCap(id, capMinor, collateral); err != nil {
+	if err := a.SetNetDebitCap(r.Context(), id, capMinor, collateral); err != nil {
 		a.bankError(w, r, err)
 		return
 	}

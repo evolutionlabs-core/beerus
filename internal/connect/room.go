@@ -589,7 +589,7 @@ func (a *App) roomCreateBank(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) roomSuspend(w http.ResponseWriter, r *http.Request, suspended bool) {
 	id := r.PathValue("id")
-	if err := a.SetBankSuspended(id, suspended); err != nil {
+	if err := a.SetBankSuspended(r.Context(), id, suspended); err != nil {
 		if errors.Is(err, errNotFound) {
 			a.mu.Lock()
 			defer a.mu.Unlock()

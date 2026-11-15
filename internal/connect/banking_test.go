@@ -158,7 +158,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 	if after["open_outward_minor"].(int64)-before["open_outward_minor"].(int64) != 200_000 {
 		t.Fatalf("the pending transfer moved the open outward from %v to %v, want 200000 more", before["open_outward_minor"], after["open_outward_minor"])
 	}
-	if err := a.SetNetDebitCap("bank-a", after["position_minor"].(int64), 0); err != nil {
+	if err := a.SetNetDebitCap(context.Background(), "bank-a", after["position_minor"].(int64), 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.Transfer(server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 1}); !errors.Is(err, errOverCap) {
@@ -175,7 +175,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 	if err := bkB.Bank.L.SetStatus(context.Background(), bank.NIPInward, "frozen"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.SetNetDebitCap("bank-a", 0, 0); err != nil {
+	if err := a.SetNetDebitCap(context.Background(), "bank-a", 0, 0); err != nil {
 		t.Fatal(err)
 	}
 	lost, err := a.Transfer(server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 300_000, Key: "lost-1"})

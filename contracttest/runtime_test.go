@@ -127,6 +127,9 @@ func TestRestartResumesProvisioning(t *testing.T) {
 	}
 	second := runOnce(t, again)
 	defer second.stop()
+	waitFor(t, "both banks to be active again", func() bool {
+		return !slices.ContainsFunc(second.app.BankStatuses(), func(b connect.BankStatus) bool { return b.Phase != connect.PhaseActive })
+	})
 	checkProvisioned(t, storedBank(t, cfg.Dir, "bank-b"))
 	checkProvisioned(t, storedBank(t, cfg.Dir, "bank-a"))
 	for _, b := range second.app.BankStatuses() {
