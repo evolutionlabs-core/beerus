@@ -63,10 +63,12 @@ type App struct {
 	dirSynced    bool
 	dirAttempts  int
 	dirNext      time.Time
-	regSynced    bool
+	regReady     bool
+	regProblem   string
 	regAttempts  int
 	regNext      time.Time
 	registries   map[string]*server.RegistryCache
+	ledgerNotes  map[string]string
 	stale        map[string]*staleMember
 	closeRuns    map[string]*closeRun
 	sendReads    map[string]sendRead
@@ -158,6 +160,9 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	} else if _, err := os.Stat(a.runningPath()); err == nil {
 		a.log.Warn("the last run did not shut down cleanly; starting a new run so partners resync", "old_run", st.WorldID)
 		st.WorldID = web.NewID("wld")
+	}
+	if d := st.dropped; d.registry+d.consents > 0 {
+		a.log.Warn("registry clients and consent history in the old state are dropped; they now live in NIBSS", "registry_clients", d.registry, "consent_events", d.consents)
 	}
 	for _, d := range st.Deliveries {
 		if d.Status == "sending" {
@@ -331,8 +336,6 @@ func (a *App) stepLocked(ctx context.Context) {
 	a.sweep()
 	due := a.dueDeliveries()
 	a.mu.Unlock()
-	a.sender.Events(ctx)
-	a.sender.Ledger(ctx)
 	for _, d := range due {
 		go func(d Delivery) {
 			a.sending <- struct{}{}

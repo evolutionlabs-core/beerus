@@ -8,7 +8,7 @@ import (
 )
 
 func consent(bank, id string, src int64, at time.Time) ConsentEvent {
-	return ConsentEvent{Bank: bank, ConsentID: id, ClientID: "client-1", PartnerID: "balance", Status: "Authorised", Via: "bank", ChangedAt: at, SourceSeq: src}
+	return ConsentEvent{Bank: bank, ConsentID: id, Incarnation: "db1", ClientID: "client-1", PartnerID: "balance", Status: "Authorised", Via: "bank", ChangedAt: at, SourceSeq: src}
 }
 
 func TestRecordConsent(t *testing.T) {
@@ -29,6 +29,12 @@ func TestRecordConsent(t *testing.T) {
 	late, replayed, err := s.RecordConsent(ctx, consent("bank-a", "c0", 2, t0))
 	if err != nil || replayed || late.Seq != 3 {
 		t.Fatalf("next source seq: %+v, %v, %v", late, replayed, err)
+	}
+	reborn := consent("bank-a", "c1", 1, t0)
+	reborn.Incarnation = "db2"
+	again, replayed, err = s.RecordConsent(ctx, reborn)
+	if err != nil || replayed || again.Seq != 4 || again.Incarnation != "db2" {
+		t.Fatalf("same source seq in a new incarnation: %+v, %v, %v", again, replayed, err)
 	}
 	changed := consent("bank-a", "c1", 1, t0.Add(time.Hour))
 	changed.Status = "Revoked"
@@ -96,6 +102,7 @@ func TestConsentRejectsBadInput(t *testing.T) {
 		want string
 	}{
 		{consent("", "c1", 1, t0), "a consent event needs a bank and a consent id"},
+		{func() ConsentEvent { e := consent("bank-a", "c1", 1, t0); e.Incarnation = ""; return e }(), "consent c1 event needs an incarnation"},
 		{consent("bank-a", "c1", 1, time.Time{}), "consent c1 event needs a changed time"},
 		{consent("bank-a", "c1", 0, t0), "consent c1 event: source seq 0 must be 1 or more"},
 		{bad, `consent c1 event: status "Maybe" must be AwaitingAuthorisation, Authorised, Rejected, Revoked, Expired, Dormant, ReconsentRequired`},

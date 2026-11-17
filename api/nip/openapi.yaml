@@ -59,7 +59,7 @@ info:
 
     ## Idempotency
 
-    A funds transfer and a credit are keyed by `session_id`. A repeat with the same details returns the first result with the header `Idempotent-Replayed: true`. The same `session_id` with different details returns `422 idempotency_key_reused`, and the message says which fields differ. A bank registration is keyed by `bank_id`, a registry client by `client_id`, and a consent event by the `source_seq` of the bank.
+    A funds transfer and a credit are keyed by `session_id`. A repeat with the same details returns the first result with the header `Idempotent-Replayed: true`. The same `session_id` with different details returns `422 idempotency_key_reused`, and the message says which fields differ. A bank registration is keyed by `bank_id`, a registry client by `client_id`, and a consent event by the incarnation and `source_seq` of the bank.
 
     ## Time and money
 
@@ -685,7 +685,7 @@ paths:
       operationId: nibssRecordConsent
       tags: [nibss]
       summary: Record a consent event in the NIBSS consent ledger
-      description: A bank tells NIBSS that a consent changed, so the ledger holds every change. NIBSS takes the bank from the caller's certificate identity and never from the body. The idempotency key is `source_seq`, the number the bank gave the event in its own outbox, and it is kept per bank. A repeat with the same details returns the first record with the header `Idempotent-Replayed`. The same `source_seq` with different details returns `422 idempotency_key_reused`, and the message says which fields differ. The bank sends events in order and sends the next one only after NIBSS has taken the last.
+      description: A bank tells NIBSS that a consent changed, so the ledger holds every change. NIBSS takes the bank from the caller's certificate identity and never from the body. The idempotency key is the `incarnation` of the bank's ledger together with `source_seq`, the number the bank gave the event in its own outbox, and it is kept per bank. The incarnation names one bank database, so a bank whose database was made again starts at `source_seq` 1 without clashing with the old rows. NIBSS keeps the old rows. A repeat with the same details returns the first record with the header `Idempotent-Replayed`. The same `source_seq` with different details returns `422 idempotency_key_reused`, and the message says which fields differ. The bank sends events in order and sends the next one only after NIBSS has taken the last.
       requestBody:
         required: true
         content:
@@ -693,6 +693,7 @@ paths:
             schema:
               $ref: '#/components/schemas/ConsentEventRequest'
             example:
+              incarnation: db16384
               source_seq: 7
               consent_id: obc_01JBC8A5T3ZK
               client_id: OBR-0001
@@ -713,6 +714,7 @@ paths:
               example:
                 seq: 12
                 bank: bank-a
+                incarnation: db16384
                 consent_id: obc_01JBC8A5T3ZK
                 client_id: OBR-0001
                 partner_id: balance
@@ -727,16 +729,26 @@ paths:
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
         '422':
-          description: The `source_seq` of this bank was first recorded with other details. The code is `idempotency_key_reused`.
+          description: The request is well formed but cannot be done. The code is `idempotency_key_reused` when the `source_seq` of this bank and incarnation was first recorded with other details, and `invalid_request` when a field is not valid.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              example:
-                error:
-                  code: idempotency_key_reused
-                  message: Source sequence 7 of bank bank-a was first recorded with other status and changed_at. Send a new source_seq, or repeat the first request.
-                  request_id: req_01JBC8A5T3ZK
+              examples:
+                reused:
+                  summary: The source sequence was used with other details.
+                  value:
+                    error:
+                      code: idempotency_key_reused
+                      message: Source sequence 7 of bank bank-a was first recorded with other status and changed_at. Send a new source_seq, or repeat the first request.
+                      request_id: req_01JBC8A5T3ZK
+                invalid:
+                  summary: A status that does not exist.
+                  value:
+                    error:
+                      code: invalid_request
+                      message: 'Consent obc_01JBC8A5T3ZK event: status "Maybe" must be AwaitingAuthorisation, Authorised, Rejected, Revoked, Expired, Dormant, ReconsentRequired.'
+                      request_id: req_01JBC8A5T3ZK
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/control/registry/clients:
@@ -788,11 +800,19 @@ paths:
       operationId: registerRegistryClient
       tags: [control]
       summary: Register an open banking client
-      description: The control plane registers a client in the registry, as the registry operator onboards a client in the real world. It is an idempotent ensure keyed by `client_id`. A repeat with the same details returns the same client. The `name`, `legal_name` and `redirect_uris` may change on a repeat, and the new values replace the old ones. The same `client_id` with a different `cac`, `role`, `cert_cn` or `jwk` returns `422 registration_conflict`, and the message says which fields differ. A `cert_cn` that belongs to another client also returns `422 registration_conflict`, and the message says to use another one. `registered_at` is set when NIBSS first registers the client and never changes. The role must be `aggregator`. A redirect URI must be an https URL, or an http URL on localhost.
+      description: The control plane registers a client in the registry, as the registry operator onboards a client in the real world. It is an idempotent ensure keyed by `client_id`. A repeat with the same details returns the same client. The `name`, `legal_name` and `redirect_uris` may change on a repeat, and the new values replace the old ones. With the `If-None-Match` header set to `*` it only creates, and a client that already exists returns `422 registration_conflict` and the message says to send another client ID. The same `client_id` with a different `cac`, `role`, `cert_cn` or `jwk` returns `422 registration_conflict`, and the message says which fields differ. A `cert_cn` that belongs to another client also returns `422 registration_conflict`, and the message says to use another one. `registered_at` is set when NIBSS first registers the client and never changes. The role must be `aggregator`. A redirect URI must be an https URL, or an http URL on localhost.
       security:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/ClientIDPath'
+        - name: If-None-Match
+          in: header
+          required: false
+          description: Send `*` to create the client only. Without it the call is an ensure.
+          schema:
+            type: string
+            enum: ['*']
+          example: '*'
       requestBody:
         required: true
         content:
@@ -844,16 +864,33 @@ paths:
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
         '422':
-          description: The client is already registered with other details, or another client holds its certificate name. The code is `registration_conflict`.
+          description: The request is well formed but cannot be done. The code is `registration_conflict` when the client is already registered with other details, when another client holds its certificate name, or when the `If-None-Match` header is `*` and the client exists. The code is `invalid_request` when a field is not valid, and the message says which.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              example:
-                error:
-                  code: registration_conflict
-                  message: Client OBR-0001 is registered with cert_cn beerus-connect, and this request has cert_cn other. Send the registered details.
-                  request_id: req_01JBC8A5T3ZK
+              examples:
+                conflict:
+                  summary: The client is registered with another certificate name.
+                  value:
+                    error:
+                      code: registration_conflict
+                      message: Client OBR-0001 is registered with cert_cn beerus-connect, and this request has cert_cn other. Send the registered details.
+                      request_id: req_01JBC8A5T3ZK
+                taken:
+                  summary: Create only, and the client exists.
+                  value:
+                    error:
+                      code: registration_conflict
+                      message: Client OBR-0001 is already registered. Send another client id.
+                      request_id: req_01JBC8A5T3ZK
+                invalid:
+                  summary: A redirect URI that is not https.
+                  value:
+                    error:
+                      code: invalid_request
+                      message: Redirect URI "http://other.example.com/cb" must be an https URL, or an http URL on localhost.
+                      request_id: req_01JBC8A5T3ZK
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/control/consents:
@@ -885,6 +922,7 @@ paths:
                 data:
                   - seq: 12
                     bank: bank-a
+                    incarnation: db16384
                     consent_id: obc_01JBC8A5T3ZK
                     client_id: OBR-0001
                     partner_id: balance
@@ -1422,8 +1460,11 @@ components:
     ConsentEventRequest:
       type: object
       description: A consent change a bank tells NIBSS about. The bank is the caller's certificate identity.
-      required: [source_seq, consent_id, client_id, partner_id, status, via, changed_at]
+      required: [incarnation, source_seq, consent_id, client_id, partner_id, status, via, changed_at]
       properties:
+        incarnation:
+          type: string
+          description: Names the bank database the event comes from. It stays the same for the life of that database.
         source_seq:
           type: integer
           format: int64
@@ -1450,8 +1491,10 @@ components:
     ConsentEvent:
       type: object
       description: A consent change in the NIBSS ledger.
-      required: [seq, bank, consent_id, client_id, partner_id, status, via, changed_at, source_seq]
+      required: [seq, bank, incarnation, consent_id, client_id, partner_id, status, via, changed_at, source_seq]
       properties:
+        incarnation:
+          type: string
         seq:
           type: integer
           format: int64

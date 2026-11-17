@@ -37,15 +37,16 @@ type Session struct {
 }
 
 type ConsentEvent struct {
-	Seq       int64     `json:"seq"`
-	Bank      string    `json:"bank"`
-	ConsentID string    `json:"consent_id"`
-	ClientID  string    `json:"client_id"`
-	PartnerID string    `json:"partner_id"`
-	Status    string    `json:"status"`
-	Via       string    `json:"via"`
-	ChangedAt time.Time `json:"changed_at"`
-	SourceSeq int64     `json:"source_seq"`
+	Seq         int64     `json:"seq"`
+	Bank        string    `json:"bank"`
+	Incarnation string    `json:"incarnation"`
+	ConsentID   string    `json:"consent_id"`
+	ClientID    string    `json:"client_id"`
+	PartnerID   string    `json:"partner_id"`
+	Status      string    `json:"status"`
+	Via         string    `json:"via"`
+	ChangedAt   time.Time `json:"changed_at"`
+	SourceSeq   int64     `json:"source_seq"`
 }
 
 type Switch interface {

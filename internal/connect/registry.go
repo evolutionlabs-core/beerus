@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
@@ -17,7 +19,11 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
-const connectKeyID = "connect-1"
+const (
+	connectKeyID    = "connect-1"
+	registryRecheck = 30 * time.Second
+	registryWait    = "Connect is still registering with NIBSS. Try again in a minute."
+)
 
 var errRegistry = errors.New("registry")
 
@@ -51,7 +57,7 @@ func (a *App) addRegistryClient(ctx context.Context, req registryRequest) (openb
 		req.LegalName = req.Name
 	}
 	c := openbanking.RegistryClient{ID: req.ID, Name: req.Name, LegalName: req.LegalName, CAC: req.CAC, Role: config.AggregatorRole, CertCN: req.CertCN, JWK: openbanking.JWKOf(ec, req.ID), RedirectURIs: req.RedirectURIs}
-	return a.nibssCtl.ensureClient(ctx, c)
+	return a.nibssCtl.ensureClient(ctx, c, true)
 }
 
 func (a *App) connectClient() (openbanking.RegistryClient, error) {
@@ -76,21 +82,33 @@ func (a *App) connectClient() (openbanking.RegistryClient, error) {
 
 func (a *App) registryDue(ctx context.Context) {
 	a.mu.Lock()
-	due := a.nibssCtl != nil && !a.regSynced && !a.clock.Real().Before(a.regNext)
+	due := a.nibssCtl != nil && !a.clock.Real().Before(a.regNext)
 	a.mu.Unlock()
 	if !due {
 		return
 	}
 	err := a.ensureConnectClient(ctx)
+	now := a.clock.Real()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if err != nil {
-		a.regAttempts++
-		a.regNext = a.clock.Real().Add(clock.Backoff(a.regAttempts))
-		a.logNIBSS("registry client not sent to NIBSS; retrying", err)
+	if err == nil {
+		a.regReady, a.regAttempts, a.regProblem = true, 0, ""
+		a.regNext = now.Add(registryRecheck)
 		return
 	}
-	a.regSynced, a.regAttempts = true, 0
+	var peer *server.PeerError
+	if errors.As(err, &peer) && peer.Status == http.StatusUnprocessableEntity {
+		a.regReady = false
+		a.lifeMu.Lock()
+		if a.regProblem != err.Error() {
+			a.regProblem = err.Error()
+			a.warn("NIBSS refuses the registry client of Connect: %v", err)
+		}
+		a.lifeMu.Unlock()
+	}
+	a.regAttempts++
+	a.regNext = now.Add(clock.Backoff(a.regAttempts))
+	a.logNIBSS("registry client not sent to NIBSS; retrying", err)
 }
 
 func (a *App) ensureConnectClient(ctx context.Context) error {
@@ -98,10 +116,37 @@ func (a *App) ensureConnectClient(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("build the registry client of Connect: %w", err)
 	}
-	if _, err := a.nibssCtl.ensureClient(ctx, c); err != nil {
+	listed, err := a.nibssCtl.clients(ctx)
+	if err != nil {
+		return fmt.Errorf("read the registry: %w", err)
+	}
+	for _, old := range listed {
+		if old.ID != c.ID {
+			continue
+		}
+		for _, u := range old.RedirectURIs {
+			if !slices.Contains(c.RedirectURIs, u) {
+				c.RedirectURIs = append(c.RedirectURIs, u)
+			}
+		}
+	}
+	if _, err := a.nibssCtl.ensureClient(ctx, c, false); err != nil {
 		return fmt.Errorf("register %s with the registry: %w", c.ID, err)
 	}
 	return nil
+}
+
+func (a *App) registered(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		a.mu.Lock()
+		ready := a.regReady
+		a.mu.Unlock()
+		if !ready {
+			web.WriteError(w, r, http.StatusServiceUnavailable, "not_ready", registryWait)
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (a *App) nibssFailed(w http.ResponseWriter, r *http.Request, err error) {
@@ -138,5 +183,5 @@ func (a *App) ctlRegistryAdd(w http.ResponseWriter, r *http.Request) {
 		a.nibssFailed(w, r, err)
 		return
 	}
-	web.WriteJSON(w, http.StatusOK, c)
+	web.WriteJSON(w, http.StatusCreated, c)
 }

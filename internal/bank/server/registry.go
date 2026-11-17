@@ -26,27 +26,39 @@ type registryPageBody struct {
 	NextCursor string                        `json:"next_cursor"`
 }
 
-func (c NIBSSClient) RegistryClients(ctx context.Context) ([]*openbanking.RegistryClient, error) {
-	out := []*openbanking.RegistryClient{}
+func AllPages[T any](ctx context.Context, page func(ctx context.Context, cursor string) ([]T, string, error)) ([]T, error) {
+	out := []T{}
 	cursor := ""
 	for {
+		data, next, err := page(ctx, cursor)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, data...)
+		if next == "" {
+			return out, nil
+		}
+		if next == cursor {
+			return nil, fmt.Errorf("cursor %q did not move", cursor)
+		}
+		cursor = next
+	}
+}
+
+func (c NIBSSClient) RegistryClients(ctx context.Context) ([]*openbanking.RegistryClient, error) {
+	out, err := AllPages(ctx, func(ctx context.Context, cursor string) ([]*openbanking.RegistryClient, string, error) {
 		q := url.Values{"limit": {strconv.Itoa(registryPage)}}
 		if cursor != "" {
 			q.Set("cursor", cursor)
 		}
 		var page registryPageBody
-		if _, err := c.Do(ctx, http.MethodGet, registryPath, q, nil, &page); err != nil {
-			return nil, fmt.Errorf("read the registry at NIBSS: %w", err)
-		}
-		out = append(out, page.Data...)
-		if page.NextCursor == "" {
-			return out, nil
-		}
-		if page.NextCursor == cursor {
-			return nil, fmt.Errorf("read the registry at NIBSS: cursor %q did not move", cursor)
-		}
-		cursor = page.NextCursor
+		_, err := c.Do(ctx, http.MethodGet, registryPath, q, nil, &page)
+		return page.Data, page.NextCursor, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read the registry at NIBSS: %w", err)
 	}
+	return out, nil
 }
 
 type RegistryCache struct {

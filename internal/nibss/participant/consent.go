@@ -12,13 +12,14 @@ import (
 )
 
 type consentRequest struct {
-	SourceSeq int64     `json:"source_seq"`
-	ConsentID string    `json:"consent_id"`
-	ClientID  string    `json:"client_id"`
-	PartnerID string    `json:"partner_id"`
-	Status    string    `json:"status"`
-	Via       string    `json:"via"`
-	ChangedAt time.Time `json:"changed_at"`
+	Incarnation string    `json:"incarnation"`
+	SourceSeq   int64     `json:"source_seq"`
+	ConsentID   string    `json:"consent_id"`
+	ClientID    string    `json:"client_id"`
+	PartnerID   string    `json:"partner_id"`
+	Status      string    `json:"status"`
+	Via         string    `json:"via"`
+	ChangedAt   time.Time `json:"changed_at"`
 }
 
 func (p *Participant) recordConsent(w http.ResponseWriter, r *http.Request) {
@@ -28,10 +29,10 @@ func (p *Participant) recordConsent(w http.ResponseWriter, r *http.Request) {
 	}
 	var req consentRequest
 	if err := web.DecodeBody(r, &req); err != nil {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send the source_seq, consent_id, client_id, partner_id, status, via and changed_at of the consent event.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send the incarnation, source_seq, consent_id, client_id, partner_id, status, via and changed_at of the consent event.")
 		return
 	}
-	e := nibss.ConsentEvent{Bank: bank, ConsentID: req.ConsentID, ClientID: req.ClientID, PartnerID: req.PartnerID, Status: req.Status, Via: req.Via, ChangedAt: req.ChangedAt, SourceSeq: req.SourceSeq}
+	e := nibss.ConsentEvent{Bank: bank, Incarnation: req.Incarnation, ConsentID: req.ConsentID, ClientID: req.ClientID, PartnerID: req.PartnerID, Status: req.Status, Via: req.Via, ChangedAt: req.ChangedAt, SourceSeq: req.SourceSeq}
 	out, replayed, err := p.store.RecordConsent(r.Context(), e)
 	var reused *nibss.ConsentReusedError
 	var bad *nibss.InvalidError
@@ -44,7 +45,7 @@ func (p *Participant) recordConsent(w http.ResponseWriter, r *http.Request) {
 	case errors.As(err, &reused):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "idempotency_key_reused", fmt.Sprintf("Source sequence %d of bank %s was first recorded with other %s. Send a new source_seq, or repeat the first request.", reused.SourceSeq, reused.Bank, strings.Join(reused.Differs, " and ")))
 	case errors.As(err, &bad):
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", web.Sentence(err.Error()))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", web.Sentence(err.Error()))
 	default:
 		p.unavailable(w, r, "consent not recorded", err)
 	}

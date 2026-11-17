@@ -144,15 +144,15 @@ func TestNIBSSClientRegistryAndConsents(t *testing.T) {
 	}
 	at := time.Date(2026, 11, 14, 10, 30, 0, 0, clock.Lagos)
 	e := openbanking.ConsentEvent{Seq: 1, ConsentID: "obc_1", ClientID: "OBR-1", PartnerID: "balance", Status: openbanking.Revoked, Via: "bank", At: at}
-	if err := c.RecordConsent(ctx, e); err != nil {
+	if err := c.RecordConsent(ctx, "db1", e); err != nil {
 		t.Fatal(err)
 	}
-	wantBody := `{"source_seq":1,"consent_id":"obc_1","client_id":"OBR-1","partner_id":"balance","status":"Revoked","via":"bank","changed_at":"2026-11-14T10:30:00+01:00"}`
+	wantBody := `{"incarnation":"db1","source_seq":1,"consent_id":"obc_1","client_id":"OBR-1","partner_id":"balance","status":"Revoked","via":"bank","changed_at":"2026-11-14T10:30:00+01:00"}`
 	if body != wantBody {
 		t.Fatalf("consent body %s, want %s", body, wantBody)
 	}
 	e.Seq = 2
-	err = c.RecordConsent(ctx, e)
+	err = c.RecordConsent(ctx, "db1", e)
 	if err == nil || err.Error() != "record consent obc_1 at NIBSS: Source sequence 2 of bank bank-a was first recorded with other status." {
 		t.Fatalf("reused source seq: %v", err)
 	}

@@ -3,6 +3,7 @@ package openbanking
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -213,8 +214,49 @@ func (s *PGStore) EnqueueLedger(ctx context.Context, e ConsentEvent, at time.Tim
 	return err
 }
 
+func (s *PGStore) EnqueueBoth(ctx context.Context, e ConsentEvent, at time.Time) error {
+	return pgx.BeginFunc(ctx, s.Pool(), func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO ob_events (consent_id, bank, client_id, partner_id, status, via, at, next_at, target)
+SELECT $1, $2, $3, $4, $5, $6, $7, $8, t FROM unnest(ARRAY['ledger', 'connect']) AS t`,
+			e.ConsentID, e.Bank, e.ClientID, e.PartnerID, string(e.Status), e.Via, e.At, at)
+		return err
+	})
+}
+
+func (s *PGStore) Incarnation(ctx context.Context) (string, error) {
+	var out string
+	if err := s.Pool().QueryRow(ctx, `SELECT incarnation FROM ob_ledger_origin`).Scan(&out); err != nil {
+		return "", fmt.Errorf("read ledger incarnation: %w", err)
+	}
+	return out, nil
+}
+
+func (s *PGStore) Reject(ctx context.Context, id int64, reason string) error {
+	_, err := s.Pool().Exec(ctx, `UPDATE ob_events SET rejected = $2 WHERE id = $1`, id, reason)
+	return err
+}
+
+func (s *PGStore) LedgerRejected(ctx context.Context) ([]Rejection, error) {
+	rows, err := s.Pool().Query(ctx, `SELECT id, consent_id, status, rejected FROM ob_events WHERE delivered_at IS NULL AND target = 'ledger' AND rejected <> '' ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Rejection{}
+	for rows.Next() {
+		var r Rejection
+		var status string
+		if err := rows.Scan(&r.ID, &r.ConsentID, &status, &r.Reason); err != nil {
+			return nil, err
+		}
+		r.Status = Status(status)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func (s *PGStore) LedgerDue(ctx context.Context, now time.Time, limit int) ([]Event, error) {
-	return s.events(ctx, `SELECT id, consent_id, bank, client_id, partner_id, status, via, at, attempts FROM ob_events WHERE delivered_at IS NULL AND target = 'ledger' AND (SELECT next_at FROM ob_events WHERE delivered_at IS NULL AND target = 'ledger' ORDER BY id LIMIT 1) <= $1 ORDER BY id LIMIT $2`, now, limit)
+	return s.events(ctx, `SELECT id, consent_id, bank, client_id, partner_id, status, via, at, attempts FROM ob_events WHERE delivered_at IS NULL AND rejected = '' AND target = 'ledger' AND (SELECT next_at FROM ob_events WHERE delivered_at IS NULL AND rejected = '' AND target = 'ledger' ORDER BY id LIMIT 1) <= $1 ORDER BY id LIMIT $2`, now, limit)
 }
 
 func (s *PGStore) Due(ctx context.Context, now time.Time, limit int) ([]Event, error) {

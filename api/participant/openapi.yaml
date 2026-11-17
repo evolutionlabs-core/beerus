@@ -1019,6 +1019,11 @@ components:
           description: The provisioning steps, in order.
           items:
             $ref: '#/components/schemas/Step'
+        problems:
+          type: array
+          description: Things an operator must look at. A bank lists each consent event NIBSS refused for good, with the reason. It is absent when there is nothing to report.
+          items:
+            type: string
     PhaseRequest:
       type: object
       description: The phase the control plane wants.

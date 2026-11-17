@@ -88,23 +88,25 @@ func (n *nibssAdmin) enquire(ctx context.Context, code, nuban string) (nip.NameE
 func (n *nibssAdmin) register(ctx context.Context, b config.Bank) (nip.Institution, error) {
 	var in nip.Institution
 	body := registerBody{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Name: b.Name, Type: b.Type, CreditURL: b.APIURL(), CertificateIdentity: b.ID, NetDebitCap: b.Cap(), Collateral: b.Collateral}
-	return in, n.call(ctx, http.MethodPut, nibssBanksPath+url.PathEscape(b.ID), body, &in)
+	return in, n.call(ctx, http.MethodPut, nibssBanksPath+url.PathEscape(b.ID), nil, body, &in)
 }
 
 func (n *nibssAdmin) setStatus(ctx context.Context, id, status string) error {
-	return n.call(ctx, http.MethodPut, nibssBanksPath+url.PathEscape(id)+"/status", statusBody{Status: status}, nil)
+	return n.call(ctx, http.MethodPut, nibssBanksPath+url.PathEscape(id)+"/status", nil, statusBody{Status: status}, nil)
 }
 
-func (n *nibssAdmin) ensureClient(ctx context.Context, c openbanking.RegistryClient) (openbanking.RegistryClient, error) {
+func (n *nibssAdmin) ensureClient(ctx context.Context, c openbanking.RegistryClient, createOnly bool) (openbanking.RegistryClient, error) {
 	var out openbanking.RegistryClient
 	body := clientBody{Name: c.Name, LegalName: c.LegalName, CAC: c.CAC, Role: c.Role, CertCN: c.CertCN, JWK: c.JWK, RedirectURIs: c.RedirectURIs}
-	return out, n.call(ctx, http.MethodPut, nibssClientsPath+"/"+url.PathEscape(c.ID), body, &out)
+	var header http.Header
+	if createOnly {
+		header = http.Header{"If-None-Match": {"*"}}
+	}
+	return out, n.call(ctx, http.MethodPut, nibssClientsPath+"/"+url.PathEscape(c.ID), header, body, &out)
 }
 
 func (n *nibssAdmin) clients(ctx context.Context) ([]openbanking.RegistryClient, error) {
-	out := []openbanking.RegistryClient{}
-	cursor := ""
-	for {
+	return server.AllPages(ctx, func(ctx context.Context, cursor string) ([]openbanking.RegistryClient, string, error) {
 		q := url.Values{"limit": {strconv.Itoa(nibssPage)}}
 		if cursor != "" {
 			q.Set("cursor", cursor)
@@ -113,15 +115,9 @@ func (n *nibssAdmin) clients(ctx context.Context) ([]openbanking.RegistryClient,
 			Data       []openbanking.RegistryClient `json:"data"`
 			NextCursor string                       `json:"next_cursor"`
 		}
-		if err := n.call(ctx, http.MethodGet, nibssClientsPath+"?"+q.Encode(), nil, &page); err != nil {
-			return nil, err
-		}
-		out = append(out, page.Data...)
-		if page.NextCursor == "" || page.NextCursor == cursor {
-			return out, nil
-		}
-		cursor = page.NextCursor
-	}
+		err := n.call(ctx, http.MethodGet, nibssClientsPath+"?"+q.Encode(), nil, nil, &page)
+		return page.Data, page.NextCursor, err
+	})
 }
 
 type consentPage struct {
@@ -131,11 +127,11 @@ type consentPage struct {
 
 func (n *nibssAdmin) consents(ctx context.Context, q url.Values) (consentPage, error) {
 	var out consentPage
-	return out, n.call(ctx, http.MethodGet, nibssConsentsPath+"?"+q.Encode(), nil, &out)
+	return out, n.call(ctx, http.MethodGet, nibssConsentsPath+"?"+q.Encode(), nil, nil, &out)
 }
 
-func (n *nibssAdmin) call(ctx context.Context, method, path string, in, out any) error {
-	_, err := n.link.Do(ctx, n.base, method, path, in, out)
+func (n *nibssAdmin) call(ctx context.Context, method, path string, header http.Header, in, out any) error {
+	_, err := n.link.Request(ctx, n.base, method, path, header, in, out)
 	var peer *server.PeerError
 	if err == nil || errors.As(err, &peer) || ctx.Err() != nil {
 		return err

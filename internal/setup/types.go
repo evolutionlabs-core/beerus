@@ -37,10 +37,11 @@ const (
 	OpRemove = "remove"
 	OpDrift  = "drift"
 
-	ConditionReady       = "Ready"
-	ConditionProgressing = "Progressing"
-	ConditionDegraded    = "Degraded"
-	ConditionBlocked     = "Blocked"
+	ConditionReady         = "Ready"
+	ConditionProgressing   = "Progressing"
+	ConditionDegraded      = "Degraded"
+	ConditionBlocked       = "Blocked"
+	ConditionConsentLedger = "ConsentLedger"
 
 	ReasonTerminating         = "Terminating"
 	ReasonSettlementPending   = "SettlementPending"
@@ -49,6 +50,7 @@ const (
 	ReasonClosed              = "Closed"
 	ReasonProvisioning        = "Provisioning"
 	ReasonStepFailed          = "StepFailed"
+	ReasonRejected            = "Rejected"
 
 	FinalizerStopRouting       = "stop-routing"
 	FinalizerRevokeConnections = "revoke-connections"

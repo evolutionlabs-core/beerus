@@ -370,12 +370,21 @@ func (s *Stack) rootPool() *x509.CertPool {
 func (s *Stack) waitHealthy() {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := s.ctlTry("GET", "/health", nil); err == nil && s.banksActive() && s.banksAnswer() {
+		if _, err := s.ctlTry("GET", "/health", nil); err == nil && s.banksActive() && s.banksAnswer() && s.registrySeeded() {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	s.t.Fatal("stack did not become healthy")
+}
+
+func (s *Stack) registrySeeded() bool {
+	out, err := s.ctlTry("GET", "/registry/clients", nil)
+	if err != nil {
+		return false
+	}
+	list, _ := out["data"].([]any)
+	return len(list) > 0
 }
 
 func (s *Stack) banksActive() bool {

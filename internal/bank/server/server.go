@@ -54,7 +54,8 @@ type Server struct {
 	replays map[string]*web.Record
 	swept   time.Time
 
-	reg *RegistryCache
+	reg      *RegistryCache
+	problems []string
 
 	dirMu      sync.Mutex
 	dirBanks   []*config.Bank

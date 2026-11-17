@@ -16,7 +16,7 @@ func client(id, cn string) openbanking.RegistryClient {
 func TestEnsureClient(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
-	first, err := s.EnsureClient(ctx, client("OBR-1", "connect"))
+	first, err := s.EnsureClient(ctx, client("OBR-1", "connect"), false)
 	if err != nil || first.RegistryID != "OBR-1" || !first.RegisteredAt.Equal(t0) {
 		t.Fatalf("first ensure: %+v, %v", first, err)
 	}
@@ -24,10 +24,12 @@ func TestEnsureClient(t *testing.T) {
 	moved.RegisteredAt = t0.Add(time.Hour)
 	moved.Name = "Renamed"
 	moved.RedirectURIs = []string{"https://new.localhost/cb", "http://127.0.0.1:9/cb"}
-	again, err := s.EnsureClient(ctx, moved)
+	again, err := s.EnsureClient(ctx, moved, false)
 	if err != nil || again.Name != "Renamed" || len(again.RedirectURIs) != 2 || !again.RegisteredAt.Equal(t0) {
 		t.Fatalf("repeat ensure: %+v, %v", again, err)
 	}
+	_, err = s.EnsureClient(ctx, client("OBR-1", "connect"), true)
+	wantErr(t, err, "client OBR-1 is already registered")
 	for _, c := range []struct {
 		c    openbanking.RegistryClient
 		want string
@@ -35,7 +37,7 @@ func TestEnsureClient(t *testing.T) {
 		{func() openbanking.RegistryClient { c := client("OBR-1", "other"); return c }(), "client OBR-1 is registered with cert_cn connect, and this request has cert_cn other"},
 		{client("OBR-2", "connect"), "certificate name connect already belongs to client OBR-1"},
 	} {
-		_, err := s.EnsureClient(ctx, c.c)
+		_, err := s.EnsureClient(ctx, c.c, false)
 		var conflict *RegistryConflictError
 		if !errors.As(err, &conflict) {
 			t.Fatalf("conflict for %s: %v", c.c.ID, err)
@@ -55,7 +57,7 @@ func TestEnsureClient(t *testing.T) {
 	} {
 		c3 := client("OBR-3", "three")
 		c.edit(&c3)
-		_, err := s.EnsureClient(ctx, c3)
+		_, err := s.EnsureClient(ctx, c3, false)
 		wantErr(t, err, c.want)
 	}
 }
@@ -64,7 +66,7 @@ func TestClientsPaging(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
 	for _, id := range []string{"OBR-3", "OBR-1", "OBR-2"} {
-		if _, err := s.EnsureClient(ctx, client(id, "cn-"+id)); err != nil {
+		if _, err := s.EnsureClient(ctx, client(id, "cn-"+id), false); err != nil {
 			t.Fatal(err)
 		}
 	}

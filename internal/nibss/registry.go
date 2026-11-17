@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -23,7 +24,7 @@ const (
 var (
 	ErrUnknownClient = errors.New("unknown registry client")
 
-	clientIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$`)
+	clientIDRe = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._-]{0," + strconv.Itoa(clientIDMax-1) + "}$")
 )
 
 const clientCols = `client_id, name, legal_name, registry_id, cac, role, cert_cn, jwk, redirect_uris, registered_at`
@@ -99,7 +100,7 @@ func clientDifferences(have, want openbanking.RegistryClient) (registered, reque
 	return registered, requested
 }
 
-func (s *Store) EnsureClient(ctx context.Context, c openbanking.RegistryClient) (openbanking.RegistryClient, error) {
+func (s *Store) EnsureClient(ctx context.Context, c openbanking.RegistryClient, createOnly bool) (openbanking.RegistryClient, error) {
 	c.RegistryID = c.ID
 	if err := checkClient(c); err != nil {
 		return openbanking.RegistryClient{}, err
@@ -119,6 +120,8 @@ func (s *Store) EnsureClient(ctx context.Context, c openbanking.RegistryClient) 
 		}
 		cur, err := scanClient(tx.QueryRow(ctx, `SELECT `+clientCols+` FROM registry_clients WHERE client_id = $1`, c.ID))
 		switch {
+		case err == nil && createOnly:
+			return &RegistryConflictError{Message: fmt.Sprintf("client %s is already registered", c.ID), Hint: "Send another client id."}
 		case err == nil:
 			registered, requested := clientDifferences(cur, c)
 			if len(registered) > 0 {

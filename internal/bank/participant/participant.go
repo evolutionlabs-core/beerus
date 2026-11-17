@@ -98,13 +98,14 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 		CA:        filepath.Join(dir, "banks", p.id, config.BankCAFile),
 		Servers:   p.servers,
 		Bank:      p.bank,
-		Record: func(ctx context.Context, _ string, e openbanking.ConsentEvent) error {
+		Record: func(ctx context.Context, incarnation string, e openbanking.ConsentEvent) error {
 			c, err := p.srv.NIBSS()
 			if err != nil {
 				return err
 			}
-			return c.RecordConsent(ctx, e)
+			return c.RecordConsent(ctx, incarnation, e)
 		},
+		Report: func(_ string, problems []string) { p.srv.SetProblems(problems) },
 	}
 	return p, nil
 }

@@ -482,10 +482,19 @@ func (s *Server) redirect(base string, q url.Values) string {
 
 func (s *Server) record(ctx context.Context, c *Consent, status Status, via string) error {
 	e := ConsentEvent{ConsentID: c.ID, Bank: s.cfg.BankID, ClientID: c.ClientID, PartnerID: c.PartnerID, Status: status, Via: via, At: s.cfg.Now()}
-	if err := s.cfg.Store.EnqueueLedger(ctx, e, s.cfg.Real()); err != nil {
-		return err
-	}
-	return s.cfg.Store.Enqueue(ctx, e, s.cfg.Real())
+	return s.cfg.Store.EnqueueBoth(ctx, e, s.cfg.Real())
+}
+
+func (s *Server) LedgerRejected(ctx context.Context) ([]Rejection, error) {
+	return s.cfg.Store.LedgerRejected(ctx)
+}
+
+func (s *Server) RejectLedger(ctx context.Context, e Event, reason string) error {
+	return s.cfg.Store.Reject(ctx, e.ID, reason)
+}
+
+func (s *Server) Incarnation(ctx context.Context) (string, error) {
+	return s.cfg.Store.Incarnation(ctx)
 }
 
 func (s *Server) Due(ctx context.Context, limit int) ([]Event, error) {

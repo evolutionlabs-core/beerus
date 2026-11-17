@@ -28,7 +28,7 @@ func (p *Participant) ensureClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := openbanking.RegistryClient{ID: id, Name: req.Name, LegalName: req.LegalName, CAC: req.CAC, Role: req.Role, CertCN: req.CertCN, JWK: req.JWK, RedirectURIs: req.RedirectURIs, RegisteredAt: p.clock.Now()}
-	out, err := p.store.EnsureClient(r.Context(), c)
+	out, err := p.store.EnsureClient(r.Context(), c, r.Header.Get("If-None-Match") == "*")
 	var conflict *nibss.RegistryConflictError
 	var bad *nibss.InvalidError
 	switch {
@@ -37,7 +37,7 @@ func (p *Participant) ensureClient(w http.ResponseWriter, r *http.Request) {
 	case errors.As(err, &conflict):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "registration_conflict", web.Sentence(err.Error())+" "+conflict.Hint)
 	case errors.As(err, &bad):
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", web.Sentence(err.Error()))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", web.Sentence(err.Error()))
 	default:
 		p.unavailable(w, r, "client not registered", err)
 	}

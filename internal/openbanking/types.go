@@ -84,7 +84,11 @@ type Store interface {
 	Awaiting(ctx context.Context) ([]*Consent, error)
 	Enqueue(ctx context.Context, e ConsentEvent, at time.Time) error
 	EnqueueLedger(ctx context.Context, e ConsentEvent, at time.Time) error
+	EnqueueBoth(ctx context.Context, e ConsentEvent, at time.Time) error
 	LedgerDue(ctx context.Context, now time.Time, limit int) ([]Event, error)
+	LedgerRejected(ctx context.Context) ([]Rejection, error)
+	Reject(ctx context.Context, id int64, reason string) error
+	Incarnation(ctx context.Context) (string, error)
 	Due(ctx context.Context, now time.Time, limit int) ([]Event, error)
 	Delivered(ctx context.Context, id int64) error
 	Retry(ctx context.Context, id int64, attempts int, next time.Time) error
@@ -117,6 +121,13 @@ type ConsentEvent struct {
 	Via       string
 	At        time.Time
 	Seq       int64
+}
+
+type Rejection struct {
+	ID        int64
+	ConsentID string
+	Status    Status
+	Reason    string
 }
 
 type Event struct {

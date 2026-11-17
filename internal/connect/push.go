@@ -177,6 +177,7 @@ func (a *App) syncBank(ctx context.Context, id, base string, gen int64, w bankWi
 	if _, err := a.link.Request(ctx, base, http.MethodGet, "/v1/status", nil, nil, &state); err != nil {
 		return fmt.Errorf("read status of %s: %w", id, err)
 	}
+	a.noteLedger(id, state.Problems)
 	if state.ObservedGeneration == gen && state.Phase == w.phase {
 		return nil
 	}

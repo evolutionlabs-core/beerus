@@ -22,7 +22,7 @@ const (
 
 func (a *App) PartnerHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/link_sessions", a.idempotent(a.createLinkSession))
+	mux.HandleFunc("POST /v1/link_sessions", a.registered(a.idempotent(a.createLinkSession)))
 	mux.HandleFunc("GET /v1/link_sessions/{id}", a.getLinkSession)
 	mux.HandleFunc("GET /v1/webhook_keys", a.listWebhookKeys)
 	mux.HandleFunc("POST /v1/connections/exchange", a.idempotent(a.exchange))

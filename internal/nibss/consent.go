@@ -14,7 +14,7 @@ import (
 
 const (
 	maxPage      = 1000
-	consentCols  = `seq, bank, consent_id, client_id, partner_id, status, via, changed_at, source_seq`
+	consentCols  = `seq, bank, incarnation, consent_id, client_id, partner_id, status, via, changed_at, source_seq`
 	consentStamp = time.Microsecond
 )
 
@@ -40,7 +40,7 @@ func (e *CursorError) Error() string {
 
 func scanConsent(row pgx.Row) (ConsentEvent, error) {
 	var e ConsentEvent
-	err := row.Scan(&e.Seq, &e.Bank, &e.ConsentID, &e.ClientID, &e.PartnerID, &e.Status, &e.Via, &e.ChangedAt, &e.SourceSeq)
+	err := row.Scan(&e.Seq, &e.Bank, &e.Incarnation, &e.ConsentID, &e.ClientID, &e.PartnerID, &e.Status, &e.Via, &e.ChangedAt, &e.SourceSeq)
 	return e, err
 }
 
@@ -68,6 +68,8 @@ func (s *Store) RecordConsent(ctx context.Context, e ConsentEvent) (ConsentEvent
 	switch {
 	case e.Bank == "" || e.ConsentID == "":
 		return ConsentEvent{}, false, invalid("a consent event needs a bank and a consent id")
+	case e.Incarnation == "":
+		return ConsentEvent{}, false, invalid("consent %s event needs an incarnation", e.ConsentID)
 	case e.ChangedAt.IsZero():
 		return ConsentEvent{}, false, invalid("consent %s event needs a changed time", e.ConsentID)
 	case e.SourceSeq < 1:
@@ -82,7 +84,7 @@ func (s *Store) RecordConsent(ctx context.Context, e ConsentEvent) (ConsentEvent
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('consent_ledger:' || $1))`, e.Bank); err != nil {
 			return fmt.Errorf("lock consent ledger for %s: %w", e.Bank, err)
 		}
-		first, err := scanConsent(tx.QueryRow(ctx, `SELECT `+consentCols+` FROM consent_ledger WHERE bank = $1 AND source_seq = $2`, e.Bank, e.SourceSeq))
+		first, err := scanConsent(tx.QueryRow(ctx, `SELECT `+consentCols+` FROM consent_ledger WHERE bank = $1 AND incarnation = $2 AND source_seq = $3`, e.Bank, e.Incarnation, e.SourceSeq))
 		if err == nil {
 			if d := consentDiffers(first, e); len(d) > 0 {
 				return &ConsentReusedError{Bank: e.Bank, SourceSeq: e.SourceSeq, Differs: d}
@@ -94,9 +96,9 @@ func (s *Store) RecordConsent(ctx context.Context, e ConsentEvent) (ConsentEvent
 			return fmt.Errorf("look up consent event %d: %w", e.SourceSeq, err)
 		}
 		out, err = scanConsent(tx.QueryRow(ctx, `
-INSERT INTO consent_ledger (bank, consent_id, client_id, partner_id, status, via, changed_at, source_seq)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING `+consentCols, e.Bank, e.ConsentID, e.ClientID, e.PartnerID, e.Status, e.Via, e.ChangedAt, e.SourceSeq))
+INSERT INTO consent_ledger (bank, incarnation, consent_id, client_id, partner_id, status, via, changed_at, source_seq)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING `+consentCols, e.Bank, e.Incarnation, e.ConsentID, e.ClientID, e.PartnerID, e.Status, e.Via, e.ChangedAt, e.SourceSeq))
 		if err != nil {
 			return fmt.Errorf("record consent %s: %w", e.ConsentID, err)
 		}

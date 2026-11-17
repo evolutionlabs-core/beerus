@@ -195,6 +195,7 @@ type State struct {
 	Idem           map[string]*web.Record    `json:"idempotency"`
 	Seq            int64                     `json:"seq"`
 	Vault          map[string]*VaultEntry    `json:"vault,omitempty"`
+	dropped        droppedState
 }
 
 func newState() *State {
@@ -263,8 +264,21 @@ func loadState(path string) (*State, error) {
 	if err := json.Unmarshal(b, s); err != nil {
 		return nil, err
 	}
+	var old struct {
+		Registry      map[string]json.RawMessage `json:"registry"`
+		ConsentLedger []json.RawMessage          `json:"consent_ledger"`
+	}
+	if err := json.Unmarshal(b, &old); err != nil {
+		return nil, err
+	}
+	s.dropped = droppedState{registry: len(old.Registry), consents: len(old.ConsentLedger)}
 	s.fill()
 	return s, nil
+}
+
+type droppedState struct {
+	registry int
+	consents int
 }
 
 func saveJSON(path string, v any) error {
