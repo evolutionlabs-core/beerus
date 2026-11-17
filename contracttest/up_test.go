@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -147,31 +148,42 @@ func TestActiveBankServesCustomersAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"Bank A", "Bank B", "Bank C"} {
-		id := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
-		if code, out := controlCall(t, cfg, http.MethodPost, "/banks", map[string]string{"name": name}); code >= http.StatusMultipleChoices {
-			t.Fatalf("create %s: %d %v", name, code, out)
+		createServing(t, cfg, name)
+	}
+	pattern := "--participant bank-a --dir " + dir
+	if out, err := exec.Command("pkill", "-STOP", "-f", "--", pattern).CombinedOutput(); err != nil {
+		t.Fatalf("freeze bank-a: %v %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("pkill", "-CONT", "-f", "--", pattern).Run() })
+	createServing(t, cfg, "Bank D")
+}
+
+func createServing(t *testing.T, cfg *config.Config, name string) {
+	t.Helper()
+	id := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+	if code, out := controlCall(t, cfg, http.MethodPost, "/banks", map[string]string{"name": name}); code >= http.StatusMultipleChoices {
+		t.Fatalf("create %s: %d %v", name, code, out)
+	}
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	limit := time.NewTimer(waitLimit)
+	defer limit.Stop()
+	for active := false; !active; {
+		select {
+		case <-limit.C:
+			t.Fatalf("%s did not turn active", id)
+		case <-tick.C:
 		}
-		tick := time.NewTicker(5 * time.Millisecond)
-		limit := time.NewTimer(waitLimit)
-		for active := false; !active; {
-			select {
-			case <-limit.C:
-				t.Fatalf("%s did not turn active", id)
-			case <-tick.C:
+		_, out := controlCall(t, cfg, http.MethodGet, "/banks", nil)
+		rows, _ := out["data"].([]any)
+		for _, r := range rows {
+			if row, _ := r.(map[string]any); row["id"] == id {
+				active = row["phase"] == config.PhaseActive
 			}
-			_, out := controlCall(t, cfg, http.MethodGet, "/banks", nil)
-			rows, _ := out["data"].([]any)
-			for _, r := range rows {
-				if row, _ := r.(map[string]any); row["id"] == id {
-					active = row["phase"] == config.PhaseActive
-				}
-			}
 		}
-		tick.Stop()
-		limit.Stop()
-		body := map[string]string{"name": "Ada Obi", "phone": "08030000000", "dob": "1990-04-12"}
-		if code, out := controlCall(t, cfg, http.MethodPost, "/banks/"+id+"/customers", body); code != http.StatusCreated {
-			t.Fatalf("customer at %s the moment it turned active: %d %v", id, code, out)
-		}
+	}
+	body := map[string]string{"name": "Ada Obi", "phone": "08030000000", "dob": "1990-04-12"}
+	if code, out := controlCall(t, cfg, http.MethodPost, "/banks/"+id+"/customers", body); code != http.StatusCreated {
+		t.Fatalf("customer at %s the moment it turned active: %d %v", id, code, out)
 	}
 }

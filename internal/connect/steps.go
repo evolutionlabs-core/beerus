@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
@@ -19,8 +18,8 @@ import (
 )
 
 const (
-	confirmWait  = 5 * time.Second
-	confirmEvery = 100 * time.Millisecond
+	confirmTimeout = 2 * time.Second
+	confirmRetry   = 250 * time.Millisecond
 )
 
 func stepIndex(id string) int {
@@ -171,15 +170,9 @@ func (a *App) reconcileBanks(ctx context.Context) {
 		pending = append(pending, b)
 	}
 	a.lifeMu.Unlock()
-	var wg sync.WaitGroup
 	for _, b := range pending {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			a.provision(ctx, b)
-		}()
+		a.provision(ctx, b)
 	}
-	wg.Wait()
 	a.reconcileChanges()
 	a.advanceFinalizers(ctx, finalizerLists)
 }
@@ -241,9 +234,6 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 		if err := a.startBankSite(b); err != nil {
 			return err
 		}
-		if a.role == RoleCore {
-			return a.confirmBank(ctx, b)
-		}
 		return a.probeSite(b)
 	}) && a.step(st, config.StepAPI, func() error {
 		if b.Closed() {
@@ -252,6 +242,9 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 		return a.checkBankAPI(b)
 	})
 	if !ok {
+		return
+	}
+	if !a.takeConfirm(b.ID, gen) {
 		return
 	}
 	phase := b.RunningPhase()
@@ -264,30 +257,6 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	a.lifeMu.Unlock()
 	a.recordPhase(b.ID, phase, gen)
 	a.pokePush()
-}
-
-func (a *App) confirmBank(ctx context.Context, b *config.Bank) error {
-	ctx, cancel := context.WithTimeout(ctx, confirmWait)
-	defer cancel()
-	w, err := a.wishFor(b.ID)
-	if err != nil {
-		return err
-	}
-	w.phase, w.reason = b.RunningPhase(), ""
-	gen := wishGeneration(a.WorldID(), w)
-	tick := time.NewTicker(confirmEvery)
-	defer tick.Stop()
-	for {
-		err := a.syncBank(ctx, b.ID, b.URL(), gen, w)
-		if err == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("confirm %s: %w", b.ID, err)
-		case <-tick.C:
-		}
-	}
 }
 
 func (a *App) directoryDone(st *BankStatus) bool {

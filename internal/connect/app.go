@@ -79,6 +79,7 @@ type App struct {
 	driftAt      time.Time
 	driftDue     atomic.Bool
 	strikes      map[string]int
+	confirms     map[string]*bankConfirm
 	refreshing   map[string]*refreshFlight
 	obMu         sync.Mutex
 	obs          map[string]*openbanking.Server
