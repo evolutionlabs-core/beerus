@@ -565,6 +565,9 @@ func (s *Stack) ctlWith(method, path string, body any, header map[string]string)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if method != http.MethodGet {
+		req.Header.Set("Idempotency-Key", randomKey())
+	}
 	for k, v := range header {
 		req.Header.Set(k, v)
 	}
