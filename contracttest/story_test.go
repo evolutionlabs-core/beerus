@@ -3,7 +3,6 @@ package contracttest
 import (
 	"context"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,6 +124,11 @@ func startUp(t *testing.T, c *cli, spec string) (*lockedBuffer, *lockedBuffer) {
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("up stderr:\n%s", tailOf(errOut.String(), logTailBytes))
+		}
+	})
 	t.Cleanup(func() {
 		_ = cmd.Process.Signal(syscall.SIGINT)
 		select {
@@ -357,12 +361,7 @@ func TestStory(t *testing.T) {
 			t.Errorf("banks/%s after its removal: %v", b.ID, err)
 		}
 		for _, port := range []int{b.Port, b.APIPort} {
-			l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-			if err != nil {
-				t.Errorf("port %d of %s is still taken: %v", port, b.ID, err)
-				continue
-			}
-			l.Close()
+			waitFor(t, fmt.Sprintf("port %d of %s to be free", port, b.ID), func() bool { return portOpen(port) })
 		}
 	}
 	if err := os.WriteFile(readd, []byte(fmt.Sprintf(storySpec, sink.srv.URL+"/webhooks")), 0o600); err != nil {
@@ -385,4 +384,13 @@ func TestStory(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Error("exit did not leave the session")
 	}
+}
+
+const logTailBytes = 20000
+
+func tailOf(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }

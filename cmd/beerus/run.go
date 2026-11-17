@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -48,6 +49,7 @@ func cmdRun(args []string) error {
 	dir := fs.String("dir", defaultDir(), "state directory")
 	participant := fs.String("participant", "", "what to run: cbn, core or a bank ID")
 	bind := fs.String("bind", envOr("BEERUS_BIND", "127.0.0.1"), "`address` to listen on")
+	supervised := fs.Bool("supervised", false, "stop when standard input closes")
 	core := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "`URL` of the core participant's control API, for banks")
 	if _, err := parseAfter("run", fs, args, 0); err != nil {
 		return err
@@ -55,7 +57,12 @@ func cmdRun(args []string) error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	connect.SetBind(*bind)
+	if *supervised {
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			stop()
+		}()
+	}
 	switch *participant {
 	case "":
 		return usageError("run")
@@ -66,7 +73,7 @@ func cmdRun(args []string) error {
 		if err != nil {
 			return err
 		}
-		app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleCore, CoreURL: *core})
+		app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleCore, CoreURL: *core, Bind: *bind})
 		if err != nil {
 			return err
 		}
@@ -82,7 +89,7 @@ func cmdRun(args []string) error {
 	if c.Bank(*participant) == nil {
 		return fmt.Errorf("%q is not a participant; banks in %s are %s", *participant, c.Dir, strings.Join(bankIDs(c), ", "))
 	}
-	app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleBank, BankID: *participant, CoreURL: *core})
+	app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleBank, BankID: *participant, CoreURL: *core, Bind: *bind})
 	if err != nil {
 		return err
 	}

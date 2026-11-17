@@ -122,13 +122,27 @@ func TestEveryBankTypeHasAHistory(t *testing.T) {
 func TestRecordPhaseNeverReopensALeavingBank(t *testing.T) {
 	for _, phase := range []string{PhaseClosing, PhaseTerminating, PhaseClosed} {
 		a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: phase, Generation: 3, ObservedGeneration: 2})
-		a.recordPhase("bank-b", PhaseActive)
+		a.recordPhase("bank-b", PhaseActive, 3)
 		st, err := a.ctl.status()
 		if err != nil {
 			t.Fatal(err)
 		}
 		if r := findResource(&st, setup.KindBank, "bank-b"); r.Phase != phase || r.Generation != 3 || r.ObservedGeneration != 2 {
 			t.Errorf("%s: resource became %s, generation %d, observed %d", phase, r.Phase, r.Generation, r.ObservedGeneration)
+		}
+	}
+}
+
+func TestRecordPhaseDoesNotObserveALaterGeneration(t *testing.T) {
+	for _, c := range []struct{ gen, want int64 }{{1, 1}, {2, 2}, {3, 3}} {
+		a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: PhaseRepairing, Generation: 3, ObservedGeneration: 1})
+		a.recordPhase("bank-b", PhaseActive, c.gen)
+		st, err := a.ctl.status()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := findResource(&st, setup.KindBank, "bank-b"); r.Phase != PhaseActive || r.ObservedGeneration != c.want {
+			t.Errorf("recorded at generation %d: phase %s, observed %d, want %d", c.gen, r.Phase, r.ObservedGeneration, c.want)
 		}
 	}
 }

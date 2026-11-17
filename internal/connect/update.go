@@ -74,7 +74,7 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 		st.Phase = phase
 	}
 	a.lifeMu.Unlock()
-	a.recordPhase(r.ID, phase)
+	a.recordPhase(r.ID, phase, r.Generation)
 }
 
 func (a *App) updateFailed(id string, err error) {
