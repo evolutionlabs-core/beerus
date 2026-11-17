@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -80,11 +81,19 @@ func TestSlowRegistryFetchIsSharedAndHoldsNoLock(t *testing.T) {
 	now := time.Date(2026, 11, 14, 10, 0, 0, 0, clock.Lagos)
 	in, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	r := registryCache(&now, func(context.Context) ([]*openbanking.RegistryClient, error) {
+	r := registryCache(&now, func(ctx context.Context) ([]*openbanking.RegistryClient, error) {
 		calls.Add(1)
-		in <- struct{}{}
-		<-release
-		return nil, nil
+		select {
+		case in <- struct{}{}:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		select {
+		case <-release:
+			return nil, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	})
 	const waiting = 5
 	errs := make(chan error, waiting)
@@ -96,9 +105,20 @@ func TestSlowRegistryFetchIsSharedAndHoldsNoLock(t *testing.T) {
 			errs <- r.Refresh(context.Background())
 		}()
 	}
-	<-in
-	if !r.mu.TryLock() {
-		t.Fatal("the registry lock is held across the call to NIBSS")
+	select {
+	case <-in:
+	case <-t.Context().Done():
+		t.Fatal("no call reached NIBSS")
+	}
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for !r.mu.TryLock() {
+		select {
+		case <-deadline.C:
+			t.Fatal("the registry lock is held across the call to NIBSS")
+		default:
+			runtime.Gosched()
+		}
 	}
 	r.mu.Unlock()
 	close(release)

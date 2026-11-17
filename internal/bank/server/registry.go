@@ -105,6 +105,9 @@ func (r *RegistryCache) fresh() bool {
 }
 
 func (r *RegistryCache) load(ctx context.Context) error {
+	if r.fresh() {
+		return nil
+	}
 	list, err := r.fetch(ctx)
 	if err != nil {
 		return err
