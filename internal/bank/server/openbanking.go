@@ -28,8 +28,6 @@ type OpenConfig struct {
 	Bank     config.Bank
 	Books    func() *store.Books
 	Registry Registrar
-	Ledger   openbanking.Ledger
-	Outbox   bool
 	Clock    *clock.Clock
 }
 
@@ -53,8 +51,6 @@ func NewOpenBanking(c OpenConfig) (*openbanking.Server, error) {
 		}},
 		Registry:      registryView{c.Registry},
 		Data:          bankData{books: c.Books, clock: c.Clock},
-		Ledger:        c.Ledger,
-		LedgerOutbox:  c.Outbox,
 		Real:          c.Clock.Real,
 		Now:           c.Clock.Now,
 		ConsentMonths: b.API.ConsentMonths,

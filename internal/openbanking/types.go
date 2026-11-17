@@ -125,10 +125,6 @@ type Event struct {
 	Attempts int
 }
 
-type Ledger interface {
-	Record(ConsentEvent)
-}
-
 type AccountInfo struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`

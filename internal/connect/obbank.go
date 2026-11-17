@@ -40,7 +40,7 @@ func (a *App) openBanking(id string) *openbanking.Server {
 	if b == nil || a.obLedger(id) == nil {
 		return nil
 	}
-	s, err := server.NewOpenBanking(server.OpenConfig{Bank: *b, Books: a.obBooks(id), Registry: a.bankRegistry(id), Outbox: true, Clock: a.clock})
+	s, err := server.NewOpenBanking(server.OpenConfig{Bank: *b, Books: a.obBooks(id), Registry: a.bankRegistry(id), Clock: a.clock})
 	if err != nil {
 		a.log.Error("open banking not built", "bank", id, "err", err)
 		return nil

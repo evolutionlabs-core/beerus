@@ -42,7 +42,7 @@ func (p *Participant) handler(ob *openbanking.Server) http.Handler {
 }
 
 func (p *Participant) openBanking() (*openbanking.Server, error) {
-	return server.NewOpenBanking(server.OpenConfig{Bank: p.srv.Bank(), Books: func() *store.Books { return p.books }, Registry: p.srv, Outbox: true, Clock: p.clock})
+	return server.NewOpenBanking(server.OpenConfig{Bank: p.srv.Bank(), Books: func() *store.Books { return p.books }, Registry: p.srv, Clock: p.clock})
 }
 
 func (p *Participant) start(ctx context.Context) error {

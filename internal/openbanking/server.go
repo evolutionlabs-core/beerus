@@ -35,8 +35,6 @@ type Config struct {
 	Store         Store
 	Registry      Registry
 	Data          Data
-	Ledger        Ledger
-	LedgerOutbox  bool
 	Real          func() time.Time
 	Now           func() time.Time
 	CodeLife      time.Duration
@@ -484,12 +482,8 @@ func (s *Server) redirect(base string, q url.Values) string {
 
 func (s *Server) record(ctx context.Context, c *Consent, status Status, via string) error {
 	e := ConsentEvent{ConsentID: c.ID, Bank: s.cfg.BankID, ClientID: c.ClientID, PartnerID: c.PartnerID, Status: status, Via: via, At: s.cfg.Now()}
-	if s.cfg.LedgerOutbox {
-		if err := s.cfg.Store.EnqueueLedger(ctx, e, s.cfg.Real()); err != nil {
-			return err
-		}
-	} else if s.cfg.Ledger != nil {
-		s.cfg.Ledger.Record(e)
+	if err := s.cfg.Store.EnqueueLedger(ctx, e, s.cfg.Real()); err != nil {
+		return err
 	}
 	return s.cfg.Store.Enqueue(ctx, e, s.cfg.Real())
 }
