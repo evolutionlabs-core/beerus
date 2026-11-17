@@ -171,7 +171,11 @@ func (a *App) inflightWith(ctx context.Context, code, id string, sends int) (str
 		if b := a.bankByID(id); b != nil {
 			name = b.Name
 		}
-		return fmt.Sprintf("%s has %s still being sent. Wait for them to finish.", name, view.Plural(sends, "transfer", "transfers")), nil
+		finish := "them"
+		if sends == 1 {
+			finish = "it"
+		}
+		return fmt.Sprintf("%s has %s still being sent. Wait for %s to finish.", name, view.Plural(sends, "transfer", "transfers"), finish), nil
 	}
 	sw := a.nibssStore()
 	if sw == nil {
