@@ -268,12 +268,13 @@ func issuePartnerKeys(dir string, partners []setup.Partner) ([]setup.Resource, e
 			return nil, err
 		}
 		out = append(out, setup.Resource{
-			Kind:       setup.KindPartner,
-			ID:         p.ID,
-			Generation: 1,
-			Phase:      config.PhaseActive,
-			Partner:    &setup.PartnerKeys{CertCN: p.ID, APIKeySHA256: config.HashKey(key)},
-			Owned:      []setup.Owned{{Kind: ownedDir, Name: filepath.Join("partners", p.ID)}},
+			Kind:               setup.KindPartner,
+			ID:                 p.ID,
+			Generation:         1,
+			ObservedGeneration: 1,
+			Phase:              config.PhaseActive,
+			Partner:            &setup.PartnerKeys{CertCN: p.ID, APIKeySHA256: config.HashKey(key)},
+			Owned:              []setup.Owned{{Kind: ownedDir, Name: filepath.Join("partners", p.ID)}},
 		})
 	}
 	return out, nil

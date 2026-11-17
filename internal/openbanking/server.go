@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
@@ -27,20 +28,24 @@ const (
 )
 
 type Config struct {
-	BankID        string
+	BankID       string
+	Issuer       string
+	AuthorizeURL string
+	HistoryDays  int
+	Store        Store
+	Registry     Registry
+	Data         Data
+	Real         func() time.Time
+	Now          func() time.Time
+	CodeLife     time.Duration
+	AccessLife   time.Duration
+	RefreshGrace time.Duration
+	RequestLife  time.Duration
+	Terms        Terms
+}
+
+type Terms struct {
 	BankName      string
-	Issuer        string
-	AuthorizeURL  string
-	HistoryDays   int
-	Store         Store
-	Registry      Registry
-	Data          Data
-	Real          func() time.Time
-	Now           func() time.Time
-	CodeLife      time.Duration
-	AccessLife    time.Duration
-	RefreshGrace  time.Duration
-	RequestLife   time.Duration
 	AssertionLife time.Duration
 	ConsentMonths int
 	RefreshDays   int
@@ -56,6 +61,7 @@ const (
 
 type Server struct {
 	cfg   Config
+	terms atomic.Pointer[Terms]
 	mu    sync.Mutex
 	pars  map[string]*par
 	codes map[string]*code
@@ -100,19 +106,29 @@ func New(cfg Config) *Server {
 	if cfg.RefreshGrace <= 0 {
 		cfg.RefreshGrace = time.Minute
 	}
-	if cfg.AssertionLife <= 0 {
-		cfg.AssertionLife = DefaultAssertionLife
+	s := &Server{cfg: cfg, pars: map[string]*par{}, codes: map[string]*code{}, jtis: map[string]time.Time{}}
+	s.SetTerms(cfg.Terms)
+	return s
+}
+
+func (s *Server) SetTerms(t Terms) {
+	if t.AssertionLife <= 0 {
+		t.AssertionLife = DefaultAssertionLife
 	}
-	if cfg.ConsentMonths <= 0 {
-		cfg.ConsentMonths = DefaultConsentMonths
+	if t.ConsentMonths <= 0 {
+		t.ConsentMonths = DefaultConsentMonths
 	}
-	if cfg.RefreshDays <= 0 {
-		cfg.RefreshDays = DefaultRefreshDays
+	if t.RefreshDays <= 0 {
+		t.RefreshDays = DefaultRefreshDays
 	}
-	if cfg.DormantDays <= 0 {
-		cfg.DormantDays = DefaultDormantDays
+	if t.DormantDays <= 0 {
+		t.DormantDays = DefaultDormantDays
 	}
-	return &Server{cfg: cfg, pars: map[string]*par{}, codes: map[string]*code{}, jtis: map[string]time.Time{}}
+	s.terms.Store(&t)
+}
+
+func (s *Server) currentTerms() Terms {
+	return *s.terms.Load()
 }
 
 func Hash(s string) string {
@@ -211,7 +227,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*Client, 
 	exp, _ := claims["exp"].(float64)
 	jti, _ := claims["jti"].(string)
 	if claims["iss"] != c.ID || claims["sub"] != c.ID || !s.audience(claims["aud"]) || jti == "" ||
-		time.Unix(int64(exp), 0).Before(now) || time.Unix(int64(exp), 0).After(now.Add(s.cfg.AssertionLife)) {
+		time.Unix(int64(exp), 0).Before(now) || time.Unix(int64(exp), 0).After(now.Add(s.currentTerms().AssertionLife)) {
 		fail(w, http.StatusUnauthorized, "invalid_client", "The client assertion has the wrong issuer, audience or lifetime.")
 		return nil, "", false
 	}
@@ -260,7 +276,7 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 	i := s.cfg.Issuer
 	writeJSON(w, http.StatusOK, map[string]any{
 		"bank_id":                                          s.cfg.BankID,
-		"name":                                             s.cfg.BankName,
+		"name":                                             s.currentTerms().BankName,
 		"issuer":                                           i,
 		"authorization_endpoint":                           s.cfg.AuthorizeURL,
 		"pushed_authorization_request_endpoint":            i + "/par",
@@ -365,7 +381,7 @@ type Request struct {
 }
 
 func (s *Server) renewal(from time.Time) time.Time {
-	return addMonths(from, s.cfg.ConsentMonths)
+	return addMonths(from, s.currentTerms().ConsentMonths)
 }
 
 func addMonths(t time.Time, n int) time.Time {
@@ -451,7 +467,7 @@ func (s *Server) Request(ctx context.Context, requestURI, clientID string) (*Req
 	if floor := s.HistoryFloor(); eff.Before(floor) {
 		eff, capped = floor, true
 	}
-	return &Request{Client: client, Consent: c, Effective: eff, Capped: capped, Months: s.cfg.ConsentMonths, Until: s.renewal(s.cfg.Now())}, nil
+	return &Request{Client: client, Consent: c, Effective: eff, Capped: capped, Months: s.currentTerms().ConsentMonths, Until: s.renewal(s.cfg.Now())}, nil
 }
 
 func (s *Server) take(requestURI string) (*par, error) {
@@ -657,7 +673,7 @@ func (s *Server) Effective(c *Consent) Status {
 	if lastUse.Before(c.AuthorisedAt) {
 		lastUse = c.AuthorisedAt
 	}
-	if !now.Before(lastUse.AddDate(0, 0, s.cfg.DormantDays)) {
+	if !now.Before(lastUse.AddDate(0, 0, s.currentTerms().DormantDays)) {
 		return Dormant
 	}
 	return Authorised
@@ -817,7 +833,7 @@ func (s *Server) refreshGrant(w http.ResponseWriter, r *http.Request, client *Cl
 func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clientID, thumb, parent, family string) {
 	now := s.cfg.Real()
 	access, refresh := random("oba_", 24), random("obr_", 24)
-	refreshUntil := now.AddDate(0, 0, s.cfg.RefreshDays)
+	refreshUntil := now.AddDate(0, 0, s.currentTerms().RefreshDays)
 	for _, t := range []*Token{
 		{Hash: Hash(access), Kind: "access", ExpiresAt: now.Add(s.cfg.AccessLife)},
 		{Hash: Hash(refresh), Kind: "refresh", ExpiresAt: refreshUntil},

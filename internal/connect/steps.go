@@ -239,19 +239,26 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	if !ok {
 		return
 	}
-	if !a.takeConfirm(b.ID, gen) {
+	a.lifeMu.Lock()
+	leaving := st.leavingLocked()
+	a.lifeMu.Unlock()
+	if leaving || a.staleMember(b.ID) || !a.takeConfirm(b.ID, gen) {
 		return
 	}
 	phase := b.RunningPhase()
+	a.recordPhase(b.ID, phase, gen)
 	a.lifeMu.Lock()
-	if st.Phase == PhaseClosing || st.Phase == PhaseTerminating {
+	if st.leavingLocked() {
 		a.lifeMu.Unlock()
 		return
 	}
 	st.Phase, st.Reason, st.Attempts, st.NextAttemptAt = phase, "", 0, nil
 	a.lifeMu.Unlock()
-	a.recordPhase(b.ID, phase, gen)
 	a.pokePush()
+}
+
+func (st *BankStatus) leavingLocked() bool {
+	return st.Phase == PhaseClosing || st.Phase == PhaseTerminating
 }
 
 func (a *App) directoryDone(st *BankStatus) bool {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -54,22 +55,22 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	renamed := b.Name != want.Name
 	restate := b.State != want.State
 	relimit := b.NetDebitCap != want.NetDebitCap || b.Collateral != want.Collateral
-	reload := renamed || b.API != want.API
+	retermed := renamed || b.API != want.API
 	b.Name, b.State, b.NetDebitCap, b.Collateral, b.API = want.Name, want.State, want.NetDebitCap, want.Collateral, want.API
 	a.mu.Unlock()
 	if st := a.status[r.ID]; st != nil {
 		st.Name = want.Name
 	}
+	current := *b
 	a.lifeMu.Unlock()
 	if renamed || restate || relimit {
 		a.markStale(r.ID, r.Generation)
 		a.updateFailed(r.ID, errors.New("waiting for NIBSS to take the change"))
 	}
-	if reload {
-		a.reloadSite(b.ID)
-		return
+	if retermed {
+		a.retune(current)
 	}
-	phase := b.RunningPhase()
+	phase := current.RunningPhase()
 	a.lifeMu.Lock()
 	if st := a.status[r.ID]; st != nil {
 		if st.Phase == PhaseClosing || st.Phase == PhaseTerminating {
@@ -96,30 +97,14 @@ func (a *App) updateFailed(id string, err error) {
 	})
 }
 
-func (a *App) reloadSite(id string) {
-	a.lifeMu.Lock()
-	b := a.cfg.Bank(id)
-	a.lifeMu.Unlock()
-	if b == nil {
+func (a *App) retune(b config.Bank) {
+	a.obMu.Lock()
+	ob := a.obs[b.ID]
+	a.obMu.Unlock()
+	if ob == nil {
 		return
 	}
-	a.detach(b, config.StepSite)
-	a.lifeMu.Lock()
-	if st := a.status[id]; st != nil {
-		st.Phase = PhaseRepairing
-		for _, step := range []string{config.StepSite, config.StepAPI} {
-			if i := stepIndex(step); i >= 0 {
-				st.Steps[i].Done, st.Steps[i].Error = false, ""
-			}
-		}
-	}
-	a.lifeMu.Unlock()
-	a.recordBank(id, func(r *setup.Resource) bool {
-		r.Phase = PhaseRepairing
-		delete(r.Steps, config.StepSite)
-		delete(r.Steps, config.StepAPI)
-		return true
-	})
+	ob.SetTerms(server.OpenTerms(b))
 }
 
 func (a *App) updatePartner(id string) {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -94,10 +95,24 @@ func TestApplyFromTheSpec(t *testing.T) {
 	}
 	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-c", nuban, "100")
 
+	site := s.cfg.Bank("bank-c").URL()
+	signedIn := s.browser()
+	signedIn.get(site + "/login")
+	signedIn.postTo(site, "/login", url.Values{"username": {who.Username}, "password": {who.Password}})
+	if otp := reOTP.FindStringSubmatch(signedIn.last); otp != nil {
+		signedIn.postTo(site, "/verify", url.Values{"otp": {otp[1]}})
+	}
+	if signedIn.get(site+"/accounts") != http.StatusOK || signedIn.cur.Path != "/accounts" || !strings.Contains(signedIn.last, nuban) {
+		t.Fatalf("sign in at the new bank: %v %.300s", signedIn.cur, signedIn.last)
+	}
+
 	renamed := applied()
 	renamed.Spec.Banks[2].Name = "Abuja Digital"
 	if _, err := post("/apply", renamed, nil); err != nil {
 		t.Fatal(err)
+	}
+	if ne := enquiry(); ne["response_code"] != "00" {
+		t.Fatalf("name enquiry during the rename: %v", ne)
 	}
 	r = settled("bank", "bank-c")
 	if r["generation"] != float64(2) {
@@ -106,7 +121,10 @@ func TestApplyFromTheSpec(t *testing.T) {
 	if ne := enquiry(); ne["bank_name"] != "Abuja Digital" || ne["response_code"] != "00" {
 		t.Fatalf("name enquiry after the rename: %v", ne)
 	}
-	resp, err := http.Get(s.cfg.Bank("bank-c").URL() + "/login")
+	if signedIn.get(site+"/accounts") != http.StatusOK || signedIn.cur.Path != "/accounts" || !strings.Contains(signedIn.last, nuban) {
+		t.Fatalf("the rename signed the customer out: %v %.300s", signedIn.cur, signedIn.last)
+	}
+	resp, err := http.Get(site + "/login")
 	if err != nil {
 		t.Fatal(err)
 	}

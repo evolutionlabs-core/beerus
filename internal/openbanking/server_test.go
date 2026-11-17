@@ -130,7 +130,7 @@ func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	t.Cleanup(e.ts.Close)
 	client := &Client{ID: "OBR-1", Name: "Connect", Role: "aggregator", CertCN: "connect", Keys: []*ecdsa.PublicKey{&key.PublicKey}, RedirectURIs: []string{"https://connect.localhost/cb"}}
 	cfg := Config{
-		BankID: "bank-a", BankName: "Bank A", Issuer: e.ts.URL, AuthorizeURL: "http://bank-a.localhost/authorize", HistoryDays: 90,
+		BankID: "bank-a", Terms: Terms{BankName: "Bank A"}, Issuer: e.ts.URL, AuthorizeURL: "http://bank-a.localhost/authorize", HistoryDays: 90,
 		Store: e.store, Registry: fakeRegistry{client}, Data: fakeData{},
 		Real: func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.now },
 		Now:  func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.clk },
@@ -494,7 +494,7 @@ func TestConsentNeedsRenewalAfterAYear(t *testing.T) {
 }
 
 func TestConsentLifetimeFollowsTheSetting(t *testing.T) {
-	e := newEnv(t, func(c *Config) { c.ConsentMonths = 6 })
+	e := newEnv(t, func(c *Config) { c.Terms.ConsentMonths = 6 })
 	_, id := e.tokens()
 	c, _ := e.store.Consent(context.Background(), id)
 	if want := addMonths(c.AuthorisedAt, 6); !c.ExpiresAt.Equal(want) {
@@ -507,8 +507,25 @@ func TestConsentLifetimeFollowsTheSetting(t *testing.T) {
 	}
 }
 
+func TestSetTermsKeepsPendingRequests(t *testing.T) {
+	e := newEnv(t)
+	uri, _ := e.pushed()
+	e.srv.SetTerms(Terms{BankName: "Bank B", ConsentMonths: 6})
+	if _, body := e.get(e.good, "/discover", ""); body["name"] != "Bank B" {
+		t.Fatalf("discover name %v", body["name"])
+	}
+	req, err := e.srv.Request(context.Background(), uri, "OBR-1")
+	if err != nil || req.Months != 6 {
+		t.Fatalf("request %+v %v", req, err)
+	}
+	e.srv.SetTerms(Terms{})
+	if req, err := e.srv.Request(context.Background(), uri, "OBR-1"); err != nil || req.Months != DefaultConsentMonths {
+		t.Fatalf("request %+v %v", req, err)
+	}
+}
+
 func TestDormantConsent(t *testing.T) {
-	e := newEnv(t, func(c *Config) { c.ConsentMonths = 24 })
+	e := newEnv(t, func(c *Config) { c.Terms.ConsentMonths = 24 })
 	tok, id := e.tokens()
 	access := tok["access_token"].(string)
 	e.advance(0, 179*day)
@@ -535,7 +552,7 @@ func TestDormantConsent(t *testing.T) {
 }
 
 func TestDormancyFollowsTheSetting(t *testing.T) {
-	e := newEnv(t, func(c *Config) { c.DormantDays = 30 })
+	e := newEnv(t, func(c *Config) { c.Terms.DormantDays = 30 })
 	tok, _ := e.tokens()
 	e.advance(0, 31*day)
 	if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != http.StatusForbidden || body["error"] != "consent_dormant" {
@@ -684,7 +701,7 @@ func TestAccessLogFailureFailsTheRequest(t *testing.T) {
 }
 
 func TestAssertionRules(t *testing.T) {
-	e := newEnv(t, func(c *Config) { c.AssertionLife = time.Minute })
+	e := newEnv(t, func(c *Config) { c.Terms.AssertionLife = time.Minute })
 	sign := func(aud string, life time.Duration) string {
 		jwt, err := Sign(e.key, "k1", map[string]any{"iss": "OBR-1", "sub": "OBR-1", "aud": aud, "jti": random("j", 8), "exp": e.now.Add(life).Unix()})
 		if err != nil {
@@ -765,7 +782,7 @@ func TestAddMonthsClampsToMonthEnd(t *testing.T) {
 }
 
 func TestConsentAuthorisedOnAMonthEndExpiresOnTheLastDay(t *testing.T) {
-	e := newEnv(t, func(c *Config) { c.ConsentMonths = 6; c.DormantDays = 400 })
+	e := newEnv(t, func(c *Config) { c.Terms.ConsentMonths = 6; c.Terms.DormantDays = 400 })
 	start := time.Date(2026, time.August, 31, 9, 0, 0, 0, time.UTC)
 	e.now, e.clk = start, start
 	tok, id := e.tokens()

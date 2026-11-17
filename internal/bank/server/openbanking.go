@@ -39,7 +39,6 @@ func NewOpenBanking(c OpenConfig) (*openbanking.Server, error) {
 	b := c.Bank
 	return openbanking.New(openbanking.Config{
 		BankID:       b.ID,
-		BankName:     b.Name,
 		Issuer:       b.APIURL(),
 		AuthorizeURL: b.URL() + "/authorize",
 		HistoryDays:  b.HistoryDays,
@@ -49,15 +48,22 @@ func NewOpenBanking(c OpenConfig) (*openbanking.Server, error) {
 			}
 			return first.Pool()
 		}},
-		Registry:      registryView{c.Registry},
-		Data:          bankData{books: c.Books, clock: c.Clock},
-		Real:          c.Clock.Real,
-		Now:           c.Clock.Now,
+		Registry: registryView{c.Registry},
+		Data:     bankData{books: c.Books, clock: c.Clock},
+		Real:     c.Clock.Real,
+		Now:      c.Clock.Now,
+		Terms:    OpenTerms(b),
+	}), nil
+}
+
+func OpenTerms(b config.Bank) openbanking.Terms {
+	return openbanking.Terms{
+		BankName:      b.Name,
 		ConsentMonths: b.API.ConsentMonths,
 		RefreshDays:   b.API.RefreshDays,
 		DormantDays:   b.API.DormantDays,
 		AssertionLife: time.Duration(b.API.AssertionSeconds) * time.Second,
-	}), nil
+	}
 }
 
 type registryView struct {
