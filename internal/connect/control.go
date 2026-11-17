@@ -27,8 +27,6 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /faults", a.ctlFaults)
 	mux.HandleFunc("POST /faults", a.ctlAddFault)
 	mux.HandleFunc("DELETE /faults", a.ctlClearFaults)
-	mux.HandleFunc("GET /internal/registry", a.ctlInternalRegistry)
-	mux.HandleFunc("POST /internal/consents", a.ctlConsentRecord)
 	mux.HandleFunc("POST /banks/{id}/net-debit-cap", a.ctlNetDebitCap)
 	mux.HandleFunc("GET /connections", a.ctlConnections)
 	mux.HandleFunc("POST /connections/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +47,7 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("DELETE /partners/{id}", a.ctlRemovePartner)
 	mux.HandleFunc("GET /registry/clients", a.ctlRegistryClients)
 	mux.HandleFunc("POST /registry/clients", a.ctlRegistryAdd)
-	mux.HandleFunc("GET /registry/consents", a.ctlConsentLedger)
+	mux.HandleFunc("GET /registry/consents", a.ctlConsents)
 	mux.HandleFunc("GET /webhooks/deliveries", a.ctlDeliveries)
 	mux.HandleFunc("POST /webhooks/deliveries/{id}/replay", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.Replay(r.PathValue("id")); err != nil {

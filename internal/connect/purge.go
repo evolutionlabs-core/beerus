@@ -103,9 +103,7 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	case r.Allocated.Database != "":
 		errs = append(errs, store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{r.Allocated.Database}))
 	}
-	a.obMu.Lock()
-	delete(a.obs, id)
-	a.obMu.Unlock()
+	a.forgetOpenBanking(id)
 	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.memberGone(ctx, id))
 	a.dropBankRows(id)
 	if err := errors.Join(errs...); err != nil {

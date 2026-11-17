@@ -30,6 +30,12 @@ var operations = []struct{ id, method, path string }{
 	{"registerBank", http.MethodPut, "/v1/control/banks/{bank_id}"},
 	{"setBankStatus", http.MethodPut, "/v1/control/banks/{bank_id}/status"},
 	{"setBankLimits", http.MethodPut, "/v1/control/banks/{bank_id}/limits"},
+	{"nibssRegistryClients", http.MethodGet, "/v1/registry/clients"},
+	{"nibssRegistryClient", http.MethodGet, "/v1/registry/clients/{client_id}"},
+	{"nibssRecordConsent", http.MethodPost, "/v1/consents"},
+	{"controlRegistryClients", http.MethodGet, "/v1/control/registry/clients"},
+	{"registerRegistryClient", http.MethodPut, "/v1/control/registry/clients/{client_id}"},
+	{"controlConsents", http.MethodGet, "/v1/control/consents"},
 }
 
 type found struct {

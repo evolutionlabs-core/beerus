@@ -6,21 +6,9 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const RoleCore = "core"
-
-func (a *App) ctlConsentRecord(w http.ResponseWriter, r *http.Request) {
-	var e openbanking.ConsentEvent
-	if err := web.DecodeBody(r, &e); err != nil {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send a consent event.")
-		return
-	}
-	consentLedger{a}.Record(e)
-	w.WriteHeader(http.StatusNoContent)
-}
 
 const probeTimeout = 5 * time.Second
 

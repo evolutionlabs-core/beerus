@@ -9,7 +9,6 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -173,18 +172,6 @@ type AccessEvent struct {
 	At           time.Time `json:"at"`
 }
 
-type ConsentRecord struct {
-	Seq       int64     `json:"seq"`
-	SourceSeq int64     `json:"source_seq,omitempty"`
-	ConsentID string    `json:"consent_id"`
-	Bank      string    `json:"bank"`
-	ClientID  string    `json:"client_id"`
-	PartnerID string    `json:"partner_id"`
-	Status    string    `json:"status"`
-	Via       string    `json:"via"`
-	At        time.Time `json:"at"`
-}
-
 type PendingRevoke struct {
 	Bank      string    `json:"bank"`
 	ConsentID string    `json:"consent_id"`
@@ -193,23 +180,21 @@ type PendingRevoke struct {
 }
 
 type State struct {
-	Revokes        []PendingRevoke                        `json:"revokes,omitempty"`
-	SettleNow      []string                               `json:"settle_now,omitempty"`
-	Registry       map[string]*openbanking.RegistryClient `json:"registry"`
-	ConsentLedger  []ConsentRecord                        `json:"consent_ledger"`
-	Access         []AccessEvent                          `json:"access"`
-	WorldID        string                                 `json:"world_id"`
-	Faults         []*server.Fault                        `json:"faults"`
-	LinkSessions   map[string]*LinkSession                `json:"link_sessions"`
-	WidgetSessions map[string]*WidgetSession              `json:"widget_sessions"`
-	Connections    map[string]*Connection                 `json:"connections"`
-	Accounts       map[string]*AccountRec                 `json:"accounts"`
-	Feeds          map[string]*Feed                       `json:"feeds"`
-	Refreshes      map[string]*Refresh                    `json:"refreshes"`
-	Deliveries     []*Delivery                            `json:"deliveries"`
-	Idem           map[string]*web.Record                 `json:"idempotency"`
-	Seq            int64                                  `json:"seq"`
-	Vault          map[string]*VaultEntry                 `json:"vault,omitempty"`
+	Revokes        []PendingRevoke           `json:"revokes,omitempty"`
+	SettleNow      []string                  `json:"settle_now,omitempty"`
+	Access         []AccessEvent             `json:"access"`
+	WorldID        string                    `json:"world_id"`
+	Faults         []*server.Fault           `json:"faults"`
+	LinkSessions   map[string]*LinkSession   `json:"link_sessions"`
+	WidgetSessions map[string]*WidgetSession `json:"widget_sessions"`
+	Connections    map[string]*Connection    `json:"connections"`
+	Accounts       map[string]*AccountRec    `json:"accounts"`
+	Feeds          map[string]*Feed          `json:"feeds"`
+	Refreshes      map[string]*Refresh       `json:"refreshes"`
+	Deliveries     []*Delivery               `json:"deliveries"`
+	Idem           map[string]*web.Record    `json:"idempotency"`
+	Seq            int64                     `json:"seq"`
+	Vault          map[string]*VaultEntry    `json:"vault,omitempty"`
 }
 
 func newState() *State {
@@ -222,7 +207,6 @@ func newState() *State {
 		Feeds:          map[string]*Feed{},
 		Refreshes:      map[string]*Refresh{},
 		Idem:           map[string]*web.Record{},
-		Registry:       map[string]*openbanking.RegistryClient{},
 		Vault:          map[string]*VaultEntry{},
 	}
 }
@@ -248,9 +232,6 @@ func (s *State) fill() {
 	}
 	if s.Idem == nil {
 		s.Idem = map[string]*web.Record{}
-	}
-	if s.Registry == nil {
-		s.Registry = map[string]*openbanking.RegistryClient{}
 	}
 	if s.Vault == nil {
 		s.Vault = map[string]*VaultEntry{}

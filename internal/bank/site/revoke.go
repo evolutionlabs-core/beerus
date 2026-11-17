@@ -16,7 +16,9 @@ func (s *site) revoke(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.Sender.Events(context.WithoutCancel(r.Context()))
+	ctx := context.WithoutCancel(r.Context())
+	s.Sender.Events(ctx)
+	s.Sender.Ledger(ctx)
 	http.Redirect(w, r, "/apps?revoked=1", http.StatusSeeOther)
 }
 

@@ -342,6 +342,7 @@ type staleJob struct {
 
 func (a *App) registerDue(ctx context.Context) {
 	a.syncDirectoryDue(ctx)
+	a.registryDue(ctx)
 	a.closingCallsDue(ctx)
 	a.sendsDue(ctx)
 	a.closeMovesDue(ctx)

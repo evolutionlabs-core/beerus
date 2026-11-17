@@ -254,6 +254,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.waitGone("partner", "balance")
+	waitFor(t, waitLimit, "the revoke in the NIBSS consent ledger", func() bool { return revoked() > revokedBefore })
 	if got := revoked(); got != revokedBefore+1 {
 		t.Fatalf("the removed partner's connection was revoked at the bank %d times, want 1", got-revokedBefore)
 	}

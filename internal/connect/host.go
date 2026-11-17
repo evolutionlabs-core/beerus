@@ -49,8 +49,8 @@ func (h bankHost) Refusing(id string) bool {
 	return h.a.bankRefusing(id)
 }
 
-func (h bankHost) RefreshRegistry(context.Context) error {
-	return nil
+func (h bankHost) RefreshRegistry(ctx context.Context) error {
+	return h.a.bankRegistry(h.id).Refresh(ctx)
 }
 
 func (h bankHost) RefreshBanks(context.Context) error {

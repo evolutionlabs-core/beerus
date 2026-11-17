@@ -1,0 +1,146 @@
+package connect
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"net/http"
+
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/openbanking"
+	"github.com/evolutionlabs-core/beerus/internal/web"
+)
+
+const connectKeyID = "connect-1"
+
+var ErrRegistry = errors.New("registry")
+
+type RegistryRequest struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	LegalName    string   `json:"legal_name"`
+	CAC          string   `json:"cac"`
+	CertCN       string   `json:"cert_cn"`
+	PublicKey    string   `json:"public_key_pem"`
+	RedirectURIs []string `json:"redirect_uris"`
+}
+
+func (a *App) AddRegistryClient(ctx context.Context, req RegistryRequest) (openbanking.RegistryClient, error) {
+	block, _ := pem.Decode([]byte(req.PublicKey))
+	if block == nil {
+		return openbanking.RegistryClient{}, fmt.Errorf("%w: public_key_pem must hold a PEM public key", ErrRegistry)
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return openbanking.RegistryClient{}, fmt.Errorf("%w: the public key could not be read", ErrRegistry)
+	}
+	ec, ok := pub.(*ecdsa.PublicKey)
+	if !ok || ec.Curve != elliptic.P256() {
+		return openbanking.RegistryClient{}, fmt.Errorf("%w: the public key must be an EC P-256 key", ErrRegistry)
+	}
+	if req.Name == "" {
+		req.Name = req.ID
+	}
+	if req.LegalName == "" {
+		req.LegalName = req.Name
+	}
+	c := openbanking.RegistryClient{ID: req.ID, Name: req.Name, LegalName: req.LegalName, CAC: req.CAC, Role: config.AggregatorRole, CertCN: req.CertCN, JWK: openbanking.JWKOf(ec, req.ID), RedirectURIs: req.RedirectURIs}
+	return a.nibssCtl.ensureClient(ctx, c)
+}
+
+func (a *App) RegistryClients(ctx context.Context) ([]openbanking.RegistryClient, error) {
+	return a.nibssCtl.clients(ctx)
+}
+
+func (a *App) connectClient() (openbanking.RegistryClient, error) {
+	key, err := a.cfg.SigningKey()
+	if err != nil {
+		return openbanking.RegistryClient{}, err
+	}
+	a.mu.Lock()
+	conn, callback := a.cfg.Connect, a.cfg.WidgetURL()+"/bank/callback"
+	a.mu.Unlock()
+	return openbanking.RegistryClient{
+		ID:           conn.RegistryID,
+		Name:         conn.BrandName,
+		LegalName:    conn.LegalName,
+		CAC:          conn.CACNumber,
+		Role:         config.AggregatorRole,
+		CertCN:       config.AggregatorCN,
+		JWK:          openbanking.JWKOf(&key.PublicKey, connectKeyID),
+		RedirectURIs: []string{callback},
+	}, nil
+}
+
+func (a *App) registryDue(ctx context.Context) {
+	a.mu.Lock()
+	due := a.nibssCtl != nil && !a.regSynced && !a.clock.Real().Before(a.regNext)
+	a.mu.Unlock()
+	if !due {
+		return
+	}
+	err := a.ensureConnectClient(ctx)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err != nil {
+		a.regAttempts++
+		a.regNext = a.clock.Real().Add(clock.Backoff(a.regAttempts))
+		a.logNIBSS("registry client not sent to NIBSS; retrying", err)
+		return
+	}
+	a.regSynced, a.regAttempts = true, 0
+}
+
+func (a *App) ensureConnectClient(ctx context.Context) error {
+	c, err := a.connectClient()
+	if err != nil {
+		return fmt.Errorf("build the registry client of Connect: %w", err)
+	}
+	if _, err := a.nibssCtl.ensureClient(ctx, c); err != nil {
+		return fmt.Errorf("register %s with the registry: %w", c.ID, err)
+	}
+	return nil
+}
+
+func (a *App) nibssFailed(w http.ResponseWriter, r *http.Request, err error) {
+	var peer *server.PeerError
+	if errors.As(err, &peer) && peer.Status != http.StatusServiceUnavailable {
+		web.WriteError(w, r, peer.Status, peer.Code, peer.Message)
+		return
+	}
+	a.log.ErrorContext(r.Context(), "NIBSS call failed", "err", err)
+	web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", nibssAway)
+}
+
+func (a *App) ctlRegistryClients(w http.ResponseWriter, r *http.Request) {
+	list, err := a.RegistryClients(r.Context())
+	if err != nil {
+		a.nibssFailed(w, r, err)
+		return
+	}
+	web.WriteJSON(w, http.StatusOK, map[string]any{"data": list})
+}
+
+func (a *App) ctlRegistryAdd(w http.ResponseWriter, r *http.Request) {
+	var req RegistryRequest
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send a JSON body with id, cert_cn, public_key_pem and redirect_uris.")
+		return
+	}
+	c, err := a.AddRegistryClient(r.Context(), req)
+	if errors.Is(err, ErrRegistry) {
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", err.Error())
+		return
+	}
+	if err != nil {
+		a.nibssFailed(w, r, err)
+		return
+	}
+	web.WriteJSON(w, http.StatusOK, c)
+}

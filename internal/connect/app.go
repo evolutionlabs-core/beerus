@@ -63,6 +63,10 @@ type App struct {
 	dirSynced    bool
 	dirAttempts  int
 	dirNext      time.Time
+	regSynced    bool
+	regAttempts  int
+	regNext      time.Time
+	registries   map[string]*server.RegistryCache
 	stale        map[string]*staleMember
 	closeRuns    map[string]*closeRun
 	sendReads    map[string]sendRead
@@ -81,7 +85,6 @@ type App struct {
 	refreshing   map[string]*refreshFlight
 	obMu         sync.Mutex
 	obs          map[string]*openbanking.Server
-	regMu        sync.Mutex
 	poolMu       sync.RWMutex
 	pools        map[string]*ledgerSource
 	vault        *vault
@@ -260,8 +263,6 @@ func (a *App) Save() error {
 
 func (a *App) saveLocked() error {
 	a.isDirty.Store(false)
-	a.regMu.Lock()
-	defer a.regMu.Unlock()
 	return saveJSON(a.statePath, a.st)
 }
 
@@ -330,6 +331,7 @@ func (a *App) stepLocked(ctx context.Context) {
 	due := a.dueDeliveries()
 	a.mu.Unlock()
 	a.sender.Events(ctx)
+	a.sender.Ledger(ctx)
 	for _, d := range due {
 		go func(d Delivery) {
 			a.sending <- struct{}{}
@@ -700,5 +702,6 @@ func (a *App) RevokeAtBank(ctx context.Context, connID string) error {
 		return err
 	}
 	a.sender.Events(context.WithoutCancel(ctx))
+	a.sender.Ledger(context.WithoutCancel(ctx))
 	return nil
 }

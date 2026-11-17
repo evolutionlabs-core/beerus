@@ -43,6 +43,11 @@ func (s *Stack) consentTrail(bank string) map[string]bool {
 	return seen
 }
 
+func (s *Stack) waitConsent(bank, key string) {
+	s.t.Helper()
+	waitFor(s.t, waitLimit, "the NIBSS consent ledger of "+bank+" to hold "+key, func() bool { return s.consentTrail(bank)[key] })
+}
+
 func (s *Stack) hasRevoked(connID string) bool {
 	return len(s.eventsOf("connection.status_changed", func(d map[string]any) bool {
 		return d["connection_id"] == connID && d["status"] == "revoked"
@@ -63,9 +68,7 @@ func TestRealAggregator(t *testing.T) {
 	if err := db.QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
 		t.Fatalf("the bank holds no consent for the connection: %v", err)
 	}
-	if !s.consentTrail("bank-a")[consentID+" Authorised/bank"] {
-		t.Fatalf("NIBSS consent ledger: %v", s.consentTrail("bank-a"))
-	}
+	s.waitConsent("bank-a", consentID+" Authorised/bank")
 
 	st, _ := s.syncAll(id, "", 500)
 	if len(st.lines) != 13 {
@@ -141,9 +144,7 @@ func TestRealAggregator(t *testing.T) {
 	if !s.hasRevoked(conn.ConnectionID) {
 		t.Fatal("no reconnect-needed webhook after the bank's consent event")
 	}
-	if !s.consentTrail("bank-a")[consentID+" Revoked/bank"] {
-		t.Fatalf("NIBSS consent ledger after revoke: %v", s.consentTrail("bank-a"))
-	}
+	s.waitConsent("bank-a", consentID+" Revoked/bank")
 	if r := s.call("GET", "/v1/accounts/"+id, nil); r.Status != 409 || r.Code() != "connection_revoked" {
 		t.Fatalf("account after revoke: %d %s", r.Status, r.Body)
 	}
@@ -160,9 +161,7 @@ func TestRealAggregator(t *testing.T) {
 	if err := db.QueryRow(context.Background(), `SELECT status, revoked_via FROM ob_consents WHERE id = $1`, consentID).Scan(&status, &via); err != nil || status != "Revoked" || via != "aggregator" {
 		t.Fatalf("consent at the bank after the partner disconnected: %s %s %v", status, via, err)
 	}
-	if !s.consentTrail("bank-a")[consentID+" Revoked/aggregator"] {
-		t.Fatalf("NIBSS consent ledger after disconnect: %v", s.consentTrail("bank-a"))
-	}
+	s.waitConsent("bank-a", consentID+" Revoked/aggregator")
 	if r := s.call("GET", "/v1/connections/"+conn2.ConnectionID, nil); r.JSON["status"] != "revoked" {
 		t.Fatalf("status after disconnect: %s", r.Body)
 	}
@@ -183,9 +182,7 @@ func TestRealAggregator(t *testing.T) {
 	})) == 0 {
 		t.Fatal("no reauth_required webhook after the consent expired")
 	}
-	if !s.consentTrail("bank-a")[consentID+" ReconsentRequired/bank"] {
-		t.Fatalf("NIBSS consent ledger after expiry: %v", s.consentTrail("bank-a"))
-	}
+	s.waitConsent("bank-a", consentID+" ReconsentRequired/bank")
 
 	conn3 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
 	if _, err := db.Exec(context.Background(), `UPDATE ob_consents SET status = 'Revoked', revoked_via = 'bank' WHERE status = 'Authorised' AND partner_id = 'balance'`); err != nil {
