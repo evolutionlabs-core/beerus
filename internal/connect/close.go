@@ -517,7 +517,11 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		if err != nil {
 			return CloseResult{}, err
 		}
-		tr, err := a.transfer(ctx, server.TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: key, Closure: true})
+		moveKey, err := a.closureKey(ctx, id, acc.NUBAN, key)
+		if err != nil {
+			return CloseResult{}, err
+		}
+		tr, err := a.transfer(ctx, server.TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: moveKey, Closure: true})
 		if err != nil {
 			return CloseResult{}, fmt.Errorf("move %s from %s: %w", bank.Naira(bal), acc.NUBAN, err)
 		}
@@ -540,6 +544,22 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		}
 	}
 	return a.closeOutcome(ctx, id, imp, choice, from)
+}
+
+func (a *App) closureKey(ctx context.Context, id, nuban, key string) (string, error) {
+	b := a.bankByID(id)
+	sw := a.nibssStore()
+	if b == nil || sw == nil {
+		return "", errors.New("NIBSS is not available right now, so the closure moves cannot be sent; try again soon")
+	}
+	failed, err := sw.ClosureFailed(ctx, b.NIPCode, nuban)
+	if err != nil {
+		return "", err
+	}
+	if failed == 0 {
+		return key, nil
+	}
+	return fmt.Sprintf("%s:%d", key, failed), nil
 }
 
 func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choice map[string]string, from *ledgerSource) (CloseResult, error) {

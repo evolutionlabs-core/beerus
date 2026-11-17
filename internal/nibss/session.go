@@ -424,6 +424,15 @@ func (s *Store) ClosureSent(ctx context.Context, fromCode string) ([]Session, er
 	return s.sessions(ctx, "closure sessions", `SELECT `+sessionCols+` FROM nip_sessions WHERE from_code = $1 AND closure AND status IN ('00', 'pending') ORDER BY created_at, session_id`, fromCode)
 }
 
+func (s *Store) ClosureFailed(ctx context.Context, fromCode, fromNUBAN string) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM nip_sessions WHERE from_code = $1 AND from_nuban = $2 AND closure AND status NOT IN ('00', 'pending')`, fromCode, fromNUBAN).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count failed closure sessions: %w", err)
+	}
+	return n, nil
+}
+
 func (s *Store) Open(ctx context.Context) ([]Session, error) {
 	return s.sessions(ctx, "open sessions", `
 SELECT `+sessionCols+` FROM nip_sessions
