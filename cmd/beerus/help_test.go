@@ -49,7 +49,7 @@ Failures and recovery:
   fault         Make a bank go down or time out
 
 Running Beerus:
-  run           Run one participant: cbn, core or a bank
+  run           Run one participant: cbn, core, nibss or a bank
   compose       Print a Docker Compose file for the setup
   info          Show addresses and partner apps
   doctor        Find and clean up leftovers
@@ -83,14 +83,15 @@ const wantTransferHelp = `Usage: beerus transfer --from NUBAN --to NUBAN --amoun
 Send money between accounts over NIP.
 
 Options:
-  --amount NAIRA     Amount in naira, such as 25000 or 2500.50
-  --dry-run          Show the fee, VAT, stamp duty and total debit without sending
-  --from NUBAN       NUBAN of the account to pay from
-  --from-bank ID     Bank ID of the paying account; the session bank when empty
-  --json             Print the API response as JSON
-  --narration TEXT   Text shown on the transfer
-  --to NUBAN         NUBAN of the account to pay into
-  --to-bank ID       Bank ID of the receiving account; the paying bank when empty
+  --amount NAIRA          Amount in naira, such as 25000 or 2500.50
+  --dry-run               Show the fee, VAT, stamp duty and total debit without sending
+  --from NUBAN            NUBAN of the account to pay from
+  --from-bank ID          Bank ID of the paying account; the session bank when empty
+  --idempotency-key KEY   Key that makes a rerun safe after a timeout; a new one is made when empty
+  --json                  Print the API response as JSON
+  --narration TEXT        Text shown on the transfer
+  --to NUBAN              NUBAN of the account to pay into
+  --to-bank ID            Bank ID of the receiving account; the paying bank when empty
 `
 
 func helpOf(t *testing.T, args ...string) string {

@@ -2,13 +2,15 @@ package connect
 
 import (
 	"context"
-	"errors"
 	"log/slog"
+	"math/rand/v2"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -136,20 +138,6 @@ func TestStoreConcurrentClaims(t *testing.T) {
 	}
 }
 
-func TestReadOnlyStoreRefusesWrites(t *testing.T) {
-	s := testStore(t)
-	ro, err := readStore(s.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ro.Claim(setup.KindBank, "bank-a", setup.Owned{Kind: ownedPort, Name: "1"}); !errors.Is(err, errStoreReadOnly) {
-		t.Fatalf("claim from a read-only store: %v", err)
-	}
-	if ro.setupKey() != 9 {
-		t.Fatalf("setup key %d", ro.setupKey())
-	}
-}
-
 func TestStoreFileMode(t *testing.T) {
 	s := testStore(t)
 	fi, err := os.Stat(filepath.Join(s.dir, "control.json"))
@@ -177,8 +165,15 @@ func TestNewSetupKeyIsRandom(t *testing.T) {
 
 func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	t.Helper()
-	dir := t.TempDir()
 	local := DefaultLocal()
+	ports := testPorts(t, 2)
+	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort = ports[0], ports[1], ports[2], ports[3], ports[4]
+	return initConfigWith(t, today, local)
+}
+
+func initConfigWith(t *testing.T, today clock.Date, local setup.Local) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
@@ -192,15 +187,38 @@ func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	return cfg
 }
 
-func newTestApp(t *testing.T, o Options) *App {
+const (
+	testPortLow  = 20000
+	testPortHigh = 32000
+)
+
+func testPorts(t *testing.T, banks int) []int {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("opens bank databases; run without -short")
+	need := 5 + banks
+	for range 200 {
+		base := testPortLow + rand.IntN(testPortHigh-testPortLow-need-config.DefaultAPIPortOffset)
+		free := true
+		for p := base; p < base+need && free; p++ {
+			free = portFree(p) && (p < base+5 || portFree(p+config.DefaultAPIPortOffset))
+		}
+		if free {
+			return []int{base, base + 1, base + 2, base + 3, base + 4}
+		}
 	}
+	t.Fatal("no free block of ports for the app")
+	return nil
+}
+
+const (
+	testProvisionLimit = 30 * time.Second
+	testProvisionPoll  = 50 * time.Millisecond
+)
+
+const testBindTries = 4
+
+func startTestNIBSS(t *testing.T, o Options) (*App, context.Context, func(), error) {
+	t.Helper()
 	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
-	if o.Logger == nil {
-		o.Logger = slog.New(slog.DiscardHandler)
-	}
 	conn, err := pgx.Connect(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		t.Skipf("no Postgres for app tests (%v); set BEERUS_TEST_DATABASE_URL", err)
@@ -215,43 +233,100 @@ func newTestApp(t *testing.T, o Options) *App {
 			t.Errorf("drop databases: %v", err)
 		}
 	})
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	errc := make(chan error, 1)
+	done, err := a.serveNIBSS(ctx, errc)
+	if err != nil {
+		cancel()
+		return nil, nil, nil, err
+	}
+	stop := sync.OnceFunc(func() {
+		cancel()
+		<-done
+	})
+	t.Cleanup(stop)
+	tick := time.NewTicker(testProvisionPoll)
+	defer tick.Stop()
+	upCtx, upStop := context.WithTimeout(ctx, testProvisionLimit)
+	defer upStop()
+	for !nibssAnswers(upCtx, a) {
+		select {
+		case <-upCtx.Done():
+			stop()
+			return nil, nil, nil, upCtx.Err()
+		case err := <-errc:
+			stop()
+			return nil, nil, nil, err
+		case <-tick.C:
+		}
+	}
+	return a, ctx, stop, nil
+}
+
+func newTestApp(t *testing.T, o Options) *App {
+	t.Helper()
+	a, _ := newTestAppWithNIBSS(t, o)
 	return a
 }
 
-func TestIdempotencyLocksExcludeAndAreReleased(t *testing.T) {
-	a := &App{}
-	var wg sync.WaitGroup
-	inside := map[string]int{}
-	var mu sync.Mutex
-	for _, scope := range []string{"s1", "s1", "s1", "s2", "s2"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			e := a.idemAcquire(scope)
-			mu.Lock()
-			inside[scope]++
-			if inside[scope] != 1 {
-				t.Errorf("two requests held %s at once", scope)
-			}
-			mu.Unlock()
-			mu.Lock()
-			inside[scope]--
-			mu.Unlock()
-			a.idemRelease(scope, e)
-		}()
+func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("opens bank databases; run without -short")
 	}
-	wg.Wait()
-	if n := len(a.idemLocks); n != 0 {
-		t.Fatalf("%d locks left after every request finished", n)
+	if o.Logger == nil {
+		o.Logger = slog.New(slog.DiscardHandler)
 	}
-	e := a.idemAcquire("s3")
-	if len(a.idemLocks) != 1 {
-		t.Fatalf("held lock missing: %d", len(a.idemLocks))
+	var a *App
+	var ctx context.Context
+	var stopNIBSS func()
+	for try := 0; ; try++ {
+		var err error
+		if a, ctx, stopNIBSS, err = startTestNIBSS(t, o); err == nil {
+			break
+		}
+		if try == testBindTries {
+			t.Fatal(err)
+		}
 	}
-	a.idemRelease("s3", e)
-	if len(a.idemLocks) != 0 {
-		t.Fatal("lock not removed on release")
+	waitCtx, stop := context.WithTimeout(ctx, testProvisionLimit)
+	defer stop()
+	tick := time.NewTicker(testProvisionPoll)
+	defer tick.Stop()
+	for !nibssAnswers(waitCtx, a) || provisioning(a) {
+		select {
+		case <-waitCtx.Done():
+			t.Fatalf("banks still provisioning: %+v", a.BankStatuses())
+		case <-tick.C:
+		}
+		a.Step(waitCtx)
 	}
+	for _, b := range a.cfg.Banks {
+		api, err := a.startBankAPI(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = api.Close() })
+	}
+	return a, stopNIBSS
+}
+
+func nibssAnswers(ctx context.Context, a *App) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.nibssCtl.base+"/v1/health", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+a.nibssCtl.link.Token)
+	resp, err := a.nibssCtl.link.Client.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+func provisioning(a *App) bool {
+	return slices.ContainsFunc(a.BankStatuses(), func(st BankStatus) bool { return st.Phase == PhaseProvisioning })
 }
 
 func TestWriteFilesRestoresExactlyTheSavedSet(t *testing.T) {

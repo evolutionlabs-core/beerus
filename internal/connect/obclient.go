@@ -18,10 +18,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -122,7 +124,7 @@ func (a *App) newBankClient() (*http.Client, error) {
 		MaxIdleConnsPerHost: bankIdleConnsPerHost,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
-			if err == nil && !a.remotePeers() && strings.HasSuffix(host, ".localhost") {
+			if err == nil && !a.link.Remote() && strings.HasSuffix(host, ".localhost") {
 				addr = net.JoinHostPort("127.0.0.1", port)
 			}
 			return dialer.DialContext(ctx, network, addr)
@@ -159,7 +161,11 @@ func (a *App) assertion(b *config.Bank) (string, error) {
 		return "", err
 	}
 	id := a.cfg.Connect.RegistryID
-	return openbanking.Sign(key, "connect-1", map[string]any{"iss": id, "sub": id, "aud": b.APIURL(), "jti": newSecret("j_", 12), "exp": a.clock.Real().Add(time.Minute).Unix()})
+	jti, err := web.NewSecret("j_", 12)
+	if err != nil {
+		return "", err
+	}
+	return openbanking.Sign(key, "connect-1", map[string]any{"iss": id, "sub": id, "aud": b.APIURL(), "jti": jti, "exp": a.clock.Real().Add(time.Minute).Unix()})
 }
 
 func (a *App) bankCall(b *config.Bank, method, path string, form url.Values, token string, out any) error {
@@ -220,10 +226,13 @@ func (a *App) bankCall(b *config.Bank, method, path string, form url.Values, tok
 	return json.Unmarshal(raw, out)
 }
 
-func pkcePair() (string, string) {
-	verifier := newSecret("", 32)
+func pkcePair() (string, string, error) {
+	verifier, err := web.NewSecret("", 32)
+	if err != nil {
+		return "", "", err
+	}
 	sum := sha256.Sum256([]byte(verifier))
-	return verifier, base64.RawURLEncoding.EncodeToString(sum[:])
+	return verifier, base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
 func (a *App) callbackURL() string {
@@ -483,7 +492,7 @@ func (a *App) revokeOrQueue(b *config.Bank, consentID string) {
 	a.log.Warn("consent not revoked at the bank; will retry", "bank", b.ID, "consent", consentID, "err", err)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.st.Revokes = append(a.st.Revokes, PendingRevoke{Bank: b.ID, ConsentID: consentID, Attempts: 1, Next: a.clock.Real().Add(eventDelay(1))})
+	a.st.Revokes = append(a.st.Revokes, PendingRevoke{Bank: b.ID, ConsentID: consentID, Attempts: 1, Next: a.clock.Real().Add(consent.Backoff(1))})
 	a.dirty()
 }
 
@@ -525,7 +534,7 @@ func (a *App) settleRevokeLocked(p PendingRevoke, err error) {
 		return
 	}
 	a.st.Revokes[i].Attempts = p.Attempts + 1
-	a.st.Revokes[i].Next = a.clock.Real().Add(eventDelay(p.Attempts + 1))
+	a.st.Revokes[i].Next = a.clock.Real().Add(consent.Backoff(p.Attempts + 1))
 	a.log.Warn("consent still not revoked at the bank", "bank", p.Bank, "consent", p.ConsentID, "attempt", p.Attempts+1, "err", err)
 }
 

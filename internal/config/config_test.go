@@ -1,22 +1,24 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
 func finish(c Config) (*Config, error) {
-	c.Dir, c.TSQAfter, c.TSQAttempts = "x", 2*time.Minute, 3
+	c.Dir, c.TSQAfter = "x", 2*time.Minute
 	return &c, c.Finish()
 }
 
-func TestStatusQueriesNeedAWaitAndTries(t *testing.T) {
-	for _, c := range []Config{{Dir: "x", TSQAttempts: 3}, {Dir: "x", TSQAfter: time.Minute}} {
-		err := c.Finish()
-		if err == nil || !strings.Contains(err.Error(), "nip status queries need a wait and a number of tries") {
-			t.Errorf("%s and %d: %v", c.TSQAfter, c.TSQAttempts, err)
-		}
+func TestStatusQueriesNeedAWait(t *testing.T) {
+	c := Config{Dir: "x"}
+	if err := c.Finish(); err == nil || err.Error() != "nip status queries need a wait above zero, not 0s" {
+		t.Errorf("finish with no wait: %v", err)
 	}
 }
 
@@ -65,5 +67,85 @@ func TestPortAllocation(t *testing.T) {
 	}
 	if _, err := finish(Config{Banks: []*Bank{{ID: "bank-a", API: BankAPI{DormantDays: -5}}}}); err == nil || !strings.Contains(err.Error(), "dormant_days") {
 		t.Fatalf("negative dormant_days: %v", err)
+	}
+}
+
+func TestNIBSSClientCertificate(t *testing.T) {
+	c, err := finish(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Dir = t.TempDir()
+	now := time.Now()
+	if err := Prepare(c, now); err != nil {
+		t.Fatal(err)
+	}
+	crt, key := c.Path("nibss", "client.crt"), c.Path("nibss", "client.key")
+	pair, err := tls.LoadX509KeyPair(crt, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaf.Subject.CommonName != "beerus-nibss" || len(leaf.Subject.OrganizationalUnit) != 1 || leaf.Subject.OrganizationalUnit[0] != "nibss" {
+		t.Fatalf("subject %v, want CN beerus-nibss and role nibss", leaf.Subject)
+	}
+	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
+		t.Fatalf("usage %v, want client auth only", leaf.ExtKeyUsage)
+	}
+	info, err := os.Stat(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("key mode %v, want 0600", info.Mode().Perm())
+	}
+	if err := Prepare(c, now); err != nil {
+		t.Fatal(err)
+	}
+	again, err := os.ReadFile(crt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again) != string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate[0]})) {
+		t.Fatal("a second prepare replaced the certificate")
+	}
+}
+
+func TestBankClientAndNIBSSServerCertificates(t *testing.T) {
+	c, err := finish(Config{Banks: []*Bank{{ID: "bank-a"}, {ID: "bank-b"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Dir = t.TempDir()
+	if err := Prepare(c, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	read := func(dir, name string) *x509.Certificate {
+		t.Helper()
+		pair, err := tls.LoadX509KeyPair(c.Path(dir, name+".crt"), c.Path(dir, name+".key"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf, err := x509.ParseCertificate(pair.Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return leaf
+	}
+	for _, id := range []string{"bank-a", "bank-b"} {
+		leaf := read("banks/"+id, "client")
+		if leaf.Subject.CommonName != id || len(leaf.Subject.OrganizationalUnit) != 1 || leaf.Subject.OrganizationalUnit[0] != "bank" {
+			t.Fatalf("%s subject %v, want CN %s and role bank", id, leaf.Subject, id)
+		}
+		if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
+			t.Fatalf("%s usage %v, want client auth only", id, leaf.ExtKeyUsage)
+		}
+	}
+	server := read("nibss", "server")
+	if len(server.DNSNames) != 2 || server.DNSNames[0] != "nibss.localhost" || server.DNSNames[1] != "localhost" {
+		t.Fatalf("NIBSS server names %v, want nibss.localhost and localhost", server.DNSNames)
 	}
 }

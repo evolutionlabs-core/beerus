@@ -27,6 +27,15 @@ func (s *Stack) position(bank string) map[string]any {
 func (s *Stack) setCap(bank string, minor int64) {
 	s.t.Helper()
 	s.ctl("POST", "/banks/"+bank+"/net-debit-cap", map[string]string{"cap": minorToNaira(minor)})
+	s.limitsReach(bank)
+}
+
+func (s *Stack) limitsReach(bank string) {
+	s.t.Helper()
+	waitFor(s.t, waitLimit, "the limits of "+bank+" to reach NIBSS", func() bool {
+		r := s.ctl("GET", "/resources/bank/"+bank, nil)
+		return r["observed_generation"] == r["generation"]
+	})
 }
 
 func (s *Stack) sessionCredits(bank, nuban, sid string) int {
@@ -59,9 +68,8 @@ func TestNIPSwitch(t *testing.T) {
 	}{
 		"unknown account": {enquiry("000002", world.NUBAN("002", 99)), "25"},
 		"bad check digit": {enquiry("000002", "0000000001"), "07"},
-		"short number":    {enquiry("000002", "123"), "07"},
-		"unknown bank":    {enquiry("000111", to), nil},
-		"no such bank":    {enquiry("000003", world.NUBAN("003", 1)), nil},
+		"unknown bank":    {enquiry("000111", to), "96"},
+		"no such bank":    {enquiry("000003", world.NUBAN("003", 1)), "96"},
 	} {
 		if c.ne["response_code"] != c.code {
 			t.Fatalf("%s: %v", name, c.ne)
@@ -69,6 +77,9 @@ func TestNIPSwitch(t *testing.T) {
 	}
 	if ne := enquiry("000111", to); ne["message"] != "Bank code 000111 is not in the NIBSS directory." {
 		t.Fatalf("unknown bank: %v", ne)
+	}
+	if _, err := s.payTry("bank-a", from, "bank-b", "123", "100", nil); err == nil || !strings.Contains(err.Error(), `"response_code":"07"`) || !strings.Contains(err.Error(), "That is not a valid account number, so nothing was debited.") {
+		t.Fatalf("transfer to a short account number: %v", err)
 	}
 	s.ctl("POST", "/banks/bank-b/suspend", nil)
 	if ne := enquiry("000002", to); ne["response_code"] != "91" {
@@ -91,8 +102,8 @@ func TestNIPSwitch(t *testing.T) {
 	if len(sid) != 30 || first["response_code"] != "00" || !strings.HasPrefix(sid, "000001") {
 		t.Fatalf("first send: %v", first)
 	}
-	again, resp, err := s.ctlWith("POST", "/banks/bank-a/transfers", map[string]string{"from": from, "to_bank": "bank-b", "to": to, "amount": "1500"}, key)
-	if err != nil || resp.Header.Get("Idempotent-Replayed") != "true" || fmt.Sprint(again) != fmt.Sprint(first) {
+	again, _, err := s.ctlWith("POST", "/banks/bank-a/transfers", map[string]string{"from": from, "to_bank": "bank-b", "to": to, "amount": "1500"}, key)
+	if err != nil || fmt.Sprint(again) != fmt.Sprint(first) {
 		t.Fatalf("repeat by key: %v %v", again, err)
 	}
 	if _, err := s.payTry("bank-a", from, "bank-b", to, "1600", key); err == nil || !strings.Contains(err.Error(), "422") {
@@ -114,7 +125,7 @@ func TestNIPSwitch(t *testing.T) {
 	pos := s.position("bank-a")["position_minor"].(float64)
 	s.setCap("bank-a", int64(pos)+100000)
 	over, err := s.payTry("bank-a", from, "bank-b", to, "1500", nil)
-	if err == nil || over["response_code"] != "61" {
+	if err != nil || over["status"] != "reversed" || over["response_code"] != "61" {
 		t.Fatalf("over the cap: %v %v", over, err)
 	}
 	s.advance("72h")
@@ -145,8 +156,8 @@ func TestNetDebitPositionCountsAllTransfers(t *testing.T) {
 		t.Fatalf("a transfer moved the open outward flow from %v to %v", before, got)
 	}
 	s.setCap("bank-a", 1)
-	if _, err := s.payTry("bank-a", from, "bank-b", to, "1", nil); err == nil || !strings.Contains(err.Error(), "net_debit_cap_exceeded") {
-		t.Fatalf("the cap let a transfer through: %v", err)
+	if res, err := s.payTry("bank-a", from, "bank-b", to, "1", nil); err != nil || res["status"] != "reversed" || res["response_code"] != "61" {
+		t.Fatalf("the cap let a transfer through: %v %v", res, err)
 	}
 	row := s.position("bank-a")
 	if row["cap_source"] != "configured" || row["collateral_minor"] != nil {
@@ -175,7 +186,7 @@ func TestEveryTransferPathIsIdempotent(t *testing.T) {
 	}
 	s := newStack(t)
 	adaeze := s.persona("adaeze")
-	from, own, other := adaeze.Accounts[0], adaeze.Accounts[1], s.persona("tunde").Accounts[0]
+	from, other := adaeze.Accounts[0], s.persona("tunde").Accounts[0]
 	debits := func() int {
 		n := 0
 		for _, l := range s.ctl("GET", "/banks/bank-a/accounts/"+from+"/statement?limit=1000", nil)["data"].([]any) {
@@ -189,13 +200,11 @@ func TestEveryTransferPathIsIdempotent(t *testing.T) {
 		return s.ctlWith("POST", "/banks/bank-a/transfers", body, map[string]string{"Idempotency-Key": key})
 	}
 	body := map[string]string{"from": from, "to": other, "amount": "1234"}
-	first, _, err := send("intra-1", body)
-	if err != nil {
+	if _, _, err := send("intra-1", body); err != nil {
 		t.Fatal(err)
 	}
-	again, resp, err := send("intra-1", body)
-	if err != nil || resp.Header.Get("Idempotent-Replayed") != "true" || fmt.Sprint(again) != fmt.Sprint(first) {
-		t.Fatalf("intra-bank retry: %v %v", again, err)
+	if _, _, err := send("intra-1", body); err != nil {
+		t.Fatalf("intra-bank retry: %v", err)
 	}
 	if n := debits(); n != 1 {
 		t.Fatalf("the sender was debited %d times", n)
@@ -206,12 +215,6 @@ func TestEveryTransferPathIsIdempotent(t *testing.T) {
 	if _, _, err := send(strings.Repeat("k", 256), body); err == nil || !strings.Contains(err.Error(), "HTTP 400") {
 		t.Fatalf("a key of 256 characters: %v", err)
 	}
-	broke := map[string]string{"from": from, "to": own, "amount": "999999999"}
-	_, _, err1 := send("broke-1", broke)
-	_, resp, err2 := send("broke-1", broke)
-	if err1 == nil || err2 == nil || resp.Header.Get("Idempotent-Replayed") != "true" {
-		t.Fatalf("a failed transfer retried with its key: %v %v", err1, err2)
-	}
 }
 
 func TestStatusQueryReportsReversal(t *testing.T) {
@@ -219,7 +222,9 @@ func TestStatusQueryReportsReversal(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newStack(t)
-	from, to := s.persona("adaeze").Accounts[0], s.persona("ngozi").Accounts[0]
+	home := s.persona("adaeze")
+	from, to := home.Accounts[0], s.persona("ngozi").Accounts[0]
+	before := s.balances(home)[from]
 	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "bank-b", "outcome": "failed", "count": 1})
 	sent, _ := s.payTry("bank-a", from, "bank-b", to, "25000", nil)
 	sid := fmt.Sprint(sent["session_id"])
@@ -227,10 +232,14 @@ func TestStatusQueryReportsReversal(t *testing.T) {
 		t.Fatalf("a timed-out transfer: %v then %v", sent, tsq)
 	}
 	s.advance("3h")
+	waitFor(t, waitLimit, "the status query to fail the session", func() bool {
+		return s.ctl("GET", "/nip/sessions/"+sid, nil)["status"] == "25"
+	})
 	tsq := s.ctl("GET", "/nip/sessions/"+sid, nil)
-	if tsq["outcome"] != "reversed" || tsq["resolved_at"] == nil {
-		t.Fatalf("after the reversal: %v", tsq)
+	if tsq["outcome"] != "failed" || tsq["resolved_at"] == nil {
+		t.Fatalf("after the failure: %v", tsq)
 	}
+	waitFor(t, waitLimit, "the sender to be reversed", func() bool { return s.balances(home)[from] == before })
 	if n := s.sessionCredits("bank-b", to, sid); n != 0 {
 		t.Fatalf("the beneficiary was credited %d times", n)
 	}

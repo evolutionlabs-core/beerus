@@ -22,11 +22,13 @@ type supervisor struct {
 	exe       string
 	dir       string
 	coreURL   string
+	database  string
 	ctl       *ctl
 	clock     *clock.Clock
 	log       *slog.Logger
 	logs      *syncWriter
 	core      *child
+	nibss     *child
 	banks     map[string]*child
 	order     []string
 	stopping  map[string]*child
@@ -45,12 +47,13 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	return s.w.Write(p)
 }
 
-func newSupervisor(exe, dir, coreURL string, c *ctl, out io.Writer) *supervisor {
+func newSupervisor(exe, dir, coreURL, databaseURL string, c *ctl, out io.Writer) *supervisor {
 	logs := &syncWriter{w: out}
 	return &supervisor{
 		exe:      exe,
 		dir:      dir,
 		coreURL:  coreURL,
+		database: databaseURL,
 		ctl:      c,
 		clock:    clock.New(nil),
 		log:      slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})),
@@ -61,7 +64,7 @@ func newSupervisor(exe, dir, coreURL string, c *ctl, out io.Writer) *supervisor 
 }
 
 func (s *supervisor) startCore() {
-	s.core = s.launch(coreID, "", []string{"run", "--participant", coreID, "--dir", s.dir, "--supervised"})
+	s.core = s.launch(coreID, "", nil, []string{"run", "--participant", coreID, "--dir", s.dir, "--supervised"})
 }
 
 func (s *supervisor) awaitCore(ctx context.Context) error {
@@ -114,6 +117,10 @@ func (s *supervisor) shutdown() {
 	}
 	for _, c := range s.stopping {
 		<-c.done
+	}
+	if s.nibss != nil {
+		s.nibss.stop()
+		<-s.nibss.done
 	}
 	s.core.stop()
 	<-s.core.done

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 const (
@@ -49,7 +49,7 @@ func newReconcileStack(t *testing.T) (*supervisor, func(string)) {
 		_, _ = io.WriteString(w, body)
 	})}
 	go srv.Serve(lis)
-	s := newSupervisor(exe, t.TempDir(), "http://"+lis.Addr().String(), &ctl{base: "http://" + lis.Addr().String()}, io.Discard)
+	s := newSupervisor(exe, t.TempDir(), "http://"+lis.Addr().String(), "", &ctl{base: "http://" + lis.Addr().String()}, io.Discard)
 	t.Cleanup(func() {
 		srv.Close()
 		for _, c := range s.banks {
@@ -84,14 +84,14 @@ func TestReconcileBanks(t *testing.T) {
 		wantErr string
 		want    []string
 	}{
-		{"active and suspended start", listJSON(bankJSON("a", setup.PhaseActive, 100, "db_a"), bankJSON("b", setup.PhaseSuspended, 200, "db_b")), "", []string{"a=100/101/db_a", "b=200/201/db_b"}},
+		{"active and suspended start", listJSON(bankJSON("a", config.PhaseActive, 100, "db_a"), bankJSON("b", config.PhaseSuspended, 200, "db_b")), "", []string{"a=100/101/db_a", "b=200/201/db_b"}},
 		{"null data changes nothing", `{"data":null}`, "read banks: the list is missing", []string{"a=100/101/db_a", "b=200/201/db_b"}},
 		{"no data key changes nothing", `{}`, "read banks: the list is missing", []string{"a=100/101/db_a", "b=200/201/db_b"}},
-		{"closed drops", listJSON(bankJSON("a", setup.PhaseClosed, 100, "db_a"), bankJSON("b", setup.PhaseActive, 200, "db_b")), "", []string{"b=200/201/db_b"}},
-		{"changed fingerprint restarts", listJSON(bankJSON("b", setup.PhaseActive, 300, "db_b2")), "", []string{"b=300/301/db_b2"}},
-		{"provisioning does not start", listJSON(bankJSON("b", setup.PhaseActive, 300, "db_b2"), bankJSON("c", setup.PhaseProvisioning, 400, "db_c")), "", []string{"b=300/301/db_b2"}},
-		{"unlisted drops", listJSON(bankJSON("c", setup.PhaseProvisioning, 400, "db_c")), "", []string{}},
-		{"restart after drop", listJSON(bankJSON("a", setup.PhaseActive, 100, "db_a")), "", []string{"a=100/101/db_a"}},
+		{"closed drops", listJSON(bankJSON("a", config.PhaseClosed, 100, "db_a"), bankJSON("b", config.PhaseActive, 200, "db_b")), "", []string{"b=200/201/db_b"}},
+		{"changed fingerprint restarts", listJSON(bankJSON("b", config.PhaseActive, 300, "db_b2")), "", []string{"b=300/301/db_b2"}},
+		{"provisioning does not start", listJSON(bankJSON("b", config.PhaseActive, 300, "db_b2"), bankJSON("c", config.PhaseProvisioning, 400, "db_c")), "", []string{"b=300/301/db_b2"}},
+		{"unlisted drops", listJSON(bankJSON("c", config.PhaseProvisioning, 400, "db_c")), "", []string{}},
+		{"restart after drop", listJSON(bankJSON("a", config.PhaseActive, 100, "db_a")), "", []string{"a=100/101/db_a"}},
 		{"empty list drops all", listJSON(), "", []string{}},
 	}
 	for _, st := range steps {

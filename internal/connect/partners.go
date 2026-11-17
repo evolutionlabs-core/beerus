@@ -9,9 +9,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 type PartnerRequest struct {
@@ -23,16 +25,16 @@ type PartnerRequest struct {
 	WebhookURL   string   `json:"webhook_url"`
 }
 
-var errPartnerBusy = invalid("another partner change is running; try again")
+var errPartnerBusy = server.Invalid("another partner change is running; try again")
 
 func (a *App) AddPartner(req PartnerRequest) (string, error) {
 	o := config.PartnerOptions{ID: req.ID, Name: req.Name, LegalName: req.LegalName, Purpose: req.Purpose, RedirectURIs: req.RedirectURIs, WebhookURL: req.WebhookURL}
 	if err := o.Check(); err != nil {
-		return "", invalid("%s", err.Error())
+		return "", server.Invalid("%s", err.Error())
 	}
 	err := a.applyEdit(func(sp *setup.Spec) error {
 		if _, ok := partnerIn(*sp, o.ID); ok {
-			return invalid("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
+			return server.Invalid("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
 		}
 		sp.Spec.Partners = append(sp.Spec.Partners, setup.Partner{ID: o.ID, Name: orDefault(o.Name, o.ID), LegalName: o.LegalName, Purpose: o.Purpose, RedirectURIs: o.RedirectURIs, WebhookURL: o.WebhookURL})
 		return nil
@@ -185,20 +187,20 @@ func (a *App) partnerError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	switch {
-	case errors.Is(err, ErrBankInvalid):
-		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+	case errors.Is(err, server.ErrInvalid):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 	case errors.Is(err, errNotFound):
-		writeError(w, r, http.StatusNotFound, "not_found", "No such partner.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such partner.")
 	default:
 		a.log.Error("partner", "err", err)
-		writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
 	}
 }
 
 func (a *App) ctlAddPartner(w http.ResponseWriter, r *http.Request) {
 	var req PartnerRequest
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"id":"...","redirect_uris":["https://..."]}.`)
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"id":"...","redirect_uris":["https://..."]}.`)
 		return
 	}
 	key, err := a.AddPartner(req)
@@ -206,7 +208,7 @@ func (a *App) ctlAddPartner(w http.ResponseWriter, r *http.Request) {
 		a.partnerError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]string{"id": req.ID, "api_key": key})
+	web.WriteJSON(w, http.StatusCreated, map[string]string{"id": req.ID, "api_key": key})
 }
 
 func (a *App) ctlRotatePartner(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +217,7 @@ func (a *App) ctlRotatePartner(w http.ResponseWriter, r *http.Request) {
 		a.partnerError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"id": r.PathValue("id"), "api_key": key})
+	web.WriteJSON(w, http.StatusOK, map[string]string{"id": r.PathValue("id"), "api_key": key})
 }
 
 func (a *App) ctlRemovePartner(w http.ResponseWriter, r *http.Request) {
@@ -225,8 +227,8 @@ func (a *App) ctlRemovePartner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !gone {
-		writeJSON(w, http.StatusAccepted, map[string]string{"id": r.PathValue("id"), "status": "terminating"})
+		web.WriteJSON(w, http.StatusAccepted, map[string]string{"id": r.PathValue("id"), "status": "terminating"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"id": r.PathValue("id"), "status": "removed"})
+	web.WriteJSON(w, http.StatusOK, map[string]string{"id": r.PathValue("id"), "status": "removed"})
 }

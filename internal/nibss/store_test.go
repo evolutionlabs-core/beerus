@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 const testDatabase = "beerus_test"
@@ -92,7 +94,7 @@ func testStore(t testing.TB) *Store {
 
 func register(t testing.TB, s *Store, id, name, code, nuban string) {
 	t.Helper()
-	if err := s.Register(context.Background(), Institution{ID: id, Name: name, NIPCode: code, NUBANCode: nuban, Type: "commercial"}); err != nil {
+	if err := s.Register(context.Background(), member(id, name, code, nuban)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -127,9 +129,9 @@ func TestDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir, err = again.Directory(ctx)
-	want := []Institution{
-		{ID: "bank-a", Name: "Bank A", NIPCode: "999001", NUBANCode: "901", Type: "commercial", Status: StatusActive},
-		{ID: "bank-b", Name: "Bank B", NIPCode: "999002", NUBANCode: "902", Type: "commercial", Status: StatusActive},
+	want := []nip.Institution{
+		{ID: "bank-a", Name: "Bank A", NIPCode: "999001", NUBANCode: "901", Type: "commercial", Status: nip.StatusActive},
+		{ID: "bank-b", Name: "Bank B", NIPCode: "999002", NUBANCode: "902", Type: "commercial", Status: nip.StatusActive},
 	}
 	if err != nil || len(dir) != len(want) {
 		t.Fatalf("directory: %+v, %v", dir, err)
@@ -143,8 +145,8 @@ func TestDirectory(t *testing.T) {
 
 func TestInstitutionUnknown(t *testing.T) {
 	_, err := testStore(t).Institution(context.Background(), "123456")
-	if !errors.Is(err, ErrUnknownInstitution) {
-		t.Fatalf("got %v, want ErrUnknownInstitution", err)
+	if !errors.Is(err, nip.ErrUnknownInstitution) {
+		t.Fatalf("got %v, want nip.ErrUnknownInstitution", err)
 	}
 	wantErr(t, err, "bank code 123456 is not in the NIBSS directory")
 }
@@ -157,14 +159,14 @@ func TestSetStatus(t *testing.T) {
 		to   string
 		want string
 	}{
-		{StatusSuspended, ""},
-		{StatusSuspended, ""},
-		{StatusActive, ""},
-		{StatusRemoved, "institution bank-c is active and cannot become removed: status change not allowed"},
-		{StatusTerminating, ""},
-		{StatusActive, "institution bank-c is terminating and cannot become active: status change not allowed"},
-		{StatusRemoved, ""},
-		{StatusActive, "institution bank-c is removed and cannot become active: status change not allowed"},
+		{nip.StatusSuspended, ""},
+		{nip.StatusSuspended, ""},
+		{nip.StatusActive, ""},
+		{nip.StatusRemoved, "institution bank-c is active and cannot become removed: status change not allowed"},
+		{nip.StatusTerminating, ""},
+		{nip.StatusActive, "institution bank-c is terminating and cannot become active: status change not allowed"},
+		{nip.StatusRemoved, ""},
+		{nip.StatusActive, "institution bank-c is removed and cannot become active: status change not allowed"},
 	}
 	for i, st := range steps {
 		err := s.SetStatus(ctx, "bank-c", st.to)
@@ -176,13 +178,13 @@ func TestSetStatus(t *testing.T) {
 		}
 	}
 	in, _ := s.Institution(ctx, "999003")
-	if in.Status != StatusRemoved {
+	if in.Status != nip.StatusRemoved {
 		t.Errorf("status %s, want removed", in.Status)
 	}
 	wantErr(t, s.SetStatus(ctx, "bank-c", "closed"), `unknown institution status "closed"`)
-	err := s.SetStatus(ctx, "bank-x", StatusActive)
-	if !errors.Is(err, ErrUnknownInstitution) {
-		t.Fatalf("got %v, want ErrUnknownInstitution", err)
+	err := s.SetStatus(ctx, "bank-x", nip.StatusActive)
+	if !errors.Is(err, nip.ErrUnknownInstitution) {
+		t.Fatalf("got %v, want nip.ErrUnknownInstitution", err)
 	}
 	wantErr(t, err, "bank id bank-x is not in the NIBSS directory")
 }

@@ -12,13 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -47,7 +48,7 @@ func envNumber(key string, positive bool) (int64, error) {
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	participant := fs.String("participant", "", "what to run: cbn, core or a bank ID")
+	which := fs.String("participant", "", "what to run: cbn, core, nibss or a bank ID")
 	bind := fs.String("bind", envOr("BEERUS_BIND", "127.0.0.1"), "`address` to listen on")
 	supervised := fs.Bool("supervised", false, "stop when standard input closes")
 	core := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "`URL` of the core participant's control API, for banks")
@@ -63,7 +64,7 @@ func cmdRun(args []string) error {
 			stop()
 		}()
 	}
-	switch *participant {
+	switch *which {
 	case "":
 		return usageError("run")
 	case "cbn":
@@ -79,30 +80,12 @@ func cmdRun(args []string) error {
 		}
 		log.Info("core running", "world", app.WorldID())
 		return app.Serve(ctx)
-	case "connect", "nibss":
-		return fmt.Errorf("%s runs inside the core participant; start --participant core", *participant)
+	case "nibss":
+		return nibssparticipant.Run(ctx, *dir, nibssparticipant.Options{Logger: log, Bind: *bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
+	case "connect":
+		return fmt.Errorf("%s runs inside the core participant; start --participant core", *which)
 	}
-	c, err := connect.LoadConfig(*dir)
-	if err != nil {
-		return err
-	}
-	if c.Bank(*participant) == nil {
-		return fmt.Errorf("%q is not a participant; banks in %s are %s", *participant, c.Dir, strings.Join(bankIDs(c), ", "))
-	}
-	app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleBank, BankID: *participant, CoreURL: *core, Bind: *bind})
-	if err != nil {
-		return err
-	}
-	log.Info("bank running", "bank", *participant)
-	return app.ServeBank(ctx)
-}
-
-func bankIDs(c *config.Config) []string {
-	ids := []string{}
-	for _, b := range c.Banks {
-		ids = append(ids, b.ID)
-	}
-	return ids
+	return participant.Run(ctx, *dir, participant.Options{Logger: log, BankID: *which, CoreURL: *core, Bind: *bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
 }
 
 func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
@@ -122,7 +105,7 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 	if id := os.Getenv("BEERUS_PARTNER_ID"); ok && os.Getenv("BEERUS_PARTNER_REDIRECT_URI") != "" && c.Partner(id) == nil {
 		log.Warn("BEERUS_PARTNER_* only applies when the setup is first made; register the partner with beerus partner add once Beerus is running", "partner", id)
 	}
-	if err := c.EnsureCertificates(time.Now()); err != nil {
+	if err := c.EnsureCertificates(clock.New(nil).Real()); err != nil {
 		return err
 	}
 	mux := http.NewServeMux()
@@ -145,7 +128,7 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 
 func initFromEnv(dir string) error {
 	local := connect.DefaultLocal()
-	for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &local.Connect.PartnerPort, "BEERUS_WIDGET_PORT": &local.Connect.WidgetPort, "BEERUS_CONTROL_PORT": &local.Connect.ControlPort, "BEERUS_HEALTH_PORT": &local.Connect.HealthPort} {
+	for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &local.Connect.PartnerPort, "BEERUS_WIDGET_PORT": &local.Connect.WidgetPort, "BEERUS_CONTROL_PORT": &local.Connect.ControlPort, "BEERUS_HEALTH_PORT": &local.Connect.HealthPort, "BEERUS_NIBSS_PORT": &local.Connect.NIBSSPort} {
 		n, err := envNumber(key, true)
 		if err != nil {
 			return err
@@ -154,7 +137,7 @@ func initFromEnv(dir string) error {
 			*dst = int(n)
 		}
 	}
-	today := clock.DateOf(time.Now())
+	today := clock.DateOf(clock.New(nil).Now())
 	spec := setup.DefaultSpec(defaultSetupName)
 	if path := os.Getenv("BEERUS_SETUP_FILE"); path != "" {
 		var err error

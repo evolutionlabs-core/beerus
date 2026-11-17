@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
@@ -232,11 +232,11 @@ func cmdAccount(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			a, err := decodeMap[connect.AccountJSON](out)
+			a, err := decodeMap[server.AccountJSON](out)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Opened %s account %s for %s (%s) at %s. Balance %s.\n", a.Type, a.NUBAN, a.Name, a.Customer, id, connect.FormatNaira(a.Balance))
+			fmt.Printf("Opened %s account %s for %s (%s) at %s. Balance %s.\n", a.Type, a.NUBAN, a.Name, a.Customer, id, bank.FormatNaira(a.Balance))
 			return nil
 		})
 	case "close":
@@ -333,7 +333,7 @@ func printCustomers(out map[string]any) error {
 }
 
 func printAccounts(out map[string]any) error {
-	rows, err := decodeList[connect.AccountJSON](out)
+	rows, err := decodeList[server.AccountJSON](out)
 	if err != nil {
 		return err
 	}
@@ -344,7 +344,7 @@ func printAccounts(out map[string]any) error {
 	w := newTable()
 	fmt.Fprintln(w, "NUBAN\tOWNER\tCUSTOMER\tTYPE\tSTATUS\tBALANCE")
 	for _, r := range rows {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.NUBAN, r.Name, r.Customer, r.Type, r.Status, connect.FormatNaira(r.Balance))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.NUBAN, r.Name, r.Customer, r.Type, r.Status, bank.FormatNaira(r.Balance))
 	}
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("print accounts: %w", err)
@@ -355,7 +355,7 @@ func printAccounts(out map[string]any) error {
 }
 
 func printStatement(out map[string]any, nuban string) error {
-	rows, err := decodeList[connect.StatementLine](out)
+	rows, err := decodeList[server.StatementLine](out)
 	if err != nil {
 		return err
 	}
@@ -366,7 +366,7 @@ func printStatement(out map[string]any, nuban string) error {
 	w := newTable()
 	fmt.Fprintln(w, "DATE\tTIME\tAMOUNT\tBALANCE\tNARRATION\tSESSION")
 	for _, r := range rows {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ValueDate, stamp(r.PostedAt), connect.FormatNaira(r.Amount), connect.FormatNaira(r.BalanceAfter), r.Narration, r.SessionID)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ValueDate, stamp(r.PostedAt), bank.FormatNaira(r.Amount), bank.FormatNaira(r.BalanceAfter), r.Narration, r.SessionID)
 	}
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("print the statement: %w", err)
@@ -379,6 +379,7 @@ func printStatement(out map[string]any, nuban string) error {
 func cmdCash(kind string, args []string) error {
 	f := newFlags(kind, true)
 	amount := f.fs.String("amount", "", "amount in `naira`, such as 5000 or 5000.50")
+	key := f.fs.String("idempotency-key", "", "`key` that makes a rerun safe after a timeout; a new one is made when empty")
 	pos, err := f.parse(kind, args, 1)
 	if err != nil {
 		return err
@@ -394,12 +395,12 @@ func cmdCash(kind string, args []string) error {
 	if kind == "withdraw" {
 		path = "withdrawals"
 	}
-	out, err := c.do("POST", bankPath(id, path), map[string]string{"account": pos[0], "amount": *amount})
+	out, err := c.doKeyed("POST", bankPath(id, path), map[string]string{"account": pos[0], "amount": *amount}, *key)
 	if err != nil {
 		return err
 	}
 	return f.show(out, func() error {
-		r, err := decodeMap[connect.CashResult](out)
+		r, err := decodeMap[server.CashResult](out)
 		if err != nil {
 			return err
 		}
@@ -407,7 +408,7 @@ func cmdCash(kind string, args []string) error {
 		if kind == "withdraw" {
 			verb, prep = "Withdrew", "from"
 		}
-		fmt.Printf("%s %s %s account %s at %s. Balance %s.\n", verb, connect.FormatNaira(r.Amount), prep, r.Account, id, connect.FormatNaira(r.Balance))
+		fmt.Printf("%s %s %s account %s at %s. Balance %s.\n", verb, bank.FormatNaira(r.Amount), prep, r.Account, id, bank.FormatNaira(r.Balance))
 		return nil
 	})
 }
@@ -421,6 +422,7 @@ func cmdTransfer(args []string) error {
 	to := f.fs.String("to", "", "`NUBAN` of the account to pay into")
 	amount := f.fs.String("amount", "", "amount in `naira`, such as 25000 or 2500.50")
 	narration := f.fs.String("narration", "", "`text` shown on the transfer")
+	key := f.fs.String("idempotency-key", "", "`key` that makes a rerun safe after a timeout; a new one is made when empty")
 	dry := f.fs.Bool("dry-run", false, "show the fee, VAT, stamp duty and total debit without sending")
 	if _, err := f.parse("transfer", args, 0); err != nil {
 		return err
@@ -436,12 +438,12 @@ func cmdTransfer(args []string) error {
 	if *dry {
 		path = bankPath(id, "transfers", "quote")
 	}
-	out, err := c.do("POST", path, map[string]string{"from": *from, "to_bank": *toBank, "to": *to, "amount": *amount, "narration": *narration})
+	out, err := c.doKeyed("POST", path, map[string]string{"from": *from, "to_bank": *toBank, "to": *to, "amount": *amount, "narration": *narration}, *key)
 	if err != nil {
 		return err
 	}
 	return f.show(out, func() error {
-		r, err := decodeMap[connect.TransferResult](out)
+		r, err := decodeMap[server.TransferResult](out)
 		if err != nil {
 			return err
 		}
@@ -452,14 +454,14 @@ func cmdTransfer(args []string) error {
 	})
 }
 
-func chargeSentence(r connect.TransferResult) string {
+func chargeSentence(r server.TransferResult) string {
 	parts := []string{}
 	for _, c := range []struct {
 		name   string
 		amount int64
 	}{{"fee", r.Fee}, {"VAT", r.VAT}, {"stamp duty", r.StampDuty}} {
 		if c.amount != 0 {
-			parts = append(parts, c.name+" "+connect.FormatNaira(c.amount))
+			parts = append(parts, c.name+" "+bank.FormatNaira(c.amount))
 		}
 	}
 	switch len(parts) {
@@ -471,33 +473,33 @@ func chargeSentence(r connect.TransferResult) string {
 	return "Charges: " + strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1] + "."
 }
 
-func printQuote(c *ctl, r connect.TransferResult) error {
+func printQuote(c *ctl, r server.TransferResult) error {
 	if r.Kind == "internal" {
-		fmt.Printf("Moving %s from %s to %s, %s, costs no charges. Balance after %s.\n", connect.FormatNaira(r.Amount), r.From, r.To, r.ToName, connect.FormatNaira(r.BalanceAfter))
+		fmt.Printf("Moving %s from %s to %s, %s, costs no charges. Balance after %s.\n", bank.FormatNaira(r.Amount), r.From, r.To, r.ToName, bank.FormatNaira(r.BalanceAfter))
 	} else {
 		to, err := bankStatus(c, r.ToBank)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Sending %s to %s at %s.\n", connect.FormatNaira(r.Amount), r.ToName, to.Name)
-		fmt.Printf("%s Total debit %s. Balance after %s.\n", chargeSentence(r), connect.FormatNaira(r.TotalDebit), connect.FormatNaira(r.BalanceAfter))
+		fmt.Printf("Sending %s to %s at %s.\n", bank.FormatNaira(r.Amount), r.ToName, to.Name)
+		fmt.Printf("%s Total debit %s. Balance after %s.\n", chargeSentence(r), bank.FormatNaira(r.TotalDebit), bank.FormatNaira(r.BalanceAfter))
 	}
 	fmt.Println("This was a quote. Nothing was sent.")
 	return nil
 }
 
-func printTransfer(c *ctl, r connect.TransferResult) error {
+func printTransfer(c *ctl, r server.TransferResult) error {
 	at := stamp(r.At)
 	if r.Kind == "internal" {
-		fmt.Printf("Moved %s from %s to %s, %s, at %s. Balance %s.\n", connect.FormatNaira(r.Amount), r.From, r.To, r.ToName, at, connect.FormatNaira(r.BalanceAfter))
+		fmt.Printf("Moved %s from %s to %s, %s, at %s. Balance %s.\n", bank.FormatNaira(r.Amount), r.From, r.To, r.ToName, at, bank.FormatNaira(r.BalanceAfter))
 		return nil
 	}
 	to, err := bankStatus(c, r.ToBank)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Sending %s to %s at %s.\n", connect.FormatNaira(r.Amount), r.ToName, to.Name)
-	charges := fmt.Sprintf("%s Total debit %s. Balance %s.", chargeSentence(r), connect.FormatNaira(r.TotalDebit), connect.FormatNaira(r.BalanceAfter))
+	fmt.Printf("Sending %s to %s at %s.\n", bank.FormatNaira(r.Amount), r.ToName, to.Name)
+	charges := fmt.Sprintf("%s Total debit %s. Balance %s.", chargeSentence(r), bank.FormatNaira(r.TotalDebit), bank.FormatNaira(r.BalanceAfter))
 	switch r.Status {
 	case nip.Success:
 		fmt.Printf("Session %s: success at %s\n%s\n", r.SessionID, at, charges)
@@ -508,21 +510,21 @@ func printTransfer(c *ctl, r connect.TransferResult) error {
 		}
 		fmt.Printf("Session %s: pending. Beerus will check with NIBSS at %s. Run beerus nip status %s.\n%s\n", r.SessionID, stamp(*r.NextCheckAt), r.SessionID, charges)
 	case nip.Reversed:
-		fmt.Printf("Session %s: failed with code %s. The debit and its charges were reversed at %s. Balance %s.\n", r.SessionID, r.ResponseCode, at, connect.FormatNaira(r.BalanceAfter))
+		fmt.Printf("Session %s: failed with code %s. The debit and its charges were reversed at %s. Balance %s.\n", r.SessionID, r.ResponseCode, at, bank.FormatNaira(r.BalanceAfter))
 	default:
 		return fmt.Errorf("the transfer came back with the unknown status %q", r.Status)
 	}
 	return nil
 }
 
-func describeFault(f connect.Fault) string {
+func describeFault(f server.Fault) string {
 	switch f.Kind {
-	case connect.FaultDown:
+	case server.FaultDown:
 		if f.Until == nil {
 			return "down until cleared"
 		}
 		return "down until " + stamp(*f.Until)
-	case connect.FaultTimeout:
+	case server.FaultTimeout:
 		if f.Left == 1 {
 			return fmt.Sprintf("the next transfer times out (outcome %s)", f.Outcome)
 		}
@@ -564,7 +566,7 @@ func cmdFault(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			fl, err := decodeMap[connect.Fault](out)
+			fl, err := decodeMap[server.Fault](out)
 			if err != nil {
 				return err
 			}
@@ -584,7 +586,7 @@ func cmdFault(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			rows, err := decodeList[connect.Fault](out)
+			rows, err := decodeList[server.Fault](out)
 			if err != nil {
 				return err
 			}
@@ -738,15 +740,13 @@ func printSession(s nibss.Session, wasPending bool) {
 		fmt.Printf("Session %s: pending. Beerus will check with NIBSS at %s.\n", s.ID, stamp(*s.NextTSQAt))
 	case s.Status == nibss.SessionPending:
 		fmt.Printf("Session %s: pending.\n", s.ID)
-	case s.Outcome == nibss.OutcomeReversed:
-		fmt.Printf("Session %s: failed with code %s. The sender's debit was reversed.\n", s.ID, s.Status)
 	default:
-		fmt.Printf("Session %s: failed with code %s. The sender's debit is being reversed.\n", s.ID, s.Status)
+		fmt.Printf("Session %s: failed with code %s. The sending bank reverses the debit.\n", s.ID, s.Status)
 	}
 	if wasPending && s.Status != nibss.SessionPending && s.Status != nibss.SessionOK {
 		fmt.Println("The session was pending; this check resolved it.")
 	}
-	fmt.Printf("Amount %s from %s (bank code %s) to %s (bank code %s), started at %s.\n", connect.FormatNaira(s.Amount), s.FromNUBAN, s.FromCode, s.ToNUBAN, s.ToCode, stamp(s.CreatedAt))
+	fmt.Printf("Amount %s from %s (bank code %s) to %s (bank code %s), started at %s.\n", bank.FormatNaira(s.Amount), s.FromNUBAN, s.FromCode, s.ToNUBAN, s.ToCode, stamp(s.CreatedAt))
 	if s.Settlement != "" {
 		fmt.Printf("Settled in settlement session %s.\n", s.Settlement)
 	}

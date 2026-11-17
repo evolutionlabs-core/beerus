@@ -290,6 +290,7 @@ const roomTemplates = `
 {{define "transfer"}}{{template "room_head" .}}
 <div class="mb-7"><h1 class="text-[24px]">New transfer</h1><p class="mt-1.5 text-[13.5px] text-muted">Within a bank, transfers are internal. Between banks they go over NIP with the transfer fee, VAT and stamp duty.</p></div>
 <form method="post" action="/ui/transfer" class="max-w-[640px] rounded-2xl border border-line bg-panel p-6">
+<input type="hidden" name="key" value="{{.Key}}">
 {{if .Error}}<p class="mb-5 rounded-[10px] border border-neg/30 bg-neg/10 px-3 py-2.5 text-[13px] text-neg" role="alert">{{.Error}}</p>{{end}}
 <div class="grid gap-4 sm:grid-cols-2">
 <label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">From bank</span><select name="from_bank" class="field" required>{{range .Banks}}<option value="{{.ID}}" {{if eq .ID ($.Form.Get "from_bank")}}selected{{end}}>{{.Name}}</option>{{end}}</select></label>

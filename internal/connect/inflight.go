@@ -4,12 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/view"
 )
 
 func (a *App) markSettleNow(kind, id string) {
@@ -73,14 +79,104 @@ func (a *App) settleWait(ctx context.Context, r setup.Resource) (*setup.Conditio
 			return nil, fmt.Errorf("run the extra settlement session: %w", err)
 		}
 	}
-	msg, err := a.inflightWith(ctx, r.Allocated.NIPCode, r.ID)
+	sends, cond, err := a.recordedSends(r.ID)
+	if cond != nil || err != nil {
+		return cond, err
+	}
+	msg, err := a.inflightWith(ctx, r.Allocated.NIPCode, r.ID, sends)
 	if err != nil || msg == "" {
 		return nil, err
 	}
 	return a.blocked(setup.ReasonSettlementPending, "%s", msg), nil
 }
 
-func (a *App) inflightWith(ctx context.Context, code, id string) (string, error) {
+const finalizerReadTTL = time.Minute
+
+type sendRead struct {
+	open int
+	at   time.Time
+	err  error
+}
+
+func (a *App) openSends(ctx context.Context, b *config.Bank) (int, error) {
+	if a.role != RoleCore {
+		a.mu.Lock()
+		ls := a.ledgerFor(b.ID)
+		a.mu.Unlock()
+		if ls == nil {
+			return 0, fmt.Errorf("the books of %s are not open", b.Name)
+		}
+		return ls.Bank().OpenSends(ctx)
+	}
+	if b.Closed() || !pushable(a.bankPhase(b.ID)) {
+		return 0, nil
+	}
+	var out server.OpenSends
+	if _, err := a.link.Request(ctx, b.URL(), http.MethodGet, "/v1/nip/sends/open", nil, nil, &out); err != nil {
+		return 0, fmt.Errorf("count open sends of %s: %w", b.ID, err)
+	}
+	return out.Open, nil
+}
+
+func (a *App) sendsDue(ctx context.Context) {
+	st, err := a.ctl.status()
+	if err != nil {
+		a.log.Error("read control.json", "err", err)
+		return
+	}
+	now := a.clock.Real()
+	for _, r := range st.Resources {
+		if r.Kind != setup.KindBank || (r.Phase != config.PhaseClosing && r.Phase != config.PhaseTerminating) || (r.NextAttemptAt != nil && now.Before(*r.NextAttemptAt)) {
+			continue
+		}
+		switch nextFinalizer(r) {
+		case setup.FinalizerSettleInflight, setup.FinalizerSettleMoves, setup.FinalizerPurgeOwned:
+		default:
+			continue
+		}
+		b := a.bankByID(r.ID)
+		if b == nil {
+			continue
+		}
+		n, err := a.openSends(ctx, b)
+		a.mu.Lock()
+		if a.sendReads == nil {
+			a.sendReads = map[string]sendRead{}
+		}
+		a.sendReads[r.ID] = sendRead{open: n, at: a.clock.Real(), err: err}
+		a.mu.Unlock()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id, read := range a.sendReads {
+		if a.clock.Real().Sub(read.at) > finalizerReadTTL {
+			delete(a.sendReads, id)
+		}
+	}
+}
+
+func (a *App) recordedSends(id string) (int, *setup.Condition, error) {
+	a.mu.Lock()
+	read, ok := a.sendReads[id]
+	a.mu.Unlock()
+	if !ok || a.clock.Real().Sub(read.at) > finalizerReadTTL {
+		return 0, a.blocked(setup.ReasonSettlementPending, "Checking the transfers %s is still sending. Try again soon.", id), nil
+	}
+	return read.open, nil, read.err
+}
+
+func (a *App) inflightWith(ctx context.Context, code, id string, sends int) (string, error) {
+	if sends > 0 {
+		name := id
+		if b := a.bankByID(id); b != nil {
+			name = b.Name
+		}
+		finish := "them"
+		if sends == 1 {
+			finish = "it"
+		}
+		return fmt.Sprintf("%s has %s still being sent. Wait for %s to finish.", name, view.Plural(sends, "transfer", "transfers"), finish), nil
+	}
 	sw := a.nibssStore()
 	if sw == nil {
 		return "", errors.New("NIBSS is not open, so open NIP sessions cannot be checked; try again soon")
@@ -99,13 +195,13 @@ func (a *App) inflightWith(ctx context.Context, code, id string) (string, error)
 		if x.FromCode == code {
 			net -= x.Amount
 		}
-		if x.ToCode == code && (x.Status == nibss.SessionOK || x.Outcome == nibss.OutcomeCredited) {
+		if x.ToCode == code && x.Status == nibss.SessionOK {
 			net += x.Amount
 		}
 	}
 	if transfers > 0 {
 		cutoff := a.schedule().next(a.clock.Now()).In(clock.Lagos).Format("15:04")
-		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Wait for it, or run beerus nip settle-now.", cutoff, plural(transfers, "transfer", "transfers"), naira(max(net, -net))), nil
+		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Wait for it, or run beerus nip settle-now.", cutoff, view.Plural(transfers, "transfer", "transfers"), bank.Naira(max(net, -net))), nil
 	}
 	unposted, err := sw.Unposted(ctx)
 	if err != nil {
@@ -118,7 +214,7 @@ func (a *App) inflightWith(ctx context.Context, code, id string) (string, error)
 		}
 	}
 	if waiting > 0 {
-		return fmt.Sprintf("Waiting for %s with %s to be posted to the books. Try again soon.", plural(waiting, "settlement", "settlements"), id), nil
+		return fmt.Sprintf("Waiting for %s with %s to be posted to the books. Try again soon.", view.Plural(waiting, "settlement", "settlements"), id), nil
 	}
 	return "", nil
 }

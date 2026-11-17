@@ -10,6 +10,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -34,7 +35,7 @@ func TestOldDirIsRefused(t *testing.T) {
 
 func TestInitWritesTheDefaultSetup(t *testing.T) {
 	today := clock.Date{Y: 2026, M: 11, D: 3}
-	cfg := initTestConfig(t, today)
+	cfg := initConfigWith(t, today, DefaultLocal())
 	for _, f := range []string{SpecFile, LocalFile, statusFile, "control-token"} {
 		fi, err := os.Stat(cfg.Path(f))
 		if err != nil {
@@ -79,7 +80,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 		t.Errorf("applied codes are not pinned: %+v", st.Applied.Spec.Banks[0])
 	}
 	r := findResource(&st, setup.KindBank, "bank-b")
-	if r == nil || r.Phase != setup.PhaseProvisioning || r.Steps[setup.StepAllocate] != stepDone || r.Generation != 1 {
+	if r == nil || r.Phase != config.PhaseProvisioning || r.Steps[config.StepAllocate] != stepDone || r.Generation != 1 {
 		t.Fatalf("bank-b resource: %+v", r)
 	}
 	for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {

@@ -6,7 +6,6 @@ spec:
   nip:
     sessions: 4
     tsq_after: 2m
-    tsq_attempts: 3
   connect:
     legal_name: Beerus Connect Ltd
     brand_name: Beerus

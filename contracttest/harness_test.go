@@ -120,21 +120,21 @@ func freePorts(t *testing.T, n int) []int {
 
 const (
 	stackPortLow  = 20000
-	stackPortHigh = 45000
+	stackPortHigh = 32000
 )
 
 func stackPorts(t *testing.T, banks int) []int {
 	t.Helper()
 	offset := config.DefaultAPIPortOffset
-	need := 4 + banks
+	need := 5 + banks
 	for range 200 {
 		base := stackPortLow + mrand.IntN(stackPortHigh-stackPortLow-need-offset)
 		free := true
 		for p := base; p < base+need && free; p++ {
-			free = portOpen(p) && (p < base+4 || portOpen(p+offset))
+			free = portOpen(p) && (p < base+5 || portOpen(p+offset))
 		}
 		if free {
-			return []int{base, base + 1, base + 2, base + 3}
+			return []int{base, base + 1, base + 2, base + 3, base + 4}
 		}
 	}
 	t.Fatal("no free block of ports for the stack")
@@ -207,7 +207,7 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
-	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort = ports[0], ports[1], ports[2], ports[3]
+	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort = ports[0], ports[1], ports[2], ports[3], ports[4]
 	today := clock.DateOf(stackBase(t))
 	spec := banktest.Spec("contract")
 	spec.Spec.Partners = []setup.Partner{{
@@ -367,15 +367,27 @@ func (s *Stack) rootPool() *x509.CertPool {
 	return pool
 }
 
+const healthyWithin = 30 * time.Second
+
 func (s *Stack) waitHealthy() {
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(healthyWithin)
 	for time.Now().Before(deadline) {
-		if _, err := s.ctlTry("GET", "/health", nil); err == nil && s.banksActive() && s.banksAnswer() {
+		if _, err := s.ctlTry("GET", "/health", nil); err == nil && s.banksActive() && s.banksAnswer() && s.registrySeeded() {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	s.t.Fatal("stack did not become healthy")
+	banks, err := s.ctlTry("GET", "/banks", nil)
+	s.t.Fatalf("stack did not become healthy within %s: %v %v", healthyWithin, banks, err)
+}
+
+func (s *Stack) registrySeeded() bool {
+	out, err := s.ctlTry("GET", "/registry/clients", nil)
+	if err != nil {
+		return false
+	}
+	list, _ := out["data"].([]any)
+	return len(list) > 0
 }
 
 func (s *Stack) banksActive() bool {
@@ -561,6 +573,9 @@ func (s *Stack) ctlWith(method, path string, body any, header map[string]string)
 	req.Header.Set("Authorization", "Bearer "+s.ctlToken)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if method != http.MethodGet {
+		req.Header.Set("Idempotency-Key", randomKey())
 	}
 	for k, v := range header {
 		req.Header.Set(k, v)

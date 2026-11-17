@@ -126,7 +126,6 @@ func (c *specChecker) nip() {
 			c.add("nip.tsq_after", "nip.tsq_after %s must be longer than zero. Use a duration such as 2m", n.TSQAfter)
 		}
 	}
-	c.positive("nip.tsq_attempts", int64(n.TSQAttempts), "Use a number such as 3, or leave it out")
 }
 
 func (c *specChecker) holidays() {

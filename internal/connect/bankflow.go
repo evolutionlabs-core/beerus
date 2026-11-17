@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSession) {
@@ -18,8 +20,17 @@ func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSess
 		a.failSession(w, r, ls, "institution_down")
 		return
 	}
-	verifier, challenge := pkcePair()
-	state := newSecret("bs_", 16)
+	verifier, challenge, err := pkcePair()
+	var state string
+	if err == nil {
+		state, err = web.NewSecret("bs_", 16)
+	}
+	if err != nil {
+		defer a.mu.Unlock()
+		a.log.Error("link state", "err", err)
+		a.failSession(w, r, ls, "server_error")
+		return
+	}
 	form := a.parFormLocked(ls, state, challenge)
 	a.mu.Unlock()
 	uri, err := a.bankPAR(b, form)
@@ -44,12 +55,12 @@ func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSess
 	http.Redirect(w, r, b.URL()+"/authorize?"+q.Encode(), http.StatusSeeOther)
 }
 
-func (a *App) accountOwner(bankID, nuban string) (string, error) {
+func (a *App) accountOwner(ctx context.Context, bankID, nuban string) (string, error) {
 	l := a.obLedger(bankID)
 	if l == nil {
 		return "", fmt.Errorf("the books of %s are not open", bankID)
 	}
-	acc, err := l.Account(nuban)
+	acc, err := l.Account(ctx, nuban)
 	if err != nil {
 		return "", fmt.Errorf("look up the owner of %s: %w", nuban, err)
 	}
@@ -93,7 +104,7 @@ func (a *App) bankCallbackBeginLocked(w http.ResponseWriter, r *http.Request) (b
 	return bankCallbackInput{ls: ls, bank: b, vid: linkVaultPrefix + ls.ID, code: q.Get("code"), verifier: verifier}, true
 }
 
-func (a *App) bankSignIn(in bankCallbackInput) (bankToken, bankGrant, string, error) {
+func (a *App) bankSignIn(ctx context.Context, in bankCallbackInput) (bankToken, bankGrant, string, error) {
 	var g bankGrant
 	tok, err := a.bankExchange(in.bank, in.code, in.verifier)
 	if err != nil {
@@ -111,7 +122,7 @@ func (a *App) bankSignIn(in bankCallbackInput) (bankToken, bankGrant, string, er
 	if len(g.Accounts) == 0 {
 		return tok, g, "", nil
 	}
-	owner, err := a.accountOwner(in.bank.ID, g.Accounts[0].ID)
+	owner, err := a.accountOwner(ctx, in.bank.ID, g.Accounts[0].ID)
 	return tok, g, owner, err
 }
 
@@ -122,7 +133,7 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tok, g, owner, err := a.bankSignIn(in)
+	tok, g, owner, err := a.bankSignIn(r.Context(), in)
 	a.mu.Lock()
 	if err != nil {
 		defer a.mu.Unlock()
@@ -165,11 +176,16 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer a.mu.Unlock()
 	slices.Sort(keys)
-	secret := newSecret("oc_", 16)
+	secret, err := web.NewSecret("oc_", 16)
+	if err != nil {
+		a.log.Error("link code", "err", err)
+		a.failSession(w, r, in.ls, "server_error")
+		return
+	}
 	in.ls.CustomerID, in.ls.Accounts, in.ls.BankAccounts = owner, keys, g.Accounts
 	in.ls.BankConsentID, in.ls.ConsentEnds, in.ls.BankFrom = tok.ConsentID, g.Ends, g.From
 	in.ls.Status = "authorised"
-	in.ls.CodeHash = hashSecret(secret)
+	in.ls.CodeHash = web.HashSecret(secret)
 	in.ls.CodeExpires = a.clock.Real().Add(codeLife)
 	if err := a.saveLocked(); err != nil {
 		a.log.Error("save state", "err", err)

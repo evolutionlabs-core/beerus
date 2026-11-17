@@ -15,9 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -224,7 +226,7 @@ func settleTargets(pl planned) []string {
 		}
 	}
 	for _, r := range pl.st.Resources {
-		if r.Kind == setup.KindBank && (r.Phase == setup.PhaseClosing || r.Phase == setup.PhaseTerminating) && !slices.Contains(out, r.ID) {
+		if r.Kind == setup.KindBank && (r.Phase == config.PhaseClosing || r.Phase == config.PhaseTerminating) && !slices.Contains(out, r.ID) {
 			out = append(out, r.ID)
 		}
 	}
@@ -274,7 +276,7 @@ func andList(xs []string) string {
 
 func moneyOpen(st *setup.Status, id string) bool {
 	r := findResource(st, setup.KindBank, id)
-	return r == nil || (r.Phase != setup.PhaseClosed && !slices.Contains(r.Done, setup.FinalizerDecideMoney))
+	return r == nil || (r.Phase != config.PhaseClosed && !slices.Contains(r.Done, setup.FinalizerDecideMoney))
 }
 
 func withMoney(desired setup.Spec, st *setup.Status, rm *setup.Removal) setup.Spec {
@@ -304,7 +306,7 @@ func retargeted(st setup.Status, rm *setup.Removal) map[string]bool {
 		return out
 	}
 	for _, r := range st.Resources {
-		if r.Kind == setup.KindBank && (r.Phase == setup.PhaseClosing || r.Phase == setup.PhaseTerminating) && moneyOpen(&st, r.ID) && (!reflect.DeepEqual(r.Money, rm) || waitingOnMoney(r)) {
+		if r.Kind == setup.KindBank && (r.Phase == config.PhaseClosing || r.Phase == config.PhaseTerminating) && moneyOpen(&st, r.ID) && (!reflect.DeepEqual(r.Money, rm) || waitingOnMoney(r)) {
 			out[r.ID] = true
 		}
 	}
@@ -395,13 +397,13 @@ func (a *App) buildPlan(desired setup.Spec, st setup.Status, opt ApplyOptions) (
 		return planned{}, planFailure(plan.Errors)
 	}
 	pl := planned{plan: plan, desired: desired, st: st}
-	if err := a.fillImpact(&pl); err != nil {
+	if err := a.fillImpact(context.Background(), &pl); err != nil {
 		return planned{}, err
 	}
 	return pl, nil
 }
 
-func (a *App) fillImpact(pl *planned) error {
+func (a *App) fillImpact(ctx context.Context, pl *planned) error {
 	for i := range pl.plan.Actions {
 		act := &pl.plan.Actions[i]
 		if act.Impact == nil {
@@ -410,7 +412,7 @@ func (a *App) fillImpact(pl *planned) error {
 		var err error
 		switch act.Kind {
 		case setup.KindBank:
-			err = a.bankImpact(act, pl.st)
+			err = a.bankImpact(ctx, act, pl.st)
 		case setup.KindPartner:
 			act.Impact.Connections = a.partnerConnections(act.ID)
 		}
@@ -433,13 +435,13 @@ func (a *App) partnerConnections(id string) int {
 	return n
 }
 
-func (a *App) bankImpact(act *setup.Action, st setup.Status) error {
+func (a *App) bankImpact(ctx context.Context, act *setup.Action, st setup.Status) error {
 	im := act.Impact
 	a.mu.Lock()
 	open := a.ledgerFor(act.ID) != nil
 	a.mu.Unlock()
 	if open {
-		ci, err := a.CloseImpact(act.ID)
+		ci, err := a.CloseImpact(ctx, act.ID)
 		if err != nil && !errors.Is(err, errNotFound) {
 			return err
 		}
@@ -527,10 +529,10 @@ func (a *App) allocatePorts(ad *admission) error {
 		return nil
 	}
 	if err := a.postgresRoom(context.Background()); err != nil {
-		return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+		return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 	}
 	c := a.cfg.Connect
-	used := map[int]bool{c.PartnerPort: true, c.WidgetPort: true, c.ControlPort: true, c.HealthPort: true}
+	used := map[int]bool{c.PartnerPort: true, c.WidgetPort: true, c.ControlPort: true, c.HealthPort: true, c.NIBSSPort: true, c.NIBSSControlPort: true}
 	top := c.PartnerPort
 	for _, r := range ad.pl.st.Resources {
 		for _, p := range []int{r.Allocated.Port, r.Allocated.APIPort} {
@@ -700,7 +702,7 @@ func admitBank(st *setup.Status, act setup.Action, ad *admission, fields map[str
 			Kind:       setup.KindBank,
 			ID:         act.ID,
 			Generation: gen,
-			Phase:      setup.PhaseProvisioning,
+			Phase:      config.PhaseProvisioning,
 			Allocated: setup.Allocation{
 				NIPCode:   fields[fieldNIPCode],
 				NUBANCode: fields[fieldNUBANCode],
@@ -708,7 +710,7 @@ func admitBank(st *setup.Status, act setup.Action, ad *admission, fields map[str
 				Port:      ports[0],
 				APIPort:   ports[1],
 			},
-			Steps: map[string]string{setup.StepAllocate: stepDone},
+			Steps: map[string]string{config.StepAllocate: stepDone},
 		}
 	case setup.OpUpdate:
 		if r := findResource(st, setup.KindBank, act.ID); r != nil {
@@ -717,12 +719,12 @@ func admitBank(st *setup.Status, act setup.Action, ad *admission, fields map[str
 	case setup.OpClose:
 		if r := findResource(st, setup.KindBank, act.ID); r != nil {
 			d, _ := bankIn(ad.pl.desired, act.ID)
-			leaving(r, setup.PhaseClosing, finalizerNames(bankFinalizers)[:len(bankFinalizers)-1], d.OnRemove, ad.now)
+			leaving(r, config.PhaseClosing, finalizerNames(bankFinalizers)[:len(bankFinalizers)-1], d.OnRemove, ad.now)
 		}
 	case setup.OpRemove:
 		if r := findResource(st, setup.KindBank, act.ID); r != nil {
 			b, _ := bankIn(ad.pl.st.Applied, act.ID)
-			leaving(r, setup.PhaseTerminating, finalizerNames(bankFinalizers), b.OnRemove, ad.now)
+			leaving(r, config.PhaseTerminating, finalizerNames(bankFinalizers), b.OnRemove, ad.now)
 		}
 	}
 }
@@ -738,7 +740,7 @@ func admitPartner(st *setup.Status, act setup.Action, ad *admission) {
 			ID:                 act.ID,
 			Generation:         gen,
 			ObservedGeneration: gen,
-			Phase:              setup.PhaseActive,
+			Phase:              config.PhaseActive,
 			Partner:            &setup.PartnerKeys{CertCN: p.CertCN, APIKeySHA256: p.APIKeySHA256, CertSHA256: p.CertSHA256},
 			Owned:              []setup.Owned{{Kind: ownedDir, Name: "partners/" + act.ID}},
 		}
@@ -748,7 +750,7 @@ func admitPartner(st *setup.Status, act setup.Action, ad *admission) {
 		}
 	case setup.OpRemove:
 		if r := findResource(st, setup.KindPartner, act.ID); r != nil {
-			leaving(r, setup.PhaseTerminating, finalizerNames(partnerFinalizers), nil, ad.now)
+			leaving(r, config.PhaseTerminating, finalizerNames(partnerFinalizers), nil, ad.now)
 		}
 	}
 }
@@ -773,6 +775,7 @@ func (a *App) startAdmitted(ad *admission) {
 			a.cfg.Banks = append(slices.Clone(a.cfg.Banks), b)
 			a.mu.Unlock()
 			a.status[b.ID] = newStatus(b, false)
+			delete(a.confirms, b.ID)
 			a.lifeMu.Unlock()
 		case act.Kind == setup.KindBank && (act.Op == setup.OpClose || act.Op == setup.OpRemove):
 			a.lifeMu.Lock()
@@ -850,9 +853,9 @@ func (a *App) writeApplyError(w http.ResponseWriter, r *http.Request, err error)
 	var ae *applyError
 	switch {
 	case errors.As(err, &ae):
-		writeError(w, r, ae.status, ae.code, ae.message)
-	case errors.Is(err, ErrBankInvalid):
-		writeError(w, r, http.StatusUnprocessableEntity, codeInvalidSpec, strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+		web.WriteError(w, r, ae.status, ae.code, ae.message)
+	case errors.Is(err, server.ErrInvalid):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, codeInvalidSpec, strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 	default:
 		return false
 	}
@@ -885,8 +888,8 @@ func (a *App) planBody(p setup.Plan) planBody {
 
 func (a *App) parseRequest(w http.ResponseWriter, r *http.Request) (setup.Spec, ApplyOptions, bool) {
 	var req applyRequest
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"file":"setup.yaml","spec":"<the file's text>"}.`)
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"file":"setup.yaml","spec":"<the file's text>"}.`)
 		return setup.Spec{}, ApplyOptions{}, false
 	}
 	spec, errs := setup.Parse(orDefault(req.File, SpecFile), []byte(req.Spec))
@@ -906,7 +909,7 @@ func (a *App) ctlPlan(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		var pl planned
 		if pl, err = a.buildPlan(spec, st, opt); err == nil {
-			writeJSON(w, http.StatusOK, a.planBody(pl.plan))
+			web.WriteJSON(w, http.StatusOK, a.planBody(pl.plan))
 			return
 		}
 	}
@@ -923,30 +926,30 @@ func (a *App) ctlApply(w http.ResponseWriter, r *http.Request) {
 		a.applyFailed(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.planBody(plan))
+	web.WriteJSON(w, http.StatusOK, a.planBody(plan))
 }
 
 func (a *App) applyFailed(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errNotFound) {
-		writeError(w, r, http.StatusNotFound, "not_found", "No such resource.")
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such resource.")
 		return
 	}
 	if a.writeApplyError(w, r, err) {
 		return
 	}
 	a.log.Error("apply", "err", err)
-	writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
+	web.WriteError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
 }
 
 func (a *App) ctlResources(w http.ResponseWriter, r *http.Request) {
-	limit, cursor, err := listParams(r)
+	limit, cursor, err := server.ListParams(r)
 	if err != nil {
-		a.bankingError(w, r, err)
+		a.banking.Error(w, r, err)
 		return
 	}
 	kind := r.URL.Query().Get("kind")
 	if kind != "" && !slices.ContainsFunc([]string{setup.KindBank, setup.KindPartner, setup.KindSystem}, func(k string) bool { return strings.EqualFold(k, kind) }) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("kind %q is not known. Use bank, partner or system.", kind))
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("kind %q is not known. Use bank, partner or system.", kind))
 		return
 	}
 	data, next, err := a.resources(kind, limit, cursor)
@@ -954,7 +957,7 @@ func (a *App) ctlResources(w http.ResponseWriter, r *http.Request) {
 		a.applyFailed(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, listPage(data, next))
+	web.WriteJSON(w, http.StatusOK, web.ListPage(data, next))
 }
 
 func (a *App) ctlResource(w http.ResponseWriter, r *http.Request) {
@@ -963,5 +966,5 @@ func (a *App) ctlResource(w http.ResponseWriter, r *http.Request) {
 		a.applyFailed(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	web.WriteJSON(w, http.StatusOK, res)
 }

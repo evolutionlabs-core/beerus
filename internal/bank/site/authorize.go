@@ -1,6 +1,7 @@
-package connect
+package site
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -11,53 +12,58 @@ import (
 
 const oauthCookie = "beerus_oauth"
 
-func (a *bankSite) oauthError(w http.ResponseWriter, s *bankSession, status int, msg string) {
+func (s *site) oauthError(w http.ResponseWriter, sess *session, status int, msg string) {
 	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: "", Path: "/", MaxAge: -1})
-	a.bankRender(w, "bank_oauth_error", status, s, roomPage{"Title": "Request not valid", "Error": msg})
+	s.render(w, "bank_oauth_error", status, sess, data{"Title": "Request not valid", "Error": msg})
 }
 
-func (a *bankSite) obAuthorize(w http.ResponseWriter, r *http.Request) {
+func (s *site) authorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	uri, client := q.Get("request_uri"), q.Get("client_id")
 	if len(q) != 2 || uri == "" || client == "" {
-		a.oauthError(w, nil, http.StatusBadRequest, "This link is not valid. Start again from the app.")
+		s.oauthError(w, nil, http.StatusBadRequest, "This link is not valid. Start again from the app.")
 		return
 	}
-	if _, err := a.ob.Request(r.Context(), uri, client); err != nil {
-		a.oauthError(w, nil, http.StatusBadRequest, err.Error())
+	if _, err := s.Open.Request(r.Context(), uri, client); err != nil {
+		s.oauthError(w, nil, http.StatusBadRequest, err.Error())
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: url.Values{"client_id": {client}, "request_uri": {uri}}.Encode(), Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
-	s, _ := a.bankSessionFor(r)
-	if s == nil {
+	sess, _ := s.sessionFor(r)
+	if sess == nil {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	a.auth.mu.Lock()
-	s.Verified, s.Fresh, s.Attempts = false, "", 0
-	s.OTP, s.OTPExpires = otp(), a.clock.Real().Add(otpLife)
-	a.auth.mu.Unlock()
+	code, err := otp()
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.auth.mu.Lock()
+	sess.Verified, sess.Fresh, sess.Attempts = false, "", 0
+	sess.OTP, sess.OTPExpires = code, s.Clock.Real().Add(otpLife)
+	s.auth.mu.Unlock()
 	http.Redirect(w, r, "/verify", http.StatusSeeOther)
 }
 
-func (a *bankSite) pendingRequest(w http.ResponseWriter, r *http.Request, s *bankSession) (*openbanking.Request, string) {
+func (s *site) pendingRequest(w http.ResponseWriter, r *http.Request, sess *session) (*openbanking.Request, string) {
 	ck, err := r.Cookie(oauthCookie)
 	if err != nil {
-		a.oauthError(w, s, http.StatusBadRequest, "This request has expired. Start again from the app.")
+		s.oauthError(w, sess, http.StatusBadRequest, "This request has expired. Start again from the app.")
 		return nil, ""
 	}
 	v, err := url.ParseQuery(ck.Value)
 	if err != nil || v.Get("request_uri") == "" {
-		a.oauthError(w, s, http.StatusBadRequest, "This request has expired. Start again from the app.")
+		s.oauthError(w, sess, http.StatusBadRequest, "This request has expired. Start again from the app.")
 		return nil, ""
 	}
-	if s.Fresh != v.Get("request_uri") {
+	if sess.Fresh != v.Get("request_uri") {
 		http.Redirect(w, r, "/authorize?"+v.Encode(), http.StatusSeeOther)
 		return nil, ""
 	}
-	req, err := a.ob.Request(r.Context(), v.Get("request_uri"), v.Get("client_id"))
+	req, err := s.Open.Request(r.Context(), v.Get("request_uri"), v.Get("client_id"))
 	if err != nil {
-		a.oauthError(w, s, http.StatusBadRequest, err.Error())
+		s.oauthError(w, sess, http.StatusBadRequest, err.Error())
 		return nil, ""
 	}
 	return req, v.Get("request_uri")
@@ -84,10 +90,10 @@ type consentChoice struct {
 	Checked        bool
 }
 
-func (a *bankSite) consentPage(w http.ResponseWriter, s *bankSession, status int, req *openbanking.Request, errMsg string) {
-	mine, err := a.ob.Data().Accounts(s.Customer)
+func (s *site) renderConsent(ctx context.Context, w http.ResponseWriter, sess *session, status int, req *openbanking.Request, errMsg string) {
+	mine, err := s.Open.Data().Accounts(ctx, sess.Customer)
 	if err != nil {
-		a.log.Error("consent page", "bank", a.bank.ID, "err", err)
+		s.Log.Error("consent page", "bank", s.id, "err", err)
 		http.Error(w, "Something went wrong at the bank. Try again soon.", http.StatusInternalServerError)
 		return
 	}
@@ -96,62 +102,62 @@ func (a *bankSite) consentPage(w http.ResponseWriter, s *bankSession, status int
 		choices = append(choices, consentChoice{ID: m.ID, Name: m.Name, Type: m.Type, Checked: true})
 	}
 	c := req.Consent
-	data := roomPage{
+	d := data{
 		"Title": "Share your account data", "Nav": "", "Req": req, "Client": req.Client, "Consent": c, "Choices": choices, "Error": errMsg,
 		"Start": c.TransactionFrom.String(), "Effective": req.Effective.String(), "Capped": req.Capped, "Months": req.Months, "Until": req.Until.Format("2 January 2006"), "Shared": strings.ToUpper(sharedData(c.Scopes)[:1]) + sharedData(c.Scopes)[1:],
 		"Partner": c.PartnerName, "PartnerLegal": c.PartnerLegal, "Purpose": c.Purpose,
 	}
 	if c.PartnerName == "" {
-		data["Partner"] = req.Client.Name
+		d["Partner"] = req.Client.Name
 	}
 	if c.PartnerLegal == "" {
-		data["PartnerLegal"] = req.Client.LegalName
+		d["PartnerLegal"] = req.Client.LegalName
 	}
 	if c.Purpose == "" {
-		data["Purpose"] = "to read your " + sharedData(c.Scopes)
+		d["Purpose"] = "to read your " + sharedData(c.Scopes)
 	}
-	a.bankRender(w, "bank_consent", status, s, data)
+	s.render(w, "bank_consent", status, sess, d)
 }
 
-func (a *bankSite) obConsentPage(w http.ResponseWriter, r *http.Request) {
-	s := a.bankUser(w, r)
-	if s == nil {
+func (s *site) consentPage(w http.ResponseWriter, r *http.Request) {
+	sess := s.user(w, r)
+	if sess == nil {
 		return
 	}
-	req, _ := a.pendingRequest(w, r, s)
+	req, _ := s.pendingRequest(w, r, sess)
 	if req == nil {
 		return
 	}
-	a.consentPage(w, s, http.StatusOK, req, "")
+	s.renderConsent(r.Context(), w, sess, http.StatusOK, req, "")
 }
 
-func (a *bankSite) obConsentSubmit(w http.ResponseWriter, r *http.Request) {
-	s := a.bankUser(w, r)
-	if s == nil {
+func (s *site) consentSubmit(w http.ResponseWriter, r *http.Request) {
+	sess := s.user(w, r)
+	if sess == nil {
 		return
 	}
-	req, uri := a.pendingRequest(w, r, s)
+	req, uri := s.pendingRequest(w, r, sess)
 	if req == nil {
 		return
 	}
 	var loc string
 	var err error
 	if r.PostForm.Get("action") == "approve" {
-		loc, err = a.ob.Approve(r.Context(), uri, s.Customer, r.PostForm["account"], r.PostForm.Get("analytics") == "yes")
+		loc, err = s.Open.Approve(r.Context(), uri, sess.Customer, r.PostForm["account"], r.PostForm.Get("analytics") == "yes")
 	} else {
-		loc, err = a.ob.Reject(r.Context(), uri)
+		loc, err = s.Open.Reject(r.Context(), uri)
 	}
 	switch {
 	case errors.Is(err, openbanking.ErrNoAccounts):
-		a.consentPage(w, s, http.StatusBadRequest, req, "Choose at least one account.")
+		s.renderConsent(r.Context(), w, sess, http.StatusBadRequest, req, "Choose at least one account.")
 		return
 	case err != nil:
-		a.oauthError(w, s, http.StatusBadRequest, openbanking.ErrInvalidRequest.Error())
+		s.oauthError(w, sess, http.StatusBadRequest, openbanking.ErrInvalidRequest.Error())
 		return
 	}
-	a.auth.mu.Lock()
-	s.Fresh = ""
-	a.auth.mu.Unlock()
+	s.auth.mu.Lock()
+	sess.Fresh = ""
+	s.auth.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: "", Path: "/", MaxAge: -1})
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, loc, http.StatusSeeOther)

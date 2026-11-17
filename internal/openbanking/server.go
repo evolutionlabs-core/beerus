@@ -35,8 +35,6 @@ type Config struct {
 	Store         Store
 	Registry      Registry
 	Data          Data
-	Ledger        Ledger
-	LedgerOutbox  bool
 	Real          func() time.Time
 	Now           func() time.Time
 	CodeLife      time.Duration
@@ -248,7 +246,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := s.caller(w, r); !ok {
 		return
 	}
-	if err := s.cfg.Data.Ping(); err != nil {
+	if err := s.cfg.Data.Ping(r.Context()); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "down"})
 		return
 	}
@@ -484,14 +482,19 @@ func (s *Server) redirect(base string, q url.Values) string {
 
 func (s *Server) record(ctx context.Context, c *Consent, status Status, via string) error {
 	e := ConsentEvent{ConsentID: c.ID, Bank: s.cfg.BankID, ClientID: c.ClientID, PartnerID: c.PartnerID, Status: status, Via: via, At: s.cfg.Now()}
-	if s.cfg.LedgerOutbox {
-		if err := s.cfg.Store.EnqueueLedger(ctx, e, s.cfg.Real()); err != nil {
-			return err
-		}
-	} else if s.cfg.Ledger != nil {
-		s.cfg.Ledger.Record(e)
-	}
-	return s.cfg.Store.Enqueue(ctx, e, s.cfg.Real())
+	return s.cfg.Store.EnqueueBoth(ctx, e, s.cfg.Real())
+}
+
+func (s *Server) LedgerRejected(ctx context.Context) ([]Rejection, error) {
+	return s.cfg.Store.LedgerRejected(ctx)
+}
+
+func (s *Server) RejectLedger(ctx context.Context, e Event, reason string) error {
+	return s.cfg.Store.Reject(ctx, e.ID, reason)
+}
+
+func (s *Server) Incarnation(ctx context.Context) (string, error) {
+	return s.cfg.Store.Incarnation(ctx)
 }
 
 func (s *Server) Due(ctx context.Context, limit int) ([]Event, error) {
@@ -544,7 +547,7 @@ func (s *Server) Approve(ctx context.Context, requestURI, customer string, accou
 	if !ok {
 		return "", ErrInvalidRequest
 	}
-	mine, err := s.cfg.Data.Accounts(customer)
+	mine, err := s.cfg.Data.Accounts(ctx, customer)
 	if err != nil {
 		return "", err
 	}

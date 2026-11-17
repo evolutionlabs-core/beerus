@@ -7,8 +7,9 @@ import (
 	"testing"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 var today = clock.Date{Y: 2026, M: 11, D: 5}
@@ -19,7 +20,7 @@ func spec() Spec {
 		Kind:       KindSetup,
 		Metadata:   Metadata{Name: "beerus"},
 		Spec: Body{
-			NIP: NIP{Sessions: 4, TSQAfter: "2m", TSQAttempts: 3},
+			NIP: NIP{Sessions: 4, TSQAfter: "2m"},
 			Connect: ConnectLegal{
 				LegalName:  "Beerus Connect Ltd",
 				BrandName:  "Beerus",
@@ -37,7 +38,7 @@ func spec() Spec {
 }
 
 func doneSteps() map[string]string {
-	return map[string]string{StepAllocate: stepDone, StepDirectory: stepDone, StepDatabase: stepDone, StepCerts: stepDone, StepCBN: stepDone, StepSite: stepDone, StepAPI: stepDone}
+	return map[string]string{config.StepAllocate: stepDone, config.StepDirectory: stepDone, config.StepDatabase: stepDone, config.StepCerts: stepDone, config.StepCBN: stepDone, config.StepSite: stepDone, config.StepAPI: stepDone}
 }
 
 func status(applied Spec) Status {
@@ -46,16 +47,16 @@ func status(applied Spec) Status {
 		st.Resources = append(st.Resources, Resource{
 			Kind:      KindBank,
 			ID:        b.ID,
-			Phase:     PhaseActive,
+			Phase:     config.PhaseActive,
 			Allocated: Allocation{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Database: "beerus_x_" + strings.ReplaceAll(b.ID, "-", "_")},
 			Owned:     []Owned{{Kind: ownedDatabase, Name: "beerus_x_" + strings.ReplaceAll(b.ID, "-", "_")}, {Kind: "port", Name: "7451"}},
 			Steps:     doneSteps(),
 		})
 	}
 	for _, x := range applied.Spec.Partners {
-		st.Resources = append(st.Resources, Resource{Kind: KindPartner, ID: x.ID, Phase: PhaseActive})
+		st.Resources = append(st.Resources, Resource{Kind: KindPartner, ID: x.ID, Phase: config.PhaseActive})
 	}
-	st.Resources = append(st.Resources, Resource{Kind: KindSystem, ID: SystemNIBSS, Phase: PhaseActive, Steps: map[string]string{StepDatabase: stepDone}})
+	st.Resources = append(st.Resources, Resource{Kind: KindSystem, ID: SystemNIBSS, Phase: config.PhaseActive, Steps: map[string]string{config.StepDatabase: stepDone}})
 	return st
 }
 
@@ -87,19 +88,19 @@ func dropBank(s *Spec, id string) {
 	s.Spec.Banks = keep
 }
 
-func tombstone(id, name, nip, nuban string) nibss.Institution {
-	return nibss.Institution{ID: id, Name: name, NIPCode: nip, NUBANCode: nuban, Type: "commercial", Status: nibss.StatusRemoved}
+func tombstone(id, name, code, nuban string) nip.Institution {
+	return nip.Institution{ID: id, Name: name, NIPCode: code, NUBANCode: nuban, Type: "commercial", Status: nip.StatusRemoved}
 }
 
-func member(id, name, nip, nuban string) nibss.Institution {
-	return nibss.Institution{ID: id, Name: name, NIPCode: nip, NUBANCode: nuban, Type: "commercial", Status: nibss.StatusActive}
+func member(id, name, code, nuban string) nip.Institution {
+	return nip.Institution{ID: id, Name: name, NIPCode: code, NUBANCode: nuban, Type: "commercial", Status: nip.StatusActive}
 }
 
 type planCase struct {
 	name    string
 	desired func(*Spec)
 	status  func(*Status)
-	dir     []nibss.Institution
+	dir     []nip.Institution
 	want    []Action
 	errs    []string
 	is      error
@@ -190,14 +191,14 @@ func TestBuildNoChanges(t *testing.T) {
 		{
 			name: "bank already terminating and out of the file",
 			status: func(st *Status) {
-				res(st, KindBank, "bank-b").Phase = PhaseTerminating
+				res(st, KindBank, "bank-b").Phase = config.PhaseTerminating
 			},
 			desired: func(s *Spec) { dropBank(s, "bank-b") },
 		},
 		{
 			name: "partner already terminating and out of the file",
 			status: func(st *Status) {
-				res(st, KindPartner, "balance").Phase = PhaseTerminating
+				res(st, KindPartner, "balance").Phase = config.PhaseTerminating
 			},
 			desired: func(s *Spec) { s.Spec.Partners = nil },
 		},
@@ -206,7 +207,7 @@ func TestBuildNoChanges(t *testing.T) {
 			status: func(st *Status) {
 				bank(&st.Applied, "bank-b").State = StateClosed
 				bank(&st.Applied, "bank-b").OnRemove = &Removal{Money: MoneyTransfer, To: "bank-a"}
-				res(st, KindBank, "bank-b").Phase = PhaseClosing
+				res(st, KindBank, "bank-b").Phase = config.PhaseClosing
 			},
 			desired: func(s *Spec) {
 				bank(s, "bank-b").State = StateClosed
@@ -217,7 +218,7 @@ func TestBuildNoChanges(t *testing.T) {
 			name: "provisioning bank with steps still running",
 			status: func(st *Status) {
 				r := res(st, KindBank, "bank-b")
-				r.Phase, r.Steps = PhaseProvisioning, map[string]string{StepAllocate: stepDone}
+				r.Phase, r.Steps = config.PhaseProvisioning, map[string]string{config.StepAllocate: stepDone}
 			},
 		},
 	})
@@ -357,12 +358,11 @@ func TestBuildChangeableFields(t *testing.T) {
 		{
 			name: "nip tsq and connect",
 			desired: func(s *Spec) {
-				s.Spec.NIP.TSQAfter, s.Spec.NIP.TSQAttempts = "5m", 4
+				s.Spec.NIP.TSQAfter = "5m"
 				s.Spec.Connect = ConnectLegal{LegalName: "Acme Connect Ltd", BrandName: "Acme", RegistryID: "OB-0002", CACNumber: "RC-000002"}
 			},
 			want: []Action{{Op: OpUpdate, Kind: KindSetup, ID: "beerus", Fields: []FieldChange{
 				{Path: "nip.tsq_after", From: "2m", To: "5m"},
-				{Path: "nip.tsq_attempts", From: "3", To: "4"},
 				{Path: "connect.legal_name", From: "Beerus Connect Ltd", To: "Acme Connect Ltd"},
 				{Path: "connect.brand_name", From: "Beerus", To: "Acme"},
 				{Path: "connect.registry_id", From: "OB-0001", To: "OB-0002"},
@@ -492,7 +492,7 @@ func TestBuildStateTransitions(t *testing.T) {
 			name: "closed is one-way",
 			status: func(st *Status) {
 				bank(&st.Applied, "bank-b").State = StateClosed
-				res(st, KindBank, "bank-b").Phase = PhaseClosed
+				res(st, KindBank, "bank-b").Phase = config.PhaseClosed
 			},
 			desired: func(s *Spec) { bank(s, "bank-b").State = StateActive },
 			errs:    []string{"banks[bank-b].state cannot change from closed to active. A closed bank stays closed; remove it from the file instead."},
@@ -517,7 +517,7 @@ func TestBuildStateTransitions(t *testing.T) {
 			name: "closed bank removed from the file",
 			status: func(st *Status) {
 				bank(&st.Applied, "bank-b").State = StateClosed
-				res(st, KindBank, "bank-b").Phase = PhaseClosed
+				res(st, KindBank, "bank-b").Phase = config.PhaseClosed
 			},
 			desired: func(s *Spec) { dropBank(s, "bank-b") },
 			want:    []Action{{Op: OpRemove, Kind: KindBank, ID: "bank-b", Destructive: true, Impact: &Impact{Databases: []string{"beerus_x_bank_b"}}}},
@@ -585,7 +585,7 @@ func TestBuildRemoval(t *testing.T) {
 		{
 			name: "re-add while terminating (C19)",
 			status: func(st *Status) {
-				res(st, KindBank, "bank-b").Phase = PhaseTerminating
+				res(st, KindBank, "bank-b").Phase = config.PhaseTerminating
 			},
 			desired: func(s *Spec) {
 				s.pos = map[string]Pos{"banks[bank-b].id": {File: "setup.yaml", Line: 27, Col: 11}}
@@ -595,14 +595,14 @@ func TestBuildRemoval(t *testing.T) {
 		},
 		{
 			name:   "partner re-add while terminating",
-			status: func(st *Status) { res(st, KindPartner, "balance").Phase = PhaseTerminating },
+			status: func(st *Status) { res(st, KindPartner, "balance").Phase = config.PhaseTerminating },
 			errs:   []string{"partners[balance] is being removed and cannot be added back until removal finishes. Take it out of the file, or wait."},
 			is:     ErrBeingRemoved,
 		},
 		{
 			name:    "re-add after removal finished hits the tombstone",
 			status:  func(st *Status) { st.Applied.Spec.Banks = st.Applied.Spec.Banks[:1]; st.Resources = st.Resources[:1] },
-			dir:     []nibss.Institution{tombstone("bank-b", "Bank B", "999002", "902")},
+			dir:     []nip.Institution{tombstone("bank-b", "Bank B", "999002", "902")},
 			desired: func(s *Spec) { bank(s, "bank-b").NIPCode, bank(s, "bank-b").NUBANCode = "", "" },
 			errs:    []string{"banks[bank-b].id bank-b belonged to a removed bank. Choose another id."},
 		},
@@ -641,7 +641,7 @@ func TestBuildOnRemoveTarget(t *testing.T) {
 			name: "close to a bank closing too",
 			status: func(st *Status) {
 				three(&st.Applied)
-				st.Resources = append(st.Resources, Resource{Kind: KindBank, ID: "bank-c", Phase: PhaseActive, Steps: doneSteps()})
+				st.Resources = append(st.Resources, Resource{Kind: KindBank, ID: "bank-c", Phase: config.PhaseActive, Steps: doneSteps()})
 			},
 			desired: func(s *Spec) {
 				three(s)
@@ -656,7 +656,7 @@ func TestBuildOnRemoveTarget(t *testing.T) {
 			name: "close to a bank already terminating",
 			status: func(st *Status) {
 				three(&st.Applied)
-				st.Resources = append(st.Resources, Resource{Kind: KindBank, ID: "bank-c", Phase: PhaseTerminating})
+				st.Resources = append(st.Resources, Resource{Kind: KindBank, ID: "bank-c", Phase: config.PhaseTerminating})
 			},
 			desired: func(s *Spec) {
 				bank(s, "bank-b").State = StateClosed
@@ -669,7 +669,7 @@ func TestBuildOnRemoveTarget(t *testing.T) {
 			status: func(st *Status) {
 				three(&st.Applied)
 				bank(&st.Applied, "bank-c").State = StateClosed
-				st.Resources = append(st.Resources, Resource{Kind: KindBank, ID: "bank-c", Phase: PhaseClosed})
+				st.Resources = append(st.Resources, Resource{Kind: KindBank, ID: "bank-c", Phase: config.PhaseClosed})
 			},
 			desired: func(s *Spec) {
 				three(s)
@@ -698,7 +698,7 @@ func TestBuildOnRemoveTarget(t *testing.T) {
 			status: func(st *Status) {
 				three(&st.Applied)
 				bank(&st.Applied, "bank-b").OnRemove = &Removal{Money: MoneyTransfer, To: "bank-c"}
-				st.Resources = append(st.Resources, Resource{Kind: KindBank, ID: "bank-c", Phase: PhaseActive, Steps: doneSteps()})
+				st.Resources = append(st.Resources, Resource{Kind: KindBank, ID: "bank-c", Phase: config.PhaseActive, Steps: doneSteps()})
 			},
 			desired: func(s *Spec) { dropBank(s, "bank-b") },
 			errs:    []string{"on_remove of removed bank bank-b sends money to bank-c, which is leaving too. Choose a bank that stays."},
@@ -747,7 +747,7 @@ func TestBuildAllocation(t *testing.T) {
 	cases := []struct {
 		name    string
 		small   bool
-		dir     []nibss.Institution
+		dir     []nip.Institution
 		desired func(*Spec)
 		want    []Action
 		errs    []string
@@ -764,7 +764,7 @@ func TestBuildAllocation(t *testing.T) {
 		},
 		{
 			name: "file order, and every kind of holder is skipped",
-			dir: []nibss.Institution{
+			dir: []nip.Institution{
 				tombstone("old", "Old Bank", "000001", "001"),
 				member("bank-z", "Bank Z", "000002", "000002"),
 				member("mfb-z", "Mfb Z", "090001", "50001"),
@@ -783,7 +783,7 @@ func TestBuildAllocation(t *testing.T) {
 		{
 			name:  "the first tier runs out and the second pads to six digits",
 			small: true,
-			dir:   []nibss.Institution{tombstone("old-1", "Old 1", "000001", "001"), tombstone("old-2", "Old 2", "000002", "002")},
+			dir:   []nip.Institution{tombstone("old-1", "Old 1", "000001", "001"), tombstone("old-2", "Old 2", "000002", "002")},
 			desired: func(s *Spec) {
 				s.Spec.Banks = append(s.Spec.Banks, newBank("bank-c", "commercial"), newBank("bank-d", "commercial"))
 			},
@@ -795,7 +795,7 @@ func TestBuildAllocation(t *testing.T) {
 		{
 			name:  "every tier used",
 			small: true,
-			dir: []nibss.Institution{
+			dir: []nip.Institution{
 				tombstone("old-1", "Old 1", "000001", "001"), tombstone("old-2", "Old 2", "000002", "002"),
 				tombstone("old-3", "Old 3", "001000", "001000"), tombstone("old-4", "Old 4", "001001", "001001"),
 			},
@@ -856,7 +856,7 @@ func TestBuildAllocation(t *testing.T) {
 func TestBuildFirstApply(t *testing.T) {
 	desired := spec()
 	clearCodes(&desired)
-	dir := []nibss.Institution{member("bank-a", "Bank A", "999001", "901"), member("bank-z", "Bank Z", "999002", "902")}
+	dir := []nip.Institution{member("bank-a", "Bank A", "999001", "901"), member("bank-z", "Bank Z", "999002", "902")}
 	p := Build(realPack(t), desired, Status{}, dir, today)
 	want := []Action{
 		{Op: OpCreate, Kind: KindBank, ID: "bank-a", Allocated: []string{"nip_code", "nuban_code"}, Fields: []FieldChange{{Path: "type", To: "commercial"}, {Path: "nip_code", To: "000001"}, {Path: "nuban_code", To: "001"}}},
@@ -900,15 +900,15 @@ func TestBuildDrift(t *testing.T) {
 	run(t, []planCase{
 		{
 			name:   "database missing",
-			status: func(st *Status) { res(st, KindBank, "bank-a").Steps[StepDatabase] = "missing" },
+			status: func(st *Status) { res(st, KindBank, "bank-a").Steps[config.StepDatabase] = "missing" },
 			want:   []Action{{Op: OpDrift, Kind: KindBank, ID: "bank-a", Fields: []FieldChange{{Path: "steps.database", From: stepDone, To: "missing"}}}},
 		},
 		{
 			name: "repairing with two parts",
 			status: func(st *Status) {
 				r := res(st, KindBank, "bank-b")
-				r.Phase = PhaseRepairing
-				r.Steps[StepCerts], r.Steps[StepSite] = "missing", "failed"
+				r.Phase = config.PhaseRepairing
+				r.Steps[config.StepCerts], r.Steps[config.StepSite] = "missing", "failed"
 			},
 			want: []Action{{Op: OpDrift, Kind: KindBank, ID: "bank-b", Fields: []FieldChange{
 				{Path: "steps.certs", From: stepDone, To: "missing"},
@@ -917,7 +917,7 @@ func TestBuildDrift(t *testing.T) {
 		},
 		{
 			name:   "repairing with no step recorded",
-			status: func(st *Status) { res(st, KindPartner, "balance").Phase = PhaseRepairing },
+			status: func(st *Status) { res(st, KindPartner, "balance").Phase = config.PhaseRepairing },
 			want:   []Action{{Op: OpDrift, Kind: KindPartner, ID: "balance"}},
 		},
 		{
@@ -928,7 +928,7 @@ func TestBuildDrift(t *testing.T) {
 		{
 			name: "system database missing",
 			status: func(st *Status) {
-				res(st, KindSystem, SystemNIBSS).Steps[StepDatabase] = "missing"
+				res(st, KindSystem, SystemNIBSS).Steps[config.StepDatabase] = "missing"
 			},
 			want: []Action{{Op: OpDrift, Kind: KindSystem, ID: SystemNIBSS, Fields: []FieldChange{{Path: "steps.database", From: stepDone, To: "missing"}}}},
 		},
@@ -936,14 +936,14 @@ func TestBuildDrift(t *testing.T) {
 			name: "terminating bank is not drift",
 			status: func(st *Status) {
 				r := res(st, KindBank, "bank-b")
-				r.Phase, r.Steps[StepDatabase] = PhaseTerminating, "missing"
+				r.Phase, r.Steps[config.StepDatabase] = config.PhaseTerminating, "missing"
 			},
 			desired: func(s *Spec) { dropBank(s, "bank-b") },
 		},
 		{
 			name: "an update wins over drift",
 			status: func(st *Status) {
-				res(st, KindBank, "bank-a").Steps[StepDatabase] = "missing"
+				res(st, KindBank, "bank-a").Steps[config.StepDatabase] = "missing"
 			},
 			desired: func(s *Spec) { bank(s, "bank-a").Name = "Zenith Bank" },
 			want:    []Action{{Op: OpUpdate, Kind: KindBank, ID: "bank-a", Fields: []FieldChange{{Path: "name", From: "Bank A", To: "Zenith Bank"}}}},

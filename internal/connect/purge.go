@@ -9,10 +9,12 @@ import (
 	"os"
 	"slices"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 type PurgeImpact struct {
@@ -35,7 +37,11 @@ func (a *App) PurgeImpact(ctx context.Context, id string) (PurgeImpact, error) {
 			out.Blockers = append(out.Blockers, other.Name+" settles through this bank; purge it first")
 		}
 	}
-	waiting, err := a.inflightWith(ctx, b.NIPCode, id)
+	sends, err := a.openSends(ctx, b)
+	if err != nil {
+		return PurgeImpact{}, err
+	}
+	waiting, err := a.inflightWith(ctx, b.NIPCode, id, sends)
 	if err != nil {
 		return PurgeImpact{}, err
 	}
@@ -69,7 +75,11 @@ func (a *App) PurgeBank(id string, settleNow bool) (setup.Resource, error) {
 
 func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
-	waiting, err := a.inflightWith(ctx, r.Allocated.NIPCode, id)
+	sends, cond, err := a.recordedSends(id)
+	if cond != nil || err != nil {
+		return cond, err
+	}
+	waiting, err := a.inflightWith(ctx, r.Allocated.NIPCode, id, sends)
 	if err != nil {
 		return nil, err
 	}
@@ -77,14 +87,14 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 		return a.blocked(setup.ReasonSettlementPending, "%s", waiting), nil
 	}
 	b := a.bankByID(id)
-	a.sendLocks.Delete(id)
+	a.dropBankState(id)
 	var ls *ledgerSource
 	if b != nil {
-		a.detach(b, setup.StepSite)
+		a.detach(b, config.StepSite)
 		a.mu.Lock()
 		ls = a.ledgerFor(id)
 		a.mu.Unlock()
-		a.detach(b, setup.StepDatabase)
+		a.detach(b, config.StepDatabase)
 	}
 	var errs []error
 	switch {
@@ -93,10 +103,8 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	case r.Allocated.Database != "":
 		errs = append(errs, store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{r.Allocated.Database}))
 	}
-	a.obMu.Lock()
-	delete(a.obs, id)
-	a.obMu.Unlock()
-	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.removeMember(ctx, id))
+	a.forgetOpenBanking(id)
+	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.memberGone(ctx, id))
 	a.dropBankRows(id)
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("purge %s: %w", id, err)
@@ -119,6 +127,7 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	a.cfg.Banks = slices.DeleteFunc(slices.Clone(a.cfg.Banks), func(x *config.Bank) bool { return x.ID == id })
 	a.mu.Unlock()
 	delete(a.status, id)
+	delete(a.confirms, id)
 	a.lifeMu.Unlock()
 	a.poke()
 	return nil, nil
@@ -132,40 +141,40 @@ func (a *App) dropBankRows(id string) {
 			a.vaultDrop(cid)
 		}
 	}
-	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *Fault) bool { return f.Bank == id })
 	for lid, l := range a.st.LinkSessions {
 		if l.Institution == id {
 			delete(a.st.LinkSessions, lid)
 		}
 	}
 	a.st.Revokes = slices.DeleteFunc(a.st.Revokes, func(p PendingRevoke) bool { return p.Bank == id })
+	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *server.Fault) bool { return f.Bank == id })
 	a.dirty()
 }
 
-func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nibss.Institution, error) {
+func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nip.Institution, error) {
 	id := r.ID
 	if r.Allocated.Database != "" {
 		left, err := store.List(ctx, a.cfg.DatabaseURL, r.Allocated.Database)
 		if err != nil {
-			return nibss.Institution{}, fmt.Errorf("read back the databases of %s: %w", id, err)
+			return nip.Institution{}, fmt.Errorf("read back the databases of %s: %w", id, err)
 		}
 		if slices.Contains(left, r.Allocated.Database) {
-			return nibss.Institution{}, fmt.Errorf("database %s of %s still exists after the purge", r.Allocated.Database, id)
+			return nip.Institution{}, fmt.Errorf("database %s of %s still exists after the purge", r.Allocated.Database, id)
 		}
 	}
 	if _, err := os.Stat(a.cfg.Path("banks", id)); !os.IsNotExist(err) {
-		return nibss.Institution{}, fmt.Errorf("banks/%s still exists after the purge", id)
+		return nip.Institution{}, fmt.Errorf("banks/%s still exists after the purge", id)
 	}
 	sw := a.nibssStore()
 	if sw == nil {
-		return nibss.Institution{}, errors.New("NIBSS is not open, so its tombstone for the bank cannot be read back; try again soon")
+		return nip.Institution{}, errors.New("NIBSS is not open, so its tombstone for the bank cannot be read back; try again soon")
 	}
 	in, err := sw.Institution(ctx, r.Allocated.NIPCode)
 	if err != nil {
-		return nibss.Institution{}, fmt.Errorf("read back the NIBSS status of %s: %w", id, err)
+		return nip.Institution{}, fmt.Errorf("read back the NIBSS status of %s: %w", id, err)
 	}
-	if in.Status != nibss.StatusRemoved {
-		return nibss.Institution{}, fmt.Errorf("NIBSS shows %s as %s, not %s", id, in.Status, nibss.StatusRemoved)
+	if in.Status != nip.StatusRemoved {
+		return nip.Institution{}, fmt.Errorf("NIBSS shows %s as %s, not %s", id, in.Status, nip.StatusRemoved)
 	}
 	return in, nil
 }
@@ -224,15 +233,15 @@ func (a *App) ctlPurgeImpact(w http.ResponseWriter, r *http.Request) {
 		a.bankError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, imp)
+	web.WriteJSON(w, http.StatusOK, imp)
 }
 
 func (a *App) ctlPurgeBank(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SettleNow bool `json:"settle_now"`
 	}
-	if err := decodeBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send nothing or {"settle_now":true}.`)
+	if err := web.DecodeBody(r, &req); err != nil && !errors.Is(err, io.EOF) {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send nothing or {"settle_now":true}.`)
 		return
 	}
 	res, err := a.PurgeBank(r.PathValue("id"), req.SettleNow)
@@ -240,5 +249,5 @@ func (a *App) ctlPurgeBank(w http.ResponseWriter, r *http.Request) {
 		a.bankError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, res)
+	web.WriteJSON(w, http.StatusAccepted, res)
 }

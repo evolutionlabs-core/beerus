@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"math"
 	"slices"
 	"sync"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/view"
 )
 
 const (
@@ -24,8 +24,6 @@ const (
 	cbnIssuance = "ISSUANCE"
 	cbnCurrency = "CURRENCY_IN_CIRCULATION"
 )
-
-var reservedIDs = map[string]bool{cbnID: true, "nibss": true}
 
 type schedule struct {
 	per int
@@ -97,10 +95,10 @@ func openRTGS(ctx context.Context, cfg *config.Config, ctl *ctlStore, clk *clock
 	}
 	if err := ctl.update(func(s *setup.Status) (bool, error) {
 		res := ensureResource(s, setup.KindSystem, setup.SystemCBN)
-		if res.Phase == setup.PhaseActive {
+		if res.Phase == config.PhaseActive {
 			return false, nil
 		}
-		res.Phase = setup.PhaseActive
+		res.Phase = config.PhaseActive
 		return true, nil
 	}); err != nil {
 		st.Close()
@@ -124,7 +122,7 @@ func (r *rtgs) keepSchedule() error {
 		return err
 	}
 	if kept != r.cfg.Sessions() {
-		return fmt.Errorf("%w: the CBN has settled with %s a day, so nip_sessions must stay %d", errSessions, plural(kept, "session", "sessions"), kept)
+		return fmt.Errorf("%w: the CBN has settled with %s a day, so nip_sessions must stay %d", errSessions, view.Plural(kept, "session", "sessions"), kept)
 	}
 	return nil
 }
@@ -211,43 +209,6 @@ type position struct {
 	outward, inward int64
 }
 
-func (p position) netDebit() int64 {
-	return max(p.outward-p.inward, 0)
-}
-
-func (a *App) openPosition(sw *nibss.Store, code string) (position, error) {
-	now := a.clock.Now()
-	list, err := sw.Open(context.Background())
-	if err != nil {
-		return position{}, err
-	}
-	var p position
-	for _, x := range list {
-		if x.Status == nibss.SessionOK && x.ResolvedAt != nil && x.ResolvedAt.After(now) {
-			continue
-		}
-		var ok bool
-		switch code {
-		case x.FromCode:
-			if p.outward, ok = addMinor(p.outward, x.Amount); !ok {
-				return position{}, fmt.Errorf("add open outward sessions of %s: the total is too large", code)
-			}
-		case x.ToCode:
-			if p.inward, ok = addMinor(p.inward, x.Amount); !ok {
-				return position{}, fmt.Errorf("add open inward sessions of %s: the total is too large", code)
-			}
-		}
-	}
-	return p, nil
-}
-
-func addMinor(a, b int64) (int64, bool) {
-	if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
-		return 0, false
-	}
-	return a + b, true
-}
-
 func (a *App) settle(now time.Time, adhoc bool) (int, error) {
 	a.mu.Lock()
 	for a.settling {
@@ -317,7 +278,7 @@ func (a *App) settle(now time.Time, adhoc bool) (int, error) {
 		todo = append(todo, nibss.Settlement{Key: key, CutoffAt: c, Sessions: groups[c]})
 	}
 	for _, x := range todo {
-		if err := postSettlement(r, ledgers, x); err != nil {
+		if err := postSettlement(ctx, r, ledgers, x); err != nil {
 			return 0, err
 		}
 		if err := sw.MarkPosted(ctx, x.Key, x.CutoffAt); err != nil {
@@ -327,17 +288,17 @@ func (a *App) settle(now time.Time, adhoc bool) (int, error) {
 	return len(todo), nil
 }
 
-func postSettlement(r *rtgs, ledgers []*ledgerSource, x nibss.Settlement) error {
+func postSettlement(ctx context.Context, r *rtgs, ledgers []*ledgerSource, x nibss.Settlement) error {
 	byCode := map[string]*ledgerSource{}
 	for _, l := range ledgers {
-		byCode[l.inst.NIPCode] = l
+		byCode[l.Inst.NIPCode] = l
 	}
 	nets := map[string]*position{}
 	side := func(l *ledgerSource) *position {
-		p := nets[l.inst.ID]
+		p := nets[l.Inst.ID]
 		if p == nil {
 			p = &position{}
-			nets[l.inst.ID] = p
+			nets[l.Inst.ID] = p
 		}
 		return p
 	}
@@ -350,12 +311,12 @@ func postSettlement(r *rtgs, ledgers []*ledgerSource, x nibss.Settlement) error 
 		side(to).inward += s.Amount
 	}
 	for _, l := range ledgers {
-		p := nets[l.inst.ID]
+		p := nets[l.Inst.ID]
 		if p == nil {
 			continue
 		}
-		if _, err := l.Bank().Settle(l.ctx, x.Key, p.outward, p.inward, x.CutoffAt); err != nil {
-			return fmt.Errorf("settle %s at %s: %w", x.Key, l.inst.ID, err)
+		if _, err := l.Bank().Settle(ctx, x.Key, p.outward, p.inward, x.CutoffAt); err != nil {
+			return fmt.Errorf("settle %s at %s: %w", x.Key, l.Inst.ID, err)
 		}
 	}
 	if err := r.settle(x.Key, x.CutoffAt, nets); err != nil {
@@ -491,7 +452,7 @@ func (a *App) settlementBooks() (settlementBooks, error) {
 func (s settlementBooks) check(l *ledgerSource) ([]string, error) {
 	var out []string
 	ctx := s.ctx
-	code, id := l.inst.NIPCode, l.inst.ID
+	code, id := l.Inst.NIPCode, l.Inst.ID
 	b := l.Bank()
 	posted, err := b.Settlements(ctx)
 	if err != nil {
@@ -518,7 +479,7 @@ func (s settlementBooks) check(l *ledgerSource) ([]string, error) {
 		if x.FromCode == code {
 			want.outward += x.Amount
 		}
-		if x.ToCode == code && (x.Status == nibss.SessionOK || x.Outcome == nibss.OutcomeCredited) {
+		if x.ToCode == code && x.Status == nibss.SessionOK {
 			want.inward += x.Amount
 		}
 	}

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 var opSigns = map[string]string{
@@ -23,16 +25,16 @@ var opSummary = []struct{ op, verb string }{
 }
 
 var stepParts = map[string]string{
-	StepAllocate:          "allocation",
-	StepDirectory:         "directory row",
-	StepDatabase:          "database",
-	StepLedgerSchema:      "ledger schema",
-	StepOpenBankingSchema: "open banking schema",
-	StepCerts:             "certificates",
-	StepCBN:               "CBN member",
-	StepSite:              "site",
-	StepAPI:               "API",
-	"status":              "status record",
+	config.StepAllocate:          "allocation",
+	config.StepDirectory:         "directory row",
+	config.StepDatabase:          "database",
+	config.StepLedgerSchema:      "ledger schema",
+	config.StepOpenBankingSchema: "open banking schema",
+	config.StepCerts:             "certificates",
+	config.StepCBN:               "CBN member",
+	config.StepSite:              "site",
+	config.StepAPI:               "API",
+	"status":                     "status record",
 }
 
 func Render(p Plan) string {
