@@ -367,15 +367,18 @@ func (s *Stack) rootPool() *x509.CertPool {
 	return pool
 }
 
+const healthyWithin = 30 * time.Second
+
 func (s *Stack) waitHealthy() {
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(healthyWithin)
 	for time.Now().Before(deadline) {
 		if _, err := s.ctlTry("GET", "/health", nil); err == nil && s.banksActive() && s.banksAnswer() {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	s.t.Fatal("stack did not become healthy")
+	banks, err := s.ctlTry("GET", "/banks", nil)
+	s.t.Fatalf("stack did not become healthy within %s: %v %v", healthyWithin, banks, err)
 }
 
 func (s *Stack) banksActive() bool {
@@ -561,6 +564,9 @@ func (s *Stack) ctlWith(method, path string, body any, header map[string]string)
 	req.Header.Set("Authorization", "Bearer "+s.ctlToken)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if method != http.MethodGet {
+		req.Header.Set("Idempotency-Key", randomKey())
 	}
 	for k, v := range header {
 		req.Header.Set(k, v)

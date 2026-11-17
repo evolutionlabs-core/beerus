@@ -53,6 +53,14 @@ services:
       timeout: 3s
       retries: 30
 
+  nibss:
+    <<: *beerus
+    command: ["run", "--participant", "nibss"]
+    network_mode: "service:core"
+    depends_on:
+      core:
+        condition: service_started
+
   core:
     <<: *beerus
     command: ["run", "--participant", "core"]
