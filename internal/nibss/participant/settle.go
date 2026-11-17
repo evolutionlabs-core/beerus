@@ -26,7 +26,7 @@ type settleReply struct {
 }
 
 type settleBody struct {
-	Adhoc bool `json:"adhoc"`
+	Adhoc *bool `json:"adhoc"`
 }
 
 func (p *Participant) runSettlement(ctx context.Context) {
@@ -113,11 +113,11 @@ func (p *Participant) settlePass(ctx context.Context, adhoc bool) (int, error) {
 
 func (p *Participant) settlementSession(w http.ResponseWriter, r *http.Request) {
 	var req settleBody
-	if err := web.DecodeBody(r, &req); err != nil {
+	if err := web.DecodeBody(r, &req); err != nil || req.Adhoc == nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"adhoc":true} to settle open sessions now, or {"adhoc":false} to settle what is due.`)
 		return
 	}
-	n, err := p.settleNow(r.Context(), req.Adhoc)
+	n, err := p.settleNow(r.Context(), *req.Adhoc)
 	var refused *CBNError
 	switch {
 	case err == nil:
@@ -125,8 +125,11 @@ func (p *Participant) settlementSession(w http.ResponseWriter, r *http.Request) 
 	case errors.As(err, &refused) && !refused.Retryable():
 		p.log.ErrorContext(r.Context(), "settlement refused by the CBN", "err", err)
 		web.WriteError(w, r, http.StatusBadGateway, "cbn_refused", web.Sentence(refused.Message))
-	default:
+	case errors.As(err, &refused) || errors.Is(err, errCBNAway):
 		p.log.ErrorContext(r.Context(), "settlement not posted", "err", err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "The settlement could not reach the CBN. Try again soon.")
+	default:
+		p.log.ErrorContext(r.Context(), "settlement not run", "err", err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "NIBSS could not run the settlement. Try again soon.")
 	}
 }

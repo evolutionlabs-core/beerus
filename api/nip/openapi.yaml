@@ -468,6 +468,59 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/control/settlement-sessions:
+    post:
+      operationId: settleSessions
+      tags: [control]
+      summary: Settle NIP sessions now
+      description: The control plane asks NIBSS to run a settlement pass now. With `adhoc` false, NIBSS settles the cutoffs that are due. With `adhoc` true, it also closes the open sessions into an adhoc settlement session, as `beerus nip settle-now` does. NIBSS posts each cutoff's non-zero nets to the CBN and marks it posted only after the CBN accepts it. A cutoff with fewer than 2 moving banks is marked posted without a CBN call. The pass is safe to repeat; a cutoff already posted is not posted again. `posted_sessions` also counts cutoffs marked posted without a CBN call.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettleRequest'
+            example:
+              adhoc: true
+      responses:
+        '200':
+          description: The pass finished. `posted_sessions` counts the cutoffs this pass marked posted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettleResult'
+              example:
+                posted_sessions: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '502':
+          description: The CBN refused a cutoff with an error that is not a retry signal. The code is `cbn_refused`, and the message is the CBN's. NIBSS keeps the cutoff and retries it. Cutoffs posted before the refusal stay posted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: cbn_refused
+                  message: The session nets to 150, not zero. Send nets that sum to zero.
+                  request_id: req_01JBC8A5T3ZK
+        '503':
+          description: NIBSS could not reach the CBN, the CBN asked for a retry, or NIBSS could not run the pass. The code is `unavailable`, and the message says which. NIBSS keeps any unposted cutoff and retries it. Cutoffs posted before the failure stay posted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: unavailable
+                  message: The settlement could not reach the CBN. Try again soon.
+                  request_id: req_01JBC8A5T3ZK
   /v1/control/banks/{bank_id}:
     put:
       operationId: registerBank
@@ -1530,6 +1583,23 @@ components:
         next_cursor:
           type: string
           description: Pass this as `cursor` to read the next page. It is absent on the last page.
+    SettleRequest:
+      type: object
+      additionalProperties: false
+      required: [adhoc]
+      properties:
+        adhoc:
+          type: boolean
+          description: True to also settle the open sessions now. False to settle only the cutoffs that are due.
+    SettleResult:
+      type: object
+      additionalProperties: false
+      required: [posted_sessions]
+      properties:
+        posted_sessions:
+          type: integer
+          minimum: 0
+          description: The number of cutoffs this pass marked posted.
     Error:
       type: object
       description: The body of every error.

@@ -31,6 +31,8 @@ type cbnCaller struct {
 	base   string
 }
 
+var errCBNAway = errors.New("the CBN did not answer")
+
 type CBNError struct {
 	Status  int
 	Code    string
@@ -92,12 +94,12 @@ func (c *cbnCaller) post(ctx context.Context, key string, cutoff time.Time, nets
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("post settlement %s to the CBN: %w", key, err)
+		return fmt.Errorf("post settlement %s: %w: %w", key, errCBNAway, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxCBNBody+1))
 	if err != nil {
-		return fmt.Errorf("read the CBN answer to settlement %s: %w", key, err)
+		return fmt.Errorf("read the answer to settlement %s: %w: %w", key, errCBNAway, err)
 	}
 	if len(body) > maxCBNBody {
 		return fmt.Errorf("the CBN answer to settlement %s is larger than %d KiB", key, maxCBNBody>>10)
