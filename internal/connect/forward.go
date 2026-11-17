@@ -96,9 +96,6 @@ func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 			a.banking.Error(w, r, server.NotActiveError{Name: b.Name, Phase: phase})
 			return
 		}
-		if key == "" {
-			key = web.NewID("idk")
-		}
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, web.BodyLimit+1))
 	if err != nil {

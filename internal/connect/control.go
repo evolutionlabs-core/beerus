@@ -77,7 +77,7 @@ func (a *App) ControlHandler() http.Handler {
 	mux.HandleFunc("GET /banks/{id}/accounts/{nuban}/statement", a.atBank(a.banking.HandleStatement))
 	mux.HandleFunc("POST /banks/{id}/deposits", a.atBankSyncing(a.banking.HandleCash("deposit")))
 	mux.HandleFunc("POST /banks/{id}/withdrawals", a.atBankSyncing(a.banking.HandleCash("withdrawal")))
-	mux.HandleFunc("POST /banks/{id}/transfers", a.atBankSyncing(a.idempotentIfKeyed(a.banking.HandleTransfer)))
+	mux.HandleFunc("POST /banks/{id}/transfers", a.atBankSyncing(a.banking.HandleTransfer))
 	mux.HandleFunc("POST /banks/{id}/transfers/quote", a.atBank(a.banking.HandleQuote))
 	mux.HandleFunc("GET /banks/{id}/close", a.ctlCloseImpact)
 	mux.HandleFunc("POST /banks/{id}/close", a.ctlCloseBank)

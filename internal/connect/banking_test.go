@@ -118,19 +118,19 @@ func TestBankingThroughTheApp(t *testing.T) {
 	}
 
 	body := `{"from":"` + from + `","to_bank":"bank-b","to":"` + to + `","amount":"10000"}`
-	sent := callHandler(t, a.idempotentIfKeyed(a.banking.HandleTransfer), "bank-a", body, "pay-1")
-	again := callHandler(t, a.idempotentIfKeyed(a.banking.HandleTransfer), "bank-a", body, "pay-1")
+	sent := callHandler(t, a.banking.HandleTransfer, "bank-a", body, "pay-1")
+	again := callHandler(t, a.banking.HandleTransfer, "bank-a", body, "pay-1")
 	if sent.status != http.StatusOK || sent.body["status"] != "success" || sent.body["session_id"] != again.body["session_id"] {
 		t.Fatalf("transfer %d %v, replay %v", sent.status, sent.body, again.body)
 	}
 	if sent.body["total_debit_minor"] != float64(q.TotalDebit) || sent.body["sender_balance_after_minor"] != float64(q.BalanceAfter) {
 		t.Fatalf("the quote said %+v, the transfer did %v", q, sent.body)
 	}
-	reused := callHandler(t, a.idempotentIfKeyed(a.banking.HandleTransfer), "bank-a", strings.Replace(body, "10000", "9000", 1), "pay-1")
+	reused := callHandler(t, a.banking.HandleTransfer, "bank-a", strings.Replace(body, "10000", "9000", 1), "pay-1")
 	if reused.status != http.StatusUnprocessableEntity || !strings.HasPrefix(errMessage(reused), "idempotency_key_reused:") {
 		t.Fatalf("a reused key: %d %s", reused.status, errMessage(reused))
 	}
-	broke := callHandler(t, a.idempotentIfKeyed(a.banking.HandleTransfer), "bank-a", strings.Replace(body, "10000", "1000000", 1), "")
+	broke := callHandler(t, a.banking.HandleTransfer, "bank-a", strings.Replace(body, "10000", "1000000", 1), "")
 	if broke.status != http.StatusUnprocessableEntity || errMessage(broke) != "insufficient_funds: Account "+from+" does not have enough money for this transfer and its charges." {
 		t.Fatalf("an overdraw: %d %s", broke.status, errMessage(broke))
 	}

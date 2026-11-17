@@ -21,6 +21,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 var version = "0.1.0"
@@ -245,6 +246,9 @@ func (c *ctl) do(method, path string, body any) (map[string]any, error) {
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if method != http.MethodGet {
+		req.Header.Set("Idempotency-Key", web.NewID("idk"))
 	}
 	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 	"time"
 
@@ -65,5 +66,23 @@ func TestPageNumbersAreBoundedBeforeTheyAreUsed(t *testing.T) {
 	}
 	if got := view.PagesOf(101, 50); got != 3 {
 		t.Fatalf("101 rows have %d pages, want 3", got)
+	}
+}
+
+func TestTransferFormCarriesAFreshKey(t *testing.T) {
+	a := newTestApp(t, Options{})
+	hidden := regexp.MustCompile(`name="key" value="(idk_[^"]+)"`)
+	seen := map[string]bool{}
+	for range 2 {
+		rec := httptest.NewRecorder()
+		a.roomTransferForm(rec, httptest.NewRequest(http.MethodGet, "/ui/transfer", nil))
+		m := hidden.FindStringSubmatch(rec.Body.String())
+		if rec.Code != http.StatusOK || m == nil {
+			t.Fatalf("transfer form: status %d, key field %v", rec.Code, m)
+		}
+		seen[m[1]] = true
+	}
+	if len(seen) != 2 {
+		t.Fatalf("two renders gave %d different keys, want 2", len(seen))
 	}
 }

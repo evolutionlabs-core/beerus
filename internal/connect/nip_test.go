@@ -29,7 +29,7 @@ func TestResponsesAreWrittenWithoutTheLock(t *testing.T) {
 	from := funded(t, a, "bank-a", "Ada Obi", "50000")
 	to := funded(t, a, "bank-b", "Ngozi Eze", "")
 	transfer := `{"from":"` + from + `","to_bank":"bank-b","to":"` + to + `","amount":"10"}`
-	send := a.idempotentIfKeyed(a.banking.HandleTransfer)
+	send := a.banking.HandleTransfer
 	for name, c := range map[string]struct {
 		handler http.HandlerFunc
 		target  string

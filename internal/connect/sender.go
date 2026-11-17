@@ -14,7 +14,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
-	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const sendsEvery = time.Second
@@ -90,12 +89,12 @@ func (a *App) transfer(ctx context.Context, req server.TransferRequest) (server.
 		return server.TransferResult{}, server.Refused(http.StatusNotFound, nip.SystemError, "not_found", fmt.Errorf("no bank %q", req.FromBank))
 	}
 	body := server.TransferBody{From: req.From, ToBank: req.ToBank, To: req.To, Amount: fmt.Sprintf("%d.%02d", req.Amount/100, req.Amount%100), Narration: req.Narration, Closure: req.Closure}
-	key := req.Key
-	if key == "" {
-		key = web.NewID("idk")
+	header := http.Header{}
+	if req.Key != "" {
+		header.Set("Idempotency-Key", req.Key)
 	}
 	var out server.TransferResult
-	_, err := a.link.Request(ctx, b.URL(), http.MethodPost, "/v1/transfers", http.Header{"Idempotency-Key": {key}}, body, &out)
+	_, err := a.link.Request(ctx, b.URL(), http.MethodPost, "/v1/transfers", header, body, &out)
 	var peer *server.PeerError
 	if errors.As(err, &peer) {
 		return out, server.Refused(peer.Status, nip.SystemError, peer.Code, errors.New(peer.Message))

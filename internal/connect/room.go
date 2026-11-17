@@ -449,7 +449,7 @@ func (a *App) roomTransferForm(w http.ResponseWriter, r *http.Request) {
 	bank, nuban := splitKey(r.URL.Query().Get("from"))
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.roomRender(w, r, "transfer", http.StatusOK, "transfer", roomPage{"Title": "New transfer", "Form": url.Values{"from_bank": {bank}, "from": {nuban}}})
+	a.roomRender(w, r, "transfer", http.StatusOK, "transfer", roomPage{"Title": "New transfer", "Key": web.NewID("idk"), "Form": url.Values{"from_bank": {bank}, "from": {nuban}}})
 }
 
 func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
@@ -458,7 +458,7 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f := r.PostForm
-	req := server.TransferRequest{FromBank: f.Get("from_bank"), From: strings.TrimSpace(f.Get("from")), ToBank: f.Get("to_bank"), To: strings.TrimSpace(f.Get("to")), Narration: strings.TrimSpace(f.Get("narration"))}
+	req := server.TransferRequest{FromBank: f.Get("from_bank"), From: strings.TrimSpace(f.Get("from")), ToBank: f.Get("to_bank"), To: strings.TrimSpace(f.Get("to")), Narration: strings.TrimSpace(f.Get("narration")), Key: f.Get("key")}
 	amount, err := bank.ParseNaira(f.Get("amount"))
 	if err != nil {
 		err = view.ErrBadAmount
@@ -479,7 +479,7 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.roomRender(w, r, "transfer", http.StatusUnprocessableEntity, "transfer", roomPage{"Title": "New transfer", "Form": f, "Error": web.Sentence(err.Error())})
+	a.roomRender(w, r, "transfer", http.StatusUnprocessableEntity, "transfer", roomPage{"Title": "New transfer", "Key": web.NewID("idk"), "Form": f, "Error": web.Sentence(err.Error())})
 }
 
 func (a *App) roomConnections(w http.ResponseWriter, r *http.Request) {
