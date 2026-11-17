@@ -155,6 +155,17 @@ func ensureResource(st *setup.Status, kind, id string) *setup.Resource {
 	return &st.Resources[len(st.Resources)-1]
 }
 
+func markActive(ctl *ctlStore, system string) error {
+	return ctl.update(func(st *setup.Status) (bool, error) {
+		r := ensureResource(st, setup.KindSystem, system)
+		if r.Phase == config.PhaseActive {
+			return false, nil
+		}
+		r.Phase = config.PhaseActive
+		return true, nil
+	})
+}
+
 func (s *ctlStore) Claim(kind, id string, list ...setup.Owned) error {
 	return s.update(func(st *setup.Status) (bool, error) {
 		r := ensureResource(st, kind, id)
@@ -181,6 +192,26 @@ func (s *ctlStore) Release(o setup.Owned) error {
 		}
 		return changed, nil
 	})
+}
+
+func (s *ctlStore) releasePorts(kind, id string) error {
+	st, err := s.status()
+	if err != nil {
+		return err
+	}
+	r := findResource(&st, kind, id)
+	if r == nil {
+		return nil
+	}
+	for _, o := range slices.Clone(r.Owned) {
+		if o.Kind != ownedPort {
+			continue
+		}
+		if err := s.Release(o); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *ctlStore) forget(kind, id string) error {

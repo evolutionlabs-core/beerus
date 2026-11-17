@@ -21,6 +21,7 @@ import (
 
 const (
 	flushEvery   = 500 * time.Millisecond
+	settleEvery  = 2 * time.Second
 	shutdownWait = 5 * time.Second
 )
 
@@ -82,6 +83,7 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 		Books:     p.books.Bank(),
 		Fees:      cfg.Fees(),
 		NIBSSPort: cfg.Connect.NIBSSPort,
+		CBNPort:   cfg.Connect.CBNPort,
 		CoreURL:   coreURL,
 		Link:      p.link,
 		Log:       p.log,
@@ -154,6 +156,11 @@ func (p *Participant) Serve(ctx context.Context) error {
 		defer close(sends)
 		p.srv.Sender().Run(ctx)
 	}()
+	checks := make(chan struct{})
+	go func() {
+		defer close(checks)
+		p.checkSettlements(ctx)
+	}()
 	tick := time.NewTicker(flushEvery)
 	defer tick.Stop()
 	for {
@@ -163,12 +170,34 @@ func (p *Participant) Serve(ctx context.Context) error {
 			p.stop(shut)
 			stop()
 			<-sends
+			<-checks
 			return nil
 		case <-tick.C:
 			p.sender.Events(ctx)
 			p.sender.Ledger(ctx)
 			p.refreshIfStale()
 			p.srv.Sweep()
+		}
+	}
+}
+
+func (p *Participant) checkSettlements(ctx context.Context) {
+	tick := time.NewTicker(settleEvery)
+	defer tick.Stop()
+	warned := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		err := p.srv.CheckSettlement(ctx)
+		switch {
+		case err == nil:
+			warned = ""
+		case ctx.Err() == nil && warned != err.Error():
+			warned = err.Error()
+			p.log.Warn("settlement not checked", "bank", p.id, "err", err)
 		}
 	}
 }

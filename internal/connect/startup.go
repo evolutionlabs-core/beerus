@@ -31,6 +31,7 @@ const (
 	defaultControlPort  = 7480
 	defaultHealthPort   = 7490
 	defaultNIBSSPort    = 7481
+	defaultCBNPort      = 7446
 	defaultSyncInterval = "1m"
 	defaultRefreshEvery = "1m"
 
@@ -78,6 +79,7 @@ func DefaultLocal() setup.Local {
 			ControlPort:  defaultControlPort,
 			HealthPort:   defaultHealthPort,
 			NIBSSPort:    defaultNIBSSPort,
+			CBNPort:      defaultCBNPort,
 			SyncInterval: defaultSyncInterval,
 			RefreshEvery: defaultRefreshEvery,
 		},
@@ -135,6 +137,12 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	}
 	cfg, err := buildConfig(dir, st, local)
 	if err != nil {
+		return err
+	}
+	if err := allocateCBN(cfg, &st); err != nil {
+		return err
+	}
+	if cfg, err = buildConfig(dir, st, local); err != nil {
 		return err
 	}
 	if err := allocateBanks(cfg, &st); err != nil {
@@ -209,30 +217,76 @@ func pinCodes(spec setup.Spec, plan setup.Plan) setup.Spec {
 	return out
 }
 
-func nibssPort(ln setup.LocalConnect, st setup.Status) (int, error) {
-	port := ln.NIBSSPort
-	if port == 0 {
-		port = defaultNIBSSPort
-	}
+func portHolders(ln setup.LocalConnect, st setup.Status) map[int]string {
 	holders := map[int]string{ln.PartnerPort: "connect.partner_port", ln.WidgetPort: "connect.widget_port", ln.ControlPort: "connect.control_port", ln.HealthPort: "connect.health_port"}
 	for _, r := range st.Resources {
 		if r.Kind == setup.KindSystem {
 			holders[r.Allocated.Port] = r.ID + " control API"
+			if r.Allocated.APIPort != 0 {
+				holders[r.Allocated.APIPort] = r.ID + " API"
+			}
 			continue
 		}
 		holders[r.Allocated.Port] = r.ID + " online banking"
 		holders[r.Allocated.APIPort] = r.ID + " open banking API"
 	}
-	if holder, taken := holders[port]; taken {
+	return holders
+}
+
+func nibssPort(ln setup.LocalConnect, st setup.Status) (int, error) {
+	port := ln.NIBSSPort
+	if port == 0 {
+		port = defaultNIBSSPort
+	}
+	if holder, taken := portHolders(ln, st)[port]; taken {
 		return 0, fmt.Errorf("NIBSS port %d is already used by %s; set connect.nibss_port in %s to a free port", port, holder, LocalFile)
 	}
 	return port, nil
 }
 
+func cbnPort(ln setup.LocalConnect, nibss int, st setup.Status) (int, error) {
+	own := setup.Status{Resources: slices.DeleteFunc(slices.Clone(st.Resources), func(r setup.Resource) bool {
+		return r.Kind == setup.KindSystem && r.ID == setup.SystemCBN
+	})}
+	holders := portHolders(ln, own)
+	holders[nibss] = "connect.nibss_port"
+	if ln.CBNPort != 0 {
+		if holder, taken := holders[ln.CBNPort]; taken {
+			return 0, fmt.Errorf("CBN port %d is already used by %s; set connect.cbn_port in %s to a free port", ln.CBNPort, holder, LocalFile)
+		}
+		return ln.CBNPort, nil
+	}
+	if r := findResource(&st, setup.KindSystem, setup.SystemCBN); r != nil && r.Allocated.APIPort != 0 {
+		return r.Allocated.APIPort, nil
+	}
+	port := defaultCBNPort
+	for {
+		if _, taken := holders[port]; !taken {
+			return port, nil
+		}
+		port++
+	}
+}
+
+func allocateCBN(cfg *config.Config, st *setup.Status) error {
+	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true, cfg.Connect.NIBSSPort: true, cfg.Connect.CBNPort: true}
+	for _, r := range st.Resources {
+		used[r.Allocated.Port], used[r.Allocated.APIPort] = true, true
+	}
+	control, err := cfg.AllocatePort(cfg.Connect.CBNPort+1, used, anyPort)
+	if err != nil {
+		return fmt.Errorf("CBN control port: %w", err)
+	}
+	r := ensureResource(st, setup.KindSystem, setup.SystemCBN)
+	r.Allocated.Port, r.Allocated.APIPort = control, cfg.Connect.CBNPort
+	r.Owned = append(r.Owned, setup.Owned{Kind: ownedPort, Name: fmt.Sprint(control)}, setup.Owned{Kind: ownedPort, Name: fmt.Sprint(cfg.Connect.CBNPort)})
+	return nil
+}
+
 func anyPort(int) bool { return true }
 
 func allocateBanks(cfg *config.Config, st *setup.Status) error {
-	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true, cfg.Connect.NIBSSPort: true}
+	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true, cfg.Connect.NIBSSPort: true, cfg.Connect.CBNPort: true, cfg.Connect.CBNControlPort: true}
 	next := cfg.Connect.PartnerPort
 	for _, b := range st.Applied.Spec.Banks {
 		port, err := cfg.AllocatePort(next, used, anyPort)
@@ -332,6 +386,10 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 	if err != nil {
 		return nil, err
 	}
+	cbn, err := cbnPort(ln, nibss, st)
+	if err != nil {
+		return nil, err
+	}
 	c := &config.Config{
 		Dir:         dir,
 		DatabaseURL: local.DatabaseURL,
@@ -347,6 +405,7 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 			ControlPort:  ln.ControlPort,
 			HealthPort:   ln.HealthPort,
 			NIBSSPort:    nibss,
+			CBNPort:      cbn,
 			SyncInterval: ln.SyncInterval,
 			RefreshEvery: ln.RefreshEvery,
 			LegalName:    orDefault(spec.Connect.LegalName, defaultLegalName),
@@ -357,6 +416,9 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 	}
 	if r := findResource(&st, setup.KindSystem, setup.SystemNIBSS); r != nil {
 		c.Connect.NIBSSControlPort = r.Allocated.Port
+	}
+	if r := findResource(&st, setup.KindSystem, setup.SystemCBN); r != nil {
+		c.Connect.CBNControlPort = r.Allocated.Port
 	}
 	if len(spec.Holidays.Add)+len(spec.Holidays.Remove) > 0 {
 		c.Holidays = &config.Holidays{Add: spec.Holidays.Add, Remove: spec.Holidays.Remove}

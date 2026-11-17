@@ -2,13 +2,11 @@ package connect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
@@ -202,7 +200,7 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	a.lifeMu.Unlock()
 	ok := a.step(st, config.StepAllocate, func() error {
 		return a.claimBank(b)
-	}) && a.directoryDone(st) && a.step(st, config.StepDatabase, func() error {
+	}) && a.stepDone(st, config.StepDirectory) && a.step(st, config.StepDatabase, func() error {
 		return store.Create(ctx, a.cfg.DatabaseURL, b.Database)
 	}) && a.step(st, config.StepLedgerSchema, func() error {
 		n, err := store.Migrate(ctx, a.cfg.DatabaseURL, b.Database, ledger.Migrate)
@@ -220,9 +218,7 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 		return a.openLedger(b)
 	}) && a.step(st, config.StepCerts, func() error {
 		return a.bankCerts(b)
-	}) && a.step(st, config.StepCBN, func() error {
-		return a.cbnMember(b)
-	}) && a.step(st, config.StepSite, func() error {
+	}) && a.stepDone(st, config.StepCBN) && a.step(st, config.StepSite, func() error {
 		if b.Closed() {
 			return nil
 		}
@@ -261,10 +257,10 @@ func (st *BankStatus) leavingLocked() bool {
 	return st.Phase == PhaseClosing || st.Phase == PhaseTerminating
 }
 
-func (a *App) directoryDone(st *BankStatus) bool {
+func (a *App) stepDone(st *BankStatus, id string) bool {
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
-	return st.Steps[stepIndex(config.StepDirectory)].Done
+	return st.Steps[stepIndex(id)].Done
 }
 
 func (a *App) nameStep(st *BankStatus, id, detail string) {
@@ -305,23 +301,6 @@ func (a *App) bankCerts(b *config.Bank) error {
 		return fmt.Errorf("issue certificates for %s: %w", b.ID, err)
 	}
 	return a.ctl.Claim(setup.KindBank, b.ID, setup.Owned{Kind: ownedDir, Name: "banks/" + b.ID})
-}
-
-func (a *App) cbnMember(b *config.Bank) error {
-	err := a.ensureRTGS()
-	a.mu.Lock()
-	r := a.rtgs
-	a.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if r == nil {
-		return errors.New("the CBN ledger is not open yet")
-	}
-	if err := r.member(b.ID, bank.GenesisSettlement, bank.GenesisVault); err != nil {
-		return fmt.Errorf("open the CBN settlement account of %s: %w", b.ID, err)
-	}
-	return nil
 }
 
 func (a *App) probeSite(b *config.Bank) error {
@@ -473,11 +452,14 @@ func (a *App) detach(b *config.Bank, from string) {
 				break
 			}
 		}
-		hc := a.nibssBanks[b.ID]
+		hc, cc := a.nibssBanks[b.ID], a.cbnBanks[b.ID]
 		delete(a.nibssBanks, b.ID)
+		delete(a.cbnBanks, b.ID)
 		a.mu.Unlock()
-		if hc != nil {
-			hc.CloseIdleConnections()
+		for _, c := range []*http.Client{hc, cc} {
+			if c != nil {
+				c.CloseIdleConnections()
+			}
 		}
 		if ls != nil {
 			ls.Close()

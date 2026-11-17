@@ -6,16 +6,19 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 )
 
 func checkSettled(t *testing.T, app *connect.App) connect.SettlementCheck {
 	t.Helper()
-	c, err := app.CheckSettlement()
+	c, err := app.CheckSettlement(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +48,36 @@ func TestNIPSettlement(t *testing.T) {
 	}
 }
 
+func TestNIBSSPostsACutoffOnceAndTheCBNReplaysARetry(t *testing.T) {
+	if testingExternal() {
+		t.Skip("needs an in-process stack")
+	}
+	s := newBankStack(t)
+	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "1500")
+	s.advance("72h")
+	first := checkSettled(t, s.app)
+	if first.Sessions == 0 {
+		t.Fatalf("no cutoff was posted: %+v", first)
+	}
+	cfg, err := pgxpool.ParseConfig(s.cfg.DatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ConnConfig.Database = config.DatabaseName(s.cfg.Dir, "nibss")
+	db, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tag, err := db.Exec(t.Context(), `UPDATE settlement_sessions SET posted_at = NULL`)
+	if err != nil || int(tag.RowsAffected()) != first.Sessions {
+		t.Fatalf("made %d of %d cutoffs unposted: %v", tag.RowsAffected(), first.Sessions, err)
+	}
+	if again := checkSettled(t, s.app); again.Sessions != first.Sessions {
+		t.Fatalf("a retry posted %d cutoffs, want the same %d", again.Sessions, first.Sessions)
+	}
+}
+
 func TestNIPSessionsCannotChangeOnALiveSetup(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
@@ -53,7 +86,7 @@ func TestNIPSessionsCannotChangeOnALiveSetup(t *testing.T) {
 	checkSettled(t, s.app)
 	cfg := s.loadConfig()
 	cfg.NIPSessions = 12
-	if _, err := connect.New(cfg, connect.Options{}); err == nil || !strings.Contains(err.Error(), "nip_sessions must stay 4") {
+	if _, err := connect.New(t.Context(), cfg, connect.Options{}); err == nil || !strings.Contains(err.Error(), "nip_sessions must stay 4") {
 		t.Fatalf("starting with a different schedule: %v", err)
 	}
 }
@@ -77,7 +110,7 @@ func TestSettlementCheckDoesNotTrustTheBooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := s.app.CheckSettlement()
+	c, err := s.app.CheckSettlement(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +135,7 @@ func TestSettlementRunsAlongsideTheApp(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			if c, err := s.app.CheckSettlement(); err != nil || len(c.Problems) > 0 {
+			if c, err := s.app.CheckSettlement(t.Context()); err != nil || len(c.Problems) > 0 {
 				t.Errorf("settlement: %v %v", err, c.Problems)
 			}
 		}()

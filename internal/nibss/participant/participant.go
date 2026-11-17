@@ -43,6 +43,9 @@ type Participant struct {
 	store *nibss.Store
 	tls   *tls.Config
 	banks *bankCaller
+	cbn   *cbnCaller
+
+	settles chan settleRequest
 }
 
 func New(ctx context.Context, dir string, o Options) (*Participant, error) {
@@ -66,12 +69,20 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Participant{dir: dir, file: f, log: o.Logger, clock: clock.New(o.Real), bind: o.Bind, token: token, tls: tc, banks: banks}
+	cbn, err := newCBNCaller(own, f.CBNPort, remoteBind(o.Bind))
+	if err != nil {
+		return nil, err
+	}
+	p := &Participant{dir: dir, file: f, log: o.Logger, clock: clock.New(o.Real), bind: o.Bind, token: token, tls: tc, banks: banks, cbn: cbn, settles: make(chan settleRequest)}
 	if p.log == nil {
 		p.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
 	if p.store, err = nibss.Open(context.WithoutCancel(ctx), o.DatabaseURL, f.Database); err != nil {
 		return nil, fmt.Errorf("open the NIBSS directory: %w", err)
+	}
+	if err := p.store.KeepSchedule(ctx, f.Sessions); err != nil {
+		p.store.Close()
+		return nil, err
 	}
 	return p, nil
 }

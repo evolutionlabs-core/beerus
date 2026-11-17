@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -221,17 +220,20 @@ func TestInstall(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r, err := openRTGS(t.Context(), cfg, ctl, clock.New(nil))
+		stored, err := ctl.status()
 		if err != nil {
 			t.Fatal(err)
 		}
-		r.Close()
+		in := &installer{clock: clock.New(nil), report: func(InstallStep) {}}
+		if err := installCBN(t.Context(), in, cfg, ctl, stored); err != nil {
+			t.Fatal(err)
+		}
 		st, err := ctl.status()
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got := systemPhase(st, setup.SystemCBN); got != config.PhaseActive {
-			t.Fatalf("CBN phase after openRTGS: %q", got)
+			t.Fatalf("CBN phase after installCBN: %q", got)
 		}
 	})
 }
@@ -286,18 +288,5 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 			continue
 		}
 		ls.Close()
-	}
-	for _, at := range []time.Time{first, second} {
-		r, err := openRTGS(t.Context(), cfg, ctl, clock.New(func() time.Time { return at }))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := r.member("bank-g", bank.GenesisSettlement, bank.GenesisVault); err != nil {
-			t.Fatal(err)
-		}
-		if got, n := postedAt(r.st.Pool, "genesis:bank-g"); !got.Equal(first) || n != 1 {
-			t.Fatalf("member genesis opened at %v: posted at %v, %d entries; want %v, 1", at, got, n, first)
-		}
-		r.Close()
 	}
 }

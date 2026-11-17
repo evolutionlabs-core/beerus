@@ -41,6 +41,7 @@ type BankFile struct {
 	WidgetPort       int         `json:"widget_port"`
 	WidgetTLS        bool        `json:"widget_tls"`
 	NIBSSPort        int         `json:"nibss_port"`
+	CBNPort          int         `json:"cbn_port"`
 	BrandName        string      `json:"brand_name"`
 	CoreURL          string      `json:"core_url"`
 	SetupKey         uint64      `json:"setup_key,string"`
@@ -93,6 +94,7 @@ func (c *Config) bankFile(b *Bank) BankFile {
 		WidgetPort:       c.Connect.WidgetPort,
 		WidgetTLS:        c.Connect.WidgetTLS,
 		NIBSSPort:        c.Connect.NIBSSPort,
+		CBNPort:          c.Connect.CBNPort,
 		BrandName:        c.Connect.BrandName,
 		CoreURL:          c.ControlURL(),
 		SetupKey:         c.SetupKey,
@@ -178,7 +180,7 @@ func (f BankFile) Config(dir, databaseURL string) (*Config, error) {
 		DatabaseURL: databaseURL,
 		Banks:       []*Bank{f.Bank()},
 		SetupKey:    f.SetupKey,
-		Connect:     Connect{Host: f.Host, WidgetPort: f.WidgetPort, WidgetTLS: f.WidgetTLS, NIBSSPort: f.NIBSSPort, BrandName: f.BrandName},
+		Connect:     Connect{Host: f.Host, WidgetPort: f.WidgetPort, WidgetTLS: f.WidgetTLS, NIBSSPort: f.NIBSSPort, CBNPort: f.CBNPort, BrandName: f.BrandName},
 	}
 	c.buildFees(pack)
 	return c, nil

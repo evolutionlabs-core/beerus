@@ -1200,8 +1200,12 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 	}
 	fmt.Fprintf(e.out, "\nControl room        %s\n", connect.RoomURL(c, cl.token))
 	sup := newSupervisor(exe, *dir, c.ControlURL(), c.DatabaseURL, cl, e.errOut)
-	sup.startCore()
+	sup.startCBN()
 	defer sup.shutdown()
+	if err := sup.awaitCBN(ctx); err != nil {
+		return err
+	}
+	sup.startCore()
 	if err := sup.awaitCore(ctx); err != nil {
 		return err
 	}

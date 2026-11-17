@@ -31,6 +31,7 @@ type Server struct {
 	dir       string
 	coreURL   string
 	nibssPort int
+	cbnPort   int
 	link      Link
 	log       *slog.Logger
 	clock     *clock.Clock
@@ -54,13 +55,16 @@ type Server struct {
 	replays map[string]*web.Record
 	swept   time.Time
 
-	reg      *RegistryCache
-	problems []string
+	reg                 *RegistryCache
+	problems            []string
+	settlementProblems  []string
+	settlementCheckedAt *time.Time
 
 	dirMu      sync.Mutex
 	dirBanks   []*config.Bank
 	dirAt      time.Time
 	dirClient  *http.Client
+	cbnClient  *http.Client
 	dirRefresh refresher
 }
 
@@ -70,6 +74,7 @@ type Config struct {
 	Books     *bank.Bank
 	Fees      *charges.Schedule
 	NIBSSPort int
+	CBNPort   int
 	CoreURL   string
 	Link      Link
 	Log       *slog.Logger
@@ -85,6 +90,7 @@ func New(c Config) *Server {
 		dir:       c.Dir,
 		coreURL:   c.CoreURL,
 		nibssPort: c.NIBSSPort,
+		cbnPort:   c.CBNPort,
 		link:      c.Link,
 		log:       c.Log,
 		clock:     c.Clock,

@@ -184,7 +184,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
-	again, err := connect.New(c, connect.Options{})
+	again, err := connect.New(t.Context(), c, connect.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestPurgeRules(t *testing.T) {
 	if len(c.Banks) != 0 {
 		t.Fatal("the setup still lists a purged bank")
 	}
-	again, err := connect.New(c, connect.Options{})
+	again, err := connect.New(t.Context(), c, connect.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	waitFor(t, waitLimit, "the removal to resume and wait for settlement", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonSettlementPending, "to settle 1 transfer")
 	})
-	if _, err := r.app.SettleNow(); err != nil {
+	if _, err := r.app.SettleNow(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, waitLimit, "the money decision", func() bool {
@@ -425,14 +425,14 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	waitFor(t, waitLimit, "the moves to wait for settlement after the third restart", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonSettlementPending, "to settle 1 transfer (net ₦41,000.00)")
 	})
-	if _, err := r.app.SettleNow(); err != nil {
+	if _, err := r.app.SettleNow(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, waitLimit, "bank-b to be removed", func() bool {
 		_, err := r.app.Resource(setup.KindBank, "bank-b")
 		return err != nil
 	})
-	if ck, err := r.app.CheckSettlement(); err != nil || len(ck.Problems) != 0 {
+	if ck, err := r.app.CheckSettlement(t.Context()); err != nil || len(ck.Problems) != 0 {
 		t.Fatalf("settlement after the restarts: %+v %v", ck, err)
 	}
 	if ck, err := r.app.VerifyBank(context.Background()); err != nil || !ck.OK() {

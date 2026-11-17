@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -167,7 +168,7 @@ func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	t.Helper()
 	local := DefaultLocal()
 	ports := testPorts(t, 2)
-	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort = ports[0], ports[1], ports[2], ports[3], ports[4]
+	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort, local.Connect.CBNPort = ports[0], ports[1], ports[2], ports[3], ports[4], ports[5]
 	return initConfigWith(t, today, local)
 }
 
@@ -194,15 +195,15 @@ const (
 
 func testPorts(t *testing.T, banks int) []int {
 	t.Helper()
-	need := 5 + banks
+	need := 7 + banks
 	for range 200 {
 		base := testPortLow + rand.IntN(testPortHigh-testPortLow-need-config.DefaultAPIPortOffset)
 		free := true
 		for p := base; p < base+need && free; p++ {
-			free = portFree(p) && (p < base+5 || portFree(p+config.DefaultAPIPortOffset))
+			free = portFree(p) && (p < base+7 || portFree(p+config.DefaultAPIPortOffset))
 		}
 		if free {
-			return []int{base, base + 1, base + 2, base + 3, base + 4}
+			return []int{base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 6}
 		}
 	}
 	t.Fatal("no free block of ports for the app")
@@ -224,7 +225,7 @@ func startTestNIBSS(t *testing.T, o Options) (*App, context.Context, func(), err
 		t.Skipf("no Postgres for app tests (%v); set BEERUS_TEST_DATABASE_URL", err)
 	}
 	conn.Close(context.Background())
-	a, err := New(cfg, o)
+	a, err := New(t.Context(), cfg, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,16 +241,23 @@ func startTestNIBSS(t *testing.T, o Options) (*App, context.Context, func(), err
 		cancel()
 		return nil, nil, nil, err
 	}
+	cbnDone, err := a.serveCBN(ctx, errc)
+	if err != nil {
+		cancel()
+		<-done
+		return nil, nil, nil, err
+	}
 	stop := sync.OnceFunc(func() {
 		cancel()
 		<-done
+		<-cbnDone
 	})
 	t.Cleanup(stop)
 	tick := time.NewTicker(testProvisionPoll)
 	defer tick.Stop()
 	upCtx, upStop := context.WithTimeout(ctx, testProvisionLimit)
 	defer upStop()
-	for !nibssAnswers(upCtx, a) {
+	for !participantsAnswer(upCtx, a) {
 		select {
 		case <-upCtx.Done():
 			stop()
@@ -293,7 +301,7 @@ func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
 	defer stop()
 	tick := time.NewTicker(testProvisionPoll)
 	defer tick.Stop()
-	for !nibssAnswers(waitCtx, a) || provisioning(a) {
+	for !participantsAnswer(waitCtx, a) || provisioning(a) {
 		select {
 		case <-waitCtx.Done():
 			t.Fatalf("banks still provisioning: %+v", a.BankStatuses())
@@ -311,13 +319,17 @@ func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
 	return a, stopNIBSS
 }
 
-func nibssAnswers(ctx context.Context, a *App) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.nibssCtl.base+"/v1/health", nil)
+func participantsAnswer(ctx context.Context, a *App) bool {
+	return answers(ctx, a.nibssCtl.link, a.nibssCtl.base) && answers(ctx, a.cbnCtl.link, a.cbnCtl.base)
+}
+
+func answers(ctx context.Context, link server.Link, base string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/health", nil)
 	if err != nil {
 		return false
 	}
-	req.Header.Set("Authorization", "Bearer "+a.nibssCtl.link.Token)
-	resp, err := a.nibssCtl.link.Client.Do(req)
+	req.Header.Set("Authorization", "Bearer "+link.Token)
+	resp, err := link.Client.Do(req)
 	if err != nil {
 		return false
 	}
@@ -355,5 +367,27 @@ func TestWriteFilesRestoresExactlyTheSavedSet(t *testing.T) {
 	}
 	if err := writeFiles(filepath.Join(dir, "api.key", "x"), map[string][]byte{"a": nil}); err == nil {
 		t.Fatal("a restore under a file did not fail")
+	}
+}
+
+func TestCBNPortClaimsFollowTheConfig(t *testing.T) {
+	s := testStore(t)
+	cfg := &config.Config{}
+	cfg.Connect.CBNPort = 39100
+	for _, port := range []int{39100, 39200} {
+		cfg.Connect.CBNPort = port
+		if err := ensureCBNPorts(s, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := findResource(&setup.Status{Resources: diskStatus(t, s).Resources}, setup.KindSystem, setup.SystemCBN)
+	if r == nil || len(r.Owned) != 2 || !slices.Contains(r.Owned, setup.Owned{Kind: ownedPort, Name: "39200"}) || slices.Contains(r.Owned, setup.Owned{Kind: ownedPort, Name: "39100"}) {
+		t.Fatalf("claims after the port changed: %+v", r)
+	}
+	if err := s.releasePorts(setup.KindSystem, setup.SystemCBN); err != nil {
+		t.Fatal(err)
+	}
+	if r := findResource(&setup.Status{Resources: diskStatus(t, s).Resources}, setup.KindSystem, setup.SystemCBN); r == nil || len(r.Owned) != 0 {
+		t.Fatalf("claims after the release: %+v", r)
 	}
 }

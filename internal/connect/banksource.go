@@ -47,10 +47,7 @@ func (a *App) DropBankDatabases(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	if a.rtgs != nil {
-		errs = append(errs, a.rtgs.Drop())
-	}
-	errs = append(errs, a.dropNIBSS(ctx))
+	errs = append(errs, a.dropCBN(ctx), a.dropNIBSS(ctx))
 	return errors.Join(errs...)
 }
 

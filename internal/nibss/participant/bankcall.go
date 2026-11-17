@@ -80,21 +80,25 @@ func newBankCaller(own string, remote bool, timeout time.Duration) (*bankCaller,
 			return &pair, nil
 		},
 	}
-	dialer := &net.Dialer{Timeout: bankDialTimeout}
 	tr := &http.Transport{
 		TLSClientConfig:     tc,
 		IdleConnTimeout:     bankIdleTimeout,
 		MaxIdleConnsPerHost: bankIdleConns,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err == nil && !remote && strings.HasSuffix(host, localhostSuffix) {
-				addr = net.JoinHostPort(loopbackHost, port)
-			}
-			return dialer.DialContext(ctx, network, addr)
-		},
+		DialContext:         localDial(remote),
 	}
 	redirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &bankCaller{client: &http.Client{Timeout: timeout, Transport: tr, CheckRedirect: redirect}}, nil
+}
+
+func localDial(remote bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{Timeout: bankDialTimeout}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err == nil && !remote && strings.HasSuffix(host, localhostSuffix) {
+			addr = net.JoinHostPort(loopbackHost, port)
+		}
+		return dialer.DialContext(ctx, network, addr)
+	}
 }
 
 func (c *bankCaller) call(ctx context.Context, m nibss.Member, method, path string, in any) (int, []byte, error) {

@@ -3,8 +3,11 @@ package contracttest
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -80,13 +83,14 @@ func runOnce(t *testing.T, cfg *config.Config) run {
 	started, _ := runOrigins.LoadOrStore(cfg.Dir, time.Now())
 	origin := started.(time.Time)
 	base := stackBase(t)
-	app, err := connect.New(cfg, connect.Options{Real: func() time.Time { return base.Add(time.Since(origin)) }})
+	app, err := connect.New(t.Context(), cfg, connect.Options{Real: func() time.Time { return base.Add(time.Since(origin)) }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- app.Serve(ctx) }()
+	waitFor(t, waitLimit, "the CBN to answer", func() bool { return cbnAnswers(ctx, cfg.Dir) })
 	return run{app: app, stop: func() {
 		cancel()
 		if err := <-done; err != nil {
@@ -203,4 +207,26 @@ func TestResetDropsEveryDatabase(t *testing.T) {
 		}
 		t.Fatalf("left in the dir: %v", names)
 	}
+}
+
+func cbnAnswers(ctx context.Context, dir string) bool {
+	f, err := config.LoadCBNFile(dir)
+	if err != nil {
+		return false
+	}
+	token, err := config.ReadSecret(filepath.Join(config.CBNDir(dir), config.CBNTokenFile))
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(f.ControlPort)+"/v1/health", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := (&http.Client{Timeout: time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }

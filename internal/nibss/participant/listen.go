@@ -108,7 +108,14 @@ func (p *Participant) Serve(ctx context.Context) error {
 		{Handler: p.directory(), ReadHeaderTimeout: headerTimeout, ReadTimeout: readLimit, WriteTimeout: writeLimit, IdleTimeout: idleLimit, ErrorLog: slog.NewLogLogger(p.log.Handler(), slog.LevelWarn)},
 		{Handler: p.Handler(), ReadHeaderTimeout: headerTimeout, ReadTimeout: readLimit, WriteTimeout: writeLimit, IdleTimeout: idleLimit, ErrorLog: slog.NewLogLogger(p.log.Handler(), slog.LevelWarn)},
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		p.runSettlement(runCtx)
+	}()
 	failed := make(chan error, len(dirLn)+len(ctlLn))
 	serve := func(s *http.Server, ls []net.Listener, tc *tls.Config) {
 		for _, ln := range ls {
@@ -131,6 +138,7 @@ func (p *Participant) Serve(ctx context.Context) error {
 	case <-ctx.Done():
 	case serr = <-failed:
 	}
+	cancel()
 	shut, stop := context.WithTimeout(context.WithoutCancel(ctx), shutdownWait)
 	defer stop()
 	for _, s := range servers {

@@ -8,7 +8,6 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 )
 
 func (a *App) ensureNIBSSDir() error {
@@ -44,17 +43,13 @@ func (a *App) prepareNIBSS() error {
 
 func (a *App) serveNIBSS(ctx context.Context, errc chan<- error) (<-chan struct{}, error) {
 	done := make(chan struct{})
-	if a.role == RoleCore {
+	if a.localNIBSS == nil {
 		close(done)
 		return done, nil
 	}
-	p, err := participant.New(ctx, a.cfg.Dir, participant.Options{Logger: a.log, Real: a.clock.Real, DatabaseURL: a.cfg.DatabaseURL})
-	if err != nil {
-		return nil, err
-	}
 	go func() {
 		defer close(done)
-		if err := p.Serve(ctx); err != nil {
+		if err := a.localNIBSS.Serve(ctx); err != nil {
 			errc <- fmt.Errorf("serve NIBSS: %w", err)
 		}
 	}()

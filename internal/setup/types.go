@@ -170,6 +170,7 @@ type LocalConnect struct {
 	ControlPort  int    `yaml:"control_port,omitempty"`
 	HealthPort   int    `yaml:"health_port,omitempty"`
 	NIBSSPort    int    `yaml:"nibss_port,omitempty"`
+	CBNPort      int    `yaml:"cbn_port,omitempty"`
 	SyncInterval string `yaml:"sync_interval,omitempty"`
 	RefreshEvery string `yaml:"refresh_min_interval,omitempty"`
 }
