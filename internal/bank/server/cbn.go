@@ -94,12 +94,16 @@ func (c CBNClient) sessionNets(ctx context.Context, id string) (map[string]int64
 	return out, nil
 }
 
-func SettlementProblems(ctx context.Context, c CBNClient, books *bank.Bank, id string) ([]string, error) {
+func SettlementProblems(ctx context.Context, n NIBSSClient, c CBNClient, books *bank.Bank, id string) ([]string, error) {
 	held, err := books.L.Balance(ctx, bank.Settlement)
 	if err != nil {
 		return nil, fmt.Errorf("read the settlement balance of %s: %w", id, err)
 	}
 	posted, err := books.Settlements(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out, err := nibssProblems(ctx, n, posted, id)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +122,6 @@ func SettlementProblems(ctx context.Context, c CBNClient, books *bank.Bank, id s
 	for k := range moved {
 		keys[k] = true
 	}
-	out := []string{}
 	for _, k := range slices.Sorted(maps.Keys(keys)) {
 		if posted[k] != moved[k] {
 			out = append(out, fmt.Sprintf("session %s at %s: the bank posted %d, but the CBN moved %d", k, id, posted[k], moved[k]))
@@ -161,11 +164,15 @@ func (s *Server) cbnHTTP() (*http.Client, error) {
 }
 
 func (s *Server) CheckSettlement(ctx context.Context) error {
+	n, err := s.NIBSS()
+	if err != nil {
+		return err
+	}
 	c, err := s.CBN()
 	if err != nil {
 		return err
 	}
-	problems, err := SettlementProblems(ctx, c, s.books, s.id)
+	problems, err := s.postAndCheck(ctx, n, c)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
@@ -177,4 +184,11 @@ func (s *Server) CheckSettlement(ctx context.Context) error {
 	defer s.mu.Unlock()
 	s.settlementProblems, s.settlementCheckedAt = problems, &at
 	return nil
+}
+
+func (s *Server) postAndCheck(ctx context.Context, n NIBSSClient, c CBNClient) ([]string, error) {
+	if err := PostSettlements(ctx, n, s.books, s.clock.Now()); err != nil {
+		return nil, err
+	}
+	return SettlementProblems(ctx, n, c, s.books, s.id)
 }

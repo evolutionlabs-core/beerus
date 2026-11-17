@@ -66,7 +66,6 @@ type Switch interface {
 	Unposted(ctx context.Context) ([]Settlement, error)
 	MarkPosted(ctx context.Context, session string, at time.Time) error
 	Open(ctx context.Context) ([]Session, error)
-	SettledNets(ctx context.Context) (map[string]map[string]int64, error)
 	RecordConsent(ctx context.Context, e ConsentEvent) (ConsentEvent, bool, error)
 	ConsentLedger(ctx context.Context, bank string, limit int, cursor string) ([]ConsentEvent, string, error)
 }

@@ -53,9 +53,6 @@ func TestSettleGroupsByCutoffAndKeepsTheSchedule(t *testing.T) {
 	if _, err := (Settlement{Key: "k", Sessions: []Session{transfer("x", "999002", t0)}}).Nets(map[string]string{"999001": "bank-a"}); err == nil || !strings.Contains(err.Error(), "session x is between 999001 and 999002, and one of them is not in the directory") {
 		t.Fatalf("nets with a bank that is not in the directory: %v", err)
 	}
-	if unposted, err := s.SettledExcept(ctx, "999001", []string{}); err != nil || len(unposted) != 0 {
-		t.Fatalf("settled before posting: %+v, %v", unposted, err)
-	}
 	if got := Moved([]BankNet{{"bank-a", -5}, {"bank-b", 0}, {"bank-c", 5}}); !reflect.DeepEqual(got, []BankNet{{"bank-a", -5}, {"bank-c", 5}}) {
 		t.Fatalf("moved: %+v", got)
 	}
@@ -63,9 +60,6 @@ func TestSettleGroupsByCutoffAndKeepsTheSchedule(t *testing.T) {
 		if err := s.MarkPosted(ctx, key, t0); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if posted, err := s.SettledExcept(ctx, "999001", []string{}); err != nil || len(posted) != 2 {
-		t.Fatalf("settled after posting: %+v, %v", posted, err)
 	}
 	if n, err := s.PostedCount(ctx); err != nil || n != 2 {
 		t.Fatalf("posted %d, %v", n, err)

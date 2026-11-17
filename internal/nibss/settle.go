@@ -75,36 +75,6 @@ func (s *Store) Settle(ctx context.Context, sched Schedule, now time.Time, adhoc
 	return todo, nil
 }
 
-func (s *Store) SettledExcept(ctx context.Context, code string, keys []string) ([]Settlement, error) {
-	rows, err := s.pool.Query(ctx, `SELECT g.session_key, g.cutoff_at FROM settlement_sessions g
-		WHERE g.posted_at IS NOT NULL AND NOT (g.session_key = ANY($2)) AND EXISTS (SELECT 1 FROM nip_sessions n WHERE n.settlement_session = g.session_key AND (n.from_code = $1 OR n.to_code = $1))
-		ORDER BY g.cutoff_at, g.session_key`, code, keys)
-	if err != nil {
-		return nil, fmt.Errorf("list settlement sessions: %w", err)
-	}
-	out := []Settlement{}
-	for rows.Next() {
-		var x Settlement
-		if err := rows.Scan(&x.Key, &x.CutoffAt); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("read settlement session: %w", err)
-		}
-		out = append(out, x)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list settlement sessions: %w", err)
-	}
-	for i := range out {
-		list, err := s.sessions(ctx, "sessions in settlement "+out[i].Key, `SELECT `+sessionCols+` FROM nip_sessions WHERE settlement_session = $1 ORDER BY resolved_at, session_id`, out[i].Key)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Sessions = list
-	}
-	return out, nil
-}
-
 func (s *Store) PostedCount(ctx context.Context) (int, error) {
 	var n int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM settlement_sessions WHERE posted_at IS NOT NULL`).Scan(&n); err != nil {

@@ -8,7 +8,7 @@ info:
 
     ## Who serves what
 
-    - Tag `nibss`: served by the NIBSS participant. Banks call it to enrol a BVN, for a name enquiry, a funds transfer, a status query and the bank directory. They also read the open banking registry and record consent changes in the consent ledger.
+    - Tag `nibss`: served by the NIBSS participant. Banks call it to enrol a BVN, for a name enquiry, a funds transfer, a status query and the bank directory. They also read the open banking registry, record consent changes in the consent ledger and read their own settlement reports.
     - Tag `bank`: served by every bank participant. NIBSS calls it to look up an account name, to credit an account and to ask whether a credit happened.
     - Tag `control`: served by the NIBSS participant to the control plane only. It registers banks and open banking clients, as NIBSS operations onboard them in the real world, and reads the consent ledger. It uses the bearer token of the participant control API and not mTLS.
 
@@ -21,7 +21,7 @@ info:
     3. NIBSS records the session and calls the destination bank's credit endpoint.
     4. The destination bank credits once per session ID and answers `00`. A repeat of the same session ID returns the first result.
     5. If the sending bank gets no answer, it sends a status query. If the session failed, the sending bank reverses its own customer. NIBSS is not told about the reversal.
-    6. At each settlement session, NIBSS posts the net positions to the CBN. See the settlement API.
+    6. At each settlement session, NIBSS posts the net positions to the CBN. See the settlement API. Once it has posted, NIBSS holds a settlement report for each bank that sent or received in that session. The bank reads its reports, posts its own side to its books and checks them against the report and the CBN statement.
 
     ## Response codes
 
@@ -804,6 +804,47 @@ paths:
                       request_id: req_01JBC8A5T3ZK
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/settlement-reports:
+    get:
+      operationId: nibssSettlementReports
+      tags: [nibss]
+      summary: List the settlement reports of the calling bank
+      description: Lists the settlement reports NIBSS holds for the bank that makes the call, ordered by `posted_at` and then `session_id`, oldest first. A bank reads only its own reports. NIBSS takes the bank from the caller's certificate identity. A report lists a settlement session once NIBSS has posted it to the CBN, and only when the bank sent or received in that session. A bank books its side of each report as NIP payable and receivable against its balance with the CBN, and checks it against the CBN statement. `net_minor` is `inward_minor` minus `outward_minor`. To carry on from the newest report a bank has booked, send its `session_id` as `after`. A session that NIBSS does not know as posted starts the list at the first report. Once a `cursor` is sent, `after` is ignored. Use `next_cursor` as `cursor` to read the next page.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: after
+          in: query
+          required: false
+          description: The `session_id` of the newest report the bank has booked. Only reports posted after that one are listed.
+          schema:
+            type: string
+          example: '2026-11-14T10:00'
+      responses:
+        '200':
+          description: One page of settlement reports.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementReportPage'
+              example:
+                data:
+                  - session_id: '2026-11-14T12:00'
+                    cutoff_at: '2026-11-14T12:00:00+01:00'
+                    posted_at: '2026-11-14T12:00:00+01:00'
+                    outward_minor: 150000
+                    inward_minor: 40000
+                    net_minor: -110000
+                    transfers: 3
+                next_cursor: MjAyNi0xMS0xNFQxMTowMDowMFp8MjAyNi0xMS0xNFQxMjowMA
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/control/registry/clients:
     get:
       operationId: controlRegistryClients
@@ -1506,6 +1547,52 @@ components:
         next_cursor:
           type: string
           description: Pass this as `cursor` to read the next page. It is absent on the last page.
+    SettlementReport:
+      type: object
+      description: What NIBSS tells one bank about one settlement session that it has posted to the CBN.
+      required: [session_id, cutoff_at, posted_at, outward_minor, inward_minor, net_minor, transfers]
+      properties:
+        session_id:
+          type: string
+          description: The settlement session. It is the cutoff time in Lagos, such as `2026-11-14T12:00`, or an `adhoc:` key for an extra session.
+        cutoff_at:
+          type: string
+          format: date-time
+          description: The cutoff of the session.
+        posted_at:
+          type: string
+          format: date-time
+          description: When NIBSS posted the session to the CBN.
+        outward_minor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: What the bank sent in the session, in kobo.
+        inward_minor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: What the bank received in the session, in kobo.
+        net_minor:
+          type: integer
+          format: int64
+          description: '`inward_minor` minus `outward_minor`, in kobo. A negative net is what the bank owes.'
+        transfers:
+          type: integer
+          minimum: 1
+          description: The number of transfers the bank sent or received in the session.
+    SettlementReportPage:
+      type: object
+      description: One page of settlement reports.
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SettlementReport'
+        next_cursor:
+          type: string
+          description: Pass this as `cursor` to read the next page. It is opaque, and it is absent on the last page.
     ConsentStatus:
       type: string
       description: The status a consent changed to.

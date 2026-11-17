@@ -439,32 +439,3 @@ SELECT `+sessionCols+` FROM nip_sessions
 WHERE status = 'pending' OR (status = '00' AND settlement_session = '')
 ORDER BY created_at, session_id`)
 }
-
-func (s *Store) SettledNets(ctx context.Context) (map[string]map[string]int64, error) {
-	rows, err := s.pool.Query(ctx, `
-SELECT code, settlement_session, sum(net)::bigint FROM (
-    SELECT to_code AS code, settlement_session, amount_minor AS net FROM nip_sessions WHERE settlement_session <> ''
-    UNION ALL
-    SELECT from_code, settlement_session, -amount_minor FROM nip_sessions WHERE settlement_session <> ''
-) t GROUP BY 1, 2`)
-	if err != nil {
-		return nil, fmt.Errorf("read settled nets: %w", err)
-	}
-	defer rows.Close()
-	out := map[string]map[string]int64{}
-	for rows.Next() {
-		var code, key string
-		var net int64
-		if err := rows.Scan(&code, &key, &net); err != nil {
-			return nil, fmt.Errorf("read settled nets: %w", err)
-		}
-		if out[code] == nil {
-			out[code] = map[string]int64{}
-		}
-		out[code][key] = net
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read settled nets: %w", err)
-	}
-	return out, nil
-}
