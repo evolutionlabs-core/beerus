@@ -836,7 +836,7 @@ paths:
       operationId: registerRegistryClient
       tags: [control]
       summary: Register an open banking client
-      description: The control plane registers a client in the registry, as the registry operator onboards a client in the real world. It is an idempotent ensure keyed by `client_id`. A repeat with the same details returns the same client. The `name`, `legal_name` and `redirect_uris` may change on a repeat, and the new values replace the old ones. The same `client_id` with a different `cac`, `role`, `cert_cn` or `jwk` returns `422 registration_conflict`, and the message says which fields differ. A `cert_cn` that belongs to another client also returns `422 registration_conflict`. `registered_at` is set when NIBSS first registers the client and never changes. The role must be `aggregator`. A redirect URI must be an https URL, or an http URL on localhost.
+      description: The control plane registers a client in the registry, as the registry operator onboards a client in the real world. It is an idempotent ensure keyed by `client_id`. A repeat with the same details returns the same client. The `name`, `legal_name` and `redirect_uris` may change on a repeat, and the new values replace the old ones. The same `client_id` with a different `cac`, `role`, `cert_cn` or `jwk` returns `422 registration_conflict`, and the message says which fields differ. A `cert_cn` that belongs to another client also returns `422 registration_conflict`, and the message says to use another one. `registered_at` is set when NIBSS first registers the client and never changes. The role must be `aggregator`. A redirect URI must be an https URL, or an http URL on localhost.
       security:
         - bearerAuth: []
       parameters:

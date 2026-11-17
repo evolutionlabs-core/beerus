@@ -30,6 +30,7 @@ const clientCols = `client_id, name, legal_name, registry_id, cac, role, cert_cn
 
 type RegistryConflictError struct {
 	Message string
+	Hint    string
 }
 
 func (e *RegistryConflictError) Error() string {
@@ -121,7 +122,7 @@ func (s *Store) EnsureClient(ctx context.Context, c openbanking.RegistryClient) 
 		case err == nil:
 			registered, requested := clientDifferences(cur, c)
 			if len(registered) > 0 {
-				return &RegistryConflictError{Message: fmt.Sprintf("client %s is registered with %s, and this request has %s", c.ID, strings.Join(registered, " and "), strings.Join(requested, " and "))}
+				return &RegistryConflictError{Message: fmt.Sprintf("client %s is registered with %s, and this request has %s", c.ID, strings.Join(registered, " and "), strings.Join(requested, " and ")), Hint: "Send the registered details."}
 			}
 			out, err = scanClient(tx.QueryRow(ctx, `UPDATE registry_clients SET name = $2, legal_name = $3, redirect_uris = $4 WHERE client_id = $1 RETURNING `+clientCols, c.ID, c.Name, c.LegalName, uris))
 			if err != nil {
@@ -134,7 +135,7 @@ func (s *Store) EnsureClient(ctx context.Context, c openbanking.RegistryClient) 
 		var holder string
 		err = tx.QueryRow(ctx, `SELECT client_id FROM registry_clients WHERE cert_cn = $1`, c.CertCN).Scan(&holder)
 		if err == nil {
-			return &RegistryConflictError{Message: fmt.Sprintf("certificate name %s already belongs to client %s", c.CertCN, holder)}
+			return &RegistryConflictError{Message: fmt.Sprintf("certificate name %s already belongs to client %s", c.CertCN, holder), Hint: "Use another cert_cn."}
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("look up certificate name %s: %w", c.CertCN, err)

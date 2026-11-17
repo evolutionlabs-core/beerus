@@ -35,7 +35,7 @@ func (p *Participant) ensureClient(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		web.WriteJSON(w, http.StatusOK, out)
 	case errors.As(err, &conflict):
-		web.WriteError(w, r, http.StatusUnprocessableEntity, "registration_conflict", web.Sentence(err.Error())+" Send the registered details.")
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "registration_conflict", web.Sentence(err.Error())+" "+conflict.Hint)
 	case errors.As(err, &bad):
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", web.Sentence(err.Error()))
 	default:
