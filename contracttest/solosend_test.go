@@ -40,11 +40,10 @@ func startSoloSend(t *testing.T, tsqAfter time.Duration) *soloSend {
 	out.fees = charges.Fee + charges.VAT + charges.StampDuty
 	for _, id := range []string{"bank-a", "bank-b"} {
 		m := s.members[id]
-		register := fmt.Sprintf(`{"nip_code":%q,"nuban_code":%q,"name":%q,"type":"commercial","credit_url":"https://%s.localhost:%d","certificate_identity":%q}`, m.bank.NIPCode, m.bank.NUBANCode, m.bank.Name, id, m.bank.APIPort, id)
+		register := fmt.Sprintf(`{"nip_code":%q,"nuban_code":%q,"name":%q,"type":"commercial","credit_url":"https://%s.localhost:%d","certificate_identity":%q,"net_debit_cap_minor":%d,"collateral_minor":0}`, m.bank.NIPCode, m.bank.NUBANCode, m.bank.Name, id, m.bank.APIPort, id, int64(soloBigCap))
 		if status, got := s.call("nip", s.plain, http.MethodPut, s.control+"/v1/control/banks/"+id, s.token, register); status != http.StatusOK {
 			t.Fatalf("register %s: %d %s", id, status, got)
 		}
-		out.limit(id, soloBigCap)
 	}
 	return out
 }

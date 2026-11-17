@@ -260,8 +260,6 @@ func (a *App) CloseBank(id string, req CloseRequest) (setup.Resource, error) {
 	return a.Resource(setup.KindBank, id)
 }
 
-const closeRunTTL = time.Minute
-
 type closeRun struct {
 	running bool
 	at      time.Time
@@ -333,7 +331,7 @@ func (a *App) sweepCloseRuns() {
 	defer a.mu.Unlock()
 	now := a.clock.Real()
 	for id, run := range a.closeRuns {
-		if !run.running && now.Sub(run.at) > closeRunTTL {
+		if !run.running && now.Sub(run.at) > finalizerReadTTL {
 			delete(a.closeRuns, id)
 		}
 	}

@@ -156,6 +156,10 @@ type OpenSends struct {
 }
 
 func (s *Server) openSends(w http.ResponseWriter, r *http.Request) {
+	if s.books == nil {
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "The bank books are not open yet. Try again soon.")
+		return
+	}
 	n, err := s.books.OpenSends(r.Context())
 	if err != nil {
 		s.log.Error("count open sends", "err", err)
