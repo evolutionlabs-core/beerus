@@ -459,17 +459,37 @@ func (a *App) closeChoices(ctx context.Context, r setup.Resource, imp CloseImpac
 		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "Every bank must be asked about its faults before money moves, and one could not be reached: %v. Check that the banks are running, then try again.", err)
 	}
 	down := a.downBanks()
+	suspended, changing, err := a.targetChange(rm.To)
+	if err != nil {
+		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "The state of %s could not be read: %v. Try again soon.", rm.To, err)
+	}
 	switch {
 	case to == nil:
 		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s is not a bank in this setup, so money cannot move there. Choose another bank.", rm.To)
-	case a.bankPhase(rm.To) != PhaseActive || down[rm.To]:
+	case a.bankPhase(rm.To) != PhaseActive || down[rm.To] || suspended:
 		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s is suspended or down, so money cannot move there. Resume it or choose another bank.", to.Name)
+	case changing:
+		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s has a change that NIBSS has not taken yet, so money cannot move there. Try again soon.", to.Name)
 	case faulty[rm.To]:
 		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s has a fault, so the money cannot be moved safely; clear it with beerus fault clear --bank %s.", to.Name, rm.To)
 	case faulty[r.ID]:
 		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s has a fault, so the money cannot be moved safely; clear it with beerus fault clear --bank %s.", imp.Bank.Name, r.ID)
 	}
 	return choice, rm.To, nil
+}
+
+func (a *App) targetChange(id string) (suspended, changing bool, err error) {
+	st, err := a.ctl.status()
+	if err != nil {
+		return false, false, fmt.Errorf("read control.json: %w", err)
+	}
+	if sb, ok := bankIn(st.Applied, id); ok && sb.State == setup.StateSuspended {
+		suspended = true
+	}
+	if r := findResource(&st, setup.KindBank, id); r != nil && r.Generation != r.ObservedGeneration {
+		changing = true
+	}
+	return suspended, changing, nil
 }
 
 func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice map[string]string, to string) (CloseResult, error) {
