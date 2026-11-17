@@ -1,7 +1,6 @@
 package contracttest
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -39,20 +38,21 @@ func startSoloSend(t *testing.T, tsqAfter time.Duration) *soloSend {
 	charges := banktest.Fees(t).ForTransfer(soloSendAmount)
 	out.fees = charges.Fee + charges.VAT + charges.StampDuty
 	for _, id := range []string{"bank-a", "bank-b"} {
-		m := s.members[id]
-		register := fmt.Sprintf(`{"nip_code":%q,"nuban_code":%q,"name":%q,"type":"commercial","credit_url":"https://%s.localhost:%d","certificate_identity":%q,"net_debit_cap_minor":%d,"collateral_minor":0}`, m.bank.NIPCode, m.bank.NUBANCode, m.bank.Name, id, m.bank.APIPort, id, int64(soloBigCap))
-		if status, got := s.call("nip", s.plain, http.MethodPut, s.control+"/v1/control/banks/"+id, s.token, register); status != http.StatusOK {
-			t.Fatalf("register %s: %d %s", id, status, got)
-		}
+		out.limit(id, soloBigCap)
 	}
 	return out
 }
 
+func (s *soloSend) register(id string, cap int64) (int, string) {
+	m := s.members[id]
+	body := fmt.Sprintf(`{"nip_code":%q,"nuban_code":%q,"name":%q,"type":"commercial","credit_url":"https://%s.localhost:%d","certificate_identity":%q,"net_debit_cap_minor":%d,"collateral_minor":0}`, m.bank.NIPCode, m.bank.NUBANCode, m.bank.Name, id, m.bank.APIPort, id, cap)
+	status, got := s.call("nip", s.plain, http.MethodPut, s.control+"/v1/control/banks/"+id, s.token, body)
+	return status, got
+}
+
 func (s *soloSend) limit(id string, cap int64) {
 	s.t.Helper()
-	body := fmt.Sprintf(`{"net_debit_cap_minor":%d,"collateral_minor":0}`, cap)
-	want := body
-	if status, got := s.call("nip", s.plain, http.MethodPut, s.control+"/v1/control/banks/"+id+"/limits", s.token, body); status != http.StatusOK || got != want {
+	if status, got := s.register(id, cap); status != http.StatusOK {
 		s.t.Fatalf("limits of %s: %d %s", id, status, got)
 	}
 }
@@ -95,10 +95,14 @@ func (s *soloSend) clear(id string) {
 	}
 }
 
+func (s *soloSend) now() time.Time {
+	return time.Now()
+}
+
 func (s *soloSend) balance(id string) int64 {
 	s.t.Helper()
 	m := s.members[id]
-	bal, err := m.books.L.Balance(context.Background(), bank.CustomerAccount(m.nuban))
+	bal, err := m.books.L.Balance(s.t.Context(), bank.CustomerAccount(m.nuban))
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -108,7 +112,7 @@ func (s *soloSend) balance(id string) int64 {
 func (s *soloSend) open(id string) int {
 	s.t.Helper()
 	var n int
-	if err := s.members[id].books.L.Pool().QueryRow(context.Background(), `SELECT count(*) FROM nip_sends`).Scan(&n); err != nil {
+	if err := s.members[id].books.L.Pool().QueryRow(s.t.Context(), `SELECT count(*) FROM nip_sends`).Scan(&n); err != nil {
 		s.t.Fatal(err)
 	}
 	return n
@@ -266,6 +270,45 @@ func TestSoloSendThroughNIBSS(t *testing.T) {
 	}
 }
 
+func TestSoloReplaysAnswerAlike(t *testing.T) {
+	s := startSoloSend(t, soloTSQAfter)
+	ctx := t.Context()
+	a := s.members["bank-a"]
+	holder, err := a.books.CustomerByBVN(ctx, "22912345678")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := a.books.OpenAccount(ctx, "acc-ada-2", holder.ID, bank.ProductCurrent, s.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a0 := s.balance("bank-a")
+	own := fmt.Sprintf(`{"from":%q,"to":%q,"amount":"1000.00","narration":"Own"}`, a.nuban, other.NUBAN)
+	status, h, first := s.bankCall("bank-a", http.MethodPost, "/v1/transfers", "own-1", own)
+	if status != http.StatusOK || h.Get("Idempotent-Replayed") != "" {
+		t.Fatalf("an intra-bank transfer: %d %v %v", status, h, first)
+	}
+	status, h, again := s.bankCall("bank-a", http.MethodPost, "/v1/transfers", "own-1", own)
+	if status != http.StatusOK || h.Get("Idempotent-Replayed") != "true" || fmt.Sprint(again) != fmt.Sprint(first) {
+		t.Fatalf("an intra-bank replay: %d %v\n%v\n%v", status, h, again, first)
+	}
+	if got := s.balance("bank-a"); got != a0-100_000 {
+		t.Fatalf("the intra-bank transfer debited %d, want 100000", a0-got)
+	}
+	broke := fmt.Sprintf(`{"from":%q,"to":%q,"amount":"999999999.00","narration":"Own"}`, a.nuban, other.NUBAN)
+	status, _, refused := s.bankCall("bank-a", http.MethodPost, "/v1/transfers", "broke-1", broke)
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("an overdraw: %d %v", status, refused)
+	}
+	status, h, refusedAgain := s.bankCall("bank-a", http.MethodPost, "/v1/transfers", "broke-1", broke)
+	if status != http.StatusUnprocessableEntity || h.Get("Idempotent-Replayed") != "true" || fmt.Sprint(refusedAgain) != fmt.Sprint(refused) {
+		t.Fatalf("an overdraw replay: %d %v %v", status, h, refusedAgain)
+	}
+	if got := s.balance("bank-a"); got != a0-100_000 {
+		t.Fatalf("the refused transfer changed the balance to %d", got)
+	}
+}
+
 func TestSoloSendSurvivesRestarts(t *testing.T) {
 	s := startSoloSend(t, 3*time.Second)
 	a0, b0 := s.balance("bank-a"), s.balance("bank-b")
@@ -314,7 +357,8 @@ func TestSoloSendSurvivesRestarts(t *testing.T) {
 	stuck := "000014261115120000000000000077"
 	request := s.transferBody(stuck, soloSendAmount, true)
 	a := s.members["bank-a"]
-	if _, _, err := a.books.SendNIP(context.Background(), bank.NIPSend{Key: "crash-1", From: a.nuban, Amount: soloSendAmount, SessionID: stuck, To: bank.Counterparty{Name: "ADA OBI", AccountNumber: s.members["bank-b"].nuban, BankCode: "000015", BankName: "Bank B"}, At: time.Now(), NoCharges: true, Request: []byte(request), CheckAt: time.Now()}); err != nil {
+	at := s.now()
+	if _, _, err := a.books.SendNIP(t.Context(), bank.NIPSend{Key: "crash-1", From: a.nuban, Amount: soloSendAmount, SessionID: stuck, To: bank.Counterparty{Name: "ADA OBI", AccountNumber: s.members["bank-b"].nuban, BankCode: "000015", BankName: "Bank B"}, At: at, NoCharges: true, Request: []byte(request), CheckAt: at}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, soloRestartFor, "bank A to reverse a send that NIBSS refuses to take", func() bool { return s.open("bank-a") == 0 })

@@ -43,11 +43,6 @@ type registerRequest struct {
 	Collateral          *int64 `json:"collateral_minor"`
 }
 
-type limitsBody struct {
-	NetDebitCap int64 `json:"net_debit_cap_minor"`
-	Collateral  int64 `json:"collateral_minor"`
-}
-
 type statusRequest struct {
 	Status string `json:"status"`
 }
@@ -59,7 +54,6 @@ func (p *Participant) Handler() http.Handler {
 	mux.HandleFunc("/v1/control/name-enquiries", only(http.MethodGet, p.controlNameEnquiry))
 	mux.HandleFunc("/v1/control/banks/{bank_id}", only(http.MethodPut, p.register))
 	mux.HandleFunc("/v1/control/banks/{bank_id}/status", only(http.MethodPut, p.setStatus))
-	mux.HandleFunc("/v1/control/banks/{bank_id}/limits", only(http.MethodPut, p.setLimits))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "NIBSS does not serve this control call.")
 	})
@@ -186,27 +180,6 @@ func (p *Participant) setStatus(w http.ResponseWriter, r *http.Request) {
 		p.refused(w, r, id, req.Status)
 	default:
 		p.unavailable(w, r, "bank status not changed", err)
-	}
-}
-
-func (p *Participant) setLimits(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("bank_id")
-	var req limitsBody
-	if err := web.DecodeBody(r, &req); err != nil {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"net_debit_cap_minor":500000000,"collateral_minor":0}.`)
-		return
-	}
-	err := p.store.SetLimits(r.Context(), id, nibss.Limits{NetDebitCap: req.NetDebitCap, Collateral: req.Collateral})
-	var bad *nibss.InvalidError
-	switch {
-	case err == nil:
-		web.WriteJSON(w, http.StatusOK, req)
-	case errors.As(err, &bad):
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", web.Sentence(err.Error()))
-	case errors.Is(err, nip.ErrUnknownInstitution):
-		web.WriteError(w, r, http.StatusNotFound, "not_found", fmt.Sprintf("Bank %s is not in the NIBSS directory. Register it first.", id))
-	default:
-		p.unavailable(w, r, "limits not set", err)
 	}
 }
 

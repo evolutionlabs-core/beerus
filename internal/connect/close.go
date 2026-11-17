@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"sort"
@@ -267,6 +268,16 @@ type closeRun struct {
 	cond    *setup.Condition
 	res     CloseResult
 	err     error
+
+	generation int64
+	money      *setup.Removal
+}
+
+func sameRemoval(a, b *setup.Removal) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Money == b.Money && a.To == b.To && maps.Equal(a.Customers, b.Customers)
 }
 
 func (a *App) closeMovesDue(ctx context.Context) {
@@ -338,6 +349,12 @@ func (a *App) sweepCloseRuns() {
 }
 
 func (a *App) closeMoves(ctx context.Context, r setup.Resource) closeRun {
+	run := a.closeMovesFor(ctx, r)
+	run.generation, run.money = r.Generation, r.Money
+	return run
+}
+
+func (a *App) closeMovesFor(ctx context.Context, r setup.Resource) closeRun {
 	imp, err := a.CloseImpact(ctx, r.ID)
 	if err != nil {
 		return closeRun{err: err}
@@ -363,7 +380,7 @@ func (a *App) decideMoney(ctx context.Context, r setup.Resource) (*setup.Conditi
 		return nil, nil
 	}
 	run, ok := a.takeCloseRun(id)
-	if !ok {
+	if !ok || run.generation != r.Generation || !sameRemoval(run.money, r.Money) {
 		return a.blocked(setup.ReasonSettlementPending, "The money moves of %s are being worked out. Try again soon.", b.Name), nil
 	}
 	if run.err != nil {
@@ -437,7 +454,11 @@ func (a *App) closeChoices(ctx context.Context, r setup.Resource, imp CloseImpac
 		return choice, "", nil
 	}
 	to := a.bankByID(rm.To)
-	down, faulty := a.faultBanks(ctx, server.FaultDown), a.faultBanks(ctx, "")
+	faulty, err := a.faultBanks(ctx)
+	if err != nil {
+		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "Every bank must be asked about its faults before money moves, and one could not be reached: %v. Check that the banks are running, then try again.", err)
+	}
+	down := a.downBanks()
 	switch {
 	case to == nil:
 		return nil, "", a.blocked(setup.ReasonTargetUnavailable, "%s is not a bank in this setup, so money cannot move there. Choose another bank.", rm.To)

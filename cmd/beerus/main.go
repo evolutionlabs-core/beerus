@@ -237,6 +237,10 @@ func newCtlFor(c *config.Config) (*ctl, error) {
 }
 
 func (c *ctl) do(method, path string, body any) (map[string]any, error) {
+	return c.doKeyed(method, path, body, "")
+}
+
+func (c *ctl) doKeyed(method, path string, body any, key string) (map[string]any, error) {
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -248,7 +252,10 @@ func (c *ctl) do(method, path string, body any) (map[string]any, error) {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if method != http.MethodGet {
-		req.Header.Set("Idempotency-Key", web.NewID("idk"))
+		if key == "" {
+			key = web.NewID("idk")
+		}
+		req.Header.Set("Idempotency-Key", key)
 	}
 	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
 	if err != nil {

@@ -56,7 +56,6 @@ type Switch interface {
 	Resolve(ctx context.Context, id, status, outcome string, at time.Time) error
 	TSQ(ctx context.Context, id string, next time.Time) (Session, error)
 	NoAnswer(ctx context.Context, id string, next time.Time) (Session, error)
-	SetLimits(ctx context.Context, id string, l Limits) error
 	Position(ctx context.Context, code string) (Position, error)
 	Session(ctx context.Context, id string) (Session, error)
 	Unsettled(ctx context.Context, upTo time.Time) ([]Session, error)

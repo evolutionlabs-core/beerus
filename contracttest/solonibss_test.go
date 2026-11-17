@@ -252,8 +252,8 @@ func (s *soloNIBSS) callWith(spec string, client *http.Client, method, url, toke
 
 func TestSoloNIBSS(t *testing.T) {
 	s, banks := startSoloNIBSS(t, soloTSQAfter)
-	register := `{"nip_code":"000014","nuban_code":"014","name":"Bank A","type":"commercial","credit_url":"https://bank-a.localhost:7451","certificate_identity":"bank-a","net_debit_cap_minor":500000000,"collateral_minor":0}`
-	moved := strings.Replace(register, "7451", "7499", 1)
+	register := `{"nip_code":"000014","nuban_code":"014","name":"Bank A","type":"commercial","credit_url":"https://bank-a.localhost:17451","certificate_identity":"bank-a","net_debit_cap_minor":500000000,"collateral_minor":0}`
+	moved := strings.Replace(register, "17451", "17499", 1)
 	entry := func(status string) string {
 		return fmt.Sprintf(`{"id":"bank-a","name":"Bank A","nip_code":"000014","nuban_code":"014","type":"commercial","status":%q}`, status)
 	}
@@ -276,11 +276,11 @@ func TestSoloNIBSS(t *testing.T) {
 		{"register without a cap", s.plain, "nip", "PUT", s.control + "/v1/control/banks/bank-y", s.token, strings.Replace(register, `,"net_debit_cap_minor":500000000`, "", 1), 400, errBody("invalid_request", "Send the net_debit_cap_minor and the collateral_minor of the bank, in kobo.")},
 		{"register with a new cap", s.plain, "nip", "PUT", bankURL, s.token, strings.Replace(register, "500000000", "900000000", 1), 200, entry("active")},
 		{"register again", s.plain, "nip", "PUT", bankURL, s.token, register, 200, entry("active")},
-		{"register with another url", s.plain, "nip", "PUT", bankURL, s.token, moved, 422, errBody("registration_conflict", "Bank bank-a is registered with credit_url https://bank-a.localhost:7451, and this request has credit_url https://bank-a.localhost:7499. Send the registered details.")},
+		{"register with another url", s.plain, "nip", "PUT", bankURL, s.token, moved, 422, errBody("registration_conflict", "Bank bank-a is registered with credit_url https://bank-a.localhost:17451, and this request has credit_url https://bank-a.localhost:17499. Send the registered details.")},
 		{"register with another nip code", s.plain, "nip", "PUT", bankURL, s.token, strings.Replace(register, "000014", "000015", 1), 422, errBody("registration_conflict", "Bank bank-a is registered with nip_code 000014, and this request has nip_code 000015. Send the registered details.")},
 		{"register without a token", s.plain, "nip", "PUT", bankURL, "", register, 401, errBody("unauthenticated", "A valid control token is required.")},
 		{"register with a wrong token", s.plain, "nip", "PUT", bankURL, "ctl_wrong", register, 401, errBody("unauthenticated", "A valid control token is required.")},
-		{"register with no url", s.plain, "nip", "PUT", s.control + "/v1/control/banks/bank-y", s.token, strings.Replace(register, "https://bank-a.localhost:7451", "", 1), 400, errBody("invalid_request", "Send a credit_url that starts with http:// or https:// and a certificate_identity.")},
+		{"register with no url", s.plain, "nip", "PUT", s.control + "/v1/control/banks/bank-y", s.token, strings.Replace(register, "https://bank-a.localhost:17451", "", 1), 400, errBody("invalid_request", "Send a credit_url that starts with http:// or https:// and a certificate_identity.")},
 		{"register with a bad code", s.plain, "nip", "PUT", s.control + "/v1/control/banks/bank-y", s.token, strings.Replace(register, "000014", "14", 1), 400, errBody("invalid_request", `Bank bank-y: nip_code "14" must be 6 digits.`)},
 		{"directory for a registered bank", banks["bank-a"], "nip", "GET", s.dirURL + "/v1/banks", "", "", 200, `{"data":[` + entry("active") + `]}`},
 		{"directory for a stranger", banks["bank-z"], "nip", "GET", s.dirURL + "/v1/banks", "", "", 403, errBody("forbidden", "This certificate may not read the bank directory. bank-z is not a bank NIBSS knows.")},

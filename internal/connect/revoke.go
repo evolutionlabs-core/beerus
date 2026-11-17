@@ -22,8 +22,10 @@ func (a *App) revokeBankConnections(ctx context.Context, r setup.Resource) (*set
 	if read.err != nil {
 		return nil, read.err
 	}
-	inScope := func(c *Connection) bool { return c.Institution == id }
-	ids, _ := a.markRevoked(inScope)
+	ids := a.scopeIDs(func(c *Connection) bool { return c.Institution == id })
+	if !slices.Equal(ids, read.ids) {
+		return nil, fmt.Errorf("the connections of %s changed while they were being revoked", id)
+	}
 	return nil, a.confirmRevoked(ids)
 }
 
@@ -39,6 +41,7 @@ func (a *App) revokePartnerConnections(ctx context.Context, r setup.Resource) (*
 
 type revokeRead struct {
 	at  time.Time
+	ids []string
 	err error
 }
 
@@ -54,13 +57,16 @@ func (a *App) revokesDue(ctx context.Context) {
 			continue
 		}
 		id := r.ID
-		_, withConsent := a.markRevoked(func(c *Connection) bool { return c.Institution == id })
-		err := a.revokeAtBanks(ctx, withConsent)
+		ids := a.scopeIDs(func(c *Connection) bool { return c.Institution == id })
+		var errs []error
+		for _, cid := range ids {
+			errs = append(errs, a.revokeConnection(ctx, cid))
+		}
 		a.mu.Lock()
 		if a.revokeReads == nil {
 			a.revokeReads = map[string]revokeRead{}
 		}
-		a.revokeReads[id] = revokeRead{at: a.clock.Real(), err: err}
+		a.revokeReads[id] = revokeRead{at: a.clock.Real(), ids: ids, err: errors.Join(errs...)}
 		a.mu.Unlock()
 	}
 	a.mu.Lock()
@@ -78,6 +84,49 @@ func (a *App) takeRevokeRead(id string) (revokeRead, bool) {
 	read, ok := a.revokeReads[id]
 	delete(a.revokeReads, id)
 	return read, ok && a.clock.Real().Sub(read.at) <= finalizerReadTTL
+}
+
+func (a *App) scopeIDs(inScope func(*Connection) bool) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ids := []string{}
+	for cid, c := range a.st.Connections {
+		if inScope(c) {
+			ids = append(ids, cid)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func (a *App) revokeConnection(ctx context.Context, cid string) error {
+	a.mu.Lock()
+	c := a.st.Connections[cid]
+	if c == nil {
+		a.mu.Unlock()
+		return nil
+	}
+	open := c.Status != "revoked" && c.Status != "expired"
+	if open {
+		for _, acct := range c.AccountIDs {
+			a.emit(c.PartnerID, "account.removed", map[string]any{"connection_id": c.ID, "account_id": acct})
+		}
+	}
+	atBank := c.ConsentID != "" && a.cfg.Bank(c.Institution) != nil
+	a.mu.Unlock()
+	if atBank {
+		if err := a.RevokeAtBank(ctx, cid); err != nil && !errors.Is(err, openbanking.ErrNotFound) {
+			return fmt.Errorf("revoke connection %s at its bank: %w", cid, err)
+		}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if c := a.st.Connections[cid]; c != nil && c.Status != "revoked" && c.Status != "expired" {
+		a.setStatus(c, "revoked", "connection_revoked")
+		a.vaultDrop(c.ID)
+		a.dirty()
+	}
+	return nil
 }
 
 func (a *App) markRevoked(inScope func(*Connection) bool) ([]string, []string) {

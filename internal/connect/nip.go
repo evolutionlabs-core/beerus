@@ -54,7 +54,7 @@ func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The NIBSS directory could not be read.")
 		return
 	}
-	down := a.faultBanks(r.Context(), server.FaultDown)
+	down := a.downBanks()
 	out := []map[string]any{}
 	for _, in := range list {
 		if in.Status == nip.StatusRemoved {

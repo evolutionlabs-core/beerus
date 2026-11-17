@@ -189,27 +189,29 @@ func (a *App) clearTimeouts(ctx context.Context, b *config.Bank) (int, error) {
 	return len(held), nil
 }
 
-func (a *App) faultBanks(ctx context.Context, kind string) map[string]bool {
+func (a *App) downBanks() map[string]bool {
 	out := map[string]bool{}
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	now := a.clock.Now()
 	for _, f := range a.st.Faults {
-		if f.Live(now) && (kind == "" || f.Kind == kind) {
+		if f.Live(now) && f.Kind == server.FaultDown {
 			out[f.Bank] = true
 		}
 	}
-	a.mu.Unlock()
-	if kind == server.FaultDown {
-		return out
-	}
+	return out
+}
+
+func (a *App) faultBanks(ctx context.Context) (map[string]bool, error) {
+	out := a.downBanks()
 	timeouts, err := a.timeoutFaults(ctx)
 	if err != nil {
-		a.log.Warn("faults not all listed", "err", err)
+		return nil, err
 	}
 	for _, f := range timeouts {
 		out[f.Bank] = true
 	}
-	return out
+	return out, nil
 }
 
 func (a *App) bankDown(id string) bool {

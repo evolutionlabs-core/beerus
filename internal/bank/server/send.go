@@ -143,8 +143,12 @@ func (s *Sender) internal(ctx context.Context, rt Route, req TransferRequest, re
 	if key == "" {
 		key = web.NewID("trf")
 	}
-	if _, err := b.OwnTransfer(ctx, key, req.From, req.To, req.Amount, req.Narration, res.At); err != nil {
+	posted, err := b.OwnTransfer(ctx, key, req.From, req.To, req.Amount, req.Narration, res.At)
+	if err != nil {
 		return res, PostingError(req.From, err)
+	}
+	if posted.Replayed {
+		res.At = posted.PostedAt.In(clock.Lagos)
 	}
 	res.Kind, res.Status, res.ResponseCode, res.ToName, res.TotalDebit = "internal", nip.Success, nip.OK, to.Name, req.Amount
 	res.BalanceAfter, err = b.BalanceAt(ctx, req.From, res.At)
