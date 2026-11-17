@@ -53,17 +53,26 @@ func (a *App) postBooks(ctx context.Context) error {
 	a.mu.Unlock()
 	var errs []error
 	for _, l := range ledgers {
+		if a.bankGone(l.Inst.ID) {
+			continue
+		}
 		n, err := a.bankNIBSS(l.Inst.ID)
 		if err == nil {
 			err = a.postBank(ctx, n, l)
 		}
-		var refused *server.PeerError
-		if errors.As(err, &refused) && refused.Status == http.StatusForbidden {
-			continue
+		if err != nil {
+			errs = append(errs, err)
 		}
-		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+func (a *App) bankGone(id string) bool {
+	if a.bankByID(id) == nil {
+		return true
+	}
+	phase := a.bankPhase(id)
+	return phase == PhaseClosed || phase == PhaseTerminating
 }
 
 func (a *App) postBank(ctx context.Context, n server.NIBSSClient, l *ledgerSource) error {

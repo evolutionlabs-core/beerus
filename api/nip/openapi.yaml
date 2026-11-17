@@ -1562,7 +1562,7 @@ components:
         posted_at:
           type: string
           format: date-time
-          description: When NIBSS posted the session to the CBN.
+          description: The time NIBSS posted the session to the CBN.
         outward_minor:
           type: integer
           format: int64

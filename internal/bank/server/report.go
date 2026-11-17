@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
@@ -28,6 +29,34 @@ type SettlementReport struct {
 type reportPageBody struct {
 	Data       []SettlementReport `json:"data"`
 	NextCursor string             `json:"next_cursor"`
+}
+
+type BookingError struct {
+	SessionID string
+	Err       error
+}
+
+func (e *BookingError) Error() string {
+	return "post settlement " + e.SessionID + ": " + e.Err.Error()
+}
+
+func (e *BookingError) Unwrap() error {
+	return e.Err
+}
+
+func (r SettlementReport) check() error {
+	net, ok := inwardLessOutward(r.Inward, r.Outward)
+	if r.Outward < 0 || r.Inward < 0 || !ok || r.Net != net {
+		return &BookingError{SessionID: r.SessionID, Err: fmt.Errorf("outward %d, inward %d and net %d do not add up", r.Outward, r.Inward, r.Net)}
+	}
+	return nil
+}
+
+func inwardLessOutward(inward, outward int64) (int64, bool) {
+	if outward < 0 && inward > math.MaxInt64+outward || outward > 0 && inward < math.MinInt64+outward {
+		return 0, false
+	}
+	return inward - outward, true
 }
 
 func (c NIBSSClient) SettlementReports(ctx context.Context, after string) ([]SettlementReport, error) {
@@ -59,8 +88,11 @@ func PostSettlements(ctx context.Context, c NIBSSClient, books *bank.Bank, now t
 		return err
 	}
 	for _, r := range list {
+		if err := r.check(); err != nil {
+			return err
+		}
 		if _, err := books.Settle(ctx, r.SessionID, r.Outward, r.Inward, now); err != nil {
-			return fmt.Errorf("post settlement %s: %w", r.SessionID, err)
+			return &BookingError{SessionID: r.SessionID, Err: err}
 		}
 	}
 	return nil

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -16,6 +18,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 const reportChunk = 2
@@ -41,7 +44,10 @@ func (d *nibssDesk) serve(r *http.Request) (*http.Response, error) {
 	d.afters = append(d.afters, q.Get("after"))
 	from := 0
 	if c := q.Get("cursor"); c != "" {
-		from, _ = strconv.Atoi(c)
+		var err error
+		if from, err = strconv.Atoi(c); err != nil {
+			return nil, err
+		}
 	} else if after := q.Get("after"); after != "" {
 		from = slices.IndexFunc(d.reports, func(x SettlementReport) bool { return x.SessionID == after }) + 1
 	}
@@ -51,7 +57,10 @@ func (d *nibssDesk) serve(r *http.Request) (*http.Response, error) {
 	if end < len(d.reports) {
 		page.NextCursor = strconv.Itoa(end)
 	}
-	raw, _ := json.Marshal(page)
+	raw, err := json.Marshal(page)
+	if err != nil {
+		return nil, err
+	}
 	return answer(http.StatusOK, string(raw))
 }
 
@@ -97,6 +106,14 @@ func TestBankPostsItsSideFromTheNIBSSReports(t *testing.T) {
 		{"a replay asks after the newest and books nothing new", fresh, nil, "k3", map[string]int64{"k1": -300, "k2": -70, "k3": 30}, ""},
 		{"a new report is booked alone", fresh, func() { desk.reports = append(desk.reports, report("k4", 5, 0)) }, "k3", map[string]int64{"k1": -300, "k2": -70, "k3": 30, "k4": -5}, ""},
 		{"NIBSS down books nothing and says so", fresh, func() { desk.down = true; desk.reports = append(desk.reports, report("k5", 9, 0)) }, "", map[string]int64{"k1": -300, "k2": -70, "k3": 30, "k4": -5}, "read the settlement reports at NIBSS: NIBSS is not available right now. Try again soon."},
+		{"a report whose net is not inward less outward is refused", reportBank(t), func() {
+			desk.down = false
+			desk.reports = []SettlementReport{report("k1", 5, 0), {SessionID: "k2", Outward: 5, Inward: 2, Net: 9}}
+		}, "", map[string]int64{"k1": -5}, "post settlement k2: outward 5, inward 2 and net 9 do not add up"},
+		{"a negative outward is refused", reportBank(t), func() { desk.reports = []SettlementReport{{SessionID: "k1", Outward: -5, Inward: 0, Net: 5}} }, "", map[string]int64{}, "post settlement k1: outward -5, inward 0 and net 5 do not add up"},
+		{"a net that overflows is refused", reportBank(t), func() {
+			desk.reports = []SettlementReport{{SessionID: "k1", Outward: 5, Inward: math.MinInt64, Net: 0}}
+		}, "", map[string]int64{}, "post settlement k1: outward 5, inward -9223372036854775808 and net 0 do not add up"},
 	}
 	for _, s := range steps {
 		if s.before != nil {
@@ -173,4 +190,46 @@ func equalNets(a, b map[string]int64) bool {
 		}
 		return true
 	}()
+}
+
+func TestBookingErrorStillRecordsTheCheck(t *testing.T) {
+	ctx := context.Background()
+	books := reportBank(t)
+	cutoff := time.Date(2026, 11, 4, 12, 0, 0, 0, clock.Lagos)
+	for _, key := range []string{"kx", "kz"} {
+		if _, err := books.Settle(ctx, key, 1, 0, cutoff); err != nil {
+			t.Fatal(err)
+		}
+	}
+	desk := &nibssDesk{reports: []SettlementReport{report("ky", 1, 0), report("kx", 2, 0)}}
+	cbn := CBNClient{Base: "https://cbn.invalid", Away: "Bank A cannot reach the CBN right now. Try again in a minute.", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		body := `{"data":[],"next_cursor":""}`
+		if strings.HasSuffix(r.URL.Path, "/settlement-balance") {
+			body = `{"balance_minor":0}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}}
+	now := cutoff.Add(3 * time.Hour)
+	s := New(Config{
+		Bank:  config.Bank{ID: "bank-a", Name: "Bank A"},
+		Books: books,
+		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock: clock.New(func() time.Time { return now }),
+	})
+	err := s.postAndCheck(ctx, desk.client(), cbn)
+	if !errors.Is(err, ledger.ErrIdempotency) || !strings.HasPrefix(err.Error(), "post settlement kx: ") {
+		t.Errorf("the booking error: %v", err)
+	}
+	want := []string{
+		"session kx at bank-a: NIBSS nets -2, but the bank posted -1",
+		"session kz at bank-a: NIBSS nets 0, but the bank posted -1",
+		"session kx at bank-a: the bank posted -1, but the CBN moved 0",
+		"session ky at bank-a: the bank posted -1, but the CBN moved 0",
+		"session kz at bank-a: the bank posted -1, but the CBN moved 0",
+		"bank-a's books show -3 at the CBN, but the CBN shows 0",
+		"could not book session kx at bank-a: " + errors.Unwrap(err).Error(),
+	}
+	if !slices.Equal(s.settlementProblems, want) || s.settlementCheckedAt == nil || !s.settlementCheckedAt.Equal(now) {
+		t.Errorf("problems %q checked at %v, want %q at %v", s.settlementProblems, s.settlementCheckedAt, want, now)
+	}
 }

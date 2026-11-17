@@ -119,7 +119,10 @@ func TestSettlementReportsListOnlyPostedSessionsOfTheCaller(t *testing.T) {
 			t.Errorf("%s: %+v %q %q, want %+v more %v %q", r.name, got, next, msg, r.want, r.more, r.err)
 		}
 	}
-	_, next, _ := list("bank-a", "", 1, "")
+	_, next, msg := list("bank-a", "", 1, "")
+	if msg != "" {
+		t.Fatal(msg)
+	}
 	if got, last, msg := list("bank-a", "", 1, next); !reflect.DeepEqual(got, []Report{second}) || last != "" || msg != "" {
 		t.Errorf("second page: %+v %q %q", got, last, msg)
 	}

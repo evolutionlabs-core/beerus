@@ -172,23 +172,25 @@ func (s *Server) CheckSettlement(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	problems, err := s.postAndCheck(ctx, n, c)
+	return s.postAndCheck(ctx, n, c)
+}
+
+func (s *Server) postAndCheck(ctx context.Context, n NIBSSClient, c CBNClient) error {
+	booking := PostSettlements(ctx, n, s.books, s.clock.Now())
+	problems, err := SettlementProblems(ctx, n, c, s.books, s.id)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
-		return fmt.Errorf("check the settlement of %s: %w", s.id, err)
+		return fmt.Errorf("check the settlement of %s: %w", s.id, errors.Join(booking, err))
+	}
+	var refused *BookingError
+	if errors.As(booking, &refused) {
+		problems = append(problems, fmt.Sprintf("could not book session %s at %s: %v", refused.SessionID, s.id, refused.Err))
 	}
 	at := s.clock.Real()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.settlementProblems, s.settlementCheckedAt = problems, &at
-	return nil
-}
-
-func (s *Server) postAndCheck(ctx context.Context, n NIBSSClient, c CBNClient) ([]string, error) {
-	if err := PostSettlements(ctx, n, s.books, s.clock.Now()); err != nil {
-		return nil, err
-	}
-	return SettlementProblems(ctx, n, c, s.books, s.id)
+	return booking
 }
