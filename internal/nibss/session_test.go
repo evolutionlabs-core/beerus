@@ -399,3 +399,54 @@ func TestResolveKeepsWithheldOutcome(t *testing.T) {
 		}
 	}
 }
+
+func TestClosureFailedCountsOnlyDefiniteFailures(t *testing.T) {
+	ctx := context.Background()
+	s := sessionStore(t)
+	setStatus(t, s, "bank-a", nip.StatusTerminating)
+	closure := func(id string, account uint64) Session {
+		x := transfer(id, "999002", t0)
+		x.FromNUBAN, x.Closure = world.NUBAN("901", account), true
+		return x
+	}
+	rows := []struct {
+		name    string
+		account uint64
+		steps   func()
+		want    int
+	}{
+		{name: "no session", account: 10, steps: func() {}, want: 0},
+		{name: "pending session", account: 11, steps: func() {
+			if _, err := begin(ctx, s, closure("c1", 11)); err != nil {
+				t.Fatal(err)
+			}
+		}, want: 0},
+		{name: "credited session", account: 12, steps: func() {
+			if _, err := begin(ctx, s, closure("c2", 12)); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Resolve(ctx, "c2", SessionOK, nip.OutcomeCredited, t0); err != nil {
+				t.Fatal(err)
+			}
+		}, want: 0},
+		{name: "failed session", account: 13, steps: func() {
+			setStatus(t, s, "bank-b", nip.StatusTerminating)
+			if got, err := begin(ctx, s, closure("c3", 13)); err != nil || got.Status != "91" {
+				t.Fatalf("failed closure: %+v, %v", got, err)
+			}
+		}, want: 1},
+		{name: "failed twice", account: 13, steps: func() {
+			if got, err := begin(ctx, s, closure("c4", 13)); err != nil || got.Status != "91" {
+				t.Fatalf("failed closure: %+v, %v", got, err)
+			}
+		}, want: 2},
+		{name: "another account", account: 11, steps: func() {}, want: 0},
+	}
+	for _, r := range rows {
+		r.steps()
+		got, err := s.ClosureFailed(ctx, "999001", world.NUBAN("901", r.account))
+		if err != nil || got != r.want {
+			t.Errorf("%s: %d, %v; want %d", r.name, got, err, r.want)
+		}
+	}
+}
