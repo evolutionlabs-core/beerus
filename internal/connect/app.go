@@ -64,6 +64,8 @@ type App struct {
 	dirAttempts  int
 	dirNext      time.Time
 	stale        map[string]*staleMember
+	closeRuns    map[string]*closeRun
+	sendReads    map[string]sendRead
 	settling     bool
 	settleDone   *sync.Cond
 	lifeMu       sync.Mutex

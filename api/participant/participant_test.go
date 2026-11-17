@@ -38,6 +38,7 @@ var operations = []struct{ id, method, path string }{
 	{"withdrawCash", http.MethodPost, "/v1/withdrawals"},
 	{"sendTransfer", http.MethodPost, "/v1/transfers"},
 	{"quoteTransfer", http.MethodPost, "/v1/transfers/quote"},
+	{"countOpenSends", http.MethodGet, "/v1/nip/sends/open"},
 	{"queryTransferStatus", http.MethodPost, "/v1/nip/sends/{session_id}/status-query"},
 }
 

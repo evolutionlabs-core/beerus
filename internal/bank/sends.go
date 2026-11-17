@@ -81,3 +81,11 @@ func (b *Bank) FinishSend(ctx context.Context, sessionID string) error {
 	}
 	return nil
 }
+
+func (b *Bank) OpenSends(ctx context.Context) (int, error) {
+	var n int
+	if err := b.L.Pool().QueryRow(ctx, `SELECT count(*) FROM nip_sends`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count open sends: %w", err)
+	}
+	return n, nil
+}

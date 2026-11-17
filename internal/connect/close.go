@@ -260,6 +260,101 @@ func (a *App) CloseBank(id string, req CloseRequest) (setup.Resource, error) {
 	return a.Resource(setup.KindBank, id)
 }
 
+const closeRunTTL = time.Minute
+
+type closeRun struct {
+	running bool
+	at      time.Time
+	name    string
+	cond    *setup.Condition
+	res     CloseResult
+	err     error
+}
+
+func (a *App) closeMovesDue(ctx context.Context) {
+	st, err := a.ctl.status()
+	if err != nil {
+		a.log.Error("read control.json", "err", err)
+		return
+	}
+	now := a.clock.Real()
+	for _, r := range st.Resources {
+		if r.Kind != setup.KindBank || (r.Phase != config.PhaseClosing && r.Phase != config.PhaseTerminating) || (r.NextAttemptAt != nil && now.Before(*r.NextAttemptAt)) {
+			continue
+		}
+		if nextFinalizer(r) != setup.FinalizerDecideMoney {
+			continue
+		}
+		if b := a.bankByID(r.ID); b == nil || b.Closed() {
+			continue
+		}
+		if !a.startCloseRun(r.ID) {
+			continue
+		}
+		run := a.closeMoves(ctx, r)
+		a.finishCloseRun(r.ID, run)
+	}
+	a.sweepCloseRuns()
+}
+
+func (a *App) startCloseRun(id string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closeRuns[id] != nil && a.closeRuns[id].running {
+		return false
+	}
+	if a.closeRuns == nil {
+		a.closeRuns = map[string]*closeRun{}
+	}
+	a.closeRuns[id] = &closeRun{running: true, at: a.clock.Real()}
+	return true
+}
+
+func (a *App) finishCloseRun(id string, run closeRun) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	run.at = a.clock.Real()
+	a.closeRuns[id] = &run
+}
+
+func (a *App) takeCloseRun(id string) (closeRun, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	run := a.closeRuns[id]
+	if run == nil || run.running {
+		return closeRun{}, false
+	}
+	delete(a.closeRuns, id)
+	return *run, true
+}
+
+func (a *App) sweepCloseRuns() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.clock.Real()
+	for id, run := range a.closeRuns {
+		if !run.running && now.Sub(run.at) > closeRunTTL {
+			delete(a.closeRuns, id)
+		}
+	}
+}
+
+func (a *App) closeMoves(ctx context.Context, r setup.Resource) closeRun {
+	imp, err := a.CloseImpact(ctx, r.ID)
+	if err != nil {
+		return closeRun{err: err}
+	}
+	choice, to, cond := a.closeChoices(ctx, r, imp)
+	if cond != nil {
+		return closeRun{cond: cond}
+	}
+	res, err := a.closeBooks(ctx, r.ID, imp, choice, to)
+	if err != nil {
+		return closeRun{err: err}
+	}
+	return closeRun{name: imp.Bank.Name, res: res}
+}
+
 func (a *App) decideMoney(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
 	b := a.bankByID(id)
@@ -269,18 +364,17 @@ func (a *App) decideMoney(ctx context.Context, r setup.Resource) (*setup.Conditi
 	if b.Closed() {
 		return nil, nil
 	}
-	imp, err := a.CloseImpact(ctx, id)
-	if err != nil {
-		return nil, err
+	run, ok := a.takeCloseRun(id)
+	if !ok {
+		return a.blocked(setup.ReasonSettlementPending, "The money moves of %s are being worked out. Try again soon.", b.Name), nil
 	}
-	choice, to, cond := a.closeChoices(ctx, r, imp)
-	if cond != nil {
-		return cond, nil
+	if run.err != nil {
+		return nil, run.err
 	}
-	res, err := a.closeBooks(ctx, id, imp, choice, to)
-	if err != nil {
-		return nil, err
+	if run.cond != nil {
+		return run.cond, nil
 	}
+	res := run.res
 	res.Bank, _ = a.bankStatus(id)
 	raw, err := json.Marshal(res)
 	if err != nil {
@@ -292,7 +386,7 @@ func (a *App) decideMoney(ctx context.Context, r setup.Resource) (*setup.Conditi
 			return false, errNotFound
 		}
 		cur.Result = raw
-		keepClosure(st, setup.Closure{Bank: id, Name: imp.Bank.Name, ClosedAt: res.ClosedAt, Lines: res.Lines})
+		keepClosure(st, setup.Closure{Bank: id, Name: run.name, ClosedAt: res.ClosedAt, Lines: res.Lines})
 		return true, nil
 	}); err != nil {
 		return nil, fmt.Errorf("record the close result: %w", err)

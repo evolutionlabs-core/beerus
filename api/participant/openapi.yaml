@@ -267,7 +267,7 @@ paths:
       operationId: setParticipantFault
       tags: [faults]
       summary: Make the participant fail
-      description: Adds a fault. A `down` fault makes the participant answer NIP calls with `91`, for the time in `for` or until it is cleared. A `timeout` fault makes the participant hold its answer until the caller gives up, for the next `count` credit or credit status calls from NIBSS, and `outcome` says what it did before it went silent. `credited` posts the credit and then says nothing. `failed` and `unknown` credit nothing. Every held call uses up one of the `count`. The bank holds the fault itself, so a restart of the bank clears it. This is what `beerus fault` does today. The idempotency key is the `Idempotency-Key` header, and a repeat returns the first fault. Beerus has `down` and `timeout`. It has no `slow` fault.
+      description: Adds a fault. A `down` fault makes the participant answer NIP calls with `91`, for the time in `for` or until it is cleared. A `timeout` fault makes the participant hold its answer until the caller gives up, for the next `count` credit or credit status calls from NIBSS, and `outcome` says what it did before it went silent. `credited` posts the credit and then says nothing. `failed` and `unknown` credit nothing. Every held call uses up one of the `count`. Timeout faults live in bank memory and are lost when the bank restarts. This is what `beerus fault` does today. The idempotency key is the `Idempotency-Key` header, and a repeat returns the first fault. Beerus has `down` and `timeout`. It has no `slow` fault.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -772,6 +772,25 @@ paths:
           $ref: '#/components/responses/BankUnprocessable'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/nip/sends/open:
+    get:
+      operationId: countOpenSends
+      tags: [bank]
+      summary: Count the transfers this bank is still sending
+      description: Returns how many transfers the bank has debited and not yet finished with NIBSS. The control plane waits for it to reach zero before it closes or purges the bank.
+      responses:
+        '200':
+          description: The number of open sends.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenSends'
+              example:
+                open_sends: 2
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/nip/sends/{session_id}/status-query:
     post:
       operationId: queryTransferStatus
@@ -1109,6 +1128,15 @@ components:
           type: string
           format: date-time
           description: When the fault was added.
+    OpenSends:
+      type: object
+      description: How many transfers the bank is still sending.
+      required: [open_sends]
+      properties:
+        open_sends:
+          type: integer
+          minimum: 0
+          description: The number of transfers debited at this bank that NIBSS has not yet finished with.
     FaultPage:
       type: object
       description: One page of faults.

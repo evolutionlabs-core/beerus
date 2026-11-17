@@ -37,7 +37,11 @@ func (a *App) PurgeImpact(ctx context.Context, id string) (PurgeImpact, error) {
 			out.Blockers = append(out.Blockers, other.Name+" settles through this bank; purge it first")
 		}
 	}
-	waiting, err := a.inflightWith(ctx, b.NIPCode, id)
+	sends, err := a.openSends(ctx, b)
+	if err != nil {
+		return PurgeImpact{}, err
+	}
+	waiting, err := a.inflightWith(ctx, b.NIPCode, id, sends)
 	if err != nil {
 		return PurgeImpact{}, err
 	}
@@ -71,7 +75,11 @@ func (a *App) PurgeBank(id string, settleNow bool) (setup.Resource, error) {
 
 func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
-	waiting, err := a.inflightWith(ctx, r.Allocated.NIPCode, id)
+	sends, cond, err := a.recordedSends(id)
+	if cond != nil || err != nil {
+		return cond, err
+	}
+	waiting, err := a.inflightWith(ctx, r.Allocated.NIPCode, id, sends)
 	if err != nil {
 		return nil, err
 	}

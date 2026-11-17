@@ -108,6 +108,7 @@ func (s *Server) API() http.Handler {
 	mux.HandleFunc("GET /v1/accounts/{nuban}/statement", s.banking.HandleStatement)
 	mux.HandleFunc("POST /v1/transfers", idempotent(s.banking.HandleTransfer))
 	mux.HandleFunc("POST /v1/transfers/quote", s.banking.HandleQuote)
+	mux.HandleFunc("GET /v1/nip/sends/open", s.openSends)
 	mux.HandleFunc("POST /v1/nip/sends/{session_id}/status-query", s.banking.HandleStatusQuery)
 	mux.HandleFunc("POST /v1/deposits", idempotent(s.banking.HandleCash("deposit")))
 	mux.HandleFunc("POST /v1/withdrawals", idempotent(s.banking.HandleCash("withdrawal")))
@@ -148,6 +149,20 @@ func (s *Server) state() State {
 	gen := s.phaseGen.Load()
 	out.Generation, out.ObservedGeneration = gen, gen
 	return out
+}
+
+type OpenSends struct {
+	Open int `json:"open_sends"`
+}
+
+func (s *Server) openSends(w http.ResponseWriter, r *http.Request) {
+	n, err := s.books.OpenSends(r.Context())
+	if err != nil {
+		s.log.Error("count open sends", "err", err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "The bank could not count its open transfers. Try again soon.")
+		return
+	}
+	web.WriteJSON(w, http.StatusOK, OpenSends{Open: n})
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
