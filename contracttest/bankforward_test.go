@@ -105,4 +105,7 @@ func TestCustomerCallsReachTheBankProcess(t *testing.T) {
 	if got := c.fails("statement", account, "--bank", "bank-a"); got != "beerus: Bank A is closed." {
 		t.Errorf("statement of a closed bank: %q", got)
 	}
+	if got := c.ok("nip", "settlement"); !strings.Contains(got, `"problems": []`) {
+		t.Errorf("settlement after the close: %q", got)
+	}
 }
