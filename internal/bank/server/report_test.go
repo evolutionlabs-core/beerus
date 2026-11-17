@@ -24,9 +24,31 @@ import (
 const reportChunk = 2
 
 type nibssDesk struct {
-	reports []SettlementReport
-	down    bool
-	afters  []string
+	reports       []SettlementReport
+	position      settlementPosition
+	down          bool
+	afters        []string
+	positionAfter string
+	onPosition    func()
+}
+
+type cbnDesk struct {
+	balance  int64
+	postings []cbnPosting
+}
+
+func (d cbnDesk) client() CBNClient {
+	return CBNClient{Base: "https://cbn.invalid", Away: "Bank A cannot reach the CBN right now. Try again in a minute.", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		var body any = cbnPostingPage{Data: append([]cbnPosting{}, d.postings...)}
+		if strings.HasSuffix(r.URL.Path, "/settlement-balance") {
+			body = map[string]int64{"balance_minor": d.balance}
+		}
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(string(raw)))}, nil
+	})}}
 }
 
 func (d *nibssDesk) client() NIBSSClient {
@@ -41,6 +63,17 @@ func (d *nibssDesk) serve(r *http.Request) (*http.Response, error) {
 		return answer(http.StatusServiceUnavailable, `{"error":{"code":"unavailable","message":"NIBSS is not available right now. Try again soon.","request_id":"req_1"}}`)
 	}
 	q := r.URL.Query()
+	if r.URL.Path == positionPath {
+		d.positionAfter = q.Get("after")
+		if d.onPosition != nil {
+			d.onPosition()
+		}
+		raw, err := json.Marshal(d.position)
+		if err != nil {
+			return nil, err
+		}
+		return answer(http.StatusOK, string(raw))
+	}
 	d.afters = append(d.afters, q.Get("after"))
 	from := 0
 	if c := q.Get("cursor"); c != "" {
@@ -202,13 +235,7 @@ func TestBookingErrorStillRecordsTheCheck(t *testing.T) {
 		}
 	}
 	desk := &nibssDesk{reports: []SettlementReport{report("ky", 1, 0), report("kx", 2, 0)}}
-	cbn := CBNClient{Base: "https://cbn.invalid", Away: "Bank A cannot reach the CBN right now. Try again in a minute.", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
-		body := `{"data":[],"next_cursor":""}`
-		if strings.HasSuffix(r.URL.Path, "/settlement-balance") {
-			body = `{"balance_minor":0}`
-		}
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
-	})}}
+	cbn := cbnDesk{}.client()
 	now := cutoff.Add(3 * time.Hour)
 	s := New(Config{
 		Bank:  config.Bank{ID: "bank-a", Name: "Bank A"},
@@ -221,12 +248,13 @@ func TestBookingErrorStillRecordsTheCheck(t *testing.T) {
 		t.Errorf("the booking error: %v", err)
 	}
 	want := []string{
+		"bank-a has NIP payable -3 and receivable 0, but its open NIBSS sessions come to 0 and 0",
 		"session kx at bank-a: NIBSS nets -2, but the bank posted -1",
 		"session kz at bank-a: NIBSS nets 0, but the bank posted -1",
+		"bank-a's books show -3 at the CBN, but the CBN shows 0",
 		"session kx at bank-a: the bank posted -1, but the CBN moved 0",
 		"session ky at bank-a: the bank posted -1, but the CBN moved 0",
 		"session kz at bank-a: the bank posted -1, but the CBN moved 0",
-		"bank-a's books show -3 at the CBN, but the CBN shows 0",
 		"could not book session kx at bank-a: " + errors.Unwrap(err).Error(),
 	}
 	if !slices.Equal(s.settlementProblems, want) || s.settlementCheckedAt == nil || !s.settlementCheckedAt.Equal(now) {

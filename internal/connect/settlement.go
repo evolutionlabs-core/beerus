@@ -8,8 +8,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 )
 
@@ -17,10 +17,6 @@ const (
 	bankCheckWait = 15 * time.Second
 	bankCheckPoll = 200 * time.Millisecond
 )
-
-type position struct {
-	outward, inward int64
-}
 
 func (a *App) schedule() nibss.Schedule {
 	return nibss.Schedule{Per: a.cfg.Sessions(), Cal: a.cfg.Calendar()}
@@ -90,96 +86,57 @@ type SettlementCheck struct {
 func (a *App) CheckSettlement(ctx context.Context) (SettlementCheck, error) {
 	out := SettlementCheck{Problems: []string{}}
 	a.mu.Lock()
-	ledgers := slices.Clone(a.ledgers)
-	empty := len(a.cfg.Banks) == 0
+	ids := make([]string, len(a.cfg.Banks))
+	for i, b := range a.cfg.Banks {
+		ids[i] = b.ID
+	}
 	a.mu.Unlock()
-	if empty {
+	if len(ids) == 0 {
 		return out, nil
+	}
+	if a.nibssCtl == nil {
+		return out, &server.UnavailableError{Msg: nibssAway}
 	}
 	if _, err := a.settleRun(ctx, false); err != nil {
 		return out, err
 	}
-	books, err := a.settlementBooks(ctx)
+	posted, problems, err := a.nibssCtl.status(ctx)
 	if err != nil {
 		return out, err
 	}
-	if out.Sessions, err = books.sw.PostedCount(ctx); err != nil {
-		return out, err
-	}
+	out.Sessions = posted
+	out.Problems = append(out.Problems, problems...)
 	cbnProblems, err := a.cbnCtl.problems(ctx)
 	if err != nil {
 		return out, err
 	}
 	out.Problems = append(out.Problems, cbnProblems...)
-	for _, l := range ledgers {
-		problems, err := books.check(ctx, a, l)
+	for _, id := range ids {
+		if a.bankGone(id) {
+			continue
+		}
+		theirs, err := a.bankSettlementProblems(ctx, id)
 		if err != nil {
 			return out, err
 		}
-		out.Problems = append(out.Problems, problems...)
+		out.Problems = append(out.Problems, theirs...)
 	}
 	return out, nil
 }
 
-type settlementBooks struct {
-	sw   *nibss.Store
-	open []nibss.Session
-}
-
-func (a *App) settlementBooks(ctx context.Context) (settlementBooks, error) {
-	sw := a.nibssStore()
-	if sw == nil {
-		return settlementBooks{}, errors.New("NIBSS is not open yet; try again soon")
-	}
-	open, err := sw.Open(ctx)
-	if err != nil {
-		return settlementBooks{}, err
-	}
-	return settlementBooks{sw: sw, open: open}, nil
-}
-
-func (s settlementBooks) check(ctx context.Context, a *App, l *ledgerSource) ([]string, error) {
-	var out []string
-	code, id := l.Inst.NIPCode, l.Inst.ID
-	b := l.Bank()
-	theirs, err := a.bankSettlementProblems(ctx, l)
-	if err != nil {
-		return nil, err
-	}
-	var want position
-	for _, x := range s.open {
-		if x.FromCode == code {
-			want.outward += x.Amount
-		}
-		if x.ToCode == code && x.Status == nibss.SessionOK {
-			want.inward += x.Amount
-		}
-	}
-	owe, err := b.L.Balance(ctx, bank.NIPOutward)
-	if err != nil {
-		return nil, err
-	}
-	due, err := b.L.Balance(ctx, bank.NIPInward)
-	if err != nil {
-		return nil, err
-	}
-	if owe != want.outward || due != want.inward {
-		out = append(out, fmt.Sprintf("%s has NIP payable %d and receivable %d, but its open NIBSS sessions come to %d and %d", id, owe, due, want.outward, want.inward))
-	}
-	return append(out, theirs...), nil
-}
-
-func (a *App) bankSettlementProblems(ctx context.Context, l *ledgerSource) ([]string, error) {
-	id := l.Inst.ID
+func (a *App) bankSettlementProblems(ctx context.Context, id string) ([]string, error) {
 	if a.role == RoleCore {
 		b := a.bankByID(id)
 		if b == nil {
 			return nil, fmt.Errorf("%s is not in the setup", id)
 		}
-		if a.bankPhase(id) == PhaseClosed {
-			return []string{}, nil
-		}
-		return a.freshBankProblems(ctx, b.URL(), id)
+		return a.freshBankProblems(ctx, b)
+	}
+	a.mu.Lock()
+	ls := a.ledgerFor(id)
+	a.mu.Unlock()
+	if ls == nil {
+		return nil, fmt.Errorf("the books of %s are not open", id)
 	}
 	n, err := a.bankNIBSS(id)
 	if err != nil {
@@ -189,20 +146,42 @@ func (a *App) bankSettlementProblems(ctx context.Context, l *ledgerSource) ([]st
 	if err != nil {
 		return nil, err
 	}
-	if err := a.postBank(ctx, n, l); err != nil {
+	check, err := server.CheckBooks(ctx, n, c, ls.Bank(), id, a.clock.Now())
+	if err != nil {
 		return nil, err
 	}
-	return server.SettlementProblems(ctx, n, c, l.Bank(), id)
+	var refused *server.BookingError
+	if check.Booking != nil && !errors.As(check.Booking, &refused) {
+		return nil, fmt.Errorf("settle %s: %w", id, check.Booking)
+	}
+	return check.Problems, nil
 }
 
-func (a *App) freshBankProblems(ctx context.Context, base, id string) ([]string, error) {
+type uncheckedError struct {
+	Name string
+	Why  string
+	Err  error
+}
+
+func (e *uncheckedError) Error() string {
+	return e.Name + " " + e.Why
+}
+
+func (e *uncheckedError) Unwrap() error {
+	return e.Err
+}
+
+func (a *App) freshBankProblems(ctx context.Context, b *config.Bank) ([]string, error) {
 	after := a.clock.Real()
 	deadline := time.NewTimer(bankCheckWait)
 	defer deadline.Stop()
 	for {
 		var state server.State
-		if _, err := a.link.Do(ctx, base, http.MethodGet, "/v1/status", nil, &state); err != nil {
-			return nil, fmt.Errorf("read the status of %s: %w", id, err)
+		if _, err := a.link.Do(ctx, b.URL(), http.MethodGet, "/v1/status", nil, &state); err != nil {
+			if unreachable(err) {
+				return nil, &uncheckedError{Name: b.Name, Why: "is not answering, so its books were not checked", Err: err}
+			}
+			return nil, fmt.Errorf("read the status of %s: %w", b.ID, err)
 		}
 		if at := state.SettlementCheckedAt; at != nil && at.After(after) {
 			return state.SettlementProblems, nil
@@ -214,7 +193,7 @@ func (a *App) freshBankProblems(ctx context.Context, base, id string) ([]string,
 			return nil, ctx.Err()
 		case <-deadline.C:
 			retry.Stop()
-			return nil, fmt.Errorf("%s has not compared its books with the CBN yet; try again soon", id)
+			return nil, &uncheckedError{Name: b.Name, Why: "has not compared its books with the CBN yet"}
 		case <-retry.C:
 		}
 	}

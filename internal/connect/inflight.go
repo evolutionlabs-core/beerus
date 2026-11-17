@@ -2,7 +2,6 @@ package connect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -13,7 +12,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 )
@@ -73,7 +71,7 @@ func (a *App) settleWait(ctx context.Context, r setup.Resource) (*setup.Conditio
 	if cond != nil || err != nil {
 		return cond, err
 	}
-	msg, err := a.inflightWith(ctx, r.Allocated.NIPCode, r.ID, sends)
+	msg, err := a.inflightWith(ctx, r.ID, sends)
 	if err != nil || msg == "" {
 		return nil, err
 	}
@@ -184,17 +182,7 @@ func (a *App) readMoves(ctx context.Context, id string) {
 }
 
 func (a *App) moveProblems(ctx context.Context, id string) ([]string, error) {
-	a.mu.Lock()
-	ls := a.ledgerFor(id)
-	a.mu.Unlock()
-	if ls == nil {
-		return nil, fmt.Errorf("the books of %s are not open", id)
-	}
-	books, err := a.settlementBooks(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return books.check(ctx, a, ls)
+	return a.bankSettlementProblems(ctx, id)
 }
 
 func (a *App) recordedSends(id string) (int, *setup.Condition, error) {
@@ -207,7 +195,7 @@ func (a *App) recordedSends(id string) (int, *setup.Condition, error) {
 	return read.open, nil, read.err
 }
 
-func (a *App) inflightWith(ctx context.Context, code, id string, sends int) (string, error) {
+func (a *App) inflightWith(ctx context.Context, id string, sends int) (string, error) {
 	if sends > 0 {
 		name := id
 		if b := a.bankByID(id); b != nil {
@@ -219,44 +207,23 @@ func (a *App) inflightWith(ctx context.Context, code, id string, sends int) (str
 		}
 		return fmt.Sprintf("%s has %s still being sent. Wait for %s to finish.", name, view.Plural(sends, "transfer", "transfers"), finish), nil
 	}
-	sw := a.nibssStore()
-	if sw == nil {
-		return "", errors.New("NIBSS is not open, so open NIP sessions cannot be checked; try again soon")
+	if a.nibssCtl == nil {
+		return "", &server.UnavailableError{Msg: nibssAway}
 	}
-	open, err := sw.Open(ctx)
+	open, err := a.nibssCtl.openSessions(ctx, id)
 	if err != nil {
-		return "", fmt.Errorf("check open NIP sessions: %w", err)
+		return "", err
 	}
-	transfers := 0
-	var net int64
-	for _, x := range open {
-		if x.FromCode != code && x.ToCode != code {
-			continue
+	if open.Transfers > 0 {
+		net, ok := bank.AddMinor(open.Inward, -open.Outward)
+		if open.Inward < 0 || open.Outward < 0 || !ok {
+			return "", fmt.Errorf("the open NIP sessions of %s do not add up", id)
 		}
-		transfers++
-		if x.FromCode == code {
-			net -= x.Amount
-		}
-		if x.ToCode == code && x.Status == nibss.SessionOK {
-			net += x.Amount
-		}
-	}
-	if transfers > 0 {
 		cutoff := a.schedule().Next(a.clock.Now()).In(clock.Lagos).Format("15:04")
-		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Wait for it, or run beerus nip settle-now.", cutoff, view.Plural(transfers, "transfer", "transfers"), bank.Naira(max(net, -net))), nil
+		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Wait for it, or run beerus nip settle-now.", cutoff, view.Plural(open.Transfers, "transfer", "transfers"), bank.Naira(max(net, -net))), nil
 	}
-	unposted, err := sw.Unposted(ctx)
-	if err != nil {
-		return "", fmt.Errorf("check unposted settlements: %w", err)
-	}
-	waiting := 0
-	for _, s := range unposted {
-		if slices.ContainsFunc(s.Sessions, func(x nibss.Session) bool { return x.FromCode == code || x.ToCode == code }) {
-			waiting++
-		}
-	}
-	if waiting > 0 {
-		return fmt.Sprintf("Waiting for %s with %s to be posted to the books. Try again soon.", view.Plural(waiting, "settlement", "settlements"), id), nil
+	if open.Unposted > 0 {
+		return fmt.Sprintf("Waiting for %s with %s to be posted to the books. Try again soon.", view.Plural(open.Unposted, "settlement", "settlements"), id), nil
 	}
 	return "", nil
 }

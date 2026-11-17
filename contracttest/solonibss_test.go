@@ -294,7 +294,7 @@ func TestSoloNIBSS(t *testing.T) {
 		{"remove", s.plain, "nip", "PUT", bankURL + "/status", s.token, `{"status":"removed"}`, 200, entry("removed")},
 		{"directory no longer admits it", banks["bank-a"], "nip", "GET", s.dirURL + "/v1/banks", "", "", 403, errBody("forbidden", "This certificate may not read the bank directory. bank-a is not a bank NIBSS knows.")},
 		{"health", s.plain, "participant", "GET", s.control + "/v1/health", s.token, "", 200, `{"participant_id":"nibss","status":"ok","world_id":"` + soloNIBSSWorld + `"}`},
-		{"status", s.plain, "participant", "GET", s.control + "/v1/status", s.token, "", 200, `{"participant_id":"nibss","kind":"nibss","phase":"active","generation":0,"observed_generation":0,"steps":[{"id":"database","name":"Making the NIBSS database","done":true},{"id":"schema","name":"Migrating the NIBSS database","done":true}]}`},
+		{"status", s.plain, "participant", "GET", s.control + "/v1/status", s.token, "", 200, `{"participant_id":"nibss","kind":"nibss","phase":"active","generation":0,"observed_generation":0,"steps":[{"id":"database","name":"Making the NIBSS database","done":true},{"id":"schema","name":"Migrating the NIBSS database","done":true}],"problems":[],"posted_sessions":0}`},
 		{"unknown path", s.plain, "", "GET", s.control + "/v1/nothing", s.token, "", 404, errBody("not_found", "NIBSS does not serve this control call.")},
 	}
 	for _, r := range rows {

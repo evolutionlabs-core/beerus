@@ -225,14 +225,39 @@ func (l *Ledger) SetStatus(ctx context.Context, code, status string) error {
 }
 
 func (l *Ledger) Balance(ctx context.Context, code string) (int64, error) {
-	var b int64
-	err := l.pool.QueryRow(ctx, `SELECT CASE WHEN a.customer THEN coalesce((SELECT ledger FROM balances WHERE account_id = a.id), 0)
-		ELSE coalesce((SELECT sum(amount) FROM journal_lines WHERE account_id = a.id), 0) * (CASE WHEN a.kind IN ('asset', 'expense') THEN 1 ELSE -1 END) END
-		FROM gl_accounts a WHERE a.code = $1`, code).Scan(&b)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, ErrUnknownAccount
+	got, err := l.Balances(ctx, code)
+	if err != nil {
+		return 0, err
 	}
-	return b, err
+	return got[code], nil
+}
+
+func (l *Ledger) Balances(ctx context.Context, codes ...string) (map[string]int64, error) {
+	rows, err := l.pool.Query(ctx, `SELECT a.code, CASE WHEN a.customer THEN coalesce((SELECT ledger FROM balances WHERE account_id = a.id), 0)
+		ELSE coalesce((SELECT sum(amount) FROM journal_lines WHERE account_id = a.id), 0) * (CASE WHEN a.kind IN ('asset', 'expense') THEN 1 ELSE -1 END) END
+		FROM gl_accounts a WHERE a.code = ANY($1)`, codes)
+	if err != nil {
+		return nil, fmt.Errorf("read balances: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]int64, len(codes))
+	for rows.Next() {
+		var code string
+		var v int64
+		if err := rows.Scan(&code, &v); err != nil {
+			return nil, fmt.Errorf("read balance: %w", err)
+		}
+		out[code] = v
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read balances: %w", err)
+	}
+	for _, code := range codes {
+		if _, ok := out[code]; !ok {
+			return nil, ErrUnknownAccount
+		}
+	}
+	return out, nil
 }
 
 func add(a, b int64) (int64, error) {

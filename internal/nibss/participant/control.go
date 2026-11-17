@@ -1,6 +1,7 @@
 package participant
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -24,12 +25,14 @@ type step struct {
 }
 
 type state struct {
-	ParticipantID      string `json:"participant_id"`
-	Kind               string `json:"kind"`
-	Phase              string `json:"phase"`
-	Generation         int64  `json:"generation"`
-	ObservedGeneration int64  `json:"observed_generation"`
-	Steps              []step `json:"steps"`
+	ParticipantID      string   `json:"participant_id"`
+	Kind               string   `json:"kind"`
+	Phase              string   `json:"phase"`
+	Generation         int64    `json:"generation"`
+	ObservedGeneration int64    `json:"observed_generation"`
+	Steps              []step   `json:"steps"`
+	Problems           []string `json:"problems"`
+	PostedSessions     *int     `json:"posted_sessions,omitempty"`
 }
 
 type registerRequest struct {
@@ -54,6 +57,7 @@ func (p *Participant) Handler() http.Handler {
 	mux.HandleFunc("/v1/control/name-enquiries", only(http.MethodGet, p.controlNameEnquiry))
 	mux.HandleFunc("/v1/control/banks/{bank_id}", only(http.MethodPut, p.register))
 	mux.HandleFunc("/v1/control/banks/{bank_id}/status", only(http.MethodPut, p.setStatus))
+	mux.HandleFunc("/v1/control/banks/{bank_id}/open-sessions", only(http.MethodGet, p.openSessions))
 	mux.HandleFunc("/v1/control/registry/clients", only(http.MethodGet, p.listClients))
 	mux.HandleFunc("/v1/control/registry/clients/{client_id}", only(http.MethodPut, p.ensureClient))
 	mux.HandleFunc("/v1/control/consents", only(http.MethodGet, p.listConsents))
@@ -113,12 +117,51 @@ func (p *Participant) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Participant) status(w http.ResponseWriter, r *http.Request) {
-	web.WriteJSON(w, http.StatusOK, state{
+	st := state{
 		ParticipantID: config.NIBSSID,
 		Kind:          kind,
 		Phase:         phaseActive,
 		Steps:         []step{{config.StepDatabase, "Making the NIBSS database", true}, {stepSchema, "Migrating the NIBSS database", true}},
-	})
+	}
+	problems, posted, err := p.settlementState(r.Context())
+	if err != nil {
+		st.Problems = []string{"NIBSS could not check its settlements: " + err.Error()}
+	} else {
+		st.Problems, st.PostedSessions = problems, &posted
+	}
+	web.WriteJSON(w, http.StatusOK, st)
+}
+
+func (p *Participant) settlementState(ctx context.Context) ([]string, int, error) {
+	sched, err := p.schedule()
+	if err != nil {
+		return nil, 0, err
+	}
+	problems, err := p.store.SettlementProblems(ctx, sched, p.clock.Now())
+	if err != nil {
+		return nil, 0, err
+	}
+	posted, err := p.store.PostedCount(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	return problems, posted, nil
+}
+
+func (p *Participant) openSessions(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("bank_id")
+	open, err := p.store.OpenSessions(r.Context(), id)
+	var sum *nibss.SumError
+	switch {
+	case err == nil:
+		web.WriteJSON(w, http.StatusOK, open)
+	case errors.Is(err, nip.ErrUnknownInstitution):
+		web.WriteError(w, r, http.StatusNotFound, "not_found", fmt.Sprintf("Bank %s is not in the NIBSS directory. Register it first.", id))
+	case errors.As(err, &sum):
+		p.cannotSum(w, r, "open sessions not added up", err)
+	default:
+		p.unavailable(w, r, "open sessions not read", err)
+	}
 }
 
 func (p *Participant) register(w http.ResponseWriter, r *http.Request) {
@@ -213,4 +256,9 @@ func (p *Participant) reply(w http.ResponseWriter, r *http.Request, id string) {
 func (p *Participant) unavailable(w http.ResponseWriter, r *http.Request, msg string, err error) {
 	p.log.ErrorContext(r.Context(), msg, "err", err)
 	web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "NIBSS cannot answer now. Try again soon.")
+}
+
+func (p *Participant) cannotSum(w http.ResponseWriter, r *http.Request, msg string, err error) {
+	p.log.ErrorContext(r.Context(), msg, "err", err)
+	web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "NIBSS cannot add up the sessions of this bank.")
 }

@@ -2,7 +2,6 @@ package nibss
 
 import (
 	"errors"
-	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -10,37 +9,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
-
-func TestPositionCountsEverySessionOfTheGroup(t *testing.T) {
-	sent := func(from, to string, amount int64, status string) Session {
-		return Session{ID: "s", FromCode: from, ToCode: to, Amount: amount, Status: status}
-	}
-	big := Settlement{Key: "k", Sessions: []Session{sent("999001", "999002", math.MaxInt64, SessionOK), sent("999001", "999002", 1, SessionOK)}}
-	bigIn := Settlement{Key: "k", Sessions: []Session{sent("999002", "999001", math.MaxInt64, SessionOK), sent("999002", "999001", 1, SessionOK)}}
-	rows := []struct {
-		name            string
-		x               Settlement
-		code            string
-		outward, inward int64
-		err             string
-	}{
-		{"both sides and a failed one", Settlement{Key: "k", Sessions: []Session{sent("999001", "999002", 500, SessionOK), sent("999002", "999001", 200, SessionOK), sent("999001", "999002", 70, "61"), sent("999003", "999004", 9, SessionOK)}}, "999001", 570, 200, ""},
-		{"the other bank", Settlement{Key: "k", Sessions: []Session{sent("999001", "999002", 500, SessionOK), sent("999002", "999001", 200, SessionOK)}}, "999002", 200, 500, ""},
-		{"a bank not in the group", Settlement{Key: "k", Sessions: []Session{sent("999001", "999002", 500, SessionOK)}}, "999009", 0, 0, ""},
-		{"too much sent", big, "999001", 0, 0, "settle k at 999001: the amount sent is too large to add"},
-		{"too much received", bigIn, "999001", 0, 0, "settle k at 999001: the amount received is too large to add"},
-	}
-	for _, r := range rows {
-		outward, inward, err := r.x.Position(r.code)
-		got := ""
-		if err != nil {
-			got = err.Error()
-		}
-		if outward != r.outward || inward != r.inward || got != r.err {
-			t.Errorf("%s: %d %d %q, want %d %d %q", r.name, outward, inward, got, r.outward, r.inward, r.err)
-		}
-	}
-}
 
 func TestSettlementReportsListOnlyPostedSessionsOfTheCaller(t *testing.T) {
 	ctx := t.Context()

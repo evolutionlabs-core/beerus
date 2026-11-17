@@ -34,6 +34,8 @@ var operations = []struct{ id, method, path string }{
 	{"nibssRegistryClient", http.MethodGet, "/v1/registry/clients/{client_id}"},
 	{"nibssRecordConsent", http.MethodPost, "/v1/consents"},
 	{"nibssSettlementReports", http.MethodGet, "/v1/settlement-reports"},
+	{"nibssSettlementPosition", http.MethodGet, "/v1/settlement-position"},
+	{"controlOpenSessions", http.MethodGet, "/v1/control/banks/{bank_id}/open-sessions"},
 	{"controlRegistryClients", http.MethodGet, "/v1/control/registry/clients"},
 	{"registerRegistryClient", http.MethodPut, "/v1/control/registry/clients/{client_id}"},
 	{"controlConsents", http.MethodGet, "/v1/control/consents"},

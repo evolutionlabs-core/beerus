@@ -15,9 +15,18 @@ import (
 )
 
 const (
-	reportsPath = "/v1/settlement-reports"
-	reportsPage = 500
+	reportsPath  = "/v1/settlement-reports"
+	positionPath = "/v1/settlement-position"
+	reportsPage  = 500
 )
+
+type settlementPosition struct {
+	Outward       int64 `json:"outward_minor"`
+	Inward        int64 `json:"inward_minor"`
+	PendingInward int64 `json:"pending_inward_minor"`
+	Transfers     int   `json:"transfers"`
+	Settlements   int   `json:"settlements"`
+}
 
 type SettlementReport struct {
 	SessionID string `json:"session_id"`
@@ -74,6 +83,18 @@ func (c NIBSSClient) SettlementReports(ctx context.Context, after string) ([]Set
 	})
 	if err != nil {
 		return nil, fmt.Errorf("read the settlement reports at NIBSS: %w", err)
+	}
+	return out, nil
+}
+
+func (c NIBSSClient) position(ctx context.Context, after string) (settlementPosition, error) {
+	q := url.Values{}
+	if after != "" {
+		q.Set("after", after)
+	}
+	var out settlementPosition
+	if _, err := c.Do(ctx, http.MethodGet, positionPath, q, nil, &out); err != nil {
+		return settlementPosition{}, fmt.Errorf("read the settlement position at NIBSS: %w", err)
 	}
 	return out, nil
 }
