@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 const (
@@ -196,7 +197,7 @@ type member struct {
 
 func (m member) NameEnquiry(ctx context.Context, nuban string) (string, error) {
 	if m.a.bankDown(m.ls.inst.ID, m.a.clock.Now()) {
-		return "", fmt.Errorf("%s is down: %w", m.ls.inst.Name, nibss.ErrUnavailable)
+		return "", fmt.Errorf("%s is down: %w", m.ls.inst.Name, nip.ErrUnavailable)
 	}
 	return m.ls.Bank().NameEnquiry(ctx, nuban)
 }

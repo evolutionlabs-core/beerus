@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -109,14 +110,14 @@ func TestResolveRejectsBadInput(t *testing.T) {
 		wantErr(t, s.Resolve(ctx, "s3", c.status, c.outcome, c.at), c.want)
 	}
 	err := s.Resolve(ctx, "nope", SessionOK, OutcomeCredited, t0)
-	if !errors.Is(err, ErrNoRecord) {
-		t.Fatalf("got %v, want ErrNoRecord", err)
+	if !errors.Is(err, nip.ErrNoRecord) {
+		t.Fatalf("got %v, want nip.ErrNoRecord", err)
 	}
 	_, err = s.TSQ(ctx, "s3", time.Time{})
 	wantErr(t, err, "session s3 needs the next status query time")
 	_, err = s.TSQ(ctx, "nope", t0)
-	if !errors.Is(err, ErrNoRecord) {
-		t.Fatalf("got %v, want ErrNoRecord", err)
+	if !errors.Is(err, nip.ErrNoRecord) {
+		t.Fatalf("got %v, want nip.ErrNoRecord", err)
 	}
 }
 
@@ -156,7 +157,7 @@ func TestBeginStatusGates(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := s.Begin(ctx, transfer("g1", "999002", t0))
-	if !errors.Is(err, ErrUnavailable) {
+	if !errors.Is(err, nip.ErrUnavailable) {
 		t.Fatalf("to suspended: %v", err)
 	}
 	wantErr(t, err, "Bank B is suspended: 91 institution unavailable")
@@ -288,7 +289,7 @@ type fakeBank map[string]string
 func (f fakeBank) NameEnquiry(ctx context.Context, nuban string) (string, error) {
 	switch name := f[nuban]; name {
 	case "":
-		return "", fmt.Errorf("no account %s: %w", nuban, ErrNoRecord)
+		return "", fmt.Errorf("no account %s: %w", nuban, nip.ErrNoRecord)
 	case "BROKEN":
 		return "", errors.New("ledger down")
 	default:
@@ -316,10 +317,10 @@ func TestNameEnquiry(t *testing.T) {
 		is          error
 		want        string
 	}{
-		{"999002", missing, ErrNoRecord, "no account " + missing + ": 25 no record"},
+		{"999002", missing, nip.ErrNoRecord, "no account " + missing + ": 25 no record"},
 		{"999002", broken, nil, "name enquiry at Bank B: ledger down"},
-		{"999002", bad, ErrInvalidAccount, bad + " is not a valid account number at Bank B: 07 invalid account"},
-		{"999002", "12345", ErrInvalidAccount, "an account number has 10 digits: 07 invalid account"},
+		{"999002", bad, nip.ErrInvalidAccount, bad + " is not a valid account number at Bank B: 07 invalid account"},
+		{"999002", "12345", nip.ErrInvalidAccount, "an account number has 10 digits: 07 invalid account"},
 		{"999123", good, ErrUnknownInstitution, "bank code 999123 is not in the NIBSS directory"},
 	}
 	for _, c := range cases {

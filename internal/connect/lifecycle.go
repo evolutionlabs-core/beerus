@@ -56,6 +56,10 @@ type BankStatus struct {
 	URL    string     `json:"online_banking"`
 	Steps  []BankStep `json:"steps"`
 
+	Port     int    `json:"port"`
+	APIPort  int    `json:"api_port"`
+	Database string `json:"database"`
+
 	Attempts      int        `json:"attempts,omitempty"`
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 }
@@ -73,6 +77,7 @@ func (a *App) BankStatuses() []BankStatus {
 		if st := a.status[b.ID]; st != nil {
 			cp := *st
 			cp.Steps = append([]BankStep(nil), st.Steps...)
+			cp.Port, cp.APIPort, cp.Database = b.Port, b.APIPort, b.Database
 			out = append(out, cp)
 		}
 	}

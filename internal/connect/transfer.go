@@ -287,11 +287,11 @@ func postingError(nuban string, err error) error {
 
 func enquiryError(name string, err error) error {
 	switch {
-	case errors.Is(err, nibss.ErrUnavailable):
+	case errors.Is(err, nip.ErrUnavailable):
 		return refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("%s is not available right now, so nothing was debited", name))
-	case errors.Is(err, nibss.ErrInvalidAccount):
+	case errors.Is(err, nip.ErrInvalidAccount):
 		return refused(http.StatusUnprocessableEntity, nip.InvalidAccount, "invalid_account", fmt.Errorf("that is not a valid account at %s, so nothing was debited", name))
-	case errors.Is(err, nibss.ErrNoRecord):
+	case errors.Is(err, nip.ErrNoRecord):
 		return refused(http.StatusUnprocessableEntity, nip.NoRecord, "no_record", fmt.Errorf("%s has no such account, so nothing was debited", name))
 	case errors.Is(err, nibss.ErrUnknownInstitution):
 		return refused(http.StatusUnprocessableEntity, nip.SystemError, "unknown_bank", err)
@@ -465,10 +465,10 @@ func (a *App) finish(rt transferRoute, req TransferRequest, res TransferResult) 
 
 func (a *App) credit(rt transferRoute, req TransferRequest, sid, senderName string, at time.Time) error {
 	if rt.to == nil {
-		return fmt.Errorf("the books of %s are not open: %w", rt.toName, nibss.ErrUnavailable)
+		return fmt.Errorf("the books of %s are not open: %w", rt.toName, nip.ErrUnavailable)
 	}
 	if a.bankDown(rt.toBank, at) {
-		return fmt.Errorf("%s is down: %w", rt.toName, nibss.ErrUnavailable)
+		return fmt.Errorf("%s is down: %w", rt.toName, nip.ErrUnavailable)
 	}
 	_, err := rt.to.Bank().ReceiveNIP(context.Background(), sid, req.To, req.Amount, bank.Counterparty{Name: senderName, AccountNumber: req.From, BankCode: rt.fromCode, BankName: rt.fromName}, req.Narration, at)
 	if err != nil {
