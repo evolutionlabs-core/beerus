@@ -104,7 +104,7 @@ func (p *Participant) settlePass(ctx context.Context, adhoc bool) (int, error) {
 				return 0, err
 			}
 		}
-		if err := p.store.MarkPosted(ctx, x.Key, x.CutoffAt); err != nil {
+		if err := p.store.MarkPosted(ctx, x.Key, p.clock.Now()); err != nil {
 			return 0, err
 		}
 	}

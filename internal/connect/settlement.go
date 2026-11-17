@@ -163,9 +163,12 @@ func (s settlementBooks) check(ctx context.Context, a *App, l *ledgerSource) ([]
 func (a *App) bankSettlementProblems(ctx context.Context, l *ledgerSource) ([]string, error) {
 	id := l.Inst.ID
 	if a.role == RoleCore {
-		b := a.cfg.Bank(id)
+		b := a.bankByID(id)
 		if b == nil {
 			return nil, fmt.Errorf("%s is not in the setup", id)
+		}
+		if a.bankPhase(id) == PhaseClosed {
+			return []string{}, nil
 		}
 		return a.freshBankProblems(ctx, b.URL(), id)
 	}
