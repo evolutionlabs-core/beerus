@@ -1,0 +1,179 @@
+package connect
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
+)
+
+const pushWait = 5 * time.Second
+
+func stubReply(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": {"application/json"}}}
+}
+
+func bankDirConfig(t *testing.T, banks ...*config.Bank) *config.Config {
+	t.Helper()
+	cfg := &config.Config{Dir: t.TempDir(), Banks: banks, SetupKey: 1<<63 + 5, Connect: config.Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, ControlPort: 9002, BrandName: "Connect"}}
+	if err := config.Prepare(cfg, clock.New(nil).Real()); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range banks {
+		b.Database = config.DatabaseName(cfg.Dir, b.ID)
+		if err := cfg.EnsureBankDir(b, clock.New(nil).Real()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return cfg
+}
+
+func TestWishGeneration(t *testing.T) {
+	down := func(ids ...string) []server.Fault {
+		out := []server.Fault{}
+		for _, id := range ids {
+			out = append(out, server.Fault{ID: id, Kind: server.FaultDown})
+		}
+		return out
+	}
+	base := wishGeneration("wld_1", bankWish{phase: PhaseActive, reason: "ok", downs: down("flt_a", "flt_b")})
+	if base <= 0 || base >= 1<<62 {
+		t.Fatalf("generation %d is not a positive 62 bit number", base)
+	}
+	rows := []struct {
+		name  string
+		world string
+		wish  bankWish
+		same  bool
+	}{
+		{"same wish", "wld_1", bankWish{phase: PhaseActive, reason: "ok", downs: down("flt_a", "flt_b")}, true},
+		{"faults in another order", "wld_1", bankWish{phase: PhaseActive, reason: "ok", downs: down("flt_b", "flt_a")}, true},
+		{"another world", "wld_2", bankWish{phase: PhaseActive, reason: "ok", downs: down("flt_a", "flt_b")}, false},
+		{"another phase", "wld_1", bankWish{phase: PhaseSuspended, reason: "ok", downs: down("flt_a", "flt_b")}, false},
+		{"another reason", "wld_1", bankWish{phase: PhaseActive, reason: "later", downs: down("flt_a", "flt_b")}, false},
+		{"one fault fewer", "wld_1", bankWish{phase: PhaseActive, reason: "ok", downs: down("flt_a")}, false},
+		{"no faults", "wld_1", bankWish{phase: PhaseActive, reason: "ok"}, false},
+		{"another config", "wld_1", bankWish{phase: PhaseActive, reason: "ok", config: "c2", downs: down("flt_a", "flt_b")}, false},
+		{"fields run together", "wld_1", bankWish{phase: PhaseActive + "o", reason: "k", downs: down("flt_a", "flt_b")}, false},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			got := wishGeneration(r.world, r.wish)
+			if (got == base) != r.same {
+				t.Fatalf("generation %d against %d, same is %v", got, base, r.same)
+			}
+		})
+	}
+}
+
+func TestHungBankDoesNotDelayAnother(t *testing.T) {
+	phases := make(chan server.PhaseRequest, 4)
+	transport := roundTrip(func(r *http.Request) (*http.Response, error) {
+		if strings.HasPrefix(r.URL.Host, "bank-a.") {
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v1/status":
+			return stubReply(200, `{"phase":"active","observed_generation":0}`), nil
+		case "GET /v1/faults":
+			return stubReply(200, `{"data":[]}`), nil
+		case "PUT /v1/phase":
+			var body server.PhaseRequest
+			raw, _ := io.ReadAll(r.Body)
+			if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&body); err != nil {
+				return nil, err
+			}
+			phases <- body
+			return stubReply(200, `{}`), nil
+		}
+		return stubReply(404, `{}`), nil
+	})
+	a := &App{
+		cfg:      bankDirConfig(t, &config.Bank{ID: "bank-a", Port: 1}, &config.Bank{ID: "bank-b", Port: 2}),
+		role:     RoleCore,
+		st:       newState(),
+		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		clock:    clock.New(nil),
+		link:     server.Link{Client: &http.Client{Transport: transport}},
+		pushWake: make(chan struct{}, 1),
+		status:   map[string]*BankStatus{"bank-a": {ID: "bank-a", Phase: PhaseActive}, "bank-b": {ID: "bank-b", Phase: PhaseSuspended, Reason: "Suspended."}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.runPush(ctx)
+	}()
+	select {
+	case got := <-phases:
+		want := server.PhaseRequest{Phase: PhaseSuspended, Reason: "Suspended.", WorldID: a.WorldID()}
+		digest, err := a.cfg.BankFileDigest(a.cfg.Bank("bank-b"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want.Generation = wishGeneration(want.WorldID, bankWish{phase: want.Phase, reason: want.Reason, config: digest})
+		if got != want {
+			t.Fatalf("bank-b was sent %+v, want %+v", got, want)
+		}
+	case <-time.After(pushWait):
+		t.Fatal("bank-b got no phase while bank-a hung")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(pushWait):
+		t.Fatal("runPush did not stop and wait for its goroutines")
+	}
+}
+
+func TestEnsureBankDirRepairsOnATick(t *testing.T) {
+	cfg := bankDirConfig(t, &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1, APIPort: 2, Database: "db"})
+	now := clock.New(nil).Real()
+	at := now
+	a := &App{cfg: cfg, clock: clock.New(func() time.Time { return at })}
+	path := config.BankDir(cfg.Dir, "bank-a") + "/" + config.BankCAFile
+	rows := []struct {
+		name    string
+		advance time.Duration
+		damage  func() error
+		want    bool
+	}{
+		{name: "first ensure writes", want: true},
+		{name: "nothing changed", advance: time.Second, want: true},
+		{name: "deleted file inside the interval", advance: time.Second, damage: func() error { return os.Remove(path) }, want: false},
+		{name: "deleted file after the interval", advance: bankEnsureEvery, want: true},
+		{name: "corrupted file after the interval", advance: bankEnsureEvery, damage: func() error { return os.WriteFile(path, []byte("x"), 0o644) }, want: true},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			at = at.Add(r.advance)
+			if r.damage != nil {
+				if err := r.damage(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := a.ensureBankDir("bank-a", false); err != nil {
+				t.Fatal(err)
+			}
+			root, err := os.ReadFile(cfg.Path("ca", "root.crt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if ok := err == nil && string(got) == string(root); ok != r.want {
+				t.Fatalf("ca.crt intact is %v, want %v", ok, r.want)
+			}
+		})
+	}
+}

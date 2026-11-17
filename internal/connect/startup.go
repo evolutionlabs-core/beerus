@@ -30,6 +30,7 @@ const (
 	defaultWidgetPort   = 7444
 	defaultControlPort  = 7480
 	defaultHealthPort   = 7490
+	defaultNIBSSPort    = 7481
 	defaultSyncInterval = "1m"
 	defaultRefreshEvery = "1m"
 
@@ -76,6 +77,7 @@ func DefaultLocal() setup.Local {
 			WidgetPort:   defaultWidgetPort,
 			ControlPort:  defaultControlPort,
 			HealthPort:   defaultHealthPort,
+			NIBSSPort:    defaultNIBSSPort,
 			SyncInterval: defaultSyncInterval,
 			RefreshEvery: defaultRefreshEvery,
 		},
@@ -128,8 +130,8 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	}
 	st := setup.Status{Version: setup.StatusVersion, Setup: spec.Metadata.Name, SetupKey: key, Applied: pinCodes(spec, plan)}
 	st.Resources = []setup.Resource{
-		{Kind: setup.KindSystem, ID: setup.SystemCBN, Phase: setup.PhaseProvisioning},
-		{Kind: setup.KindSystem, ID: setup.SystemNIBSS, Phase: setup.PhaseProvisioning},
+		{Kind: setup.KindSystem, ID: setup.SystemCBN, Phase: config.PhaseProvisioning},
+		{Kind: setup.KindSystem, ID: setup.SystemNIBSS, Phase: config.PhaseProvisioning},
 	}
 	cfg, err := buildConfig(dir, st, local)
 	if err != nil {
@@ -207,10 +209,30 @@ func pinCodes(spec setup.Spec, plan setup.Plan) setup.Spec {
 	return out
 }
 
+func nibssPort(ln setup.LocalConnect, st setup.Status) (int, error) {
+	port := ln.NIBSSPort
+	if port == 0 {
+		port = defaultNIBSSPort
+	}
+	holders := map[int]string{ln.PartnerPort: "connect.partner_port", ln.WidgetPort: "connect.widget_port", ln.ControlPort: "connect.control_port", ln.HealthPort: "connect.health_port"}
+	for _, r := range st.Resources {
+		if r.Kind == setup.KindSystem {
+			holders[r.Allocated.Port] = r.ID + " control API"
+			continue
+		}
+		holders[r.Allocated.Port] = r.ID + " online banking"
+		holders[r.Allocated.APIPort] = r.ID + " open banking API"
+	}
+	if holder, taken := holders[port]; taken {
+		return 0, fmt.Errorf("NIBSS port %d is already used by %s; set connect.nibss_port in %s to a free port", port, holder, LocalFile)
+	}
+	return port, nil
+}
+
 func anyPort(int) bool { return true }
 
 func allocateBanks(cfg *config.Config, st *setup.Status) error {
-	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true}
+	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true, cfg.Connect.NIBSSPort: true}
 	next := cfg.Connect.PartnerPort
 	for _, b := range st.Applied.Spec.Banks {
 		port, err := cfg.AllocatePort(next, used, anyPort)
@@ -228,9 +250,9 @@ func allocateBanks(cfg *config.Config, st *setup.Status) error {
 			Kind:       setup.KindBank,
 			ID:         b.ID,
 			Generation: 1,
-			Phase:      setup.PhaseProvisioning,
+			Phase:      config.PhaseProvisioning,
 			Allocated:  setup.Allocation{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Database: config.DatabaseName(cfg.Dir, b.ID), Port: port, APIPort: api},
-			Steps:      map[string]string{setup.StepAllocate: stepDone},
+			Steps:      map[string]string{config.StepAllocate: stepDone},
 		}
 		r.Owned = []setup.Owned{{Kind: ownedPort, Name: fmt.Sprint(port)}, {Kind: ownedPort, Name: fmt.Sprint(api)}}
 		st.Resources = append(st.Resources, r)
@@ -249,7 +271,7 @@ func issuePartnerKeys(dir string, partners []setup.Partner) ([]setup.Resource, e
 			Kind:       setup.KindPartner,
 			ID:         p.ID,
 			Generation: 1,
-			Phase:      setup.PhaseActive,
+			Phase:      config.PhaseActive,
 			Partner:    &setup.PartnerKeys{CertCN: p.ID, APIKeySHA256: config.HashKey(key)},
 			Owned:      []setup.Owned{{Kind: ownedDir, Name: filepath.Join("partners", p.ID)}},
 		})
@@ -304,17 +326,17 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 	if err != nil {
 		return nil, fmt.Errorf("nip.tsq_after %q: %w", spec.NIP.TSQAfter, err)
 	}
-	tsqAttempts := spec.NIP.TSQAttempts
-	if tsqAttempts == 0 {
-		tsqAttempts = def.NIP.TSQAttempts
-	}
 	ln := local.Connect
+	nibss, err := nibssPort(ln, st)
+	if err != nil {
+		return nil, err
+	}
 	c := &config.Config{
 		Dir:         dir,
 		DatabaseURL: local.DatabaseURL,
 		NIPSessions: spec.NIP.Sessions,
 		TSQAfter:    tsqAfter,
-		TSQAttempts: tsqAttempts,
+		SetupKey:    st.SetupKey,
 		Ports:       config.Ports{APIOffset: local.Ports.APIOffset, Window: local.Ports.Window},
 		Connect: config.Connect{
 			Host:         orDefault(ln.Host, defaultConnectHost),
@@ -323,6 +345,7 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 			WidgetTLS:    ln.WidgetTLS,
 			ControlPort:  ln.ControlPort,
 			HealthPort:   ln.HealthPort,
+			NIBSSPort:    nibss,
 			SyncInterval: ln.SyncInterval,
 			RefreshEvery: ln.RefreshEvery,
 			LegalName:    orDefault(spec.Connect.LegalName, defaultLegalName),
@@ -330,6 +353,9 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 			RegistryID:   orDefault(spec.Connect.RegistryID, defaultRegistryID),
 			CACNumber:    orDefault(spec.Connect.CACNumber, defaultCACNumber),
 		},
+	}
+	if r := findResource(&st, setup.KindSystem, setup.SystemNIBSS); r != nil {
+		c.Connect.NIBSSControlPort = r.Allocated.Port
 	}
 	if len(spec.Holidays.Add)+len(spec.Holidays.Remove) > 0 {
 		c.Holidays = &config.Holidays{Add: spec.Holidays.Add, Remove: spec.Holidays.Remove}
@@ -357,9 +383,9 @@ func buildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 func runtimeBank(b setup.Bank, r setup.Resource) *config.Bank {
 	state := b.State
 	switch r.Phase {
-	case setup.PhaseClosed:
+	case config.PhaseClosed:
 		state = setup.StateClosed
-	case setup.PhaseClosing, setup.PhaseTerminating:
+	case config.PhaseClosing, config.PhaseTerminating:
 		state = setup.StateSuspended
 		if slices.Contains(r.Done, setup.FinalizerDecideMoney) {
 			state = setup.StateClosed

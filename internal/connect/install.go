@@ -53,7 +53,7 @@ func CheckStart(dir string) error {
 	if !found {
 		return fmt.Errorf("no Beerus setup in %s. Run beerus init first.", dir)
 	}
-	if systemPhase(st, setup.SystemCBN) == setup.PhaseProvisioning {
+	if systemPhase(st, setup.SystemCBN) == config.PhaseProvisioning {
 		return fmt.Errorf("the setup in %s is not finished. Run beerus init again to finish it.", dir)
 	}
 	return nil
@@ -100,7 +100,7 @@ func Install(ctx context.Context, dir string, spec setup.Spec, local setup.Local
 	if err != nil {
 		return err
 	}
-	if found && systemPhase(st, setup.SystemCBN) == setup.PhaseActive && systemPhase(st, setup.SystemNIBSS) == setup.PhaseActive {
+	if found && systemPhase(st, setup.SystemCBN) == config.PhaseActive && systemPhase(st, setup.SystemNIBSS) == config.PhaseActive {
 		return fmt.Errorf("%s is already set up. Run beerus up to start it.", dir)
 	}
 	in := &installer{clock: clock.New(nil), report: report}
@@ -164,7 +164,7 @@ func checkPostgres(ctx context.Context, url string) error {
 
 func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *ctlStore, st setup.Status) error {
 	name := config.DatabaseName(cfg.Dir, cbnID)
-	steps := []string{setup.StepDatabase, setup.StepLedgerSchema, setup.StepSettlement}
+	steps := []string{config.StepDatabase, config.StepLedgerSchema, setup.StepSettlement}
 	err := in.ensure(ctl, st, setup.SystemCBN, steps[0], stepNameCBNCreate, steps, func() (string, error) {
 		if err := ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
 			return "", err
@@ -193,7 +193,7 @@ func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *ctl
 
 func installNIBSS(ctx context.Context, in *installer, cfg *config.Config, ctl *ctlStore, st setup.Status) error {
 	name := config.DatabaseName(cfg.Dir, setup.SystemNIBSS)
-	steps := []string{setup.StepDatabase, setup.StepSchema}
+	steps := []string{config.StepDatabase, setup.StepSchema}
 	err := in.ensure(ctl, st, setup.SystemNIBSS, steps[0], stepNameNIBSSMake, steps, func() (string, error) {
 		if err := ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
 			return "", err
@@ -227,14 +227,14 @@ func (in *installer) ensure(ctl *ctlStore, st setup.Status, system, step, name s
 			if slices.ContainsFunc(all, func(id string) bool { return r.Steps[id] != stepDone }) {
 				return true, nil
 			}
-			r.Phase = setup.PhaseActive
+			r.Phase = config.PhaseActive
 			return true, nil
 		})
 	})
 }
 
 func skippedDetail(step string) string {
-	if step == setup.StepLedgerSchema || step == setup.StepSchema {
+	if step == config.StepLedgerSchema || step == setup.StepSchema {
 		return migrationCount(0)
 	}
 	return ""

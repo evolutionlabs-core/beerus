@@ -21,6 +21,7 @@ type outboxRow struct {
 	next      time.Time
 	delivered bool
 	ledger    bool
+	rejected  string
 }
 
 func NewMemStore() *MemStore {
@@ -191,13 +192,45 @@ func (m *MemStore) EnqueueLedger(_ context.Context, e ConsentEvent, at time.Time
 	return nil
 }
 
+func (m *MemStore) EnqueueBoth(_ context.Context, e ConsentEvent, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ledger := range []bool{true, false} {
+		m.events = append(m.events, &outboxRow{Event: Event{ConsentEvent: e, ID: int64(len(m.events) + 1)}, next: at, ledger: ledger})
+	}
+	return nil
+}
+
+func (m *MemStore) Incarnation(context.Context) (string, error) {
+	return "mem", nil
+}
+
+func (m *MemStore) Reject(_ context.Context, id int64, reason string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events[id-1].rejected = reason
+	return nil
+}
+
+func (m *MemStore) LedgerRejected(context.Context) ([]Rejection, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Rejection{}
+	for _, r := range m.events {
+		if r.ledger && !r.delivered && r.rejected != "" {
+			out = append(out, Rejection{ID: r.ID, ConsentID: r.ConsentID, Status: r.Status, Reason: r.rejected})
+		}
+	}
+	return out, nil
+}
+
 func (m *MemStore) LedgerDue(_ context.Context, now time.Time, limit int) ([]Event, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := []Event{}
 	head := true
 	for _, r := range m.events {
-		if !r.ledger || r.delivered {
+		if !r.ledger || r.delivered || r.rejected != "" {
 			continue
 		}
 		if head && r.next.After(now) {

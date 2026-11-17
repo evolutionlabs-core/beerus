@@ -14,29 +14,29 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/view"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
-	PhaseProvisioning  = setup.PhaseProvisioning
-	PhaseActive        = setup.PhaseActive
-	PhaseSuspended     = setup.PhaseSuspended
-	PhaseRepairing     = setup.PhaseRepairing
-	PhaseClosing       = setup.PhaseClosing
-	PhaseClosed        = setup.PhaseClosed
-	PhaseTerminating   = setup.PhaseTerminating
+	PhaseProvisioning  = config.PhaseProvisioning
+	PhaseActive        = config.PhaseActive
+	PhaseSuspended     = config.PhaseSuspended
+	PhaseRepairing     = config.PhaseRepairing
+	PhaseClosing       = config.PhaseClosing
+	PhaseClosed        = config.PhaseClosed
+	PhaseTerminating   = config.PhaseTerminating
 	driftEvery         = 5 * time.Second
 	connectionsPerBank = 8
 )
 
 var (
 	typeHistoryDays = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
-	ErrBankInvalid  = errors.New("invalid bank")
 	slugRe          = regexp.MustCompile(`[^a-z0-9]+`)
-	idRe            = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
-	databaseRe      = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 )
 
 type BankStep struct {
@@ -56,6 +56,10 @@ type BankStatus struct {
 	URL    string     `json:"online_banking"`
 	Steps  []BankStep `json:"steps"`
 
+	Port     int    `json:"port"`
+	APIPort  int    `json:"api_port"`
+	Database string `json:"database"`
+
 	Attempts      int        `json:"attempts,omitempty"`
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 }
@@ -73,6 +77,7 @@ func (a *App) BankStatuses() []BankStatus {
 		if st := a.status[b.ID]; st != nil {
 			cp := *st
 			cp.Steps = append([]BankStep(nil), st.Steps...)
+			cp.Port, cp.APIPort, cp.Database = b.Port, b.APIPort, b.Database
 			out = append(out, cp)
 		}
 	}
@@ -80,15 +85,20 @@ func (a *App) BankStatuses() []BankStatus {
 }
 
 func (a *App) bankPhase(id string) string {
+	phase, _ := a.bankPhaseReason(id)
+	return phase
+}
+
+func (a *App) bankPhaseReason(id string) (string, string) {
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
 	if st := a.status[id]; st != nil {
-		return st.Phase
+		return st.Phase, st.Reason
 	}
 	if a.cfg.Bank(id) == nil {
-		return PhaseActive
+		return PhaseActive, ""
 	}
-	return PhaseProvisioning
+	return PhaseProvisioning, ""
 }
 
 func (a *App) bankReady(id string) bool {
@@ -117,10 +127,6 @@ type BankRequest struct {
 	SettlesThrough string `json:"settles_through"`
 }
 
-func invalid(format string, args ...any) error {
-	return fmt.Errorf("%w: %s", ErrBankInvalid, fmt.Sprintf(format, args...))
-}
-
 func portFree(p int) bool {
 	for _, host := range []string{"127.0.0.1", "::1"} {
 		l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(p)))
@@ -141,7 +147,7 @@ func (a *App) postgresRoom(ctx context.Context) error {
 		a.mu.Unlock()
 		return nil
 	}
-	pool := a.ledgers[0].st.Pool
+	pool := a.ledgers[0].Pool()
 	a.mu.Unlock()
 	var max, used int
 	if err := pool.QueryRow(ctx, `SELECT setting::int FROM pg_settings WHERE name = 'max_connections'`).Scan(&max); err != nil {
@@ -151,12 +157,12 @@ func (a *App) postgresRoom(ctx context.Context) error {
 		return err
 	}
 	if used+connectionsPerBank+5 > max {
-		return invalid("Postgres has %d of %s in use; another bank needs up to %s", used, plural(max, "connection", "connections"), plural(connectionsPerBank, "connection", "connections"))
+		return server.Invalid("Postgres has %d of %s in use; another bank needs up to %s", used, view.Plural(max, "connection", "connections"), view.Plural(connectionsPerBank, "connection", "connections"))
 	}
 	return nil
 }
 
-func (a *App) removedBanks(ctx context.Context) ([]nibss.Institution, error) {
+func (a *App) removedBanks(ctx context.Context) ([]nip.Institution, error) {
 	s := a.nibssStore()
 	if s == nil {
 		return nil, errors.New("the NIBSS directory is not open yet, so the codes of removed banks cannot be checked; try again soon")
@@ -165,9 +171,9 @@ func (a *App) removedBanks(ctx context.Context) ([]nibss.Institution, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := []nibss.Institution{}
+	out := []nip.Institution{}
 	for _, in := range all {
-		if in.Status == nibss.StatusRemoved {
+		if in.Status == nip.StatusRemoved {
 			out = append(out, in)
 		}
 	}
@@ -176,15 +182,15 @@ func (a *App) removedBanks(ctx context.Context) ([]nibss.Institution, error) {
 
 func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, error) {
 	if req.NIPCode != "" || req.NUBANCode != "" {
-		return BankStatus{}, invalid("nip_code and nuban_code are assigned by Beerus; leave them out")
+		return BankStatus{}, server.Invalid("nip_code and nuban_code are assigned by Beerus; leave them out")
 	}
 	if req.HistoryDays != 0 {
-		return BankStatus{}, invalid("history_days can no longer be set; it follows the bank type")
+		return BankStatus{}, server.Invalid("history_days can no longer be set; it follows the bank type")
 	}
 	name := strings.TrimSpace(req.Name)
 	id := strings.TrimSpace(req.ID)
 	slug := ""
-	var removed []nibss.Institution
+	var removed []nip.Institution
 	if id == "" {
 		slug = strings.Trim(slugRe.ReplaceAllString(strings.ToLower(name), "-"), "-")
 	}
@@ -242,7 +248,7 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 	return st, nil
 }
 
-func (a *App) SetBankSuspended(id string, suspended bool) error {
+func (a *App) SetBankSuspended(ctx context.Context, id string, suspended bool) error {
 	err := a.applyEdit(func(sp *setup.Spec) error {
 		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
 		if i < 0 {
@@ -250,7 +256,7 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 		}
 		b := &sp.Spec.Banks[i]
 		if b.State == setup.StateClosed {
-			return invalid("%s is closed; a closed bank cannot be suspended or resumed", b.Name)
+			return server.Invalid("%s is closed; a closed bank cannot be suspended or resumed", b.Name)
 		}
 		b.State = ""
 		if suspended {
@@ -261,7 +267,8 @@ func (a *App) SetBankSuspended(id string, suspended bool) error {
 	if err != nil {
 		return err
 	}
-	a.reconcileNow()
+	a.reconcileNow(ctx)
+	a.pokePush()
 	return nil
 }
 
@@ -274,11 +281,11 @@ func (a *App) startBankSite(b *config.Bank) error {
 		return nil
 	}
 	a.forgetOpenBanking(b.ID)
-	h := a.BankHandler(b.ID)
+	h := a.bankHandler(b.ID)
 	if h == nil {
 		return fmt.Errorf("no ledger for %s", b.ID)
 	}
-	ls, err := a.listenLocal(b.Port)
+	ls, err := a.link.Listen(b.Port)
 	if err != nil {
 		return err
 	}
@@ -318,14 +325,12 @@ func (a *App) stopBankSites(ctx context.Context) {
 	}
 }
 
-const NoBanksMessage = "there are no banks yet. Add one first with beerus bank create --name NAME"
-
 func (a *App) noSuchBank(w http.ResponseWriter, r *http.Request) {
 	if len(a.bankList()) == 0 {
-		writeError(w, r, http.StatusNotFound, "not_found", NoBanksMessage)
+		web.WriteError(w, r, http.StatusNotFound, "not_found", server.NoBanksMessage)
 		return
 	}
-	writeError(w, r, http.StatusNotFound, "not_found", "No such bank.")
+	web.WriteError(w, r, http.StatusNotFound, "not_found", "No such bank.")
 }
 
 func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
@@ -333,13 +338,13 @@ func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	switch {
-	case errors.Is(err, ErrBankInvalid):
-		writeError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrBankInvalid.Error()+": "))
+	case errors.Is(err, server.ErrInvalid):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 	case errors.Is(err, errNotFound):
 		a.noSuchBank(w, r)
 	default:
 		a.log.Error("bank lifecycle", "err", err)
-		writeError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
 	}
 }
 
@@ -354,8 +359,8 @@ func (a *App) bankStatus(id string) (BankStatus, bool) {
 
 func (a *App) ctlCreateBank(w http.ResponseWriter, r *http.Request) {
 	var req BankRequest
-	if err := decodeBody(r, &req); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"...","type":"commercial"}.`)
+	if err := web.DecodeBody(r, &req); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"...","type":"commercial"}.`)
 		return
 	}
 	st, err := a.CreateBank(r.Context(), req)
@@ -363,21 +368,24 @@ func (a *App) ctlCreateBank(w http.ResponseWriter, r *http.Request) {
 		a.bankError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, st)
+	web.WriteJSON(w, http.StatusAccepted, st)
 }
 
 func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool) {
 	id := r.PathValue("id")
-	if err := a.SetBankSuspended(id, suspended); err != nil {
+	if err := a.SetBankSuspended(r.Context(), id, suspended); err != nil {
 		a.bankError(w, r, err)
 		return
 	}
 	st, _ := a.bankStatus(id)
-	writeJSON(w, http.StatusOK, st)
+	web.WriteJSON(w, http.StatusOK, st)
 }
 
 func CheckPorts(c *config.Config) error {
-	ports := []int{c.Connect.PartnerPort, c.Connect.WidgetPort, c.Connect.ControlPort}
+	ports := []int{c.Connect.PartnerPort, c.Connect.WidgetPort, c.Connect.ControlPort, c.Connect.HealthPort, c.Connect.NIBSSPort}
+	if c.Connect.NIBSSControlPort != 0 {
+		ports = append(ports, c.Connect.NIBSSControlPort)
+	}
 	for _, b := range c.Banks {
 		if !b.Closed() {
 			ports = append(ports, b.Port, b.APIPort)

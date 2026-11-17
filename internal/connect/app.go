@@ -17,17 +17,20 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
-	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 type App struct {
-	bind         string
 	applyMu      sync.Mutex
+	bankFileMu   sync.Mutex
+	bankEnsures  map[string]bankEnsured
 	mu           sync.Mutex
 	cfg          *config.Config
 	clock        *clock.Clock
@@ -35,13 +38,12 @@ type App struct {
 	ctl          *ctlStore
 	setupKey     uint64
 	key          config.SigningKey
-	ctlToken     string
 	log          *slog.Logger
 	isDirty      atomic.Bool
 	limiters     map[string]*rate.Limiter
-	idemMu       sync.Mutex
-	idemLocks    map[string]*idemEntry
-	sendLocks    sync.Map
+	idem         web.Idempotency
+	senders      map[string]*server.Sender
+	faults       map[string]*server.Faults
 	client       *http.Client
 	wake         chan struct{}
 	statePath    string
@@ -56,8 +58,21 @@ type App struct {
 	nibss        *nibss.Store
 	nibssTried   time.Time
 	nibssOpening bool
-	members      []nip.Participant
-	peerBanks    []*config.Bank
+	nibssCtl     *nibssAdmin
+	nibssEnsured time.Time
+	dirSynced    bool
+	dirAttempts  int
+	dirNext      time.Time
+	regReady     bool
+	regProblem   string
+	regAttempts  int
+	regNext      time.Time
+	registries   map[string]*server.RegistryCache
+	ledgerNotes  map[string]string
+	stale        map[string]*staleMember
+	closeRuns    map[string]*closeRun
+	sendReads    map[string]sendRead
+	revokeReads  map[string]revokeRead
 	settling     bool
 	settleDone   *sync.Cond
 	lifeMu       sync.Mutex
@@ -70,32 +85,25 @@ type App struct {
 	driftAt      time.Time
 	driftDue     atomic.Bool
 	strikes      map[string]int
+	confirms     map[string]*bankConfirm
+	confirmWG    sync.WaitGroup
 	refreshing   map[string]*refreshFlight
 	obMu         sync.Mutex
 	obs          map[string]*openbanking.Server
-	regMu        sync.Mutex
 	poolMu       sync.RWMutex
 	pools        map[string]*ledgerSource
-	flushMu      sync.Mutex
 	vault        *vault
 	obHTTP       *http.Client
+	nibssBanks   map[string]*http.Client
 	role         string
-	bankID       string
 	coreURL      string
-	replicated   bool
-	synced       atomic.Bool
-	pullMu       sync.Mutex
-	pulledAt     time.Time
-	pullFailed   time.Time
-	pullErr      error
-	pullWarned   string
-	pulling      *pullFlight
-	peers        *http.Client
+	pushWake     chan struct{}
+	link         server.Link
+	banking      *server.Banking
 	probeHTTP    *http.Client
-	eventMu      sync.Mutex
-	eventHTTP    map[string]*http.Client
-	bankWrap     func(http.RoundTripper) http.RoundTripper
+	sender       *consent.Sender
 	obKey        *ecdsa.PrivateKey
+	bankWrap     func(http.RoundTripper) http.RoundTripper
 	eventJTI     jtiSet
 }
 
@@ -104,16 +112,12 @@ type Options struct {
 	Logger   *slog.Logger
 	Client   *http.Client
 	Role     string
-	BankID   string
 	CoreURL  string
 	Bind     string
 	BankWrap func(http.RoundTripper) http.RoundTripper
 }
 
 func New(cfg *config.Config, o Options) (*App, error) {
-	if o.Role == RoleBank {
-		return newBankRole(cfg, o)
-	}
 	key, err := config.WebhookKey(cfg)
 	if err != nil {
 		return nil, err
@@ -125,13 +129,12 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	a := &App{
 		cfg:       cfg,
 		key:       key,
-		ctlToken:  token,
 		log:       o.Logger,
 		limiters:  map[string]*rate.Limiter{},
-		peers:     &http.Client{Timeout: peerTimeout},
+		link:      server.NewLink(token, o.Bind),
+		pushWake:  make(chan struct{}, 1),
 		probeHTTP: &http.Client{Timeout: probeTimeout},
 		coreURL:   o.CoreURL,
-		bind:      o.Bind,
 		client:    o.Client,
 		bankWrap:  o.BankWrap,
 		role:      o.Role,
@@ -158,7 +161,10 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		st = newState()
 	} else if _, err := os.Stat(a.runningPath()); err == nil {
 		a.log.Warn("the last run did not shut down cleanly; starting a new run so partners resync", "old_run", st.WorldID)
-		st.WorldID = newID("wld")
+		st.WorldID = web.NewID("wld")
+	}
+	if d := st.dropped; d.registry+d.consents > 0 {
+		a.log.Warn("registry clients and consent history in the old state are dropped; they now live in NIBSS", "registry_clients", d.registry, "consent_events", d.consents)
 	}
 	for _, d := range st.Deliveries {
 		if d.Status == "sending" {
@@ -167,6 +173,8 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New(o.Real)
+	a.banking = &server.Banking{Src: bookSource{a}, Clock: a.clock, Log: a.log}
+	a.sender = a.newSender()
 	if err := a.prepareOpenBanking(); err != nil {
 		return nil, err
 	}
@@ -174,6 +182,9 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		return nil, err
 	}
 	for _, b := range cfg.Banks {
+		if _, err := a.ensureBankDir(b.ID, true); err != nil {
+			return nil, err
+		}
 		if err := a.claimBank(b); err != nil {
 			return nil, err
 		}
@@ -185,23 +196,14 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		a.addLedger(ls)
 	}
 	a.nibssStore()
-	unregistered := map[string]bool{}
-	for _, b := range cfg.Banks {
-		if err := a.registerMember(b); err != nil {
-			a.log.Error("bank not in the NIBSS directory; retrying in the background", "bank", b.ID, "err", err)
-			unregistered[b.ID] = true
-		}
-	}
-	for _, l := range a.ledgers {
-		a.attachMember(l)
+	if err := a.prepareNIBSS(); err != nil {
+		return nil, err
 	}
 	if err := a.ensureRTGS(); err != nil {
 		return nil, err
 	}
 	a.settleDue()
-	for _, b := range a.initLifecycle(unregistered) {
-		a.provision(b)
-	}
+	a.initLifecycle()
 	return a, nil
 }
 
@@ -211,7 +213,7 @@ func (a *App) addLedger(ls *ledgerSource) {
 	if a.pools == nil {
 		a.pools = map[string]*ledgerSource{}
 	}
-	a.pools[ls.inst.ID] = ls
+	a.pools[ls.Inst.ID] = ls
 	a.poolMu.Unlock()
 }
 
@@ -223,7 +225,7 @@ func (a *App) obLedger(id string) *ledgerSource {
 
 func (a *App) ledgerFor(institution string) *ledgerSource {
 	for _, l := range a.ledgers {
-		if l.inst.ID == institution {
+		if l.Inst.ID == institution {
 			return l
 		}
 	}
@@ -240,6 +242,10 @@ func (a *App) closeLedgers() {
 	if a.nibss != nil {
 		a.nibss.Close()
 	}
+}
+
+func (a *App) Banking() *server.Banking {
+	return a.banking
 }
 
 func (a *App) Config() *config.Config {
@@ -265,8 +271,6 @@ func (a *App) Save() error {
 
 func (a *App) saveLocked() error {
 	a.isDirty.Store(false)
-	a.regMu.Lock()
-	defer a.regMu.Unlock()
 	return saveJSON(a.statePath, a.st)
 }
 
@@ -307,6 +311,12 @@ func (a *App) Run(ctx context.Context) {
 }
 
 func (a *App) Step(ctx context.Context) {
+	a.confirmDue(ctx)
+	a.registerDue(ctx)
+	a.stepLocked(ctx)
+}
+
+func (a *App) stepLocked(ctx context.Context) {
 	a.stepMu.Lock()
 	defer a.stepMu.Unlock()
 	if a.recMu.TryLock() {
@@ -314,6 +324,9 @@ func (a *App) Step(ctx context.Context) {
 		a.recMu.Unlock()
 	}
 	a.nibssStore()
+	if err := a.ensureNIBSSDir(); err != nil {
+		a.log.Error("NIBSS directory not written", "err", err)
+	}
 	if err := a.ensureRTGS(); err != nil {
 		a.log.Error("CBN ledger", "err", err)
 	}
@@ -326,7 +339,6 @@ func (a *App) Step(ctx context.Context) {
 	a.sweep()
 	due := a.dueDeliveries()
 	a.mu.Unlock()
-	a.flushEvents()
 	for _, d := range due {
 		go func(d Delivery) {
 			a.sending <- struct{}{}
@@ -338,9 +350,6 @@ func (a *App) Step(ctx context.Context) {
 
 func (a *App) settleDue() {
 	now := a.clock.Now()
-	if err := a.checkSessions(now); err != nil {
-		a.log.Error("NIP status query", "err", err)
-	}
 	if _, err := a.settle(now, false); err != nil {
 		a.log.Error("NIP settlement", "err", err)
 	}
@@ -353,11 +362,14 @@ func (a *App) sweep() {
 	}
 	a.swept = real
 	for k, rec := range a.st.Idem {
-		if real.Sub(rec.CreatedReal) > idemTTL {
+		if real.Sub(rec.CreatedReal) > web.IdempotencyTTL {
 			delete(a.st.Idem, k)
 		}
 	}
 	a.pruneFaultsLocked(a.clock.Now())
+	for _, f := range a.faults {
+		f.Prune(a.clock.Now())
+	}
 	for k, ls := range a.st.LinkSessions {
 		if real.Sub(ls.ExpiresReal) > 7*24*time.Hour {
 			delete(a.st.LinkSessions, k)
@@ -407,7 +419,7 @@ func (a *App) emit(partner, typ string, data any) {
 		a.log.Error("marshal webhook", "err", err)
 		return
 	}
-	d := &Delivery{ID: newID("msg"), PartnerID: partner, Type: typ, Body: body, Status: "pending", NextReal: a.clock.Real(), CreatedReal: a.clock.Real()}
+	d := &Delivery{ID: web.NewID("msg"), PartnerID: partner, Type: typ, Body: body, Status: "pending", NextReal: a.clock.Real(), CreatedReal: a.clock.Real()}
 	p := a.partnerOf(partner)
 	if p == nil || p.WebhookURL == "" {
 		d.Status = "no_endpoint"
@@ -674,7 +686,7 @@ func (a *App) refreshOutcomeLocked(conn *Connection, synced bool) (string, any) 
 
 var errNotFound = errors.New("not found")
 
-func (a *App) RevokeAtBank(connID string) error {
+func (a *App) RevokeAtBank(ctx context.Context, connID string) error {
 	a.mu.Lock()
 	c, ok := a.st.Connections[connID]
 	if !ok {
@@ -684,7 +696,7 @@ func (a *App) RevokeAtBank(connID string) error {
 	bank, consent := c.Institution, c.ConsentID
 	a.mu.Unlock()
 	if b := a.cfg.Bank(bank); a.role == RoleCore && b != nil && consent != "" {
-		if err := a.revokeRemote(b, consent); err != nil {
+		if err := a.revokeRemote(ctx, b, consent); err != nil {
 			return err
 		}
 		return nil
@@ -693,9 +705,10 @@ func (a *App) RevokeAtBank(connID string) error {
 	if ob == nil || consent == "" {
 		return errNotFound
 	}
-	if err := ob.RevokeByBank(context.Background(), consent, "bank"); err != nil {
+	if err := ob.RevokeByBank(ctx, consent, "bank"); err != nil {
 		return err
 	}
-	a.flushEvents()
+	a.sender.Events(context.WithoutCancel(ctx))
+	a.sender.Ledger(context.WithoutCancel(ctx))
 	return nil
 }

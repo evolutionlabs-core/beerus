@@ -7,6 +7,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -24,10 +25,10 @@ func TestBanksJoinTheNIBSSDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, r := range st.Resources {
-		if r.Kind == setup.KindBank && r.Steps[setup.StepDirectory] != "done" {
-			t.Errorf("%s: directory step %q", r.ID, r.Steps[setup.StepDirectory])
+		if r.Kind == setup.KindBank && r.Steps[config.StepDirectory] != "done" {
+			t.Errorf("%s: directory step %q", r.ID, r.Steps[config.StepDirectory])
 		}
-		if r.Kind == setup.KindSystem && r.ID == setup.SystemNIBSS && r.Phase != setup.PhaseActive {
+		if r.Kind == setup.KindSystem && r.ID == setup.SystemNIBSS && r.Phase != config.PhaseActive {
 			t.Errorf("System/nibss is %s", r.Phase)
 		}
 	}
@@ -54,22 +55,22 @@ func TestBanksJoinTheNIBSSDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if in.ID != b.ID || in.NUBANCode != b.NUBANCode || in.Status != nibss.StatusActive {
+		if in.ID != b.ID || in.NUBANCode != b.NUBANCode || in.Status != nip.StatusActive {
 			t.Errorf("directory entry for %s: %+v", b.ID, in)
 		}
 	}
 	s.ctl("POST", "/banks/bank-b/suspend", nil)
-	if got := status("bank-b"); got != nibss.StatusSuspended {
+	if got := status("bank-b"); got != nip.StatusSuspended {
 		t.Fatalf("bank-b after suspend: %q", got)
 	}
 	s.ctl("POST", "/banks/bank-b/resume", nil)
-	if got := status("bank-b"); got != nibss.StatusActive {
+	if got := status("bank-b"); got != nip.StatusActive {
 		t.Fatalf("bank-b after resume: %q", got)
 	}
 	found := false
 	for _, p := range s.ctl("GET", "/nip/participants", nil)["data"].([]any) {
 		m := p.(map[string]any)
-		if m["bank_id"] == "bank-a" && m["status"] == nibss.StatusActive {
+		if m["bank_id"] == "bank-a" && m["status"] == nip.StatusActive {
 			found = true
 		}
 	}

@@ -1,73 +1,33 @@
 package connect
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
-	"encoding/json"
-	"io"
 	"net/http"
-	"strings"
-	"sync"
-	"time"
 
 	"golang.org/x/time/rate"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 type ctxKey int
 
 const (
 	ctxPartner ctxKey = iota
-	ctxRequestID
 )
-
-func requestID(r *http.Request) string {
-	if r == nil {
-		return ""
-	}
-	if v, ok := r.Context().Value(ctxRequestID).(string); ok {
-		return v
-	}
-	return ""
-}
 
 func partnerFrom(r *http.Request) *config.Partner {
 	p, _ := r.Context().Value(ctxPartner).(*config.Partner)
 	return p
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+func idemOwner(r *http.Request) string {
+	if p := partnerFrom(r); p != nil {
+		return p.ID
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_, _ = w.Write(b)
-}
-
-type apiError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id"`
-}
-
-func writeError(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
-	writeJSON(w, status, map[string]apiError{"error": {Code: code, Message: msg, RequestID: requestID(r)}})
-}
-
-func (a *App) withRequestID(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := newID("req")
-		w.Header().Set("Request-Id", id)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxRequestID, id)))
-	})
+	return web.ControlOwner
 }
 
 func keyMatches(key, hash string) bool {
@@ -78,7 +38,7 @@ func keyMatches(key, hash string) bool {
 func (a *App) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
-			writeError(w, r, http.StatusUnauthorized, "unauthenticated", "A client certificate from the Connect CA is required.")
+			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "A client certificate from the Connect CA is required.")
 			return
 		}
 		cert := r.TLS.PeerCertificates[0]
@@ -93,22 +53,22 @@ func (a *App) authenticate(next http.Handler) http.Handler {
 			role = cert.Subject.OrganizationalUnit[0]
 		}
 		if p == nil || role != "partner" || (p.CertSHA256 != "" && subtle.ConstantTimeCompare([]byte(pki.Thumbprint(cert)), []byte(p.CertSHA256)) != 1) {
-			writeError(w, r, http.StatusForbidden, "forbidden", "The client certificate does not belong to a registered partner.")
+			web.WriteError(w, r, http.StatusForbidden, "forbidden", "The client certificate does not belong to a registered partner.")
 			return
 		}
 		key := r.Header.Get("X-Api-Key")
 		if key == "" {
-			writeError(w, r, http.StatusUnauthorized, "unauthenticated", "The X-Api-Key header is required.")
+			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "The X-Api-Key header is required.")
 			return
 		}
 		if !keyMatches(key, p.APIKeySHA256) {
 			for _, other := range a.partnersSnapshot() {
 				if other != p && keyMatches(key, other.APIKeySHA256) {
-					writeError(w, r, http.StatusForbidden, "forbidden", "The API key does not belong to the client certificate's partner.")
+					web.WriteError(w, r, http.StatusForbidden, "forbidden", "The API key does not belong to the client certificate's partner.")
 					return
 				}
 			}
-			writeError(w, r, http.StatusUnauthorized, "unauthenticated", "The API key is not valid.")
+			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "The API key is not valid.")
 			return
 		}
 		a.mu.Lock()
@@ -120,37 +80,38 @@ func (a *App) authenticate(next http.Handler) http.Handler {
 		a.mu.Unlock()
 		if !lim.Allow() {
 			w.Header().Set("Retry-After", "1")
-			writeError(w, r, http.StatusTooManyRequests, "rate_limited", "Too many requests.")
+			web.WriteError(w, r, http.StatusTooManyRequests, "rate_limited", "Too many requests.")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxPartner, p)))
 	})
 }
 
-type recorder struct {
-	http.ResponseWriter
-	status int
-	buf    bytes.Buffer
+type idemStore struct {
+	a *App
 }
 
-func (rec *recorder) WriteHeader(s int) {
-	if rec.status == 0 {
-		rec.status = s
+func (s idemStore) Lookup(scope string) *web.Record {
+	s.a.mu.Lock()
+	defer s.a.mu.Unlock()
+	return s.a.idemGetLocked(scope)
+}
+
+func (s idemStore) Commit(scope string, rec *web.Record) error {
+	s.a.mu.Lock()
+	defer s.a.mu.Unlock()
+	if rec != nil {
+		s.a.idemPutLocked(scope, rec.Hash, rec.Status, rec.ContentType, rec.Body)
 	}
-}
-
-func (rec *recorder) Write(b []byte) (int, error) {
-	if rec.status == 0 {
-		rec.status = http.StatusOK
+	if s.a.statePath == "" {
+		return nil
 	}
-	return rec.buf.Write(b)
+	return s.a.saveLocked()
 }
 
-const idemTTL = 24 * time.Hour
-
-func (a *App) idemGetLocked(scope string) *IdemRec {
+func (a *App) idemGetLocked(scope string) *web.Record {
 	rec := a.st.Idem[scope]
-	if rec != nil && a.clock.Real().Sub(rec.CreatedReal) > idemTTL {
+	if rec != nil && a.clock.Real().Sub(rec.CreatedReal) > web.IdempotencyTTL {
 		delete(a.st.Idem, scope)
 		return nil
 	}
@@ -158,98 +119,9 @@ func (a *App) idemGetLocked(scope string) *IdemRec {
 }
 
 func (a *App) idemPutLocked(scope, hash string, status int, contentType string, body []byte) {
-	a.st.Idem[scope] = &IdemRec{Hash: hash, Status: status, ContentType: contentType, Body: body, CreatedReal: a.clock.Real()}
-}
-
-type idemEntry struct {
-	mu   sync.Mutex
-	refs int
-}
-
-func (a *App) idemAcquire(scope string) *idemEntry {
-	a.idemMu.Lock()
-	if a.idemLocks == nil {
-		a.idemLocks = map[string]*idemEntry{}
-	}
-	e := a.idemLocks[scope]
-	if e == nil {
-		e = &idemEntry{}
-		a.idemLocks[scope] = e
-	}
-	e.refs++
-	a.idemMu.Unlock()
-	e.mu.Lock()
-	return e
-}
-
-func (a *App) idemRelease(scope string, e *idemEntry) {
-	e.mu.Unlock()
-	a.idemMu.Lock()
-	e.refs--
-	if e.refs == 0 {
-		delete(a.idemLocks, scope)
-	}
-	a.idemMu.Unlock()
+	a.st.Idem[scope] = &web.Record{Hash: hash, Status: status, ContentType: contentType, Body: body, CreatedReal: a.clock.Real()}
 }
 
 func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		key := r.Header.Get("Idempotency-Key")
-		if key == "" || len(key) > 255 {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "An Idempotency-Key header of 1 to 255 characters is required on writes.")
-			return
-		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body could not be read.")
-			return
-		}
-		p := partnerFrom(r)
-		scope := strings.Join([]string{p.ID, r.Method, r.URL.Path, key}, " ")
-		sum := sha256.Sum256(append([]byte(r.Method+" "+r.URL.RequestURI()+"\n"), body...))
-		hash := hex.EncodeToString(sum[:])
-		entry := a.idemAcquire(scope)
-		defer a.idemRelease(scope, entry)
-		a.mu.Lock()
-		rec := a.idemGetLocked(scope)
-		a.mu.Unlock()
-		if rec != nil {
-			if rec.Hash != hash {
-				writeError(w, r, http.StatusUnprocessableEntity, "idempotency_key_reused", "This Idempotency-Key was used with a different request.")
-				return
-			}
-			if rec.ContentType != "" {
-				w.Header().Set("Content-Type", rec.ContentType)
-			}
-			w.Header().Set("Idempotent-Replayed", "true")
-			w.WriteHeader(rec.Status)
-			_, _ = w.Write(rec.Body)
-			return
-		}
-		r.Body = io.NopCloser(bytes.NewReader(body))
-		rw := &recorder{ResponseWriter: w}
-		next(rw, r)
-		if rw.status == 0 {
-			rw.status = http.StatusOK
-		}
-		a.mu.Lock()
-		if rw.status < 500 && rw.status != http.StatusTooManyRequests {
-			a.idemPutLocked(scope, hash, rw.status, rw.Header().Get("Content-Type"), rw.buf.Bytes())
-		}
-		err = a.saveLocked()
-		a.mu.Unlock()
-		if err != nil {
-			a.log.Error("save state", "err", err)
-			writeError(w, r, http.StatusInternalServerError, "internal_error", "The change could not be saved.")
-			return
-		}
-		w.WriteHeader(rw.status)
-		_, _ = w.Write(rw.buf.Bytes())
-	}
-}
-
-func decodeBody(r *http.Request, v any) error {
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(v)
+	return a.idem.Wrap(idemStore{a}, idemOwner, a.log, next)
 }

@@ -38,7 +38,6 @@ func TestValidateRules(t *testing.T) {
 		{"negative sessions", func(s *Spec) { s.Spec.NIP.Sessions = -4 }, []string{"nip.sessions -4 does not split the day into whole minutes. Use a number such as 1, 2, 4, 6, 12 or 24."}},
 		{"bad tsq after", func(s *Spec) { s.Spec.NIP.TSQAfter = "soon" }, []string{`nip.tsq_after "soon" is not a duration. Use a duration such as 2m.`}},
 		{"negative tsq after", func(s *Spec) { s.Spec.NIP.TSQAfter = "-1m" }, []string{"nip.tsq_after -1m must be longer than zero. Use a duration such as 2m."}},
-		{"negative tsq attempts", func(s *Spec) { s.Spec.NIP.TSQAttempts = -1 }, []string{"nip.tsq_attempts -1 must be more than zero. Use a number such as 3, or leave it out."}},
 		{"bad holiday", func(s *Spec) { s.Spec.Holidays.Add = []string{"2026-02-30"} }, []string{`holidays.add "2026-02-30" is not a date. Use YYYY-MM-DD.`}},
 		{"leap day holiday", func(s *Spec) { s.Spec.Holidays.Add = []string{"2028-02-29"} }, nil},
 		{"repeated holiday", func(s *Spec) { s.Spec.Holidays.Add = []string{"2026-12-28", "2026-12-28"} }, []string{"holidays.add 2026-12-28 appears twice. Keep one."}},
@@ -128,7 +127,7 @@ func TestValidateRules(t *testing.T) {
 func TestValidateUsesPositionsWhenParsed(t *testing.T) {
 	s := parseFixture(t, "default.yaml")
 	s.Spec.Banks[1].Type = "online"
-	want := []string{`setup.yaml:26:7: banks[bank-b].type "online" is not a bank type. Use commercial, digital or microfinance.`}
+	want := []string{`setup.yaml:25:7: banks[bank-b].type "online" is not a bank type. Use commercial, digital or microfinance.`}
 	if got := errStrings(Validate(s)); !slices.Equal(got, want) {
 		t.Fatalf("got %q", got)
 	}
@@ -137,7 +136,7 @@ func TestValidateUsesPositionsWhenParsed(t *testing.T) {
 func TestValidateFallsBackToTheParentPosition(t *testing.T) {
 	s := parseFixture(t, "default.yaml")
 	s.Spec.Banks[0].SettlesThrough = "bank-z"
-	want := []string{`setup.yaml:19:7: banks[bank-a].settles_through "bank-z" is not a bank in this file. Name a bank listed under banks.`}
+	want := []string{`setup.yaml:18:7: banks[bank-a].settles_through "bank-z" is not a bank in this file. Name a bank listed under banks.`}
 	if got := errStrings(Validate(s)); !slices.Equal(got, want) {
 		t.Fatalf("got %q", got)
 	}

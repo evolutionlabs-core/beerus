@@ -16,7 +16,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -574,17 +574,17 @@ func (b *Bank) Statement(ctx context.Context, nuban string, from, to clock.Date,
 
 func (b *Bank) NameEnquiry(ctx context.Context, nuban string) (string, error) {
 	if !world.ValidNUBAN(b.P.NUBANCode, nuban) {
-		return "", fmt.Errorf("name enquiry %s: %w", nuban, nibss.ErrInvalidAccount)
+		return "", fmt.Errorf("name enquiry %s: %w", nuban, nip.ErrInvalidAccount)
 	}
 	a, err := b.L.AccountByNUBAN(ctx, nuban)
 	if errors.Is(err, ledger.ErrUnknownAccount) || (err == nil && !a.Customer) {
-		return "", fmt.Errorf("name enquiry %s: %w", nuban, nibss.ErrNoRecord)
+		return "", fmt.Errorf("name enquiry %s: %w", nuban, nip.ErrNoRecord)
 	}
 	if err != nil {
 		return "", fmt.Errorf("name enquiry %s: %w", nuban, err)
 	}
 	if a.Status == "closed" || a.Status == "frozen" {
-		return "", fmt.Errorf("name enquiry %s: account is %s: %w", nuban, a.Status, nibss.ErrInvalidAccount)
+		return "", fmt.Errorf("name enquiry %s: account is %s: %w", nuban, a.Status, nip.ErrInvalidAccount)
 	}
 	return a.Name, nil
 }

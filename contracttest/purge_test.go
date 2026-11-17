@@ -1,10 +1,13 @@
 package contracttest
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net"
+	"net/http"
 	"os"
 	"slices"
 	"strconv"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
@@ -48,9 +52,11 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	conn := s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
 	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "abuja-digital", "outcome": "credited", "count": 1})
-	if sent, _ := s.payTry("bank-a", home.Accounts[0], "abuja-digital", target, "100", nil); sent["status"] == "success" {
+	sent, _ := s.payTry("bank-a", home.Accounts[0], "abuja-digital", target, "100", nil)
+	if sent["status"] != "pending" {
 		t.Fatalf("the timeout fault did not leave the transfer pending: %v", sent)
 	}
+	s.ctl("POST", "/nip/sessions/"+fmt.Sprint(sent["session_id"])+"/status", nil)
 	databases := func() []string {
 		names, err := store.List(context.Background(), s.cfg.DatabaseURL, bank.Database)
 		if err != nil {
@@ -66,7 +72,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("purge preview: %v", imp)
 	}
 	atBankA := s.balances(home)[home.Accounts[0]]
-	if res := s.ctl("POST", "/banks/abuja-digital/purge", nil); res["phase"] != setup.PhaseTerminating {
+	if res := s.ctl("POST", "/banks/abuja-digital/purge", nil); res["phase"] != config.PhaseTerminating {
 		t.Fatalf("purge was not admitted as terminating: %v", res)
 	}
 	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦25,100.00). Wait for it, or run beerus nip settle-now.")
@@ -169,7 +175,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if rep, err := connect.Doctor(context.Background(), c, false); err != nil || !rep.Clean() {
 		t.Fatalf("doctor after --fix: %+v %v", rep, err)
 	}
-	if ck, err := s.app.VerifyBank(); err != nil || !ck.OK() {
+	if ck, err := s.app.VerifyBank(context.Background()); err != nil || !ck.OK() {
 		t.Fatalf("bank ledgers after the purge: %v %v", err, ck)
 	}
 	s.advance("72h")
@@ -289,14 +295,20 @@ func cbnBalance(t *testing.T, cfg *config.Config, account string) int64 {
 	return bal
 }
 
-func waitFor(t *testing.T, what string, cond func() bool) {
+const waitLimit = 60 * time.Second
+
+func waitFor(t *testing.T, limit time.Duration, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.NewTimer(limit)
+	defer deadline.Stop()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
 	for !cond() {
-		if time.Now().After(deadline) {
+		select {
+		case <-deadline.C:
 			t.Fatalf("timed out waiting for %s", what)
+		case <-tick.C:
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -340,7 +352,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		return r
 	}
 	r := start()
-	waitFor(t, "both banks to be active", func() bool {
+	waitFor(t, waitLimit, "both banks to be active", func() bool {
 		for _, b := range r.app.BankStatuses() {
 			if b.Phase != connect.PhaseActive {
 				return false
@@ -349,28 +361,29 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		return true
 	})
 	open := func(bank, name, phone, dob, username, naira string) string {
-		c, err := r.app.CreateCustomer(bank, connect.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
+		c, err := r.app.Banking().CreateCustomer(t.Context(), bank, server.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
 		if err != nil {
 			t.Fatal(err)
 		}
-		acc, err := r.app.OpenAccount(bank, connect.AccountRequest{Customer: c.ID, Type: "current"})
+		acc, err := r.app.Banking().OpenAccount(t.Context(), bank, server.AccountRequest{Customer: c.ID, Type: "current"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.app.Cash(t.Context(), bank, "deposit", connect.CashRequest{Account: acc.NUBAN, Amount: naira}); err != nil {
+		if _, err := r.app.Banking().Cash(t.Context(), bank, "deposit", server.CashRequest{Account: acc.NUBAN, Amount: naira}); err != nil {
 			t.Fatal(err)
 		}
+		r.app.SyncAll(t.Context())
 		return acc.NUBAN
 	}
 	from := open("bank-a", "Tunde Motors Ltd", "08032345678", "1979-07-02", "tunde", "50000")
 	to := open("bank-b", "Chidi Okafor", "08034567890", "1995-05-30", "chidi", "1000")
-	if tr, err := r.app.Transfer(connect.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 4_000_000, Key: "restart-1"}); err != nil || tr.Status != "success" {
+	if tr, err := sendByControl(t, cfg, "bank-a", "restart-1", map[string]string{"from": from, "to_bank": "bank-b", "to": to, "amount": "40000"}); err != nil || tr["status"] != "success" {
 		t.Fatalf("transfer: %+v %v", tr, err)
 	}
 	if _, err := r.app.PurgeBank("bank-b", false); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "settle-inflight to wait", func() bool {
+	waitFor(t, waitLimit, "settle-inflight to wait", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonSettlementPending, "to settle 1 transfer (net ₦40,000.00)")
 	})
 	if got := storedBank(t, cfg.Dir, "bank-b").Done; !slices.Equal(got, []string{setup.FinalizerStopRouting, setup.FinalizerRevokeConnections}) {
@@ -379,19 +392,19 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	r.stop()
 
 	r = start()
-	waitFor(t, "the removal to resume and wait for settlement", func() bool {
+	waitFor(t, waitLimit, "the removal to resume and wait for settlement", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonSettlementPending, "to settle 1 transfer")
 	})
 	if _, err := r.app.SettleNow(); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the money decision", func() bool {
+	waitFor(t, waitLimit, "the money decision", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonMoneyDecisionNeeded, "holds ₦41,000.00 for 1 customer")
 	})
 	r.stop()
 
 	r = start()
-	waitFor(t, "the money decision after the second restart", func() bool {
+	waitFor(t, waitLimit, "the money decision after the second restart", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonMoneyDecisionNeeded, "holds ₦41,000.00 for 1 customer")
 	})
 	spec := storedStatus(t, cfg.Dir).Applied
@@ -399,7 +412,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	if _, err := r.app.Apply(spec, connect.ApplyOptions{Prune: true, Money: &setup.Removal{Money: setup.MoneyTransfer, To: "bank-a"}}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the moves to wait for settlement", func() bool {
+	waitFor(t, waitLimit, "the moves to wait for settlement", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonSettlementPending, "to settle 1 transfer (net ₦41,000.00)")
 	})
 	if got := storedBank(t, cfg.Dir, "bank-b").Done; !slices.Equal(got, []string{setup.FinalizerStopRouting, setup.FinalizerRevokeConnections, setup.FinalizerSettleInflight, setup.FinalizerDecideMoney}) {
@@ -409,20 +422,20 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 
 	r = start()
 	defer r.stop()
-	waitFor(t, "the moves to wait for settlement after the third restart", func() bool {
+	waitFor(t, waitLimit, "the moves to wait for settlement after the third restart", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonSettlementPending, "to settle 1 transfer (net ₦41,000.00)")
 	})
 	if _, err := r.app.SettleNow(); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "bank-b to be removed", func() bool {
+	waitFor(t, waitLimit, "bank-b to be removed", func() bool {
 		_, err := r.app.Resource(setup.KindBank, "bank-b")
 		return err != nil
 	})
 	if ck, err := r.app.CheckSettlement(); err != nil || len(ck.Problems) != 0 {
 		t.Fatalf("settlement after the restarts: %+v %v", ck, err)
 	}
-	if ck, err := r.app.VerifyBank(); err != nil || !ck.OK() {
+	if ck, err := r.app.VerifyBank(context.Background()); err != nil || !ck.OK() {
 		t.Fatalf("bank ledgers after the restarts: %v %v", err, ck)
 	}
 	final, err := connect.LoadConfig(cfg.Dir)
@@ -432,4 +445,36 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	if rep, err := connect.Doctor(context.Background(), final, false); err != nil || !rep.Clean() || len(rep.Missing) != 0 {
 		t.Fatalf("doctor: %+v %v", rep, err)
 	}
+}
+
+func sendByControl(t *testing.T, cfg *config.Config, bank, key string, body map[string]string) (map[string]any, error) {
+	t.Helper()
+	token, err := config.ReadSecret(cfg.Path("control-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, cfg.ControlURL()+"/banks/"+bank+"/transfers", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	out := map[string]any{}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return out, fmt.Errorf("transfer answered %d %v", resp.StatusCode, out)
+	}
+	return out, nil
 }

@@ -29,13 +29,14 @@ func TestResponsesAreWrittenWithoutTheLock(t *testing.T) {
 	from := funded(t, a, "bank-a", "Ada Obi", "50000")
 	to := funded(t, a, "bank-b", "Ngozi Eze", "")
 	transfer := `{"from":"` + from + `","to_bank":"bank-b","to":"` + to + `","amount":"10"}`
+	send := a.banking.HandleTransfer
 	for name, c := range map[string]struct {
 		handler http.HandlerFunc
 		target  string
 		body    string
 	}{
-		"transfer":     {a.ctlBankTransfer, "/", transfer},
-		"replay":       {a.ctlBankTransfer, "/", transfer},
+		"transfer":     {send, "/", transfer},
+		"replay":       {send, "/", transfer},
 		"positions":    {a.ctlNIPPositions, "/", ""},
 		"participants": {a.ctlNIPParticipants, "/", ""},
 		"enquiry":      {a.ctlNameEnquiry, "/?bank_code=999002&account_number=0000000017", ""},

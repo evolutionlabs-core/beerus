@@ -1,0 +1,57 @@
+package connect
+
+import (
+	"context"
+
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	"github.com/evolutionlabs-core/beerus/internal/clock"
+)
+
+type bookSource struct {
+	a *App
+}
+
+func (s bookSource) Book(id string) (server.Book, error) {
+	s.a.mu.Lock()
+	b := s.a.cfg.Bank(id)
+	var name string
+	var ls *ledgerSource
+	if b != nil {
+		name, ls = b.Name, s.a.ledgerFor(id)
+	}
+	s.a.mu.Unlock()
+	if b == nil {
+		return server.Book{Name: id, Phase: PhaseClosed}, nil
+	}
+	bk := server.Book{Name: name, Phase: s.a.bankPhase(id), Enrol: s.enrolAt(id), Send: s.a.bankSender(id)}
+	if ls != nil {
+		bk.Bank = ls.Bank()
+	}
+	return bk, nil
+}
+
+func (s bookSource) enrolAt(bankID string) func(context.Context, string, string, clock.Date) (string, string, error) {
+	return func(ctx context.Context, name, phone string, dob clock.Date) (string, string, error) {
+		c, err := s.a.bankNIBSS(bankID)
+		if err != nil {
+			return "", "", err
+		}
+		out, err := c.Enrol(ctx, name, phone, dob)
+		if err != nil {
+			return "", "", err
+		}
+		return out.BVN, out.Phone, nil
+	}
+}
+
+func (s bookSource) Empty() bool {
+	return len(s.a.bankList()) == 0
+}
+
+func (s bookSource) Refusing(id string) bool {
+	return s.a.bankRefusing(id)
+}
+
+func (s bookSource) TakeTimeout(id string) (string, bool) {
+	return s.a.takeTimeout(id)
+}

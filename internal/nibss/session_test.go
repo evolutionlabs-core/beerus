@@ -3,12 +3,12 @@ package nibss
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -17,9 +17,14 @@ var t0 = time.Date(2026, 11, 4, 9, 12, 0, 0, clock.Lagos)
 func sessionStore(t *testing.T) *Store {
 	t.Helper()
 	s := testStore(t)
-	register(t, s, "bank-a", "Bank A", "999001", "901")
-	register(t, s, "bank-b", "Bank B", "999002", "902")
+	registerCapped(t, s, "bank-a", "Bank A", "999001", "901", Limits{NetDebitCap: 100_000_000})
+	registerCapped(t, s, "bank-b", "Bank B", "999002", "902", Limits{NetDebitCap: 100_000_000})
 	return s
+}
+
+func begin(ctx context.Context, s *Store, x Session) (Session, error) {
+	got, _, err := s.Begin(ctx, x)
+	return got, err
 }
 
 func transfer(id, to string, at time.Time) Session {
@@ -33,64 +38,63 @@ func TestSessionSuccess(t *testing.T) {
 	s := sessionStore(t)
 	x := transfer("s1", "999002", t0)
 	x.NextTSQAt = ptr(t0.Add(2 * time.Minute))
-	got, err := s.Begin(ctx, x)
+	got, err := begin(ctx, s, x)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Status != SessionPending || got.Outcome != "" || got.ResolvedAt != nil || !got.CreatedAt.Equal(t0) || !got.NextTSQAt.Equal(t0.Add(2*time.Minute)) {
 		t.Fatalf("begin: %+v", got)
 	}
-	again, err := s.Begin(ctx, transfer("s1", "999002", t0.Add(time.Hour)))
+	again, err := begin(ctx, s, transfer("s1", "999002", t0.Add(time.Hour)))
 	if err != nil || again.Status != SessionPending || !again.CreatedAt.Equal(t0) {
 		t.Fatalf("resend: %+v, %v", again, err)
 	}
 	changed := transfer("s1", "999002", t0)
 	changed.Amount++
-	_, err = s.Begin(ctx, changed)
-	wantErr(t, err, "session s1: session id reused with different details")
+	_, err = begin(ctx, s, changed)
+	wantErr(t, err, "session s1: session id reused with different amount_minor")
 
 	q, err := s.TSQ(ctx, "s1", t0.Add(4*time.Minute))
 	if err != nil || q.TSQAttempts != 1 || q.Status != SessionPending || !q.NextTSQAt.Equal(t0.Add(4*time.Minute)) {
 		t.Fatalf("tsq: %+v, %v", q, err)
 	}
-	if err := s.Resolve(ctx, "s1", SessionOK, OutcomeCredited, t0.Add(time.Minute)); err != nil {
+	if err := s.Resolve(ctx, "s1", SessionOK, nip.OutcomeCredited, t0.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Resolve(ctx, "s1", SessionOK, OutcomeCredited, t0.Add(time.Hour)); err != nil {
+	if err := s.Resolve(ctx, "s1", SessionOK, nip.OutcomeCredited, t0.Add(time.Hour)); err != nil {
 		t.Fatalf("repeat resolve: %v", err)
 	}
-	err = s.Resolve(ctx, "s1", "91", OutcomeFailed, t0.Add(time.Hour))
+	err = s.Resolve(ctx, "s1", "91", nip.OutcomeFailed, t0.Add(time.Hour))
 	wantErr(t, err, "session s1 is 00/credited and cannot become 91/failed: status change not allowed")
 	q, err = s.TSQ(ctx, "s1", t0.Add(8*time.Minute))
-	if err != nil || q.TSQAttempts != 1 || q.Status != SessionOK || q.Outcome != OutcomeCredited || !q.ResolvedAt.Equal(t0.Add(time.Minute)) || q.NextTSQAt != nil {
+	if err != nil || q.TSQAttempts != 1 || q.Status != SessionOK || q.Outcome != nip.OutcomeCredited || !q.ResolvedAt.Equal(t0.Add(time.Minute)) || q.NextTSQAt != nil {
 		t.Fatalf("tsq after resolve: %+v, %v", q, err)
 	}
 }
 
-func TestSessionFailureThenReversal(t *testing.T) {
+func TestSessionFailure(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
-	if _, err := s.Begin(ctx, transfer("s2", "999002", t0)); err != nil {
+	if _, err := begin(ctx, s, transfer("s2", "999002", t0)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Resolve(ctx, "s2", "91", OutcomeFailed, t0); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Resolve(ctx, "s2", "91", OutcomeReversed, t0.Add(time.Second)); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := s.Resolve(ctx, "s2", "91", nip.OutcomeFailed, t0); err != nil {
+			t.Fatal(err)
+		}
 	}
 	q, _ := s.TSQ(ctx, "s2", t0)
-	if q.Status != "91" || q.Outcome != OutcomeReversed || !q.ResolvedAt.Equal(t0) {
-		t.Fatalf("after reversal: %+v", q)
+	if q.Status != "91" || q.Outcome != nip.OutcomeFailed || !q.ResolvedAt.Equal(t0) {
+		t.Fatalf("after failure: %+v", q)
 	}
-	err := s.Resolve(ctx, "s2", "91", OutcomeFailed, t0)
-	wantErr(t, err, "session s2 is 91/reversed and cannot become 91/failed: status change not allowed")
+	err := s.Resolve(ctx, "s2", SessionOK, nip.OutcomeCredited, t0)
+	wantErr(t, err, "session s2 is 91/failed and cannot become 00/credited: status change not allowed")
 }
 
 func TestResolveRejectsBadInput(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
-	if _, err := s.Begin(ctx, transfer("s3", "999002", t0)); err != nil {
+	if _, err := begin(ctx, s, transfer("s3", "999002", t0)); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
@@ -98,25 +102,25 @@ func TestResolveRejectsBadInput(t *testing.T) {
 		at              time.Time
 		want            string
 	}{
-		{SessionPending, OutcomeUnknown, t0, `session s3: "pending" is not a response code`},
-		{"9", OutcomeFailed, t0, `session s3: "9" is not a response code`},
-		{SessionOK, OutcomeFailed, t0, `session s3: a 00 session is credited, not "failed"`},
-		{"91", OutcomeCredited, t0, `session s3: a 91 session is failed or reversed, not "credited"`},
-		{"91", OutcomeFailed, time.Time{}, "session s3 needs a resolved time"},
-		{SessionOK, OutcomeCredited, t0.Add(-time.Second), "session s3 cannot resolve at 2026-11-04T09:11:59+01:00, before it began at 2026-11-04T09:12:00+01:00"},
+		{SessionPending, nip.OutcomeUnknown, t0, `session s3: "pending" is not a response code`},
+		{"9", nip.OutcomeFailed, t0, `session s3: "9" is not a response code`},
+		{SessionOK, nip.OutcomeFailed, t0, `session s3: a 00 session is credited, not "failed"`},
+		{"91", nip.OutcomeCredited, t0, `session s3: a 91 session is failed, not "credited"`},
+		{"91", nip.OutcomeFailed, time.Time{}, "session s3 needs a resolved time"},
+		{SessionOK, nip.OutcomeCredited, t0.Add(-time.Second), "session s3 cannot resolve at 2026-11-04T09:11:59+01:00, before it began at 2026-11-04T09:12:00+01:00"},
 	}
 	for _, c := range cases {
 		wantErr(t, s.Resolve(ctx, "s3", c.status, c.outcome, c.at), c.want)
 	}
-	err := s.Resolve(ctx, "nope", SessionOK, OutcomeCredited, t0)
-	if !errors.Is(err, ErrNoRecord) {
-		t.Fatalf("got %v, want ErrNoRecord", err)
+	err := s.Resolve(ctx, "nope", SessionOK, nip.OutcomeCredited, t0)
+	if !errors.Is(err, nip.ErrNoRecord) {
+		t.Fatalf("got %v, want nip.ErrNoRecord", err)
 	}
 	_, err = s.TSQ(ctx, "s3", time.Time{})
 	wantErr(t, err, "session s3 needs the next status query time")
 	_, err = s.TSQ(ctx, "nope", t0)
-	if !errors.Is(err, ErrNoRecord) {
-		t.Fatalf("got %v, want ErrNoRecord", err)
+	if !errors.Is(err, nip.ErrNoRecord) {
+		t.Fatalf("got %v, want nip.ErrNoRecord", err)
 	}
 }
 
@@ -137,14 +141,14 @@ func TestBeginRejectsBadInput(t *testing.T) {
 		{mod(func(x *Session) { x.Amount = 0 }), "session s4: amount must be above zero, not 0"},
 		{mod(func(x *Session) { x.CreatedAt = time.Time{} }), "session s4 needs a created time"},
 		{mod(func(x *Session) { x.Status = SessionOK }), "session s4 starts pending, not 00"},
-		{mod(func(x *Session) { x.Outcome = OutcomeReversed }), "session s4 cannot start with outcome reversed"},
-		{mod(func(x *Session) { x.Outcome = OutcomeUnknown }), "session s4 holds outcome unknown and needs a status query time"},
+		{mod(func(x *Session) { x.Outcome = "reversed" }), "session s4 cannot start with outcome reversed"},
+		{mod(func(x *Session) { x.Outcome = nip.OutcomeUnknown }), "session s4 holds outcome unknown and needs a status query time"},
 		{mod(func(x *Session) { x.Settlement = "c1" }), "session s4 must start unresolved, unsettled and with no status queries"},
 		{mod(func(x *Session) { x.ToCode = "123456" }), "bank code 123456 is not in the NIBSS directory"},
 		{mod(func(x *Session) { x.FromCode = "999003" }), "bank code 999003 is not in the NIBSS directory"},
 	}
 	for _, c := range cases {
-		_, err := s.Begin(ctx, c.x)
+		_, err := begin(ctx, s, c.x)
 		wantErr(t, err, c.want)
 	}
 }
@@ -152,108 +156,147 @@ func TestBeginRejectsBadInput(t *testing.T) {
 func TestBeginStatusGates(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
-	if err := s.SetStatus(ctx, "bank-b", StatusSuspended); err != nil {
-		t.Fatal(err)
+	rows := []struct {
+		name    string
+		prepare func()
+		id      string
+		from    string
+		to      string
+		closure bool
+		status  string
+		outcome string
+		err     string
+	}{
+		{name: "to suspended", prepare: func() { setStatus(t, s, "bank-b", nip.StatusSuspended) }, id: "g1", from: "999001", to: "999002", status: "91", outcome: "failed"},
+		{name: "both active", prepare: func() { setStatus(t, s, "bank-b", nip.StatusActive) }, id: "g2", from: "999001", to: "999002", status: SessionPending},
+		{name: "closure from active", id: "g3", from: "999001", to: "999002", closure: true, err: "Bank A is active, so it cannot send a closure transfer"},
+		{name: "from terminating", prepare: func() { setStatus(t, s, "bank-a", nip.StatusTerminating) }, id: "g4", from: "999001", to: "999002", status: "91", outcome: "failed"},
+		{name: "closure from terminating", id: "g5", from: "999001", to: "999002", closure: true, status: SessionPending},
+		{name: "closure to terminating", prepare: func() { setStatus(t, s, "bank-b", nip.StatusTerminating) }, id: "g6", from: "999001", to: "999002", closure: true, status: "91", outcome: "failed"},
+		{name: "from removed", prepare: func() { setStatus(t, s, "bank-a", nip.StatusRemoved) }, id: "g7", from: "999001", to: "999002", closure: true, err: "Bank A is removed, so it cannot send a closure transfer"},
 	}
-	_, err := s.Begin(ctx, transfer("g1", "999002", t0))
-	if !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("to suspended: %v", err)
-	}
-	wantErr(t, err, "Bank B is suspended: 91 institution unavailable")
-	if err := s.SetStatus(ctx, "bank-b", StatusActive); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetStatus(ctx, "bank-a", StatusTerminating); err != nil {
-		t.Fatal(err)
-	}
-	_, err = s.Begin(ctx, transfer("g2", "999002", t0))
-	wantErr(t, err, "Bank A is terminating: 91 institution unavailable")
-	closing := transfer("g3", "999002", t0)
-	closing.Closure = true
-	got, err := s.Begin(ctx, closing)
-	if err != nil || !got.Closure || got.Status != SessionPending {
-		t.Fatalf("closure from terminating: %+v, %v", got, err)
-	}
-	if err := s.SetStatus(ctx, "bank-a", StatusRemoved); err != nil {
-		t.Fatal(err)
-	}
-	closing.ID = "g4"
-	_, err = s.Begin(ctx, closing)
-	wantErr(t, err, "Bank A is removed: 91 institution unavailable")
-	if err := s.SetStatus(ctx, "bank-b", StatusTerminating); err != nil {
-		t.Fatal(err)
-	}
-	back := transfer("g5", "999001", t0)
-	back.FromCode, back.Closure = "999002", true
-	_, err = s.Begin(ctx, back)
-	wantErr(t, err, "Bank A is removed: 91 institution unavailable")
-}
-
-func TestDueOrder(t *testing.T) {
-	ctx := context.Background()
-	s := sessionStore(t)
-	begin := func(id string, created time.Time, next *time.Time, outcome string) {
-		x := transfer(id, "999002", created)
-		x.NextTSQAt, x.Outcome = next, outcome
-		if _, err := s.Begin(ctx, x); err != nil {
-			t.Fatal(err)
+	for _, r := range rows {
+		if r.prepare != nil {
+			r.prepare()
 		}
-	}
-	begin("d-late", t0, ptr(t0.Add(3*time.Minute)), OutcomeUnknown)
-	begin("d-b", t0.Add(time.Second), ptr(t0.Add(2*time.Minute)), OutcomeCredited)
-	begin("d-a", t0.Add(time.Second), ptr(t0.Add(2*time.Minute)), OutcomeFailed)
-	begin("d-first", t0.Add(2*time.Second), ptr(t0.Add(time.Minute)), OutcomeUnknown)
-	begin("d-none", t0, nil, "")
-	begin("d-done", t0, ptr(t0), OutcomeCredited)
-	if err := s.Resolve(ctx, "d-done", SessionOK, OutcomeCredited, t0); err != nil {
-		t.Fatal(err)
-	}
-	ids := func(at time.Time) []string {
-		due, err := s.Due(ctx, at)
-		if err != nil {
-			t.Fatal(err)
+		x := transfer(r.id, r.to, t0)
+		x.FromCode, x.Closure = r.from, r.closure
+		got, err := begin(ctx, s, x)
+		if r.err != "" {
+			var closure *ClosureError
+			if !errors.As(err, &closure) || err.Error() != r.err {
+				t.Errorf("%s: got %v, want %s", r.name, err, r.err)
+			}
+			continue
 		}
-		out := []string{}
-		for _, x := range due {
-			out = append(out, x.ID)
+		if err != nil || got.Status != r.status || got.Outcome != r.outcome || (r.status != SessionPending) != (got.ResolvedAt != nil) {
+			t.Errorf("%s: %+v, %v", r.name, got, err)
 		}
-		return out
-	}
-	check := func(at time.Time, want ...string) {
-		t.Helper()
-		got := ids(at)
-		if len(got) != len(want) {
-			t.Fatalf("due at %s = %v, want %v", at.Format(time.Kitchen), got, want)
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("due at %s = %v, want %v", at.Format(time.Kitchen), got, want)
+		if r.status == "91" {
+			again, err := s.Session(ctx, r.id)
+			if err != nil || again.Status != "91" || again.Outcome != nip.OutcomeFailed {
+				t.Errorf("%s: stored %+v, %v", r.name, again, err)
 			}
 		}
 	}
-	check(t0)
-	check(t0.Add(time.Minute), "d-first")
-	check(t0.Add(2*time.Minute), "d-first", "d-a", "d-b")
-	check(t0.Add(time.Hour), "d-first", "d-a", "d-b", "d-late")
+}
+
+func setStatus(t *testing.T, s *Store, id, status string) {
+	t.Helper()
+	if err := s.SetStatus(context.Background(), id, status); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBeginCapReplayAndNoAnswer(t *testing.T) {
+	ctx := context.Background()
+	s := sessionStore(t)
+	registerCapped(t, s, "bank-a", "Bank A", "999001", "901", Limits{NetDebitCap: 1_200_000, Collateral: 5})
+	rows := []struct {
+		id       string
+		amount   int64
+		closure  bool
+		status   string
+		replayed bool
+	}{
+		{"c1", 500_000, false, SessionPending, false},
+		{"c2", 700_000, false, SessionPending, false},
+		{"c3", 1, false, "61", false},
+		{"c3", 1, false, "61", true},
+		{"c4", 5_000_000, false, "61", false},
+		{"c5", math.MaxInt64, false, "61", false},
+	}
+	for _, r := range rows {
+		x := transfer(r.id, "999002", t0)
+		x.Amount, x.Closure = r.amount, r.closure
+		got, replayed, err := s.Begin(ctx, x)
+		if err != nil || got.Status != r.status || replayed != r.replayed {
+			t.Fatalf("%s: %+v replayed %v, %v", r.id, got, replayed, err)
+		}
+	}
+	pos, err := s.Position(ctx, "999001")
+	if err != nil || pos.Outward != 1_200_000 || pos.Inward != 0 {
+		t.Fatalf("position of the sender: %+v, %v", pos, err)
+	}
+	if pos, err = s.Position(ctx, "999002"); err != nil || pos.Inward != 1_200_000 || pos.NetDebit() != 0 {
+		t.Fatalf("position of the receiver: %+v, %v", pos, err)
+	}
+	changed := transfer("c1", "999002", t0)
+	changed.Amount, changed.Narration = 1, "other"
+	_, _, err = s.Begin(ctx, changed)
+	var reused *ReusedError
+	if !errors.As(err, &reused) || len(reused.Fields) != 2 || reused.Fields[0] != (FieldDiff{"amount_minor", "500000", "1"}) || reused.Fields[1] != (FieldDiff{"narration", `"rent"`, `"other"`}) {
+		t.Fatalf("reused: %v", err)
+	}
+
+	next := t0.Add(2 * time.Minute)
+	got, err := s.NoAnswer(ctx, "c1", next)
+	if err != nil || got.Status != SessionPending || got.Outcome != nip.OutcomeUnknown || !got.NextTSQAt.Equal(next) {
+		t.Fatalf("no answer: %+v, %v", got, err)
+	}
+	if got, err = s.NoAnswer(ctx, "c1", next.Add(time.Hour)); err != nil || !got.NextTSQAt.Equal(next) {
+		t.Fatalf("no answer twice: %+v, %v", got, err)
+	}
+	if _, err := s.NoAnswer(ctx, "nope", next); !errors.Is(err, nip.ErrNoRecord) {
+		t.Fatalf("no answer for an unknown session: %v", err)
+	}
+	register(t, s, "bank-c", "Bank C", "999003", "903")
+	if _, err := s.pool.Exec(ctx, `UPDATE institutions SET net_debit_cap_minor = NULL WHERE id = 'bank-c'`); err != nil {
+		t.Fatal(err)
+	}
+	nolimit := transfer("n1", "999002", t0)
+	nolimit.FromCode = "999003"
+	_, _, err = s.Begin(ctx, nolimit)
+	if !errors.Is(err, ErrNoLimits) {
+		t.Fatalf("a bank with no cap: %v", err)
+	}
+}
+
+func TestTSQKeepsTheStoredOutcome(t *testing.T) {
+	ctx := context.Background()
+	s := sessionStore(t)
+	x := transfer("d-b", "999002", t0)
+	x.NextTSQAt, x.Outcome = ptr(t0.Add(2*time.Minute)), nip.OutcomeCredited
+	if _, err := begin(ctx, s, x); err != nil {
+		t.Fatal(err)
+	}
 	q, err := s.TSQ(ctx, "d-b", t0.Add(10*time.Minute))
-	if err != nil || q.Outcome != OutcomeCredited || q.TSQAttempts != 1 || !q.NextTSQAt.Equal(t0.Add(10*time.Minute)) {
+	if err != nil || q.Outcome != nip.OutcomeCredited || q.TSQAttempts != 1 || !q.NextTSQAt.Equal(t0.Add(10*time.Minute)) {
 		t.Fatalf("tsq keeps stored outcome: %+v, %v", q, err)
 	}
-	check(t0.Add(2*time.Minute), "d-first", "d-a")
-	check(t0.Add(time.Hour), "d-first", "d-a", "d-late", "d-b")
 }
 
 func TestSettlement(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
 	for i, id := range []string{"u1", "u2", "u3", "u4"} {
-		if _, err := s.Begin(ctx, transfer(id, "999002", t0)); err != nil {
+		if _, err := begin(ctx, s, transfer(id, "999002", t0)); err != nil {
 			t.Fatal(err)
 		}
 		if id == "u4" {
 			continue
 		}
-		if err := s.Resolve(ctx, id, SessionOK, OutcomeCredited, t0.Add(time.Duration(i)*time.Hour)); err != nil {
+		if err := s.Resolve(ctx, id, SessionOK, nip.OutcomeCredited, t0.Add(time.Duration(i)*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -283,85 +326,41 @@ func TestSettlement(t *testing.T) {
 	}
 }
 
-type fakeBank map[string]string
-
-func (f fakeBank) NameEnquiry(ctx context.Context, nuban string) (string, error) {
-	switch name := f[nuban]; name {
-	case "":
-		return "", fmt.Errorf("no account %s: %w", nuban, ErrNoRecord)
-	case "BROKEN":
-		return "", errors.New("ledger down")
-	default:
-		return name, nil
-	}
-}
-
-func TestNameEnquiry(t *testing.T) {
+func TestCallee(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
 	good := world.NUBAN("902", 1234567)
-	broken := world.NUBAN("902", 7)
-	missing := world.NUBAN("902", 8)
 	bad := good[:9] + string('0'+(good[9]-'0'+1)%10)
-	_, err := s.NameEnquiry(ctx, "999002", good)
-	wantErr(t, err, "Bank B is offline: 91 institution unavailable")
-	s.Attach("bank-b", fakeBank{"x": "WRONG"})
-	s.Attach("bank-b", fakeBank{good: "ADAEZE OKAFOR", broken: "BROKEN"})
-	name, err := s.NameEnquiry(ctx, "999002", good)
-	if err != nil || name != "ADAEZE OKAFOR" {
-		t.Fatalf("attached bank: %q, %v", name, err)
-	}
 	cases := []struct {
 		code, nuban string
 		is          error
 		want        string
 	}{
-		{"999002", missing, ErrNoRecord, "no account " + missing + ": 25 no record"},
-		{"999002", broken, nil, "name enquiry at Bank B: ledger down"},
-		{"999002", bad, ErrInvalidAccount, bad + " is not a valid account number at Bank B: 07 invalid account"},
-		{"999002", "12345", ErrInvalidAccount, "an account number has 10 digits: 07 invalid account"},
-		{"999123", good, ErrUnknownInstitution, "bank code 999123 is not in the NIBSS directory"},
+		{"999002", good, nil, ""},
+		{"999002", bad, nip.ErrInvalidAccount, bad + " is not a valid account number at Bank B: 07 invalid account"},
+		{"999123", good, nip.ErrUnknownInstitution, "bank code 999123 is not in the NIBSS directory"},
 	}
 	for _, c := range cases {
-		_, err := s.NameEnquiry(ctx, c.code, c.nuban)
-		if c.is != nil && !errors.Is(err, c.is) {
+		m, err := s.Callee(ctx, c.code, c.nuban)
+		if c.is == nil {
+			if err != nil || m.ID != "bank-b" {
+				t.Errorf("%s/%s: %q, %v", c.code, c.nuban, m.ID, err)
+			}
+			continue
+		}
+		if !errors.Is(err, c.is) {
 			t.Errorf("%s/%s: %v, want %v", c.code, c.nuban, err, c.is)
 		}
 		wantErr(t, err, c.want)
 	}
-	if err := s.SetStatus(ctx, "bank-b", StatusSuspended); err != nil {
+	if err := s.SetStatus(ctx, "bank-b", nip.StatusSuspended); err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.NameEnquiry(ctx, "999002", good)
+	m, err := s.Callee(ctx, "999002", good)
 	wantErr(t, err, "Bank B is suspended: 91 institution unavailable")
-	if err := s.SetStatus(ctx, "bank-b", StatusActive); err != nil {
-		t.Fatal(err)
+	if m.Name != "Bank B" {
+		t.Errorf("suspended bank is named %q, want Bank B", m.Name)
 	}
-	s.Attach("bank-b", nil)
-	_, err = s.NameEnquiry(ctx, "999002", good)
-	wantErr(t, err, "Bank B is offline: 91 institution unavailable")
-}
-
-func TestAttachConcurrent(t *testing.T) {
-	ctx := context.Background()
-	s := sessionStore(t)
-	good := world.NUBAN("902", 1234567)
-	s.Attach("bank-b", fakeBank{good: "ADAEZE OKAFOR"})
-	var wg sync.WaitGroup
-	for i := range 8 {
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			s.Attach("bank-b", fakeBank{good: "ADAEZE OKAFOR"})
-		}()
-		go func() {
-			defer wg.Done()
-			if name, err := s.NameEnquiry(ctx, "999002", good); err != nil || name != "ADAEZE OKAFOR" {
-				t.Errorf("call %d: %q, %v", i, name, err)
-			}
-		}()
-	}
-	wg.Wait()
 }
 
 func TestResolveKeepsWithheldOutcome(t *testing.T) {
@@ -370,33 +369,84 @@ func TestResolveKeepsWithheldOutcome(t *testing.T) {
 	begin := func(id, held string) {
 		x := transfer(id, "999002", t0)
 		x.Outcome, x.NextTSQAt = held, ptr(t0.Add(time.Minute))
-		if _, err := s.Begin(ctx, x); err != nil {
+		if _, err := begin(ctx, s, x); err != nil {
 			t.Fatal(err)
 		}
 	}
 	at := t0.Add(time.Minute)
-	begin("w1", OutcomeCredited)
-	wantErr(t, s.Resolve(ctx, "w1", "91", OutcomeFailed, at), "session w1 holds outcome credited and cannot resolve as 91: status change not allowed")
-	if err := s.Resolve(ctx, "w1", SessionOK, OutcomeCredited, at); err != nil {
+	begin("w1", nip.OutcomeCredited)
+	wantErr(t, s.Resolve(ctx, "w1", "91", nip.OutcomeFailed, at), "session w1 holds outcome credited and cannot resolve as 91: status change not allowed")
+	if err := s.Resolve(ctx, "w1", SessionOK, nip.OutcomeCredited, at); err != nil {
 		t.Fatalf("credited as 00: %v", err)
 	}
-	begin("w2", OutcomeFailed)
-	wantErr(t, s.Resolve(ctx, "w2", SessionOK, OutcomeCredited, at), "session w2 holds outcome failed and cannot resolve as 00: status change not allowed")
-	if err := s.Resolve(ctx, "w2", "96", OutcomeFailed, at); err != nil {
+	begin("w2", nip.OutcomeFailed)
+	wantErr(t, s.Resolve(ctx, "w2", SessionOK, nip.OutcomeCredited, at), "session w2 holds outcome failed and cannot resolve as 00: status change not allowed")
+	if err := s.Resolve(ctx, "w2", "96", nip.OutcomeFailed, at); err != nil {
 		t.Fatalf("failed as 96: %v", err)
 	}
-	begin("w3", OutcomeUnknown)
-	if err := s.Resolve(ctx, "w3", SessionOK, OutcomeCredited, at); err != nil {
+	begin("w3", nip.OutcomeUnknown)
+	if err := s.Resolve(ctx, "w3", SessionOK, nip.OutcomeCredited, at); err != nil {
 		t.Fatalf("unknown as 00: %v", err)
 	}
-	begin("w4", OutcomeUnknown)
-	if err := s.Resolve(ctx, "w4", "91", OutcomeFailed, at); err != nil {
+	begin("w4", nip.OutcomeUnknown)
+	if err := s.Resolve(ctx, "w4", "91", nip.OutcomeFailed, at); err != nil {
 		t.Fatalf("unknown as 91: %v", err)
 	}
 	for id, want := range map[string]string{"w1": SessionOK, "w2": "96", "w3": SessionOK, "w4": "91"} {
 		q, err := s.TSQ(ctx, id, at)
 		if err != nil || q.Status != want {
 			t.Errorf("%s: %+v, %v; want status %s", id, q, err, want)
+		}
+	}
+}
+
+func TestClosureFailedCountsOnlyDefiniteFailures(t *testing.T) {
+	ctx := context.Background()
+	s := sessionStore(t)
+	setStatus(t, s, "bank-a", nip.StatusTerminating)
+	closure := func(id string, account uint64) Session {
+		x := transfer(id, "999002", t0)
+		x.FromNUBAN, x.Closure = world.NUBAN("901", account), true
+		return x
+	}
+	rows := []struct {
+		name    string
+		account uint64
+		steps   func()
+		want    int
+	}{
+		{name: "no session", account: 10, steps: func() {}, want: 0},
+		{name: "pending session", account: 11, steps: func() {
+			if _, err := begin(ctx, s, closure("c1", 11)); err != nil {
+				t.Fatal(err)
+			}
+		}, want: 0},
+		{name: "credited session", account: 12, steps: func() {
+			if _, err := begin(ctx, s, closure("c2", 12)); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Resolve(ctx, "c2", SessionOK, nip.OutcomeCredited, t0); err != nil {
+				t.Fatal(err)
+			}
+		}, want: 0},
+		{name: "failed session", account: 13, steps: func() {
+			setStatus(t, s, "bank-b", nip.StatusTerminating)
+			if got, err := begin(ctx, s, closure("c3", 13)); err != nil || got.Status != "91" {
+				t.Fatalf("failed closure: %+v, %v", got, err)
+			}
+		}, want: 1},
+		{name: "failed twice", account: 13, steps: func() {
+			if got, err := begin(ctx, s, closure("c4", 13)); err != nil || got.Status != "91" {
+				t.Fatalf("failed closure: %+v, %v", got, err)
+			}
+		}, want: 2},
+		{name: "another account", account: 11, steps: func() {}, want: 0},
+	}
+	for _, r := range rows {
+		r.steps()
+		got, err := s.ClosureFailed(ctx, "999001", world.NUBAN("901", r.account))
+		if err != nil || got != r.want {
+			t.Errorf("%s: %d, %v; want %d", r.name, got, err, r.want)
 		}
 	}
 }

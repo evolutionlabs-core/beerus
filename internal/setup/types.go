@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 const (
@@ -31,24 +31,17 @@ const (
 	OutcomeClaim       = "claim"
 	OutcomeLeft        = "left"
 
-	PhaseProvisioning = "provisioning"
-	PhaseActive       = "active"
-	PhaseSuspended    = "suspended"
-	PhaseRepairing    = "repairing"
-	PhaseClosing      = "closing"
-	PhaseClosed       = "closed"
-	PhaseTerminating  = "terminating"
-
 	OpCreate = "create"
 	OpUpdate = "update"
 	OpClose  = "close"
 	OpRemove = "remove"
 	OpDrift  = "drift"
 
-	ConditionReady       = "Ready"
-	ConditionProgressing = "Progressing"
-	ConditionDegraded    = "Degraded"
-	ConditionBlocked     = "Blocked"
+	ConditionReady         = "Ready"
+	ConditionProgressing   = "Progressing"
+	ConditionDegraded      = "Degraded"
+	ConditionBlocked       = "Blocked"
+	ConditionConsentLedger = "ConsentLedger"
 
 	ReasonTerminating         = "Terminating"
 	ReasonSettlementPending   = "SettlementPending"
@@ -57,6 +50,7 @@ const (
 	ReasonClosed              = "Closed"
 	ReasonProvisioning        = "Provisioning"
 	ReasonStepFailed          = "StepFailed"
+	ReasonRejected            = "Rejected"
 
 	FinalizerStopRouting       = "stop-routing"
 	FinalizerRevokeConnections = "revoke-connections"
@@ -65,17 +59,8 @@ const (
 	FinalizerSettleMoves       = "settle-moves"
 	FinalizerPurgeOwned        = "purge-owned"
 
-	StepAllocate          = "allocate"
-	StepDirectory         = "directory"
-	StepDatabase          = "database"
-	StepLedgerSchema      = "ledger_schema"
-	StepOpenBankingSchema = "openbanking_schema"
-	StepCerts             = "certs"
-	StepCBN               = "cbn"
-	StepSite              = "site"
-	StepAPI               = "api"
-	StepSettlement        = "settlement"
-	StepSchema            = "schema"
+	StepSettlement = "settlement"
+	StepSchema     = "schema"
 
 	StatusVersion = 2
 )
@@ -112,9 +97,8 @@ type Body struct {
 }
 
 type NIP struct {
-	Sessions    int    `yaml:"sessions,omitempty" json:"sessions,omitempty"`
-	TSQAfter    string `yaml:"tsq_after,omitempty" json:"tsq_after,omitempty"`
-	TSQAttempts int    `yaml:"tsq_attempts,omitempty" json:"tsq_attempts,omitempty"`
+	Sessions int    `yaml:"sessions,omitempty" json:"sessions,omitempty"`
+	TSQAfter string `yaml:"tsq_after,omitempty" json:"tsq_after,omitempty"`
 }
 
 type Holidays struct {
@@ -185,6 +169,7 @@ type LocalConnect struct {
 	WidgetTLS    bool   `yaml:"widget_tls,omitempty"`
 	ControlPort  int    `yaml:"control_port,omitempty"`
 	HealthPort   int    `yaml:"health_port,omitempty"`
+	NIBSSPort    int    `yaml:"nibss_port,omitempty"`
 	SyncInterval string `yaml:"sync_interval,omitempty"`
 	RefreshEvery string `yaml:"refresh_min_interval,omitempty"`
 }
@@ -195,14 +180,14 @@ type PartnerLocal struct {
 }
 
 type Status struct {
-	Version       int                 `json:"version"`
-	Setup         string              `json:"setup"`
-	SetupKey      uint64              `json:"setup_key,string"`
-	Applied       Spec                `json:"applied"`
-	AppliedSHA256 string              `json:"applied_sha256"`
-	Resources     []Resource          `json:"resources"`
-	Tombstones    []nibss.Institution `json:"tombstones,omitempty"`
-	Closures      []Closure           `json:"closures,omitempty"`
+	Version       int               `json:"version"`
+	Setup         string            `json:"setup"`
+	SetupKey      uint64            `json:"setup_key,string"`
+	Applied       Spec              `json:"applied"`
+	AppliedSHA256 string            `json:"applied_sha256"`
+	Resources     []Resource        `json:"resources"`
+	Tombstones    []nip.Institution `json:"tombstones,omitempty"`
+	Closures      []Closure         `json:"closures,omitempty"`
 }
 
 type ClosureLine struct {

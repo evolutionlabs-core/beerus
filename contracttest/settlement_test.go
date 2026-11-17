@@ -40,7 +40,7 @@ func TestNIPSettlement(t *testing.T) {
 	if later.Sessions == 0 {
 		t.Fatalf("settlement did not move on: %+v then %+v", first, later)
 	}
-	if c, err := s.app.VerifyBank(); err != nil || !c.OK() {
+	if c, err := s.app.VerifyBank(context.Background()); err != nil || !c.OK() {
 		t.Fatalf("bank ledgers: %v %v", err, c)
 	}
 }

@@ -217,6 +217,8 @@ type NIPSend struct {
 	At        time.Time
 	NoCharges bool
 	Narration string
+	Request   []byte
+	CheckAt   time.Time
 }
 
 func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.Transfer, error) {
@@ -252,7 +254,7 @@ func (b *Bank) SendNIP(ctx context.Context, s NIPSend) (ledger.Posted, charges.T
 	if !s.NoCharges {
 		e.LimitedAmount = s.Amount
 	}
-	p, err := b.L.Post(ctx, e)
+	p, err := b.L.PostThen(ctx, e, func(tx pgx.Tx) error { return insertSend(ctx, tx, s) })
 	return p, c, err
 }
 
@@ -311,18 +313,22 @@ func (b *Bank) ReverseNIP(ctx context.Context, entryID int64, sessionID string, 
 	return p, nil
 }
 
-func (b *Bank) ReceiveNIP(ctx context.Context, sessionID, to string, amount int64, from Counterparty, narration string, at time.Time) (ledger.Posted, error) {
+func nipInEntry(sessionID, to string, amount int64, from Counterparty, narration string, at time.Time) (ledger.Entry, error) {
 	if err := positive(amount); err != nil {
-		return ledger.Posted{}, err
+		return ledger.Entry{}, err
 	}
 	if len(sessionID) != 30 {
-		return ledger.Posted{}, fmt.Errorf("%w: session ID must be 30 digits", ledger.ErrInvalid)
+		return ledger.Entry{}, fmt.Errorf("%w: session ID must be 30 digits", ledger.ErrInvalid)
 	}
 	narr := withNarration(fmt.Sprintf("NIP TRF FRM %s/%s/%s", from.Name, from.BankName, sessionID[18:]), narration)
 	lines := []ledger.Line{dr(NIPInward, amount, narr), via(cr(CustomerAccount(to), amount, narr), "nip", &from)}
-	e := entry("nip-in:"+sessionID, "nip_inward", at, narr, lines...)
+	e := entry(nipInKey(sessionID), "nip_inward", at, narr, lines...)
 	e.SessionID = sessionID
-	return b.L.Post(ctx, e)
+	return e, nil
+}
+
+func nipInKey(sessionID string) string {
+	return "nip-in:" + sessionID
 }
 
 func (b *Bank) Settle(ctx context.Context, sessionKey string, outward, inward int64, at time.Time) (ledger.Posted, error) {

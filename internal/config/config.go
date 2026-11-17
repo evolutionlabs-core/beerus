@@ -39,18 +39,20 @@ type Partner struct {
 }
 
 type Connect struct {
-	Host         string `yaml:"host"`
-	PartnerPort  int    `yaml:"partner_port"`
-	WidgetPort   int    `yaml:"widget_port"`
-	WidgetTLS    bool   `yaml:"widget_tls"`
-	ControlPort  int    `yaml:"control_port"`
-	HealthPort   int    `yaml:"health_port"`
-	LegalName    string `yaml:"legal_name"`
-	BrandName    string `yaml:"brand_name"`
-	RegistryID   string `yaml:"registry_id"`
-	CACNumber    string `yaml:"cac_number"`
-	SyncInterval string `yaml:"sync_interval"`
-	RefreshEvery string `yaml:"refresh_min_interval"`
+	Host             string `yaml:"host"`
+	PartnerPort      int    `yaml:"partner_port"`
+	WidgetPort       int    `yaml:"widget_port"`
+	WidgetTLS        bool   `yaml:"widget_tls"`
+	ControlPort      int    `yaml:"control_port"`
+	HealthPort       int    `yaml:"health_port"`
+	NIBSSPort        int    `yaml:"nibss_port"`
+	NIBSSControlPort int    `yaml:"-"`
+	LegalName        string `yaml:"legal_name"`
+	BrandName        string `yaml:"brand_name"`
+	RegistryID       string `yaml:"registry_id"`
+	CACNumber        string `yaml:"cac_number"`
+	SyncInterval     string `yaml:"sync_interval"`
+	RefreshEvery     string `yaml:"refresh_min_interval"`
 }
 
 type Bank struct {
@@ -93,8 +95,12 @@ func (b *Bank) URL() string {
 	return fmt.Sprintf("http://%s.localhost:%d", b.ID, b.Port)
 }
 
+func BankHost(id string) string {
+	return id + ".localhost"
+}
+
 func (b *Bank) APIURL() string {
-	return fmt.Sprintf("https://%s.localhost:%d", b.ID, b.APIPort)
+	return fmt.Sprintf("https://%s:%d", BankHost(b.ID), b.APIPort)
 }
 
 func (b *Bank) Style() string {
@@ -122,7 +128,7 @@ type Config struct {
 	Banks       []*Bank       `yaml:"banks,omitempty"`
 	NIPSessions int           `yaml:"nip_sessions,omitempty"`
 	TSQAfter    time.Duration `yaml:"-"`
-	TSQAttempts int           `yaml:"-"`
+	SetupKey    uint64        `yaml:"-"`
 	Ports       Ports         `yaml:"ports,omitempty"`
 	Connect     Connect       `yaml:"connect"`
 	Partners    []*Partner    `yaml:"partners"`
@@ -261,8 +267,8 @@ func HashKey(key string) string {
 }
 
 func (c *Config) Finish() error {
-	if c.TSQAfter <= 0 || c.TSQAttempts <= 0 {
-		return fmt.Errorf("nip status queries need a wait and a number of tries, not %s and %d", c.TSQAfter, c.TSQAttempts)
+	if c.TSQAfter <= 0 {
+		return fmt.Errorf("nip status queries need a wait above zero, not %s", c.TSQAfter)
 	}
 	if err := c.validateSessions(); err != nil {
 		return err
@@ -375,6 +381,10 @@ func (c *Config) EnsureCertificates(now time.Time) error {
 const (
 	AggregatorCN    = "beerus-connect"
 	AggregatorRole  = "aggregator"
+	NIBSSCN         = "beerus-nibss"
+	NIBSSRole       = "nibss"
+	NIBSSHost       = "nibss.localhost"
+	BankRole        = "bank"
 	EventSignerName = "events"
 	EventSignerRole = "event-signer"
 )
@@ -393,11 +403,41 @@ func (c *Config) ensureOpenBanking(root *pki.Authority, now time.Time) error {
 			return fmt.Errorf("save aggregator certificate: %w", err)
 		}
 	}
+	if err := c.ensureNIBSS(root, now); err != nil {
+		return err
+	}
 	if _, err := c.SigningKey(); err != nil {
 		return fmt.Errorf("load signing key: %w", err)
 	}
 	if err := c.EnsureBankCertificates(root, now); err != nil {
 		return fmt.Errorf("ensure bank certificates: %w", err)
+	}
+	return nil
+}
+
+func (c *Config) ensureNIBSS(root *pki.Authority, now time.Time) error {
+	dir := c.Path("nibss")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create nibss dir: %w", err)
+	}
+	if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
+		leaf, err := root.IssueServer([]string{NIBSSHost, "localhost"}, leafLife)
+		if err != nil {
+			return fmt.Errorf("issue NIBSS server certificate: %w", err)
+		}
+		if err := leaf.Save(dir, "server"); err != nil {
+			return fmt.Errorf("save NIBSS server certificate: %w", err)
+		}
+	}
+	if !pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
+		return nil
+	}
+	leaf, err := root.IssueClient(NIBSSCN, NIBSSRole, leafLife)
+	if err != nil {
+		return fmt.Errorf("issue NIBSS client certificate: %w", err)
+	}
+	if err := leaf.Save(dir, "client"); err != nil {
+		return fmt.Errorf("save NIBSS client certificate: %w", err)
 	}
 	return nil
 }
@@ -410,27 +450,43 @@ func (c *Config) EnsureBankCertificates(root *pki.Authority, now time.Time) erro
 		}
 	}
 	for _, b := range c.Banks {
-		dir := c.Path("banks", b.ID)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("create bank dir %s: %w", dir, err)
+		if err := c.ensureBankCerts(root, b, now); err != nil {
+			return err
 		}
-		if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
-			leaf, err := root.IssueServer([]string{b.ID + ".localhost", "localhost"}, leafLife)
-			if err != nil {
-				return fmt.Errorf("issue server certificate for bank %s: %w", b.ID, err)
-			}
-			if err := leaf.Save(dir, "server"); err != nil {
-				return fmt.Errorf("save server certificate for bank %s: %w", b.ID, err)
-			}
+	}
+	return nil
+}
+
+func (c *Config) ensureBankCerts(root *pki.Authority, b *Bank, now time.Time) error {
+	dir := c.Path("banks", b.ID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create bank dir %s: %w", dir, err)
+	}
+	if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
+		leaf, err := root.IssueServer([]string{BankHost(b.ID), "localhost"}, leafLife)
+		if err != nil {
+			return fmt.Errorf("issue server certificate for bank %s: %w", b.ID, err)
 		}
-		if pki.NeedsRenewal(filepath.Join(dir, EventSignerName+".crt"), now) {
-			leaf, err := root.IssueSigner(b.ID+"-events", EventSignerRole, leafLife)
-			if err != nil {
-				return fmt.Errorf("issue event signer for bank %s: %w", b.ID, err)
-			}
-			if err := leaf.Save(dir, EventSignerName); err != nil {
-				return fmt.Errorf("save event signer for bank %s: %w", b.ID, err)
-			}
+		if err := leaf.Save(dir, "server"); err != nil {
+			return fmt.Errorf("save server certificate for bank %s: %w", b.ID, err)
+		}
+	}
+	if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
+		leaf, err := root.IssueClient(b.ID, BankRole, leafLife)
+		if err != nil {
+			return fmt.Errorf("issue client certificate for bank %s: %w", b.ID, err)
+		}
+		if err := leaf.Save(dir, "client"); err != nil {
+			return fmt.Errorf("save client certificate for bank %s: %w", b.ID, err)
+		}
+	}
+	if pki.NeedsRenewal(filepath.Join(dir, EventSignerName+".crt"), now) {
+		leaf, err := root.IssueSigner(b.ID+"-events", EventSignerRole, leafLife)
+		if err != nil {
+			return fmt.Errorf("issue event signer for bank %s: %w", b.ID, err)
+		}
+		if err := leaf.Save(dir, EventSignerName); err != nil {
+			return fmt.Errorf("save event signer for bank %s: %w", b.ID, err)
 		}
 	}
 	return nil

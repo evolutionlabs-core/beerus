@@ -8,15 +8,16 @@ import (
 	"io/fs"
 	"regexp"
 	"slices"
-	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 //go:embed migrations/*.sql
@@ -26,25 +27,22 @@ var validName = regexp.MustCompile(`^beerus_[a-z0-9_]{1,50}$`)
 
 const maxConns = 8
 
-var errTransition = errors.New("status change not allowed")
+var ErrTransition = errors.New("status change not allowed")
 
 var transitions = map[string][]string{
-	StatusActive:      {StatusSuspended, StatusTerminating},
-	StatusSuspended:   {StatusActive, StatusTerminating},
-	StatusTerminating: {StatusRemoved},
-	StatusRemoved:     {},
+	nip.StatusActive:      {nip.StatusSuspended, nip.StatusTerminating},
+	nip.StatusSuspended:   {nip.StatusActive, nip.StatusTerminating},
+	nip.StatusTerminating: {nip.StatusRemoved},
+	nip.StatusRemoved:     {},
 }
 
-type Participant interface {
-	NameEnquiry(ctx context.Context, nuban string) (string, error)
+func Transitions(from string) []string {
+	return slices.Clone(transitions[from])
 }
 
 type Store struct {
 	pool  *pgxpool.Pool
 	phone countrypack.Phone
-
-	mu           sync.RWMutex
-	participants map[string]Participant
 }
 
 var _ Switch = (*Store)(nil)
@@ -112,7 +110,7 @@ func newStore(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 	if _, err := migrate(ctx, pool); err != nil {
 		return nil, err
 	}
-	return &Store{pool: pool, phone: p.Phone, participants: map[string]Participant{}}, nil
+	return &Store{pool: pool, phone: p.Phone}, nil
 }
 
 func Migrate(ctx context.Context, url, name string) (int, error) {
@@ -137,7 +135,11 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("read NIBSS migrations: %w", err)
 	}
-	p, err := goose.NewProvider(goose.DialectPostgres, db, sub)
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return 0, fmt.Errorf("make NIBSS migration lock: %w", err)
+	}
+	p, err := goose.NewProvider(goose.DialectPostgres, db, sub, goose.WithSessionLocker(locker))
 	if err != nil {
 		return 0, fmt.Errorf("load NIBSS migrations: %w", err)
 	}
@@ -146,22 +148,6 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) (int, error) {
 		return 0, fmt.Errorf("run NIBSS migrations: %w", err)
 	}
 	return len(results), nil
-}
-
-func (s *Store) Attach(id string, p Participant) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if p == nil {
-		delete(s.participants, id)
-		return
-	}
-	s.participants[id] = p
-}
-
-func (s *Store) participant(id string) Participant {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.participants[id]
 }
 
 func (s *Store) Close() {
@@ -174,19 +160,58 @@ type querier interface {
 
 const institutionCols = `id, name, nip_code, nuban_code, type, status`
 
-func scanInstitution(row pgx.Row) (Institution, error) {
-	var in Institution
+const memberCols = institutionCols + `, credit_url, certificate_identity`
+
+func scanMember(row pgx.Row) (Member, error) {
+	var m Member
+	err := row.Scan(&m.ID, &m.Name, &m.NIPCode, &m.NUBANCode, &m.Type, &m.Status, &m.CreditURL, &m.CertificateIdentity)
+	return m, err
+}
+
+func (s *Store) Member(ctx context.Context, id string) (Member, error) {
+	m, err := scanMember(s.pool.QueryRow(ctx, `SELECT `+memberCols+` FROM institutions WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Member{}, fmt.Errorf("bank id %s is %w", id, nip.ErrUnknownInstitution)
+	}
+	if err != nil {
+		return Member{}, fmt.Errorf("look up institution %s: %w", id, err)
+	}
+	return m, nil
+}
+
+func (s *Store) MemberAt(ctx context.Context, code string) (Member, error) {
+	m, err := scanMember(s.pool.QueryRow(ctx, `SELECT `+memberCols+` FROM institutions WHERE nip_code = $1`, code))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Member{}, fmt.Errorf("bank code %s is %w", code, nip.ErrUnknownInstitution)
+	}
+	if err != nil {
+		return Member{}, fmt.Errorf("look up institution %s: %w", code, err)
+	}
+	return m, nil
+}
+
+func (s *Store) Admits(ctx context.Context, identity string) (bool, error) {
+	var ok bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM institutions WHERE certificate_identity = $1 AND status <> 'removed')`, identity).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("look up certificate identity %s: %w", identity, err)
+	}
+	return ok, nil
+}
+
+func scanInstitution(row pgx.Row) (nip.Institution, error) {
+	var in nip.Institution
 	err := row.Scan(&in.ID, &in.Name, &in.NIPCode, &in.NUBANCode, &in.Type, &in.Status)
 	return in, err
 }
 
-func (s *Store) Directory(ctx context.Context) ([]Institution, error) {
+func (s *Store) Directory(ctx context.Context) ([]nip.Institution, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+institutionCols+` FROM institutions ORDER BY nip_code`)
 	if err != nil {
 		return nil, fmt.Errorf("list institutions: %w", err)
 	}
 	defer rows.Close()
-	out := []Institution{}
+	out := []nip.Institution{}
 	for rows.Next() {
 		in, err := scanInstitution(rows)
 		if err != nil {
@@ -200,30 +225,30 @@ func (s *Store) Directory(ctx context.Context) ([]Institution, error) {
 	return out, nil
 }
 
-func (s *Store) Institution(ctx context.Context, code string) (Institution, error) {
+func (s *Store) Institution(ctx context.Context, code string) (nip.Institution, error) {
 	return institution(ctx, s.pool, code, "")
 }
 
-func institution(ctx context.Context, q querier, code, lock string) (Institution, error) {
+func institution(ctx context.Context, q querier, code, lock string) (nip.Institution, error) {
 	in, err := scanInstitution(q.QueryRow(ctx, `SELECT `+institutionCols+` FROM institutions WHERE nip_code = $1 `+lock, code))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Institution{}, fmt.Errorf("bank code %s is %w", code, ErrUnknownInstitution)
+		return nip.Institution{}, fmt.Errorf("bank code %s is %w", code, nip.ErrUnknownInstitution)
 	}
 	if err != nil {
-		return Institution{}, fmt.Errorf("look up institution %s: %w", code, err)
+		return nip.Institution{}, fmt.Errorf("look up institution %s: %w", code, err)
 	}
 	return in, nil
 }
 
 func (s *Store) SetStatus(ctx context.Context, id, status string) error {
 	if _, ok := transitions[status]; !ok {
-		return fmt.Errorf("unknown institution status %q", status)
+		return invalid("unknown institution status %q", status)
 	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var cur string
 		err := tx.QueryRow(ctx, `SELECT status FROM institutions WHERE id = $1 FOR UPDATE`, id).Scan(&cur)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("bank id %s is %w", id, ErrUnknownInstitution)
+			return fmt.Errorf("bank id %s is %w", id, nip.ErrUnknownInstitution)
 		}
 		if err != nil {
 			return fmt.Errorf("look up institution %s: %w", id, err)
@@ -232,7 +257,7 @@ func (s *Store) SetStatus(ctx context.Context, id, status string) error {
 			return nil
 		}
 		if !slices.Contains(transitions[cur], status) {
-			return fmt.Errorf("institution %s is %s and cannot become %s: %w", id, cur, status, errTransition)
+			return fmt.Errorf("institution %s is %s and cannot become %s: %w", id, cur, status, ErrTransition)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE institutions SET status = $2, updated_at = now() WHERE id = $1`, id, status); err != nil {
 			return fmt.Errorf("set institution %s status: %w", id, err)

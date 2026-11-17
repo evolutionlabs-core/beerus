@@ -280,19 +280,23 @@ func TestBankRepairsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.advance("24h")
-	deadline := time.Now().Add(30 * time.Second)
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
 	for {
 		st := s.waitPhase("bank-b", connect.PhaseActive, 30*time.Second)
 		rebuilt, _ := time.Parse(time.RFC3339Nano, fmt.Sprint(st["steps"].([]any)[2].(map[string]any)["at"]))
 		if rebuilt.After(dropped) {
 			break
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-timeout.C:
 			t.Fatalf("bank-b was not rebuilt: %v", st)
+		case <-tick.C:
 		}
-		time.Sleep(200 * time.Millisecond)
 	}
-	checkProvisioned(t, storedBank(t, s.cfg.Dir, "bank-b"))
+	checkProvisioned(t, activeBank(t, s.cfg.Dir, "bank-b"))
 	s.syncNow()
 	if r := s.call("GET", "/v1/accounts/"+acct+"/balance", nil); r.Status != 409 || r.Code() != "reauth_required" {
 		t.Fatalf("consents live in the bank database, so a rebuilt bank should ask for consent again: %d %s", r.Status, r.Body)
@@ -312,7 +316,7 @@ func TestBankRepairsDrift(t *testing.T) {
 	if _, err := db.Exec(context.Background(), "DROP DATABASE "+s.cfg.Bank("bank-b").Database+" WITH (FORCE)"); err != nil {
 		t.Fatal(err)
 	}
-	deadline = time.Now().Add(60 * time.Second)
+	timeout.Reset(60 * time.Second)
 	for {
 		st := s.waitPhase("bank-b", connect.PhaseTerminating, 30*time.Second)
 		if ne := s.ctl("GET", "/nip/name-enquiry?bank_code="+s.cfg.Bank("bank-b").NIPCode+"&account_number="+p.Accounts[0], nil); ne["response_code"] != "91" {
@@ -322,10 +326,11 @@ func TestBankRepairsDrift(t *testing.T) {
 		if rebuilt.After(dropped) {
 			break
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-timeout.C:
 			t.Fatalf("bank-b was not rebuilt while terminating: %v", st)
+		case <-tick.C:
 		}
-		time.Sleep(200 * time.Millisecond)
 	}
 	checkSettled(t, s.app)
 }
@@ -444,7 +449,7 @@ func TestCloseBank(t *testing.T) {
 		t.Fatalf("fault without a count: %v", got)
 	}
 	accepted := s.ctl("POST", "/banks/abuja-digital/close", map[string]any{"money": "transfer", "to": "bank-a", "customers": map[string]string{opened["tunde"].Customer: "leave"}})
-	if accepted["phase"] != setup.PhaseClosing || accepted["deletion_requested_at"] == nil {
+	if accepted["phase"] != config.PhaseClosing || accepted["deletion_requested_at"] == nil {
 		t.Fatalf("close was not admitted as closing: %v", accepted)
 	}
 	s.waitBlocked("abuja-digital", setup.ReasonSettlementPending, "to settle 2 transfers (net ₦35,000.00). Wait for it, or run beerus nip settle-now.")
@@ -462,10 +467,10 @@ func TestCloseBank(t *testing.T) {
 	if got := balance(home["adaeze"]); got != before {
 		t.Fatalf("money moved while the destination had a fault: %d, want %d", got, before)
 	}
+	s.ctl("POST", "/banks/bank-a/suspend", nil)
 	if got := s.ctl("DELETE", "/faults?bank=bank-a", nil); got["cleared"] != float64(1) {
 		t.Fatalf("clear faults: %v", got)
 	}
-	s.ctl("POST", "/banks/bank-a/suspend", nil)
 	s.waitBlocked("abuja-digital", setup.ReasonTargetUnavailable, "Bank A is suspended or down, so money cannot move there. Resume it or choose another bank.")
 	if got := balance(home["adaeze"]); got != before {
 		t.Fatalf("money moved while the destination was suspended: %d, want %d", got, before)
@@ -497,7 +502,7 @@ func TestCloseBank(t *testing.T) {
 	if got := balance(opened["tunde"]); got != 1_000_000 {
 		t.Fatalf("left account has %d", got)
 	}
-	if c, err := s.app.VerifyBank(); err != nil || !c.OK() {
+	if c, err := s.app.VerifyBank(context.Background()); err != nil || !c.OK() {
 		t.Fatalf("bank ledgers after the close: %v %v", err, c)
 	}
 	if got := s.eventsOf("connection.status_changed", func(d map[string]any) bool {

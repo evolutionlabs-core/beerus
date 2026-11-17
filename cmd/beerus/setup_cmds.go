@@ -24,6 +24,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
@@ -329,7 +330,7 @@ func (t target) label() string { return strings.ToLower(t.kind) + " " + t.id }
 
 func ready(r setup.Resource) bool {
 	switch r.Phase {
-	case setup.PhaseActive, setup.PhaseSuspended, setup.PhaseClosed:
+	case config.PhaseActive, config.PhaseSuspended, config.PhaseClosed:
 		return r.ObservedGeneration == r.Generation
 	}
 	return false
@@ -340,7 +341,7 @@ func finished(t target, r *setup.Resource) bool {
 	case setup.OpRemove:
 		return r == nil
 	case setup.OpClose:
-		return r != nil && r.Phase == setup.PhaseClosed
+		return r != nil && r.Phase == config.PhaseClosed
 	case opFinish, setup.OpUpdate:
 		return r == nil || ready(*r)
 	}
@@ -387,7 +388,7 @@ func writeClosure(w io.Writer, c setup.Closure) error {
 	fmt.Fprintf(w, "Money of %s on %s:\n", c.Name, stamp(c.ClosedAt))
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	for _, l := range c.Lines {
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", l.Name, l.NUBAN, connect.FormatNaira(l.AmountMinor), outcomeText(l))
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", l.Name, l.NUBAN, bank.FormatNaira(l.AmountMinor), outcomeText(l))
 	}
 	return tw.Flush()
 }
@@ -511,7 +512,7 @@ func (e *cli) wait(ctx context.Context, c *ctl, p planReply, wait time.Duration,
 		return err
 	}
 	for _, r := range res {
-		busy := r.Phase == setup.PhaseClosing || r.Phase == setup.PhaseTerminating
+		busy := r.Phase == config.PhaseClosing || r.Phase == config.PhaseTerminating
 		if !busy {
 			continue
 		}
@@ -550,7 +551,7 @@ func (e *cli) wait(ctx context.Context, c *ctl, p planReply, wait time.Duration,
 			if !strings.EqualFold(t.kind, setup.KindBank) {
 				continue
 			}
-			if r := findResource(res, t.kind, t.id); r == nil || r.Phase == setup.PhaseClosed {
+			if r := findResource(res, t.kind, t.id); r == nil || r.Phase == config.PhaseClosed {
 				if err := awaitPortsFree(ctx, t.id, ports[t.id]); err != nil {
 					return err
 				}
@@ -1198,10 +1199,14 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 		return err
 	}
 	fmt.Fprintf(e.out, "\nControl room        %s\n", connect.RoomURL(c, cl.token))
-	sup := newSupervisor(exe, *dir, c.ControlURL(), cl, e.errOut)
+	sup := newSupervisor(exe, *dir, c.ControlURL(), c.DatabaseURL, cl, e.errOut)
 	sup.startCore()
 	defer sup.shutdown()
 	if err := sup.awaitCore(ctx); err != nil {
+		return err
+	}
+	sup.startNIBSS()
+	if err := sup.awaitNIBSS(ctx); err != nil {
 		return err
 	}
 	sup.watch(ctx)

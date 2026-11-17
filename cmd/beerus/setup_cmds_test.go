@@ -56,9 +56,9 @@ func freeLocal(t *testing.T) setup.Local {
 	t.Helper()
 	local := connect.DefaultLocal()
 	for range 200 {
-		base := 20000 + rand.IntN(20000)
+		base := 20000 + rand.IntN(11900)
 		if portsFree(base) {
-			local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort = base, base+1, base+2, base+3
+			local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort = base, base+1, base+2, base+3, base+4
 			return local
 		}
 	}

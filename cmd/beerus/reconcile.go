@@ -8,27 +8,41 @@ import (
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 const (
 	reconcileEvery = 250 * time.Millisecond
-	replicaPath    = "/internal/replica"
+	banksPath      = "/banks"
 )
 
-type replicaBank struct {
-	ID       string
-	Port     int
-	APIPort  int
-	Database string
+type bankState struct {
+	ID       string `json:"id"`
+	Phase    string `json:"phase"`
+	Port     int    `json:"port"`
+	APIPort  int    `json:"api_port"`
+	Database string `json:"database"`
+	Steps    []struct {
+		ID   string `json:"id"`
+		Done bool   `json:"done"`
+	} `json:"steps"`
 }
 
-type replicaView struct {
-	Banks  []replicaBank     `json:"banks"`
-	Phases map[string]string `json:"phases"`
+func (b bankState) startable() bool {
+	switch b.Phase {
+	case config.PhaseActive, config.PhaseSuspended:
+		return true
+	case config.PhaseProvisioning, config.PhaseRepairing:
+		for _, s := range b.Steps {
+			if s.ID == config.StepCBN {
+				return s.Done
+			}
+		}
+	}
+	return false
 }
 
-func (b replicaBank) fingerprint() string {
+func (b bankState) fingerprint() string {
 	return fmt.Sprintf("%d/%d/%s", b.Port, b.APIPort, b.Database)
 }
 
@@ -37,11 +51,11 @@ func (s *supervisor) reconcile(ctx context.Context) {
 	defer tick.Stop()
 	lastErr := ""
 	for {
-		rep, err := s.replica(ctx)
+		banks, err := s.readBanks(ctx)
 		switch {
 		case err == nil:
 			lastErr = ""
-			s.sync(rep)
+			s.sync(banks)
 		case err.Error() != lastErr && ctx.Err() == nil:
 			s.log.Warn("core is not readable; keeping the banks as they are", "err", err)
 			lastErr = err.Error()
@@ -54,40 +68,40 @@ func (s *supervisor) reconcile(ctx context.Context) {
 	}
 }
 
-func (s *supervisor) replica(ctx context.Context) (replicaView, error) {
-	raw, err := s.ctl.request(ctx, "GET", replicaPath, nil)
+func (s *supervisor) readBanks(ctx context.Context) ([]bankState, error) {
+	raw, err := s.ctl.request(ctx, "GET", banksPath, nil)
 	if err != nil {
-		return replicaView{}, fmt.Errorf("read replica: %w", err)
+		return nil, fmt.Errorf("read banks: %w", err)
 	}
-	rep, err := decode[replicaView](raw, "replica")
+	list, err := decode[struct {
+		Data []bankState `json:"data"`
+	}](raw, "banks")
 	if err != nil {
-		return replicaView{}, err
+		return nil, err
 	}
-	if rep.Phases == nil || rep.Banks == nil {
-		return replicaView{}, errors.New("read replica: it has no banks or phases")
+	if list.Data == nil {
+		return nil, errors.New("read banks: the list is missing")
 	}
-	return rep, nil
+	return list.Data, nil
 }
 
-func (s *supervisor) sync(rep replicaView) {
+func (s *supervisor) sync(banks []bankState) {
 	s.reap()
-	prints := map[string]string{}
-	for _, b := range rep.Banks {
-		prints[b.ID] = b.fingerprint()
-	}
-	for _, id := range slices.Sorted(maps.Keys(rep.Phases)) {
-		running := s.banks[id]
-		switch phase := rep.Phases[id]; {
-		case phase == setup.PhaseClosed:
-			s.drop(id)
-		case running != nil && running.print != prints[id]:
-			s.drop(id)
-		case running == nil && (phase == setup.PhaseActive || phase == setup.PhaseSuspended):
-			s.bring(id, prints[id])
+	listed := map[string]bool{}
+	for _, b := range banks {
+		listed[b.ID] = true
+		running := s.banks[b.ID]
+		switch {
+		case b.Phase == config.PhaseClosed:
+			s.drop(b.ID)
+		case running != nil && running.print != b.fingerprint():
+			s.drop(b.ID)
+		case running == nil && b.startable():
+			s.bring(b.ID, b.fingerprint())
 		}
 	}
 	for _, id := range slices.Sorted(maps.Keys(s.banks)) {
-		if _, ok := rep.Phases[id]; !ok {
+		if !listed[id] {
 			s.drop(id)
 		}
 	}
@@ -98,7 +112,7 @@ func (s *supervisor) bring(id, print string) {
 		return
 	}
 	s.log.Info("starting participant", "participant", id)
-	s.banks[id] = s.launch(id, print, []string{"run", "--participant", id, "--dir", s.dir, "--core", s.coreURL, "--supervised"})
+	s.banks[id] = s.launch(id, print, []string{config.DatabaseURLEnv + "=" + s.database}, []string{"run", "--participant", id, "--dir", s.dir, "--core", s.coreURL, "--supervised"})
 	s.order = append(s.order, id)
 }
 

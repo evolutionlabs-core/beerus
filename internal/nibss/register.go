@@ -8,46 +8,88 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 var (
-	errCodeTaken = errors.New("code or name already used")
+	ErrCodeTaken = errors.New("code or name already used")
 
 	nipCodeRe   = regexp.MustCompile(`^[0-9]{6}$`)
 	nubanCodeRe = regexp.MustCompile(`^([0-9]{3}|[0-9]{5}|[0-9]{6})$`)
 )
 
-func checkRegister(in Institution) error {
+type Member struct {
+	nip.Institution
+	CreditURL           string
+	CertificateIdentity string
+	Limits              Limits
+}
+
+type RegistrationConflictError struct {
+	ID         string
+	Registered []string
+	Requested  []string
+}
+
+func (e *RegistrationConflictError) Error() string {
+	return fmt.Sprintf("bank %s is registered with %s, and this request has %s", e.ID, strings.Join(e.Registered, " and "), strings.Join(e.Requested, " and "))
+}
+
+type InvalidError struct {
+	Message string
+}
+
+func (e *InvalidError) Error() string {
+	return e.Message
+}
+
+func invalid(format string, args ...any) error {
+	return &InvalidError{Message: fmt.Sprintf(format, args...)}
+}
+
+func checkRegister(in nip.Institution) error {
 	switch {
 	case in.ID == "" || strings.TrimSpace(in.Name) == "" || in.Type == "":
-		return errors.New("a bank needs an id, a name and a type")
+		return invalid("a bank needs an id, a name and a type")
 	case !nipCodeRe.MatchString(in.NIPCode):
-		return fmt.Errorf("bank %s: nip_code %q must be 6 digits", in.ID, in.NIPCode)
+		return invalid("bank %s: nip_code %q must be 6 digits", in.ID, in.NIPCode)
 	case !nubanCodeRe.MatchString(in.NUBANCode):
-		return fmt.Errorf("bank %s: nuban_code %q must be 3, 5 or 6 digits", in.ID, in.NUBANCode)
-	case in.Status != "" && in.Status != StatusActive:
-		return fmt.Errorf("bank %s registers as active, not %s; use SetStatus to change it", in.ID, in.Status)
+		return invalid("bank %s: nuban_code %q must be 3, 5 or 6 digits", in.ID, in.NUBANCode)
+	case in.Status != "" && in.Status != nip.StatusActive:
+		return invalid("bank %s registers as active, not %s; use SetStatus to change it", in.ID, in.Status)
 	}
 	return nil
 }
 
-func (s *Store) Register(ctx context.Context, in Institution) error {
+func checkLimits(id string, l Limits) error {
+	if l.NetDebitCap < 0 || l.Collateral < 0 {
+		return invalid("bank %s: net_debit_cap_minor and collateral_minor must not be negative", id)
+	}
+	return nil
+}
+
+func (s *Store) Register(ctx context.Context, m Member) error {
+	in := m.Institution
 	if err := checkRegister(in); err != nil {
+		return err
+	}
+	if err := checkLimits(in.ID, m.Limits); err != nil {
 		return err
 	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `LOCK TABLE institutions IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 			return fmt.Errorf("lock institutions: %w", err)
 		}
-		rows, err := tx.Query(ctx, `SELECT `+institutionCols+` FROM institutions
+		rows, err := tx.Query(ctx, `SELECT `+memberCols+` FROM institutions
 WHERE id = $1 OR nip_code = $2 OR nuban_code = $3 OR (lower(name) = lower($4) AND status <> 'removed')
 ORDER BY nip_code`, in.ID, in.NIPCode, in.NUBANCode, in.Name)
 		if err != nil {
 			return fmt.Errorf("look up bank %s: %w", in.ID, err)
 		}
-		var clash []Institution
+		var clash []Member
 		for rows.Next() {
-			c, err := scanInstitution(rows)
+			c, err := scanMember(rows)
 			if err != nil {
 				rows.Close()
 				return fmt.Errorf("read institution: %w", err)
@@ -58,19 +100,19 @@ ORDER BY nip_code`, in.ID, in.NIPCode, in.NUBANCode, in.Name)
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("look up bank %s: %w", in.ID, err)
 		}
-		var self *Institution
+		var self *Member
 		for i := range clash {
 			c := &clash[i]
 			if c.ID != in.ID {
-				return clashError(in, *c)
+				return clashError(in, c.Institution)
 			}
 			self = c
 		}
 		if self != nil {
-			return updateMember(ctx, tx, in, *self)
+			return updateMember(ctx, tx, m, *self)
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO institutions (id, name, nip_code, nuban_code, type, status) VALUES ($1, $2, $3, $4, $5, 'active')`,
-			in.ID, in.Name, in.NIPCode, in.NUBANCode, in.Type)
+		_, err = tx.Exec(ctx, `INSERT INTO institutions (id, name, nip_code, nuban_code, type, status, credit_url, certificate_identity, net_debit_cap_minor, collateral_minor) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9)`,
+			in.ID, in.Name, in.NIPCode, in.NUBANCode, in.Type, m.CreditURL, m.CertificateIdentity, m.Limits.NetDebitCap, m.Limits.Collateral)
 		if err != nil {
 			return fmt.Errorf("register bank %s: %w", in.ID, err)
 		}
@@ -78,31 +120,46 @@ ORDER BY nip_code`, in.ID, in.NIPCode, in.NUBANCode, in.Name)
 	})
 }
 
-func updateMember(ctx context.Context, tx pgx.Tx, in, cur Institution) error {
-	switch {
-	case cur.Status == StatusRemoved:
-		return fmt.Errorf("bank %s was removed, and its id stays reserved: %w", in.ID, errCodeTaken)
-	case cur.NIPCode != in.NIPCode || cur.NUBANCode != in.NUBANCode:
-		return fmt.Errorf("bank %s has codes %s/%s and they cannot change to %s/%s", in.ID, cur.NIPCode, cur.NUBANCode, in.NIPCode, in.NUBANCode)
-	case cur.Name == in.Name && cur.Type == in.Type:
-		return nil
+func differences(cur, want Member) (registered, requested []string) {
+	for _, f := range []struct{ name, have, ask string }{
+		{"nip_code", cur.NIPCode, want.NIPCode},
+		{"nuban_code", cur.NUBANCode, want.NUBANCode},
+		{"credit_url", cur.CreditURL, want.CreditURL},
+		{"certificate_identity", cur.CertificateIdentity, want.CertificateIdentity},
+	} {
+		if f.have == f.ask || f.have == "" {
+			continue
+		}
+		registered = append(registered, f.name+" "+f.have)
+		requested = append(requested, f.name+" "+f.ask)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE institutions SET name = $2, type = $3, updated_at = now() WHERE id = $1`, in.ID, in.Name, in.Type); err != nil {
-		return fmt.Errorf("update bank %s: %w", in.ID, err)
+	return registered, requested
+}
+
+func updateMember(ctx context.Context, tx pgx.Tx, m Member, cur Member) error {
+	if cur.Status == nip.StatusRemoved {
+		return fmt.Errorf("bank %s was removed, and its id stays reserved: %w", m.ID, ErrCodeTaken)
+	}
+	if registered, requested := differences(cur, m); len(registered) > 0 {
+		return &RegistrationConflictError{ID: m.ID, Registered: registered, Requested: requested}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE institutions SET name = $2, type = $3, credit_url = $4, certificate_identity = $5, net_debit_cap_minor = $6, collateral_minor = $7, updated_at = now()
+WHERE id = $1 AND (name, type, credit_url, certificate_identity, net_debit_cap_minor, collateral_minor) IS DISTINCT FROM ($2, $3, $4, $5, $6::bigint, $7::bigint)`, m.ID, m.Name, m.Type, m.CreditURL, m.CertificateIdentity, m.Limits.NetDebitCap, m.Limits.Collateral); err != nil {
+		return fmt.Errorf("update bank %s: %w", m.ID, err)
 	}
 	return nil
 }
 
-func clashError(in, c Institution) error {
+func clashError(in, c nip.Institution) error {
 	holder := c.ID
-	if c.Status == StatusRemoved {
+	if c.Status == nip.StatusRemoved {
 		holder = "removed bank " + c.ID
 	}
 	switch {
 	case c.NIPCode == in.NIPCode:
-		return fmt.Errorf("bank %s: nip_code %s is held by %s: %w", in.ID, in.NIPCode, holder, errCodeTaken)
+		return fmt.Errorf("bank %s: nip_code %s is held by %s: %w", in.ID, in.NIPCode, holder, ErrCodeTaken)
 	case c.NUBANCode == in.NUBANCode:
-		return fmt.Errorf("bank %s: nuban_code %s is held by %s: %w", in.ID, in.NUBANCode, holder, errCodeTaken)
+		return fmt.Errorf("bank %s: nuban_code %s is held by %s: %w", in.ID, in.NUBANCode, holder, ErrCodeTaken)
 	}
-	return fmt.Errorf("bank %s: name %q is held by %s: %w", in.ID, in.Name, holder, errCodeTaken)
+	return fmt.Errorf("bank %s: name %q is held by %s: %w", in.ID, in.Name, holder, ErrCodeTaken)
 }

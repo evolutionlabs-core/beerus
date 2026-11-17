@@ -1,15 +1,21 @@
 package connect
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-func (a *App) reconcileNow() {
+func (a *App) reconcileNow(ctx context.Context) {
 	a.recMu.Lock()
-	defer a.recMu.Unlock()
 	a.reconcileChanges()
+	a.pokePush()
+	a.recMu.Unlock()
+	a.registerDue(ctx)
 }
 
 func (a *App) reconcileChanges() {
@@ -47,6 +53,7 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	a.mu.Lock()
 	renamed := b.Name != want.Name
 	restate := b.State != want.State
+	relimit := b.NetDebitCap != want.NetDebitCap || b.Collateral != want.Collateral
 	reload := renamed || b.API != want.API
 	b.Name, b.State, b.NetDebitCap, b.Collateral, b.API = want.Name, want.State, want.NetDebitCap, want.Collateral, want.API
 	a.mu.Unlock()
@@ -54,17 +61,15 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 		st.Name = want.Name
 	}
 	a.lifeMu.Unlock()
-	if renamed || restate {
-		if err := a.registerMember(b); err != nil {
-			a.updateFailed(r.ID, err)
-			return
-		}
+	if renamed || restate || relimit {
+		a.markStale(r.ID, r.Generation)
+		a.updateFailed(r.ID, errors.New("waiting for NIBSS to take the change"))
 	}
 	if reload {
 		a.reloadSite(b.ID)
 		return
 	}
-	phase := runningPhase(b)
+	phase := b.RunningPhase()
 	a.lifeMu.Lock()
 	if st := a.status[r.ID]; st != nil {
 		if st.Phase == PhaseClosing || st.Phase == PhaseTerminating {
@@ -74,6 +79,9 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 		st.Phase = phase
 	}
 	a.lifeMu.Unlock()
+	if a.staleMember(r.ID) {
+		return
+	}
 	a.recordPhase(r.ID, phase, r.Generation)
 }
 
@@ -81,7 +89,7 @@ func (a *App) updateFailed(id string, err error) {
 	now := a.clock.Real()
 	a.recordBank(id, func(r *setup.Resource) bool {
 		r.Attempts++
-		next := now.Add(backoff(r.Attempts))
+		next := now.Add(clock.Backoff(r.Attempts))
 		r.NextAttemptAt = &next
 		setCondition(r, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: setup.ReasonStepFailed, Message: fmt.Sprintf("update: %v", err), ChangedAt: now})
 		return true
@@ -95,11 +103,11 @@ func (a *App) reloadSite(id string) {
 	if b == nil {
 		return
 	}
-	a.detach(b, setup.StepSite)
+	a.detach(b, config.StepSite)
 	a.lifeMu.Lock()
 	if st := a.status[id]; st != nil {
 		st.Phase = PhaseRepairing
-		for _, step := range []string{setup.StepSite, setup.StepAPI} {
+		for _, step := range []string{config.StepSite, config.StepAPI} {
 			if i := stepIndex(step); i >= 0 {
 				st.Steps[i].Done, st.Steps[i].Error = false, ""
 			}
@@ -108,8 +116,8 @@ func (a *App) reloadSite(id string) {
 	a.lifeMu.Unlock()
 	a.recordBank(id, func(r *setup.Resource) bool {
 		r.Phase = PhaseRepairing
-		delete(r.Steps, setup.StepSite)
-		delete(r.Steps, setup.StepAPI)
+		delete(r.Steps, config.StepSite)
+		delete(r.Steps, config.StepAPI)
 		return true
 	})
 }

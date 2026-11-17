@@ -3,11 +3,20 @@ package nip
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+)
+
+var (
+	ErrUnavailable    = errors.New("91 institution unavailable")
+	ErrInvalidAccount = errors.New("07 invalid account")
+	ErrNoRecord       = errors.New("25 no record")
+
+	ErrUnknownInstitution = errors.New("not in the NIBSS directory")
 )
 
 const (
@@ -110,4 +119,24 @@ func ValidSessionID(s string) bool {
 		}
 	}
 	return true
+}
+
+const (
+	StatusActive      = "active"
+	StatusSuspended   = "suspended"
+	StatusTerminating = "terminating"
+	StatusRemoved     = "removed"
+
+	OutcomeCredited = "credited"
+	OutcomeFailed   = "failed"
+	OutcomeUnknown  = "unknown"
+)
+
+type Institution struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	NIPCode   string `json:"nip_code"`
+	NUBANCode string `json:"nuban_code"`
+	Type      string `json:"type"`
+	Status    string `json:"status"`
 }

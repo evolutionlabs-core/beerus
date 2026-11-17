@@ -13,7 +13,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -482,13 +482,13 @@ func TestNameEnquiry(t *testing.T) {
 	}
 	bad := n[:9] + fmt.Sprint((int(n[9]-'0')+1)%10)
 	_, err = a.NameEnquiry(ctx, bad)
-	wantErr(t, err, nibss.ErrInvalidAccount, "name enquiry "+bad+": 07 invalid account")
+	wantErr(t, err, nip.ErrInvalidAccount, "name enquiry "+bad+": 07 invalid account")
 	unknown := world.NUBAN("901", 777)
 	_, err = a.NameEnquiry(ctx, unknown)
-	wantErr(t, err, nibss.ErrNoRecord, "name enquiry "+unknown+": 25 no record")
+	wantErr(t, err, nip.ErrNoRecord, "name enquiry "+unknown+": 25 no record")
 	if err := a.CloseAccount(ctx, n, t0); err != nil {
 		t.Fatal(err)
 	}
 	_, err = a.NameEnquiry(ctx, n)
-	wantErr(t, err, nibss.ErrInvalidAccount, "name enquiry "+n+": account is closed: 07 invalid account")
+	wantErr(t, err, nip.ErrInvalidAccount, "name enquiry "+n+": account is closed: 07 invalid account")
 }

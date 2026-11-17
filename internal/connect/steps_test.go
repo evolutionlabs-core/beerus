@@ -10,29 +10,18 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-func TestBackoffDoublesToFiveMinutes(t *testing.T) {
-	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
-	for i, w := range want {
-		if got := backoff(i + 1); got != w {
-			t.Errorf("attempt %d: %v, want %v", i+1, got, w)
-		}
-	}
-	if got := backoff(40); got != 5*time.Minute {
-		t.Fatalf("attempt 40: %v", got)
-	}
-}
-
 func TestStepIndexKeepsTheDatabaseThird(t *testing.T) {
-	if stepIndex(setup.StepDatabase) != 2 || stepIndex(setup.StepAllocate) != 0 || stepIndex("nope") != -1 {
+	if stepIndex(config.StepDatabase) != 2 || stepIndex(config.StepAllocate) != 0 || stepIndex("nope") != -1 {
 		t.Fatal("step order changed")
 	}
 }
 
 func TestDriftRules(t *testing.T) {
-	missing := []string{setup.StepDatabase, setup.StepSite}
+	missing := []string{config.StepDatabase, config.StepSite}
 	cases := []struct {
 		phase     string
 		done      []string
@@ -67,7 +56,7 @@ func finalizerApp(t *testing.T, r setup.Resource) *App {
 }
 
 func TestOneFinalizerPerStep(t *testing.T) {
-	a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: setup.PhaseClosing, Finalizers: []string{"one", "two", "three"}})
+	a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: config.PhaseClosing, Finalizers: []string{"one", "two", "three"}})
 	ran := []string{}
 	run := func(name string) func(*App, context.Context, setup.Resource) (*setup.Condition, error) {
 		return func(*App, context.Context, setup.Resource) (*setup.Condition, error) {
@@ -86,13 +75,13 @@ func TestOneFinalizerPerStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := findResource(&st, setup.KindBank, "bank-b"); !slices.Equal(r.Done, []string{"one", "two", "three"}) || r.Phase != setup.PhaseClosed || r.ObservedGeneration != r.Generation {
+	if r := findResource(&st, setup.KindBank, "bank-b"); !slices.Equal(r.Done, []string{"one", "two", "three"}) || r.Phase != config.PhaseClosed || r.ObservedGeneration != r.Generation {
 		t.Fatalf("a finalizer without a run did not finish at once, or the close did not complete: %+v", r)
 	}
 }
 
 func TestFinalizerFailureBacksOff(t *testing.T) {
-	a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: setup.PhaseClosing, Finalizers: []string{"one"}})
+	a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: config.PhaseClosing, Finalizers: []string{"one"}})
 	calls := 0
 	lists := map[string][]finalizer{setup.KindBank: {{name: "one", run: func(*App, context.Context, setup.Resource) (*setup.Condition, error) {
 		calls++

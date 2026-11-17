@@ -219,10 +219,10 @@ func LoadAuthority(dir, name string) (*Authority, error) {
 }
 
 func (l *Leaf) Save(dir, name string) error {
-	if err := WriteFile(filepath.Join(dir, name+".crt"), l.CertPEM, 0o644); err != nil {
+	if err := WriteFile(filepath.Join(dir, name+".key"), l.KeyPEM, 0o600); err != nil {
 		return err
 	}
-	return WriteFile(filepath.Join(dir, name+".key"), l.KeyPEM, 0o600)
+	return WriteFile(filepath.Join(dir, name+".crt"), l.CertPEM, 0o644)
 }
 
 func LoadPool(paths ...string) (*x509.CertPool, error) {

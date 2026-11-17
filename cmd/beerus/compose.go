@@ -67,6 +67,14 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  nibss:
+    <<: *beerus
+    command: ["run", "--participant", "nibss"]
+    network_mode: "service:core"
+    depends_on:
+      core:
+        condition: service_started
 {{range .Banks}}
   {{.ID}}:
     <<: *beerus
@@ -78,7 +86,7 @@ services:
         aliases:
           - {{.ID}}.localhost
     depends_on:
-      cbn:
+      core:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "beerus", "health", "http://{{.ID}}.localhost:{{.Port}}/health"]
@@ -97,13 +105,9 @@ services:
       default:
         aliases:
           - {{.ConnectHost}}
-{{- if .Banks}}
     depends_on:
-{{- range .Banks}}
-      {{.ID}}:
+      cbn:
         condition: service_healthy
-{{- end}}
-{{- end}}
     healthcheck:
       test: ["CMD", "beerus", "health", "--token-file", "/state/control-token", "http://127.0.0.1:{{.ControlPort}}/health"]
       interval: 2s

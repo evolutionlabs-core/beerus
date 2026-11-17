@@ -9,8 +9,9 @@ import (
 	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -50,13 +51,13 @@ type planner struct {
 	applied    map[string]Bank
 	wanted     map[string]Bank
 	resources  map[string]Resource
-	tombstones []nibss.Institution
-	members    []nibss.Institution
+	tombstones []nip.Institution
+	members    []nip.Institution
 	errs       []error
 	pack       *countrypack.Pack
 }
 
-func Build(pack *countrypack.Pack, desired Spec, st Status, dir []nibss.Institution, today clock.Date) Plan {
+func Build(pack *countrypack.Pack, desired Spec, st Status, dir []nip.Institution, today clock.Date) Plan {
 	p := newPlanner(desired, st, dir, today)
 	p.pack = pack
 	var actions []Action
@@ -79,7 +80,7 @@ func Build(pack *countrypack.Pack, desired Spec, st Status, dir []nibss.Institut
 	return Plan{Setup: desired.Metadata.Name, Actions: actions}
 }
 
-func newPlanner(desired Spec, st Status, dir []nibss.Institution, today clock.Date) *planner {
+func newPlanner(desired Spec, st Status, dir []nip.Institution, today clock.Date) *planner {
 	p := &planner{
 		desired:    desired,
 		st:         st,
@@ -98,10 +99,10 @@ func newPlanner(desired Spec, st Status, dir []nibss.Institution, today clock.Da
 	for _, r := range st.Resources {
 		p.resources[r.Kind+"/"+r.ID] = r
 	}
-	rows := append([]nibss.Institution(nil), dir...)
+	rows := append([]nip.Institution(nil), dir...)
 	sort.Slice(rows, func(i, j int) bool { return rows[i].NIPCode < rows[j].NIPCode })
 	for _, in := range rows {
-		if in.Status == nibss.StatusRemoved {
+		if in.Status == nip.StatusRemoved {
 			p.tombstones = append(p.tombstones, in)
 		} else {
 			p.members = append(p.members, in)
@@ -143,7 +144,6 @@ func (p *planner) setupAction() (Action, bool) {
 		}
 	}
 	add("nip.tsq_after", orString(a.Spec.NIP.TSQAfter, def.NIP.TSQAfter), orString(d.Spec.NIP.TSQAfter, def.NIP.TSQAfter))
-	add("nip.tsq_attempts", strconv.Itoa(orInt(a.Spec.NIP.TSQAttempts, def.NIP.TSQAttempts)), strconv.Itoa(orInt(d.Spec.NIP.TSQAttempts, def.NIP.TSQAttempts)))
 	add("connect.legal_name", orString(a.Spec.Connect.LegalName, def.Connect.LegalName), orString(d.Spec.Connect.LegalName, def.Connect.LegalName))
 	add("connect.brand_name", orString(a.Spec.Connect.BrandName, def.Connect.BrandName), orString(d.Spec.Connect.BrandName, def.Connect.BrandName))
 	add("connect.registry_id", orString(a.Spec.Connect.RegistryID, def.Connect.RegistryID), orString(d.Spec.Connect.RegistryID, def.Connect.RegistryID))
@@ -214,7 +214,7 @@ func (p *planner) allocate() map[string]codes {
 		}
 		return err
 	}
-	markHeld := func(in nibss.Institution) {
+	markHeld := func(in nip.Institution) {
 		if err := markNUBAN(in.NUBANCode); err != nil {
 			p.fail("", nil, "NIBSS holds a bad NUBAN code %q for %s: %v. Run beerus reset to start again.", in.NUBANCode, in.ID, err)
 		}
@@ -321,7 +321,7 @@ func (p *planner) order(banks []Bank) []Bank {
 
 func (p *planner) bankAction(b Bank, c codes) (Action, bool) {
 	r, hasRes := p.resource(KindBank, b.ID)
-	if hasRes && r.Phase == PhaseTerminating {
+	if hasRes && r.Phase == config.PhaseTerminating {
 		p.fail("banks["+b.ID+"].id", ErrBeingRemoved, "banks[%s] is being removed, and its id is never reused. Choose another id.", b.ID)
 		return Action{}, false
 	}
@@ -420,17 +420,17 @@ func (p *planner) updateAction(old, b Bank, r Resource, hasRes bool) (Action, bo
 
 func driftAction(r Resource) (Action, bool) {
 	switch r.Phase {
-	case PhaseActive, PhaseSuspended, PhaseRepairing:
+	case config.PhaseActive, config.PhaseSuspended, config.PhaseRepairing:
 	default:
 		return Action{}, false
 	}
 	var fields []FieldChange
-	for _, s := range []string{StepAllocate, StepDirectory, StepDatabase, StepLedgerSchema, StepOpenBankingSchema, StepCerts, StepCBN, StepSite, StepAPI} {
+	for _, s := range []string{config.StepAllocate, config.StepDirectory, config.StepDatabase, config.StepLedgerSchema, config.StepOpenBankingSchema, config.StepCerts, config.StepCBN, config.StepSite, config.StepAPI} {
 		if v, ok := r.Steps[s]; ok && v != stepDone {
 			fields = append(fields, FieldChange{Path: "steps." + s, From: stepDone, To: v})
 		}
 	}
-	if len(fields) == 0 && r.Phase != PhaseRepairing {
+	if len(fields) == 0 && r.Phase != config.PhaseRepairing {
 		return Action{}, false
 	}
 	return Action{Op: OpDrift, Kind: r.Kind, ID: r.ID, Fields: fields}, true
@@ -462,7 +462,7 @@ func (p *planner) checkTarget(id string, rm *Removal, path string) {
 		p.fail(path, nil, "%s sends money to %s, which is not in the file. Choose a bank in the file.", path, rm.To)
 		return
 	}
-	if r, ok := p.resource(KindBank, rm.To); ok && (r.Phase == PhaseTerminating || r.Phase == PhaseClosing || r.Phase == PhaseClosed) {
+	if r, ok := p.resource(KindBank, rm.To); ok && (r.Phase == config.PhaseTerminating || r.Phase == config.PhaseClosing || r.Phase == config.PhaseClosed) {
 		p.fail(path, nil, "%s sends money to %s, which is closing or closed. Choose a bank that stays open.", path, rm.To)
 		return
 	}
@@ -500,7 +500,7 @@ func (p *planner) bankRemovals() []Action {
 	for i := len(ordered) - 1; i >= 0; i-- {
 		b := ordered[i]
 		r, hasRes := p.resource(KindBank, b.ID)
-		if hasRes && r.Phase == PhaseTerminating {
+		if hasRes && r.Phase == config.PhaseTerminating {
 			if !slices.Contains(r.Done, FinalizerDecideMoney) {
 				p.checkTarget(b.ID, b.OnRemove, "on_remove of removed bank "+b.ID)
 			}
@@ -536,7 +536,7 @@ func (p *planner) partnerActions() []Action {
 	var out []Action
 	for _, x := range p.desired.Spec.Partners {
 		r, hasRes := p.resource(KindPartner, x.ID)
-		if hasRes && r.Phase == PhaseTerminating {
+		if hasRes && r.Phase == config.PhaseTerminating {
 			p.fail("partners["+x.ID+"].id", ErrBeingRemoved, "partners[%s] is being removed and cannot be added back until removal finishes. Take it out of the file, or wait.", x.ID)
 			continue
 		}
@@ -581,7 +581,7 @@ func (p *planner) partnerRemovals() []Action {
 		if wanted[x.ID] {
 			continue
 		}
-		if r, ok := p.resource(KindPartner, x.ID); ok && r.Phase == PhaseTerminating {
+		if r, ok := p.resource(KindPartner, x.ID); ok && r.Phase == config.PhaseTerminating {
 			continue
 		}
 		out = append(out, Action{Op: OpRemove, Kind: KindPartner, ID: x.ID, Destructive: true, Impact: &Impact{}})

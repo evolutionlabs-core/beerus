@@ -16,7 +16,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-var createSteps = []string{setup.StepAllocate, setup.StepDirectory, setup.StepDatabase, setup.StepLedgerSchema, setup.StepOpenBankingSchema, setup.StepCerts, setup.StepCBN, setup.StepSite, setup.StepAPI}
+var createSteps = []string{config.StepAllocate, config.StepDirectory, config.StepDatabase, config.StepLedgerSchema, config.StepOpenBankingSchema, config.StepCerts, config.StepCBN, config.StepSite, config.StepAPI}
 
 func storedStatus(t *testing.T, dir string) setup.Status {
 	t.Helper()
@@ -38,9 +38,27 @@ func storedBank(t *testing.T, dir, id string) setup.Resource {
 	return setup.Resource{}
 }
 
+func activeBank(t *testing.T, dir, id string) setup.Resource {
+	t.Helper()
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if r := storedBank(t, dir, id); r.Phase == config.PhaseActive {
+			return r
+		}
+		select {
+		case <-timeout.C:
+			return storedBank(t, dir, id)
+		case <-tick.C:
+		}
+	}
+}
+
 func checkProvisioned(t *testing.T, r setup.Resource) {
 	t.Helper()
-	if r.Phase != setup.PhaseActive || r.ObservedGeneration != r.Generation || r.Attempts != 0 || r.NextAttemptAt != nil {
+	if r.Phase != config.PhaseActive || r.ObservedGeneration != r.Generation || r.Attempts != 0 || r.NextAttemptAt != nil {
 		t.Errorf("%s: phase %s generation %d/%d attempts %d next %v", r.ID, r.Phase, r.ObservedGeneration, r.Generation, r.Attempts, r.NextAttemptAt)
 	}
 	for _, step := range createSteps {
@@ -83,7 +101,7 @@ func TestFreshUpMakesBothBanksActive(t *testing.T) {
 	}
 	s := newBankStack(t)
 	for _, b := range s.cfg.Banks {
-		checkProvisioned(t, storedBank(t, s.cfg.Dir, b.ID))
+		checkProvisioned(t, activeBank(t, s.cfg.Dir, b.ID))
 	}
 	for _, st := range s.ctl("GET", "/banks", nil)["data"].([]any) {
 		m := st.(map[string]any)
@@ -113,8 +131,8 @@ func TestRestartResumesProvisioning(t *testing.T) {
 	for i := range st.Resources {
 		r := &st.Resources[i]
 		if r.Kind == setup.KindBank && r.ID == "bank-b" {
-			r.Phase = setup.PhaseProvisioning
-			r.Steps = map[string]string{setup.StepAllocate: "done", setup.StepDirectory: "done"}
+			r.Phase = config.PhaseProvisioning
+			r.Steps = map[string]string{config.StepAllocate: "done", config.StepDirectory: "done"}
 			r.Attempts, r.NextAttemptAt = 3, &later
 		}
 	}
@@ -127,8 +145,11 @@ func TestRestartResumesProvisioning(t *testing.T) {
 	}
 	second := runOnce(t, again)
 	defer second.stop()
-	checkProvisioned(t, storedBank(t, cfg.Dir, "bank-b"))
-	checkProvisioned(t, storedBank(t, cfg.Dir, "bank-a"))
+	waitFor(t, waitLimit, "both banks to be active again", func() bool {
+		return !slices.ContainsFunc(second.app.BankStatuses(), func(b connect.BankStatus) bool { return b.Phase != connect.PhaseActive })
+	})
+	checkProvisioned(t, activeBank(t, cfg.Dir, "bank-b"))
+	checkProvisioned(t, activeBank(t, cfg.Dir, "bank-a"))
 	for _, b := range second.app.BankStatuses() {
 		if b.Phase != connect.PhaseActive {
 			t.Errorf("%s is %s after the restart", b.ID, b.Phase)

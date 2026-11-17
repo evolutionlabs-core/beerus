@@ -19,13 +19,22 @@ const specFile = "openapi.yaml"
 
 var operations = []struct{ id, method, path string }{
 	{"nibssNameEnquiry", http.MethodGet, "/v1/name-enquiries"},
+	{"nibssEnrolBVN", http.MethodPost, "/v1/bvns"},
 	{"nibssFundsTransfer", http.MethodPost, "/v1/transfers"},
 	{"nibssStatusQuery", http.MethodPost, "/v1/transfers/{session_id}/status-queries"},
 	{"nibssBankDirectory", http.MethodGet, "/v1/banks"},
 	{"bankAccountNameEnquiry", http.MethodGet, "/v1/nip/account-names/{account_number}"},
 	{"bankCredit", http.MethodPost, "/v1/nip/credits"},
 	{"bankCreditStatus", http.MethodGet, "/v1/nip/credits/{session_id}"},
+	{"controlNameEnquiry", http.MethodGet, "/v1/control/name-enquiries"},
 	{"registerBank", http.MethodPut, "/v1/control/banks/{bank_id}"},
+	{"setBankStatus", http.MethodPut, "/v1/control/banks/{bank_id}/status"},
+	{"nibssRegistryClients", http.MethodGet, "/v1/registry/clients"},
+	{"nibssRegistryClient", http.MethodGet, "/v1/registry/clients/{client_id}"},
+	{"nibssRecordConsent", http.MethodPost, "/v1/consents"},
+	{"controlRegistryClients", http.MethodGet, "/v1/control/registry/clients"},
+	{"registerRegistryClient", http.MethodPut, "/v1/control/registry/clients/{client_id}"},
+	{"controlConsents", http.MethodGet, "/v1/control/consents"},
 }
 
 type found struct {

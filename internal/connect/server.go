@@ -1,17 +1,14 @@
 package connect
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
-	"log"
 	"net"
 	"net/http"
-	"strconv"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
@@ -35,31 +32,6 @@ func (a *App) WidgetTLS() (*tls.Config, error) {
 	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
 }
 
-func (a *App) listenLocal(port int) ([]net.Listener, error) {
-	if a.multiProcess() {
-		l, err := net.Listen("tcp", net.JoinHostPort(a.bind, strconv.Itoa(port)))
-		if err != nil {
-			return nil, fmt.Errorf("listen on port %d: %w", port, err)
-		}
-		return []net.Listener{l}, nil
-	}
-	out := []net.Listener{}
-	for _, host := range []string{"127.0.0.1", "::1"} {
-		l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
-		if err != nil {
-			if host == "::1" {
-				continue
-			}
-			for _, x := range out {
-				x.Close()
-			}
-			return nil, fmt.Errorf("listen on port %d: %w", port, err)
-		}
-		out = append(out, l)
-	}
-	return out, nil
-}
-
 func (a *App) Serve(ctx context.Context) error {
 	ptls, err := a.PartnerTLS()
 	if err != nil {
@@ -71,6 +43,17 @@ func (a *App) Serve(ctx context.Context) error {
 			return err
 		}
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	errc := make(chan error, 8)
+	nibssDone, err := a.serveNIBSS(runCtx, errc)
+	if err != nil {
+		cancel()
+		return err
+	}
+	defer func() {
+		cancel()
+		<-nibssDone
+	}()
 	type srv struct {
 		s   *http.Server
 		tls *tls.Config
@@ -87,7 +70,7 @@ func (a *App) Serve(ctx context.Context) error {
 	}
 	servers := []srv{}
 	for _, sp := range specs {
-		ls, err := a.listenLocal(sp.port)
+		ls, err := a.link.Listen(sp.port)
 		if err != nil {
 			for _, s := range servers {
 				for _, l := range s.ls {
@@ -96,7 +79,7 @@ func (a *App) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		servers = append(servers, srv{s: &http.Server{Handler: sp.h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: log.New(quietTLS{a}, "", 0)}, tls: sp.tls, ls: ls})
+		servers = append(servers, srv{s: &http.Server{Handler: sp.h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: server.ErrorLog(a.log)}, tls: sp.tls, ls: ls})
 	}
 	a.lifeMu.Lock()
 	a.serving = true
@@ -115,7 +98,6 @@ func (a *App) Serve(ctx context.Context) error {
 			return err
 		}
 	}
-	errc := make(chan error, 8)
 	for _, s := range servers {
 		for _, l := range s.ls {
 			ln := l
@@ -129,11 +111,24 @@ func (a *App) Serve(ctx context.Context) error {
 			}(s.s, ln)
 		}
 	}
-	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		a.Run(runCtx)
 		close(done)
+	}()
+	pushDone := make(chan struct{})
+	go func() {
+		defer close(pushDone)
+		if a.role == RoleCore {
+			a.runPush(runCtx)
+		}
+	}()
+	sendsDone := make(chan struct{})
+	go func() {
+		defer close(sendsDone)
+		if a.role != RoleCore {
+			a.runSends(runCtx)
+		}
 	}()
 	var serr error
 	select {
@@ -148,17 +143,9 @@ func (a *App) Serve(ctx context.Context) error {
 	a.stopBankSites(shut)
 	cancel()
 	<-done
+	<-pushDone
+	<-sendsDone
+	a.confirmWG.Wait()
 	a.closeLedgers()
 	return serr
-}
-
-type quietTLS struct {
-	a *App
-}
-
-func (q quietTLS) Write(p []byte) (int, error) {
-	if !bytes.Contains(p, []byte("TLS handshake error")) {
-		q.a.log.Warn(string(bytes.TrimSpace(p)))
-	}
-	return len(p), nil
 }

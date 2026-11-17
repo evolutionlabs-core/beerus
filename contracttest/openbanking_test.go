@@ -269,17 +269,8 @@ func TestOpenBanking(t *testing.T) {
 		t.Fatalf("refresh after revoke: %d %v", status, body)
 	}
 
-	ledger := s.ctl("GET", "/registry/consents?bank=bank-a", nil)["data"].([]any)
-	seen := map[string]bool{}
-	for _, e := range ledger {
-		m := e.(map[string]any)
-		if m["consent_id"] == consentID {
-			seen[fmt.Sprint(m["status"])+"/"+fmt.Sprint(m["via"])] = true
-		}
-	}
-	if !seen["Authorised/bank"] || !seen["Revoked/bank"] {
-		t.Fatalf("NIBSS consent ledger for %s: %v", consentID, ledger)
-	}
+	s.waitConsent("bank-a", consentID+" Authorised/bank")
+	s.waitConsent("bank-a", consentID+" Revoked/bank")
 	clients := s.ctl("GET", "/registry/clients", nil)["data"].([]any)
 	if len(clients) != 1 || clients[0].(map[string]any)["id"] != s.cfg.Connect.RegistryID {
 		t.Fatalf("registry: %v", clients)

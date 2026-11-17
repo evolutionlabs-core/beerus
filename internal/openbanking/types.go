@@ -84,7 +84,11 @@ type Store interface {
 	Awaiting(ctx context.Context) ([]*Consent, error)
 	Enqueue(ctx context.Context, e ConsentEvent, at time.Time) error
 	EnqueueLedger(ctx context.Context, e ConsentEvent, at time.Time) error
+	EnqueueBoth(ctx context.Context, e ConsentEvent, at time.Time) error
 	LedgerDue(ctx context.Context, now time.Time, limit int) ([]Event, error)
+	LedgerRejected(ctx context.Context) ([]Rejection, error)
+	Reject(ctx context.Context, id int64, reason string) error
+	Incarnation(ctx context.Context) (string, error)
 	Due(ctx context.Context, now time.Time, limit int) ([]Event, error)
 	Delivered(ctx context.Context, id int64) error
 	Retry(ctx context.Context, id int64, attempts int, next time.Time) error
@@ -119,14 +123,17 @@ type ConsentEvent struct {
 	Seq       int64
 }
 
+type Rejection struct {
+	ID        int64
+	ConsentID string
+	Status    Status
+	Reason    string
+}
+
 type Event struct {
 	ConsentEvent
 	ID       int64
 	Attempts int
-}
-
-type Ledger interface {
-	Record(ConsentEvent)
 }
 
 type AccountInfo struct {
@@ -166,10 +173,10 @@ type Counterparty struct {
 }
 
 type Data interface {
-	Accounts(customer string) ([]AccountInfo, error)
-	Account(nuban string) (AccountInfo, error)
-	Balance(nuban string) (Balance, error)
-	BalanceOn(nuban string, d clock.Date) (int64, error)
-	Transactions(nuban string, from, to clock.Date) ([]Txn, error)
-	Ping() error
+	Accounts(ctx context.Context, customer string) ([]AccountInfo, error)
+	Account(ctx context.Context, nuban string) (AccountInfo, error)
+	Balance(ctx context.Context, nuban string) (Balance, error)
+	BalanceOn(ctx context.Context, nuban string, d clock.Date) (int64, error)
+	Transactions(ctx context.Context, nuban string, from, to clock.Date) ([]Txn, error)
+	Ping(ctx context.Context) error
 }

@@ -82,7 +82,6 @@ spec:
   nip:
     sessions: 4
     tsq_after: 2m
-    tsq_attempts: 3
   banks:
     - id: bank-a
       name: Bank A

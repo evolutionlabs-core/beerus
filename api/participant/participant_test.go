@@ -23,9 +23,23 @@ var operations = []struct{ id, method, path string }{
 	{"ensureParticipantStep", http.MethodPost, "/v1/steps/{step_id}/ensure"},
 	{"closeParticipant", http.MethodPost, "/v1/close"},
 	{"stopParticipant", http.MethodPost, "/v1/stop"},
+	{"setParticipantPhase", http.MethodPut, "/v1/phase"},
 	{"listParticipantFaults", http.MethodGet, "/v1/faults"},
 	{"setParticipantFault", http.MethodPost, "/v1/faults"},
 	{"clearParticipantFaults", http.MethodDelete, "/v1/faults"},
+	{"listCustomers", http.MethodGet, "/v1/customers"},
+	{"createCustomer", http.MethodPost, "/v1/customers"},
+	{"closeCustomer", http.MethodPost, "/v1/customers/{customer_id}/close"},
+	{"listAccounts", http.MethodGet, "/v1/accounts"},
+	{"openAccount", http.MethodPost, "/v1/accounts"},
+	{"closeAccount", http.MethodPost, "/v1/accounts/{nuban}/close"},
+	{"accountStatement", http.MethodGet, "/v1/accounts/{nuban}/statement"},
+	{"depositCash", http.MethodPost, "/v1/deposits"},
+	{"withdrawCash", http.MethodPost, "/v1/withdrawals"},
+	{"sendTransfer", http.MethodPost, "/v1/transfers"},
+	{"quoteTransfer", http.MethodPost, "/v1/transfers/quote"},
+	{"countOpenSends", http.MethodGet, "/v1/nip/sends/open"},
+	{"queryTransferStatus", http.MethodPost, "/v1/nip/sends/{session_id}/status-query"},
 }
 
 type found struct {

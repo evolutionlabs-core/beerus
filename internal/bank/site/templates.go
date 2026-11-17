@@ -1,6 +1,6 @@
-package connect
+package site
 
-const bankTemplates = `
+const templates = `
 {{define "bank_doc"}}<!doctype html>
 <html lang="en">
 <head>

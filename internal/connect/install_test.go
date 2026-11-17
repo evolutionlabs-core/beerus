@@ -168,7 +168,7 @@ func TestInstall(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {
-				if r := findResource(&st, setup.KindSystem, id); r == nil || r.Phase != setup.PhaseActive {
+				if r := findResource(&st, setup.KindSystem, id); r == nil || r.Phase != config.PhaseActive {
 					t.Errorf("%s after install: %+v", id, r)
 				}
 			}
@@ -230,7 +230,7 @@ func TestInstall(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := systemPhase(st, setup.SystemCBN); got != setup.PhaseActive {
+		if got := systemPhase(st, setup.SystemCBN); got != config.PhaseActive {
 			t.Fatalf("CBN phase after openRTGS: %q", got)
 		}
 	})
@@ -276,7 +276,7 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, n := postedAt(ls.st.Pool, "genesis"); !got.Equal(first) || n != 1 {
+		if got, n := postedAt(ls.Pool(), "genesis"); !got.Equal(first) || n != 1 {
 			t.Fatalf("bank genesis opened at %v: posted at %v, %d entries; want %v, 1", at, got, n, first)
 		}
 		if at == second {

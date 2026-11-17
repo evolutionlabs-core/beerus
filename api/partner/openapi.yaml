@@ -109,6 +109,8 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/NotReady'
   /v1/link_sessions/{link_session_id}:
     parameters:
       - name: link_session_id
@@ -759,6 +761,17 @@ components:
               code: internal_error
               message: Something went wrong.
               request_id: req_01JBC9X9
+    NotReady:
+      description: Connect has not finished registering with NIBSS, so no bank would accept it yet. Retry in a minute. The code is `not_ready`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: not_ready
+              message: Connect is still registering with NIBSS. Try again in a minute.
+              request_id: req_01JBC9XB
     InstitutionDown:
       description: The bank cannot be reached. Retry later.
       headers:
@@ -816,6 +829,7 @@ components:
         - `rate_limited` (429): too many requests.
         - `institution_down` (503): the bank cannot be reached. Also sent in `refresh.completed` and `connection.status_changed`.
         - `internal_error` (500): something went wrong inside Connect.
+        - `not_ready` (503): Connect has not finished registering with NIBSS.
       examples:
         - cursor_reset
     LinkSessionCreate:

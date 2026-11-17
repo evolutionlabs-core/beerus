@@ -2,11 +2,23 @@ package nibss
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
-func member(id, name, code, nuban string) Institution {
-	return Institution{ID: id, Name: name, NIPCode: code, NUBANCode: nuban, Type: "commercial"}
+func member(id, name, code, nuban string) Member {
+	return Member{Institution: nip.Institution{ID: id, Name: name, NIPCode: code, NUBANCode: nuban, Type: "commercial"}}
+}
+
+func registerCapped(t testing.TB, s *Store, id, name, code, nuban string, l Limits) {
+	t.Helper()
+	m := member(id, name, code, nuban)
+	m.Limits = l
+	if err := s.Register(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRegister(t *testing.T) {
@@ -19,11 +31,11 @@ func TestRegister(t *testing.T) {
 		}
 	}
 	got, err := s.Institution(ctx, "999001")
-	want := Institution{ID: "bank-a", Name: "Member A", NIPCode: "999001", NUBANCode: "901", Type: "commercial", Status: StatusActive}
+	want := nip.Institution{ID: "bank-a", Name: "Member A", NIPCode: "999001", NUBANCode: "901", Type: "commercial", Status: nip.StatusActive}
 	if err != nil || got != want {
 		t.Fatalf("registered: %+v, %v", got, err)
 	}
-	if err := s.SetStatus(ctx, "bank-a", StatusSuspended); err != nil {
+	if err := s.SetStatus(ctx, "bank-a", nip.StatusSuspended); err != nil {
 		t.Fatal(err)
 	}
 	rebrand := a
@@ -32,7 +44,7 @@ func TestRegister(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ = s.Institution(ctx, "999001")
-	if got.Name != "Member A Plc" || got.Type != "digital" || got.Status != StatusSuspended {
+	if got.Name != "Member A Plc" || got.Type != "digital" || got.Status != nip.StatusSuspended {
 		t.Fatalf("rebrand: %+v", got)
 	}
 	dir, _ := s.Directory(ctx)
@@ -41,22 +53,61 @@ func TestRegister(t *testing.T) {
 	}
 }
 
+func TestRegisterLimits(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	read := func() Limits {
+		t.Helper()
+		var l Limits
+		if err := s.pool.QueryRow(ctx, `SELECT net_debit_cap_minor, collateral_minor FROM institutions WHERE id = 'bank-a'`).Scan(&l.NetDebitCap, &l.Collateral); err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	a := member("bank-a", "Member A", "999001", "901")
+	a.Limits = Limits{NetDebitCap: 500_000_000, Collateral: 7}
+	if err := s.Register(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != a.Limits {
+		t.Fatalf("limits at registration: %+v", got)
+	}
+	a.Limits = Limits{NetDebitCap: 900_000_000, Collateral: 0}
+	if err := s.Register(ctx, a); err != nil {
+		t.Fatalf("new limits are not a conflict: %v", err)
+	}
+	if got := read(); got != a.Limits {
+		t.Fatalf("limits after a repeat: %+v", got)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE institutions SET net_debit_cap_minor = NULL WHERE id = 'bank-a'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Register(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != a.Limits {
+		t.Fatalf("a missing cap after a register again: %+v", got)
+	}
+	a.Limits = Limits{NetDebitCap: -1}
+	wantErr(t, s.Register(ctx, a), "bank bank-a: net_debit_cap_minor and collateral_minor must not be negative")
+}
+
 func TestRegisterRefusals(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
 	register(t, s, "bank-a", "Member A", "999001", "901")
 	register(t, s, "bank-gone", "Gone Bank", "999009", "909")
-	for _, st := range []string{StatusTerminating, StatusRemoved} {
+	for _, st := range []string{nip.StatusTerminating, nip.StatusRemoved} {
 		if err := s.SetStatus(ctx, "bank-gone", st); err != nil {
 			t.Fatal(err)
 		}
 	}
 	cases := []struct {
-		in   Institution
+		in   Member
 		want string
 	}{
-		{member("bank-a", "Member A", "999001", "911"), "bank bank-a has codes 999001/901 and they cannot change to 999001/911"},
-		{member("bank-a", "Member A", "999011", "901"), "bank bank-a has codes 999001/901 and they cannot change to 999011/901"},
+		{member("bank-a", "Member A", "999001", "911"), "bank bank-a is registered with nuban_code 901, and this request has nuban_code 911"},
+		{member("bank-a", "Member A", "999011", "901"), "bank bank-a is registered with nip_code 999001, and this request has nip_code 999011"},
 		{member("bank-x", "Member X", "999001", "931"), "bank bank-x: nip_code 999001 is held by bank-a: code or name already used"},
 		{member("bank-x", "Member X", "999031", "901"), "bank bank-x: nuban_code 901 is held by bank-a: code or name already used"},
 		{member("bank-x", "member a", "999031", "931"), `bank bank-x: name "member a" is held by bank-a: code or name already used`},
@@ -74,6 +125,62 @@ func TestRegisterRefusals(t *testing.T) {
 		t.Fatalf("a removed bank's name is free again: %v", err)
 	}
 	suspended := member("bank-x", "X", "999031", "931")
-	suspended.Status = StatusSuspended
+	suspended.Status = nip.StatusSuspended
 	wantErr(t, s.Register(ctx, suspended), "bank bank-x registers as active, not suspended; use SetStatus to change it")
+}
+
+func TestRegisterContact(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	register(t, s, "bank-a", "Member A", "999001", "901")
+	withContact := func(url, identity string) Member {
+		m := member("bank-a", "Member A", "999001", "901")
+		m.CreditURL, m.CertificateIdentity = url, identity
+		return m
+	}
+	steps := []struct {
+		name string
+		in   Member
+		want string
+	}{
+		{"fills in what was empty", withContact("https://a.localhost:1", "bank-a"), ""},
+		{"repeat", withContact("https://a.localhost:1", "bank-a"), ""},
+		{"other url", withContact("https://a.localhost:2", "bank-a"), "bank bank-a is registered with credit_url https://a.localhost:1, and this request has credit_url https://a.localhost:2"},
+		{"other identity and url", withContact("https://a.localhost:2", "bank-z"), "bank bank-a is registered with credit_url https://a.localhost:1 and certificate_identity bank-a, and this request has credit_url https://a.localhost:2 and certificate_identity bank-z"},
+	}
+	for _, st := range steps {
+		err := s.Register(ctx, st.in)
+		if st.want == "" && err != nil {
+			t.Fatalf("%s: %v", st.name, err)
+		}
+		if st.want != "" {
+			var conflict *RegistrationConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("%s: got %v, want a RegistrationConflictError", st.name, err)
+			}
+			wantErr(t, err, st.want)
+		}
+	}
+	got, err := s.Member(ctx, "bank-a")
+	if err != nil || got.CreditURL != "https://a.localhost:1" || got.CertificateIdentity != "bank-a" {
+		t.Fatalf("member: %+v, %v", got, err)
+	}
+	for _, c := range []struct {
+		identity string
+		want     bool
+	}{{"bank-a", true}, {"bank-z", false}} {
+		if ok, err := s.Admits(ctx, c.identity); err != nil || ok != c.want {
+			t.Fatalf("admits %s: %v, %v, want %v", c.identity, ok, err, c.want)
+		}
+	}
+	for _, st := range []string{nip.StatusTerminating, nip.StatusRemoved} {
+		if err := s.SetStatus(ctx, "bank-a", st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := s.Admits(ctx, "bank-a"); err != nil || ok {
+		t.Fatalf("a removed bank is admitted: %v, %v", ok, err)
+	}
+	_, err = s.Member(ctx, "bank-x")
+	wantErr(t, err, "bank id bank-x is not in the NIBSS directory")
 }

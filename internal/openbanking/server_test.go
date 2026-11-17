@@ -36,23 +36,23 @@ func (r fakeRegistry) ClientByCert(cn string) (*Client, bool) {
 
 type fakeData struct{}
 
-func (fakeData) Accounts(customer string) ([]AccountInfo, error) {
+func (fakeData) Accounts(_ context.Context, customer string) ([]AccountInfo, error) {
 	return []AccountInfo{{ID: "0123456789", Name: "Current", Type: "current", Currency: "NGN"}, {ID: "0123456790", Name: "Savings", Type: "savings", Currency: "NGN"}}, nil
 }
 
-func (fakeData) Account(id string) (AccountInfo, error) {
+func (fakeData) Account(_ context.Context, id string) (AccountInfo, error) {
 	return AccountInfo{ID: id, Name: "Current", Type: "current", Currency: "NGN"}, nil
 }
 
-func (fakeData) Balance(string) (Balance, error) {
+func (fakeData) Balance(context.Context, string) (Balance, error) {
 	return Balance{Ledger: 5000, Available: 4000, Currency: "NGN"}, nil
 }
 
-func (fakeData) BalanceOn(string, clock.Date) (int64, error) {
+func (fakeData) BalanceOn(context.Context, string, clock.Date) (int64, error) {
 	return 4200, nil
 }
 
-func (fakeData) Transactions(string, clock.Date, clock.Date) ([]Txn, error) {
+func (fakeData) Transactions(context.Context, string, clock.Date, clock.Date) ([]Txn, error) {
 	d, _ := clock.ParseDate("2026-01-05")
 	out := []Txn{}
 	for i := 0; i < 5; i++ {
@@ -61,34 +61,31 @@ func (fakeData) Transactions(string, clock.Date, clock.Date) ([]Txn, error) {
 	return out, nil
 }
 
-func (fakeData) Ping() error {
+func (fakeData) Ping(context.Context) error {
 	return nil
 }
 
-type recorder struct {
-	mu     sync.Mutex
-	events []ConsentEvent
-}
-
-func (r *recorder) Record(e ConsentEvent) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.events = append(r.events, e)
-}
-
 type env struct {
-	t      *testing.T
-	srv    *Server
-	ts     *httptest.Server
-	store  *MemStore
-	key    *ecdsa.PrivateKey
-	ca     *pki.Authority
-	good   *http.Client
-	other  *http.Client
-	now    time.Time
-	clk    time.Time
-	ledger *recorder
-	mu     sync.Mutex
+	t     *testing.T
+	srv   *Server
+	ts    *httptest.Server
+	store *MemStore
+	key   *ecdsa.PrivateKey
+	ca    *pki.Authority
+	good  *http.Client
+	other *http.Client
+	now   time.Time
+	clk   time.Time
+	mu    sync.Mutex
+}
+
+func (e *env) lastLedger() ConsentEvent {
+	e.t.Helper()
+	due, err := e.srv.LedgerDue(context.Background(), 100)
+	if err != nil || len(due) == 0 {
+		e.t.Fatalf("ledger events %+v: %v", due, err)
+	}
+	return due[len(due)-1].ConsentEvent
 }
 
 func (e *env) clientFor(cn, role string) *http.Client {
@@ -125,7 +122,7 @@ func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, store: NewMemStore(), key: key, ca: ca, now: time.Now(), clk: time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC), ledger: &recorder{}}
+	e := &env{t: t, store: NewMemStore(), key: key, ca: ca, now: time.Now(), clk: time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)}
 	var h http.Handler
 	e.ts = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
 	e.ts.TLS = &tls.Config{Certificates: []tls.Certificate{pair}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool}
@@ -134,7 +131,7 @@ func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	client := &Client{ID: "OBR-1", Name: "Connect", Role: "aggregator", CertCN: "connect", Keys: []*ecdsa.PublicKey{&key.PublicKey}, RedirectURIs: []string{"https://connect.localhost/cb"}}
 	cfg := Config{
 		BankID: "bank-a", BankName: "Bank A", Issuer: e.ts.URL, AuthorizeURL: "http://bank-a.localhost/authorize", HistoryDays: 90,
-		Store: e.store, Registry: fakeRegistry{client}, Data: fakeData{}, Ledger: e.ledger,
+		Store: e.store, Registry: fakeRegistry{client}, Data: fakeData{},
 		Real: func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.now },
 		Now:  func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.clk },
 	}
@@ -473,7 +470,7 @@ func TestRevokedConsent(t *testing.T) {
 	if status, body := e.post(e.good, "/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {tok["refresh_token"].(string)}}); status != http.StatusBadRequest {
 		t.Fatalf("refresh after revoke: %d %v", status, body)
 	}
-	last := e.ledger.events[len(e.ledger.events)-1]
+	last := e.lastLedger()
 	if last.Status != Revoked || last.ConsentID != id || last.Via != "bank" {
 		t.Fatalf("ledger %+v", last)
 	}
@@ -491,7 +488,7 @@ func TestConsentNeedsRenewalAfterAYear(t *testing.T) {
 	if c, _ := e.store.Consent(context.Background(), id); c.Status != ReconsentRequired {
 		t.Fatalf("status %s", c.Status)
 	}
-	if last := e.ledger.events[len(e.ledger.events)-1]; last.Status != ReconsentRequired {
+	if last := e.lastLedger(); last.Status != ReconsentRequired {
 		t.Fatalf("ledger %+v", last)
 	}
 }
@@ -532,7 +529,7 @@ func TestDormantConsent(t *testing.T) {
 	if status, _ := e.post(e.good, "/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {tok["refresh_token"].(string)}}); status != http.StatusBadRequest {
 		t.Fatalf("refresh of a dormant consent: %d", status)
 	}
-	if last := e.ledger.events[len(e.ledger.events)-1]; last.Status != Dormant || last.ConsentID != id {
+	if last := e.lastLedger(); last.Status != Dormant || last.ConsentID != id {
 		t.Fatalf("ledger %+v", last)
 	}
 }
@@ -711,14 +708,11 @@ func TestAssertionRules(t *testing.T) {
 }
 
 func TestLedgerOutboxKeepsOrderAndRetries(t *testing.T) {
-	e := newEnv(t, func(c *Config) { c.LedgerOutbox = true })
+	e := newEnv(t)
 	ctx := context.Background()
 	_, id := e.tokens()
 	if err := e.srv.Revoke(ctx, id, "adaeze", "bank"); err != nil {
 		t.Fatal(err)
-	}
-	if len(e.ledger.events) != 0 {
-		t.Fatalf("%d events went to the ledger in-process", len(e.ledger.events))
 	}
 	due, err := e.srv.LedgerDue(ctx, 10)
 	if err != nil || len(due) != 2 || due[0].Status != Authorised || due[1].Status != Revoked || due[0].ID >= due[1].ID {
