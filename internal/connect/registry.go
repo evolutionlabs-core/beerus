@@ -90,24 +90,27 @@ func (a *App) registryDue(ctx context.Context) {
 	err := a.ensureConnectClient(ctx)
 	now := a.clock.Real()
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if err == nil {
 		a.regReady, a.regAttempts, a.regProblem = true, 0, ""
 		a.regNext = now.Add(registryRecheck)
+		a.mu.Unlock()
 		return
 	}
 	var peer *server.PeerError
-	if errors.As(err, &peer) && peer.Status == http.StatusUnprocessableEntity {
+	refused := errors.As(err, &peer) && peer.Status == http.StatusUnprocessableEntity
+	changed := refused && a.regProblem != err.Error()
+	if refused {
 		a.regReady = false
-		a.lifeMu.Lock()
-		if a.regProblem != err.Error() {
-			a.regProblem = err.Error()
-			a.warn("NIBSS refuses the registry client of Connect: %v", err)
-		}
-		a.lifeMu.Unlock()
+		a.regProblem = err.Error()
 	}
 	a.regAttempts++
 	a.regNext = now.Add(clock.Backoff(a.regAttempts))
+	a.mu.Unlock()
+	if changed {
+		a.lifeMu.Lock()
+		a.warn("NIBSS refuses the registry client of Connect: %v", err)
+		a.lifeMu.Unlock()
+	}
 	a.logNIBSS("registry client not sent to NIBSS; retrying", err)
 }
 
