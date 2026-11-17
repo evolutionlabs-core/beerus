@@ -67,6 +67,14 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  nibss:
+    <<: *beerus
+    command: ["run", "--participant", "nibss"]
+    network_mode: "service:core"
+    depends_on:
+      core:
+        condition: service_started
 {{range .Banks}}
   {{.ID}}:
     <<: *beerus
