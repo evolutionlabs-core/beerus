@@ -1,14 +1,20 @@
 package contracttest
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 func TestSecondUpIsRefused(t *testing.T) {
@@ -76,6 +82,9 @@ func TestFreshUpHasNoBanks(t *testing.T) {
 		t.Errorf("fault down at an unknown bank: %q", got)
 	}
 	c.ok("bank", "create", "--name", "Bank A")
+	if got := c.ok("customer", "create", "--bank", "bank-a", "--name", "Ada Obi", "--phone", "08030000000", "--dob", "1990-04-12"); !strings.HasPrefix(got, "Created customer ") {
+		t.Errorf("customer create straight after bank create: %q", got)
+	}
 	if got := c.fails("fault", "down", "--bank", "bank-z"); got != "beerus: No such bank." {
 		t.Errorf("fault down at an unknown bank: %q", got)
 	}
@@ -85,7 +94,100 @@ func TestFreshUpHasNoBanks(t *testing.T) {
 	if got := c.ok("info"); !strings.Contains(got, "Bank A online banking") {
 		t.Errorf("info after the first bank: %q", got)
 	}
-	if got := c.ok("customer", "create", "--bank", "bank-a", "--name", "Ada Obi", "--phone", "08030000000", "--dob", "1990-04-12"); !strings.HasPrefix(got, "Created customer ") {
-		t.Errorf("customer create at the first bank: %q", got)
+}
+
+func controlCall(t *testing.T, cfg *config.Config, method, path string, body any) (int, map[string]any) {
+	t.Helper()
+	token, err := config.ReadSecret(cfg.Path("control-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), method, cfg.ControlURL()+path, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", web.NewID("key"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out := map[string]any{}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, out
+}
+
+func TestActiveBankServesCustomersAtOnce(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts a full stack; run without -short")
+	}
+	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
+		t.Setenv(config.DatabaseURLEnv, u)
+	}
+	dir := filepath.Join(t.TempDir(), "beerus")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ports := stackPorts(t, 1)
+	local := fmt.Sprintf("database_url: postgres:///postgres\nconnect:\n  host: connect.localhost\n  partner_port: %d\n  widget_port: %d\n  control_port: %d\n  health_port: %d\n  nibss_port: %d\n  sync_interval: 1m\n  refresh_min_interval: 1m\n", ports[0], ports[1], ports[2], ports[3], ports[4])
+	if err := os.WriteFile(filepath.Join(dir, "local.yaml"), []byte(local), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := newCLIAt(t, dir)
+	startUp(t, c, "")
+	cfg, err := connect.LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Bank A", "Bank B", "Bank C"} {
+		createServing(t, cfg, name, strings.ToLower(strings.ReplaceAll(name, " ", "-")))
+	}
+	pattern := "--participant bank-a --dir " + dir
+	if out, err := exec.Command("pkill", "-STOP", "-f", "--", pattern).CombinedOutput(); err != nil {
+		t.Fatalf("freeze bank-a: %v %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("pkill", "-CONT", "-f", "--", pattern).Run() })
+	createServing(t, cfg, "Bank D", "bank-d")
+	if out, err := exec.Command("pkill", "-CONT", "-f", "--", pattern).CombinedOutput(); err != nil {
+		t.Fatalf("thaw bank-a: %v %s", err, out)
+	}
+	c.ok("bank", "purge", "bank-d", "--yes")
+	createServing(t, cfg, "Bank D", "bank-d-2")
+}
+
+func createServing(t *testing.T, cfg *config.Config, name, id string) {
+	t.Helper()
+	if code, out := controlCall(t, cfg, http.MethodPost, "/banks", map[string]string{"name": name}); code >= http.StatusMultipleChoices {
+		t.Fatalf("create %s: %d %v", name, code, out)
+	}
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	limit := time.NewTimer(waitLimit)
+	defer limit.Stop()
+	for active := false; !active; {
+		select {
+		case <-limit.C:
+			t.Fatalf("%s did not turn active", id)
+		case <-tick.C:
+		}
+		_, out := controlCall(t, cfg, http.MethodGet, "/banks", nil)
+		rows, _ := out["data"].([]any)
+		for _, r := range rows {
+			if row, _ := r.(map[string]any); row["id"] == id {
+				active = row["phase"] == config.PhaseActive
+			}
+		}
+	}
+	body := map[string]string{"name": "Ada Obi", "phone": "08030000000", "dob": "1990-04-12"}
+	if code, out := controlCall(t, cfg, http.MethodPost, "/banks/"+id+"/customers", body); code != http.StatusCreated {
+		t.Fatalf("customer at %s the moment it turned active: %d %v", id, code, out)
 	}
 }

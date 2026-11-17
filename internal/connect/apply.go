@@ -775,6 +775,7 @@ func (a *App) startAdmitted(ad *admission) {
 			a.cfg.Banks = append(slices.Clone(a.cfg.Banks), b)
 			a.mu.Unlock()
 			a.status[b.ID] = newStatus(b, false)
+			delete(a.confirms, b.ID)
 			a.lifeMu.Unlock()
 		case act.Kind == setup.KindBank && (act.Op == setup.OpClose || act.Op == setup.OpRemove):
 			a.lifeMu.Lock()

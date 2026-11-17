@@ -22,6 +22,24 @@ type bankState struct {
 	Port     int    `json:"port"`
 	APIPort  int    `json:"api_port"`
 	Database string `json:"database"`
+	Steps    []struct {
+		ID   string `json:"id"`
+		Done bool   `json:"done"`
+	} `json:"steps"`
+}
+
+func (b bankState) startable() bool {
+	switch b.Phase {
+	case config.PhaseActive, config.PhaseSuspended:
+		return true
+	case config.PhaseProvisioning, config.PhaseRepairing:
+		for _, s := range b.Steps {
+			if s.ID == config.StepCBN {
+				return s.Done
+			}
+		}
+	}
+	return false
 }
 
 func (b bankState) fingerprint() string {
@@ -78,7 +96,7 @@ func (s *supervisor) sync(banks []bankState) {
 			s.drop(b.ID)
 		case running != nil && running.print != b.fingerprint():
 			s.drop(b.ID)
-		case running == nil && (b.Phase == config.PhaseActive || b.Phase == config.PhaseSuspended):
+		case running == nil && b.startable():
 			s.bring(b.ID, b.fingerprint())
 		}
 	}

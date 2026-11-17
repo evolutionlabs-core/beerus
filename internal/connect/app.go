@@ -85,6 +85,8 @@ type App struct {
 	driftAt      time.Time
 	driftDue     atomic.Bool
 	strikes      map[string]int
+	confirms     map[string]*bankConfirm
+	confirmWG    sync.WaitGroup
 	refreshing   map[string]*refreshFlight
 	obMu         sync.Mutex
 	obs          map[string]*openbanking.Server
@@ -309,6 +311,7 @@ func (a *App) Run(ctx context.Context) {
 }
 
 func (a *App) Step(ctx context.Context) {
+	a.confirmDue(ctx)
 	a.registerDue(ctx)
 	a.stepLocked(ctx)
 }
