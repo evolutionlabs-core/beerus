@@ -467,10 +467,10 @@ func TestCloseBank(t *testing.T) {
 	if got := balance(home["adaeze"]); got != before {
 		t.Fatalf("money moved while the destination had a fault: %d, want %d", got, before)
 	}
+	s.ctl("POST", "/banks/bank-a/suspend", nil)
 	if got := s.ctl("DELETE", "/faults?bank=bank-a", nil); got["cleared"] != float64(1) {
 		t.Fatalf("clear faults: %v", got)
 	}
-	s.ctl("POST", "/banks/bank-a/suspend", nil)
 	s.waitBlocked("abuja-digital", setup.ReasonTargetUnavailable, "Bank A is suspended or down, so money cannot move there. Resume it or choose another bank.")
 	if got := balance(home["adaeze"]); got != before {
 		t.Fatalf("money moved while the destination was suspended: %d, want %d", got, before)
