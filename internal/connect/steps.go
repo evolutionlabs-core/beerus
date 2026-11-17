@@ -248,6 +248,7 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	st.Phase, st.Reason, st.Attempts, st.NextAttemptAt = phase, "", 0, nil
 	a.lifeMu.Unlock()
 	a.recordPhase(b.ID, phase, gen)
+	a.pokePush()
 }
 
 func (a *App) directoryDone(st *BankStatus) bool {

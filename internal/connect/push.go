@@ -139,6 +139,7 @@ func (a *App) startPushers(ctx context.Context, wg *sync.WaitGroup, pushers map[
 func (a *App) pushBank(ctx context.Context, id, base string, wake <-chan struct{}) {
 	attempts := 0
 	warned := ""
+	synced := false
 	for {
 		w, err := a.wishFor(id)
 		if err == nil {
@@ -147,12 +148,17 @@ func (a *App) pushBank(ctx context.Context, id, base string, wake <-chan struct{
 		delay := pushInSync
 		switch {
 		case err == nil:
-			attempts, warned = 0, ""
+			attempts, warned, synced = 0, "", true
+			a.setServed(id, w.phase)
 		case ctx.Err() != nil:
 			return
 		default:
 			attempts++
-			delay = min(clock.Backoff(attempts), pushRetryMax)
+			a.setServed(id, "")
+			delay = pushEvery
+			if synced {
+				delay = min(clock.Backoff(attempts), pushRetryMax)
+			}
 			if msg := err.Error(); warned != msg {
 				warned = msg
 				a.log.Warn("bank not synced; retrying", "bank", id, "err", err)

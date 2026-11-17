@@ -76,6 +76,9 @@ func TestFreshUpHasNoBanks(t *testing.T) {
 		t.Errorf("fault down at an unknown bank: %q", got)
 	}
 	c.ok("bank", "create", "--name", "Bank A")
+	if got := c.ok("customer", "create", "--bank", "bank-a", "--name", "Ada Obi", "--phone", "08030000000", "--dob", "1990-04-12"); !strings.HasPrefix(got, "Created customer ") {
+		t.Errorf("customer create straight after bank create: %q", got)
+	}
 	if got := c.fails("fault", "down", "--bank", "bank-z"); got != "beerus: No such bank." {
 		t.Errorf("fault down at an unknown bank: %q", got)
 	}
@@ -84,8 +87,5 @@ func TestFreshUpHasNoBanks(t *testing.T) {
 	}
 	if got := c.ok("info"); !strings.Contains(got, "Bank A online banking") {
 		t.Errorf("info after the first bank: %q", got)
-	}
-	if got := c.ok("customer", "create", "--bank", "bank-a", "--name", "Ada Obi", "--phone", "08030000000", "--dob", "1990-04-12"); !strings.HasPrefix(got, "Created customer ") {
-		t.Errorf("customer create at the first bank: %q", got)
 	}
 }

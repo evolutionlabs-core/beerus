@@ -56,6 +56,9 @@ type BankStatus struct {
 	URL    string     `json:"online_banking"`
 	Steps  []BankStep `json:"steps"`
 
+	Serving bool `json:"serving"`
+	served  string
+
 	Port     int    `json:"port"`
 	APIPort  int    `json:"api_port"`
 	Database string `json:"database"`
@@ -78,6 +81,7 @@ func (a *App) BankStatuses() []BankStatus {
 			cp := *st
 			cp.Steps = append([]BankStep(nil), st.Steps...)
 			cp.Port, cp.APIPort, cp.Database = b.Port, b.APIPort, b.Database
+			cp.Serving = a.role != RoleCore || (st.served != "" && st.served == st.Phase)
 			out = append(out, cp)
 		}
 	}
@@ -99,6 +103,14 @@ func (a *App) bankPhaseReason(id string) (string, string) {
 		return PhaseActive, ""
 	}
 	return PhaseProvisioning, ""
+}
+
+func (a *App) setServed(id, phase string) {
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	if st := a.status[id]; st != nil {
+		st.served = phase
+	}
 }
 
 func (a *App) bankReady(id string) bool {

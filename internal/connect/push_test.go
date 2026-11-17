@@ -126,6 +126,28 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 		if got != want {
 			t.Fatalf("bank-b was sent %+v, want %+v", got, want)
 		}
+		served := func() bool {
+			for _, st := range a.BankStatuses() {
+				if st.ID == "bank-a" && st.Serving {
+					t.Fatal("bank-a is serving while it hangs")
+				}
+				if st.ID == "bank-b" && st.Serving {
+					return true
+				}
+			}
+			return false
+		}
+		poll := time.NewTicker(10 * time.Millisecond)
+		defer poll.Stop()
+		limit := time.NewTimer(pushWait)
+		defer limit.Stop()
+		for !served() {
+			select {
+			case <-limit.C:
+				t.Fatal("bank-b is not serving after its phase was taken")
+			case <-poll.C:
+			}
+		}
 	case <-time.After(pushWait):
 		t.Fatal("bank-b got no phase while bank-a hung")
 	}
