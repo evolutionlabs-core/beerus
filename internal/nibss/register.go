@@ -23,6 +23,7 @@ type Member struct {
 	nip.Institution
 	CreditURL           string
 	CertificateIdentity string
+	Limits              Limits
 }
 
 type RegistrationConflictError struct {
@@ -61,9 +62,19 @@ func checkRegister(in nip.Institution) error {
 	return nil
 }
 
+func checkLimits(id string, l Limits) error {
+	if l.NetDebitCap < 0 || l.Collateral < 0 {
+		return invalid("bank %s: net_debit_cap_minor and collateral_minor must not be negative", id)
+	}
+	return nil
+}
+
 func (s *Store) Register(ctx context.Context, m Member) error {
 	in := m.Institution
 	if err := checkRegister(in); err != nil {
+		return err
+	}
+	if err := checkLimits(in.ID, m.Limits); err != nil {
 		return err
 	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
@@ -100,8 +111,8 @@ ORDER BY nip_code`, in.ID, in.NIPCode, in.NUBANCode, in.Name)
 		if self != nil {
 			return updateMember(ctx, tx, m, *self)
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO institutions (id, name, nip_code, nuban_code, type, status, credit_url, certificate_identity) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7)`,
-			in.ID, in.Name, in.NIPCode, in.NUBANCode, in.Type, m.CreditURL, m.CertificateIdentity)
+		_, err = tx.Exec(ctx, `INSERT INTO institutions (id, name, nip_code, nuban_code, type, status, credit_url, certificate_identity, net_debit_cap_minor, collateral_minor) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9)`,
+			in.ID, in.Name, in.NIPCode, in.NUBANCode, in.Type, m.CreditURL, m.CertificateIdentity, m.Limits.NetDebitCap, m.Limits.Collateral)
 		if err != nil {
 			return fmt.Errorf("register bank %s: %w", in.ID, err)
 		}
@@ -132,10 +143,8 @@ func updateMember(ctx context.Context, tx pgx.Tx, m Member, cur Member) error {
 	if registered, requested := differences(cur, m); len(registered) > 0 {
 		return &RegistrationConflictError{ID: m.ID, Registered: registered, Requested: requested}
 	}
-	if cur.Name == m.Name && cur.Type == m.Type && cur.CreditURL == m.CreditURL && cur.CertificateIdentity == m.CertificateIdentity {
-		return nil
-	}
-	if _, err := tx.Exec(ctx, `UPDATE institutions SET name = $2, type = $3, credit_url = $4, certificate_identity = $5, updated_at = now() WHERE id = $1`, m.ID, m.Name, m.Type, m.CreditURL, m.CertificateIdentity); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE institutions SET name = $2, type = $3, credit_url = $4, certificate_identity = $5, net_debit_cap_minor = $6, collateral_minor = $7, updated_at = now()
+WHERE id = $1 AND (name, type, credit_url, certificate_identity, net_debit_cap_minor, collateral_minor) IS DISTINCT FROM ($2, $3, $4, $5, $6::bigint, $7::bigint)`, m.ID, m.Name, m.Type, m.CreditURL, m.CertificateIdentity, m.Limits.NetDebitCap, m.Limits.Collateral); err != nil {
 		return fmt.Errorf("update bank %s: %w", m.ID, err)
 	}
 	return nil

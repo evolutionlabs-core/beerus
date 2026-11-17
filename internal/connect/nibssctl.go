@@ -47,11 +47,8 @@ type registerBody struct {
 	Type                string `json:"type"`
 	CreditURL           string `json:"credit_url"`
 	CertificateIdentity string `json:"certificate_identity"`
-}
-
-type limitsBody struct {
-	NetDebitCap int64 `json:"net_debit_cap_minor"`
-	Collateral  int64 `json:"collateral_minor"`
+	NetDebitCap         int64  `json:"net_debit_cap_minor"`
+	Collateral          int64  `json:"collateral_minor"`
 }
 
 type statusBody struct {
@@ -74,16 +71,12 @@ func (n *nibssAdmin) enquire(ctx context.Context, code, nuban string) (nip.NameE
 
 func (n *nibssAdmin) register(ctx context.Context, b config.Bank) (nip.Institution, error) {
 	var in nip.Institution
-	body := registerBody{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Name: b.Name, Type: b.Type, CreditURL: b.APIURL(), CertificateIdentity: b.ID}
+	body := registerBody{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Name: b.Name, Type: b.Type, CreditURL: b.APIURL(), CertificateIdentity: b.ID, NetDebitCap: b.Cap(), Collateral: b.Collateral}
 	return in, n.put(ctx, nibssBanksPath+url.PathEscape(b.ID), body, &in)
 }
 
 func (n *nibssAdmin) setStatus(ctx context.Context, id, status string) error {
 	return n.put(ctx, nibssBanksPath+url.PathEscape(id)+"/status", statusBody{Status: status}, nil)
-}
-
-func (n *nibssAdmin) setLimits(ctx context.Context, b config.Bank) error {
-	return n.put(ctx, nibssBanksPath+url.PathEscape(b.ID)+"/limits", limitsBody{NetDebitCap: b.Cap(), Collateral: b.Collateral}, nil)
 }
 
 func (n *nibssAdmin) put(ctx context.Context, path string, in, out any) error {

@@ -273,6 +273,9 @@ func TestBeginCapReplayAndNoAnswer(t *testing.T) {
 		t.Fatalf("no answer for an unknown session: %v", err)
 	}
 	register(t, s, "bank-c", "Bank C", "999003", "903")
+	if _, err := s.pool.Exec(ctx, `UPDATE institutions SET net_debit_cap_minor = NULL WHERE id = 'bank-c'`); err != nil {
+		t.Fatal(err)
+	}
 	nolimit := transfer("n1", "999002", t0)
 	nolimit.FromCode = "999003"
 	_, _, err = s.Begin(ctx, nolimit)

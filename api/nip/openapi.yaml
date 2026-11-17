@@ -473,7 +473,7 @@ paths:
       operationId: registerBank
       tags: [control]
       summary: Register a bank with NIBSS
-      description: The control plane registers a bank in the NIBSS directory, as NIBSS operations onboard banks in the real world. It is an idempotent ensure keyed by `bank_id`. A repeat with the same details returns the same registration. The same `bank_id` with a different NIP code, NUBAN code, URL or certificate identity returns `422 registration_conflict`, and the message says which fields differ. NIBSS keeps `credit_url` and `certificate_identity` to call the bank, and never shows them in the directory.
+      description: The control plane registers a bank in the NIBSS directory, as NIBSS operations onboard banks in the real world. It is an idempotent ensure keyed by `bank_id`. A repeat with the same details returns the same registration. The same `bank_id` with a different NIP code, NUBAN code, URL or certificate identity returns `422 registration_conflict`, and the message says which fields differ. The net debit cap and the collateral are part of the registration, so a registered bank always has a cap. A repeat with other figures updates them, and is not a conflict. NIBSS keeps `credit_url` and `certificate_identity` to call the bank, and never shows them in the directory.
       security:
         - bearerAuth: []
       parameters:
@@ -491,6 +491,8 @@ paths:
               type: commercial
               credit_url: https://bank-a.localhost:7451
               certificate_identity: bank-a
+              net_debit_cap_minor: 500000000
+              collateral_minor: 0
       responses:
         '200':
           description: The bank is registered. It is the directory entry, without the URL.
@@ -591,7 +593,7 @@ paths:
       operationId: setBankLimits
       tags: [control]
       summary: Set the net debit cap and collateral of a bank
-      description: The control plane tells NIBSS the net debit cap and the collateral of a bank, as the CBN sets them in the real world. It is an idempotent ensure keyed by `bank_id`. NIBSS keeps the figures and uses the cap on every funds transfer from the bank. Until a cap is set, NIBSS answers `503` to the funds transfers of the bank. An unknown bank returns `404 not_found`.
+      description: The control plane tells NIBSS a new net debit cap and collateral for a bank that is already registered, as the CBN sets them in the real world. Registration carries the first figures. It is an idempotent ensure keyed by `bank_id`. NIBSS keeps the figures and uses the cap on every funds transfer from the bank. An unknown bank returns `404 not_found`.
       security:
         - bearerAuth: []
       parameters:
@@ -966,7 +968,7 @@ components:
     RegisterBank:
       type: object
       description: What the control plane tells NIBSS about a bank.
-      required: [nip_code, nuban_code, name, type, credit_url, certificate_identity]
+      required: [nip_code, nuban_code, name, type, credit_url, certificate_identity, net_debit_cap_minor, collateral_minor]
       properties:
         nip_code:
           type: string
@@ -990,6 +992,16 @@ components:
         certificate_identity:
           type: string
           description: The identity in the bank's client certificate. NIBSS accepts calls for this NIP code only from this identity.
+        net_debit_cap_minor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The most the bank may owe the other banks before the next settlement, in kobo.
+        collateral_minor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The collateral the bank holds with the CBN, in kobo.
     BankPage:
       type: object
       description: One page of the bank directory.

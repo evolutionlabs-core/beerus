@@ -18,8 +18,8 @@ type Limits struct {
 }
 
 func (s *Store) SetLimits(ctx context.Context, id string, l Limits) error {
-	if l.NetDebitCap < 0 || l.Collateral < 0 {
-		return invalid("bank %s: net_debit_cap_minor and collateral_minor must not be negative", id)
+	if err := checkLimits(id, l); err != nil {
+		return err
 	}
 	tag, err := s.pool.Exec(ctx, `UPDATE institutions SET net_debit_cap_minor = $2, collateral_minor = $3, updated_at = now() WHERE id = $1`, id, l.NetDebitCap, l.Collateral)
 	if err != nil {

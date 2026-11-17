@@ -44,6 +44,36 @@ func TestRegister(t *testing.T) {
 	}
 }
 
+func TestRegisterLimits(t *testing.T) {
+	ctx := context.Background()
+	s := testStore(t)
+	read := func() Limits {
+		t.Helper()
+		var l Limits
+		if err := s.pool.QueryRow(ctx, `SELECT net_debit_cap_minor, collateral_minor FROM institutions WHERE id = 'bank-a'`).Scan(&l.NetDebitCap, &l.Collateral); err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	a := member("bank-a", "Member A", "999001", "901")
+	a.Limits = Limits{NetDebitCap: 500_000_000, Collateral: 7}
+	if err := s.Register(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != a.Limits {
+		t.Fatalf("limits at registration: %+v", got)
+	}
+	a.Limits = Limits{NetDebitCap: 900_000_000, Collateral: 0}
+	if err := s.Register(ctx, a); err != nil {
+		t.Fatalf("new limits are not a conflict: %v", err)
+	}
+	if got := read(); got != a.Limits {
+		t.Fatalf("limits after a repeat: %+v", got)
+	}
+	a.Limits = Limits{NetDebitCap: -1}
+	wantErr(t, s.Register(ctx, a), "bank bank-a: net_debit_cap_minor and collateral_minor must not be negative")
+}
+
 func TestRegisterRefusals(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
