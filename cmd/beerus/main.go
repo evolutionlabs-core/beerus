@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -464,12 +465,11 @@ const (
 )
 
 type bankProgress struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Phase   string `json:"phase"`
-	URL     string `json:"online_banking"`
-	Serving bool   `json:"serving"`
-	Steps   []struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Phase string `json:"phase"`
+	URL   string `json:"online_banking"`
+	Steps []struct {
 		Name      string     `json:"name"`
 		Done      bool       `json:"done"`
 		Error     string     `json:"error"`
@@ -504,17 +504,16 @@ func waitBank(ctx context.Context, c *ctl, first bankProgress, clk *clock.Clock)
 			}
 			fmt.Println(stepLine(s.Name, width, true, stepTime(s.StartedAt, s.At)))
 		}
-		listening := st.Phase == config.PhaseActive && !st.Serving
-		if st.Phase != "provisioning" && shown == len(st.Steps) && !listening {
+		if st.Phase != "provisioning" && shown == len(st.Steps) {
+			if st.Phase == config.PhaseActive {
+				return st, awaitBankSite(ctx, st)
+			}
 			return st, nil
 		}
 		select {
 		case <-ctx.Done():
 			return st, ctx.Err()
 		case <-deadline.C:
-			if listening && shown == len(st.Steps) {
-				return st, fmt.Errorf("%s is active but its bank process is not answering. Check it with beerus bank list.", st.Name)
-			}
 			return st, stalled
 		case <-tick.C:
 		}
@@ -523,6 +522,37 @@ func waitBank(ctx context.Context, c *ctl, first bankProgress, clk *clock.Clock)
 			return st, err
 		}
 		st = next
+	}
+}
+
+func awaitBankSite(ctx context.Context, st bankProgress) error {
+	u, err := url.Parse(st.URL)
+	if err != nil {
+		return fmt.Errorf("read the address of %s: %w", st.ID, err)
+	}
+	health := "http://" + net.JoinHostPort("127.0.0.1", u.Port()) + "/health"
+	deadline := time.NewTimer(startTimeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(startRetry)
+	defer tick.Stop()
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, health, nil)
+		if err != nil {
+			return fmt.Errorf("build health request of %s: %w", st.ID, err)
+		}
+		if resp, err := apiClient.Do(req); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode < http.StatusMultipleChoices {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("bank %s is active but not answering on port %s", st.ID, u.Port())
+		case <-tick.C:
+		}
 	}
 }
 
