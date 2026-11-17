@@ -120,7 +120,7 @@ func freePorts(t *testing.T, n int) []int {
 
 const (
 	stackPortLow  = 20000
-	stackPortHigh = 45000
+	stackPortHigh = 32000
 )
 
 func stackPorts(t *testing.T, banks int) []int {
