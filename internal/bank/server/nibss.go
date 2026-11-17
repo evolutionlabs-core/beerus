@@ -115,7 +115,7 @@ func (c NIBSSClient) Enquire(ctx context.Context, code, nuban string) (nip.NameE
 	return out, nil
 }
 
-func (s *Server) nibss() (NIBSSClient, error) {
+func (s *Server) NIBSS() (NIBSSClient, error) {
 	hc, err := s.directoryClient()
 	if err != nil {
 		return NIBSSClient{}, s.coreAway(err)
@@ -127,8 +127,15 @@ func (s *Server) nibss() (NIBSSClient, error) {
 	return NIBSSClient{HTTP: hc, Base: base, Away: s.Bank().Name + " cannot reach NIBSS right now. Try again in a minute."}, nil
 }
 
+func (s *Server) coreAway(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	return &UnavailableError{Msg: s.Bank().Name + " cannot reach NIBSS right now. Try again in a minute.", Err: err}
+}
+
 func (s *Server) Enrol(ctx context.Context, name, phone string, dob clock.Date) (string, string, error) {
-	c, err := s.nibss()
+	c, err := s.NIBSS()
 	if err != nil {
 		return "", "", err
 	}

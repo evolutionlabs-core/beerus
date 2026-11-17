@@ -23,13 +23,13 @@ func TestPeerAnswerOverTheLimitFailsClearly(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(big)), Header: http.Header{}}, nil
 	})}}
 	var out struct{ Data []string }
-	if _, err := l.Do(context.Background(), "http://core.invalid", http.MethodGet, "/internal/registry", nil, &out); err == nil || !strings.Contains(err.Error(), "larger than 16 MiB") {
+	if _, err := l.Do(context.Background(), "http://core.invalid", http.MethodGet, "/v1/registry/clients", nil, &out); err == nil || !strings.Contains(err.Error(), "larger than 16 MiB") {
 		t.Fatalf("an oversized answer: %v", err)
 	}
 	l.Client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(iotest.ErrReader(errors.New("connection reset"))), Header: http.Header{}}, nil
 	})}
-	if _, err := l.Do(context.Background(), "http://core.invalid", http.MethodGet, "/internal/registry", nil, &out); err == nil || !strings.Contains(err.Error(), "connection reset") {
+	if _, err := l.Do(context.Background(), "http://core.invalid", http.MethodGet, "/v1/registry/clients", nil, &out); err == nil || !strings.Contains(err.Error(), "connection reset") {
 		t.Fatalf("a broken answer: %v", err)
 	}
 }

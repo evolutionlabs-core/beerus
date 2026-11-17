@@ -124,7 +124,7 @@ func (s *Server) RefreshBanks(ctx context.Context) error {
 }
 
 func (s *Server) fetchDirectory(ctx context.Context) error {
-	c, err := s.nibss()
+	c, err := s.NIBSS()
 	if err != nil {
 		return err
 	}

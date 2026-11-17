@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -99,9 +98,12 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 		CA:        filepath.Join(dir, "banks", p.id, config.BankCAFile),
 		Servers:   p.servers,
 		Bank:      p.bank,
-		Core: func(ctx context.Context, e openbanking.ConsentEvent) error {
-			_, err := p.srv.CoreDo(ctx, http.MethodPost, "/internal/consents", e, nil)
-			return err
+		Record: func(ctx context.Context, _ string, e openbanking.ConsentEvent) error {
+			c, err := p.srv.NIBSS()
+			if err != nil {
+				return err
+			}
+			return c.RecordConsent(ctx, e)
 		},
 	}
 	return p, nil

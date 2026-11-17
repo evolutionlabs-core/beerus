@@ -41,7 +41,7 @@ type Sender struct {
 	CA        string
 	Servers   func() map[string]*openbanking.Server
 	Bank      func(id string) *config.Bank
-	Core      func(ctx context.Context, e openbanking.ConsentEvent) error
+	Record    func(ctx context.Context, bank string, e openbanking.ConsentEvent) error
 
 	flushMu sync.Mutex
 	mu      sync.Mutex
@@ -84,7 +84,7 @@ func (s *Sender) Events(ctx context.Context) {
 }
 
 func (s *Sender) Ledger(ctx context.Context) {
-	if s.Core == nil {
+	if s.Record == nil {
 		return
 	}
 	for id, srv := range s.Servers() {
@@ -96,7 +96,7 @@ func (s *Sender) Ledger(ctx context.Context) {
 		for _, e := range due {
 			ev := e.ConsentEvent
 			ev.Seq = e.ID
-			if err := s.Core(ctx, ev); err != nil {
+			if err := s.Record(ctx, id, ev); err != nil {
 				s.Log.Warn("consent ledger not updated; will retry", "bank", id, "consent", e.ConsentID, "attempt", e.Attempts+1, "err", err)
 				if err := srv.Retry(context.WithoutCancel(ctx), e, s.Clock.Real().Add(Backoff(e.Attempts))); err != nil {
 					s.Log.Error("consent ledger retry not saved", "bank", id, "consent", e.ConsentID, "err", err)

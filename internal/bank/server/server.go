@@ -12,7 +12,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -55,11 +54,7 @@ type Server struct {
 	replays map[string]*web.Record
 	swept   time.Time
 
-	regMu      sync.Mutex
-	registry   map[string]*openbanking.RegistryClient
-	regAt      time.Time
-	regWarned  string
-	regRefresh refresher
+	reg *RegistryCache
 
 	dirMu      sync.Mutex
 	dirBanks   []*config.Bank
@@ -99,8 +94,8 @@ func New(c Config) *Server {
 		bank:      c.Bank,
 		worldID:   web.NewID("wld"),
 		replays:   map[string]*web.Record{},
-		registry:  map[string]*openbanking.RegistryClient{},
 	}
+	s.reg = NewRegistryCache(s.id, c.Clock, c.Log, s.fetchRegistry)
 	s.banking = &Banking{Src: s, Clock: c.Clock, Log: c.Log, ID: s.id}
 	s.sender = NewSender(SenderConfig{
 		Own:      s.Bank,
@@ -112,7 +107,7 @@ func New(c Config) *Server {
 		Phase:    s.phaseOf,
 		Lookup:   s.Lookup,
 		Refresh:  s.RefreshBanks,
-		NIBSS:    s.nibss,
+		NIBSS:    s.NIBSS,
 	})
 	return s
 }
