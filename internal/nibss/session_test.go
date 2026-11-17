@@ -77,24 +77,23 @@ func TestSessionSuccess(t *testing.T) {
 	}
 }
 
-func TestSessionFailureThenReversal(t *testing.T) {
+func TestSessionFailure(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
 	if _, err := begin(ctx, s, transfer("s2", "999002", t0)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Resolve(ctx, "s2", "91", nip.OutcomeFailed, t0); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Resolve(ctx, "s2", "91", OutcomeReversed, t0.Add(time.Second)); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := s.Resolve(ctx, "s2", "91", nip.OutcomeFailed, t0); err != nil {
+			t.Fatal(err)
+		}
 	}
 	q, _ := s.TSQ(ctx, "s2", t0)
-	if q.Status != "91" || q.Outcome != OutcomeReversed || !q.ResolvedAt.Equal(t0) {
-		t.Fatalf("after reversal: %+v", q)
+	if q.Status != "91" || q.Outcome != nip.OutcomeFailed || !q.ResolvedAt.Equal(t0) {
+		t.Fatalf("after failure: %+v", q)
 	}
-	err := s.Resolve(ctx, "s2", "91", nip.OutcomeFailed, t0)
-	wantErr(t, err, "session s2 is 91/reversed and cannot become 91/failed: status change not allowed")
+	err := s.Resolve(ctx, "s2", SessionOK, nip.OutcomeCredited, t0)
+	wantErr(t, err, "session s2 is 91/failed and cannot become 00/credited: status change not allowed")
 }
 
 func TestResolveRejectsBadInput(t *testing.T) {
@@ -111,7 +110,7 @@ func TestResolveRejectsBadInput(t *testing.T) {
 		{SessionPending, nip.OutcomeUnknown, t0, `session s3: "pending" is not a response code`},
 		{"9", nip.OutcomeFailed, t0, `session s3: "9" is not a response code`},
 		{SessionOK, nip.OutcomeFailed, t0, `session s3: a 00 session is credited, not "failed"`},
-		{"91", nip.OutcomeCredited, t0, `session s3: a 91 session is failed or reversed, not "credited"`},
+		{"91", nip.OutcomeCredited, t0, `session s3: a 91 session is failed, not "credited"`},
 		{"91", nip.OutcomeFailed, time.Time{}, "session s3 needs a resolved time"},
 		{SessionOK, nip.OutcomeCredited, t0.Add(-time.Second), "session s3 cannot resolve at 2026-11-04T09:11:59+01:00, before it began at 2026-11-04T09:12:00+01:00"},
 	}
@@ -147,7 +146,7 @@ func TestBeginRejectsBadInput(t *testing.T) {
 		{mod(func(x *Session) { x.Amount = 0 }), "session s4: amount must be above zero, not 0"},
 		{mod(func(x *Session) { x.CreatedAt = time.Time{} }), "session s4 needs a created time"},
 		{mod(func(x *Session) { x.Status = SessionOK }), "session s4 starts pending, not 00"},
-		{mod(func(x *Session) { x.Outcome = OutcomeReversed }), "session s4 cannot start with outcome reversed"},
+		{mod(func(x *Session) { x.Outcome = "reversed" }), "session s4 cannot start with outcome reversed"},
 		{mod(func(x *Session) { x.Outcome = nip.OutcomeUnknown }), "session s4 holds outcome unknown and needs a status query time"},
 		{mod(func(x *Session) { x.Settlement = "c1" }), "session s4 must start unresolved, unsettled and with no status queries"},
 		{mod(func(x *Session) { x.ToCode = "123456" }), "bank code 123456 is not in the NIBSS directory"},
@@ -284,58 +283,18 @@ func TestBeginCapReplayAndNoAnswer(t *testing.T) {
 	}
 }
 
-func TestDueOrder(t *testing.T) {
+func TestTSQKeepsTheStoredOutcome(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
-	begin := func(id string, created time.Time, next *time.Time, outcome string) {
-		x := transfer(id, "999002", created)
-		x.NextTSQAt, x.Outcome = next, outcome
-		if _, err := begin(ctx, s, x); err != nil {
-			t.Fatal(err)
-		}
-	}
-	begin("d-late", t0, ptr(t0.Add(3*time.Minute)), nip.OutcomeUnknown)
-	begin("d-b", t0.Add(time.Second), ptr(t0.Add(2*time.Minute)), nip.OutcomeCredited)
-	begin("d-a", t0.Add(time.Second), ptr(t0.Add(2*time.Minute)), nip.OutcomeFailed)
-	begin("d-first", t0.Add(2*time.Second), ptr(t0.Add(time.Minute)), nip.OutcomeUnknown)
-	begin("d-none", t0, nil, "")
-	begin("d-done", t0, ptr(t0), nip.OutcomeCredited)
-	if err := s.Resolve(ctx, "d-done", SessionOK, nip.OutcomeCredited, t0); err != nil {
+	x := transfer("d-b", "999002", t0)
+	x.NextTSQAt, x.Outcome = ptr(t0.Add(2*time.Minute)), nip.OutcomeCredited
+	if _, err := begin(ctx, s, x); err != nil {
 		t.Fatal(err)
 	}
-	ids := func(at time.Time) []string {
-		due, err := s.Due(ctx, at)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := []string{}
-		for _, x := range due {
-			out = append(out, x.ID)
-		}
-		return out
-	}
-	check := func(at time.Time, want ...string) {
-		t.Helper()
-		got := ids(at)
-		if len(got) != len(want) {
-			t.Fatalf("due at %s = %v, want %v", at.Format(time.Kitchen), got, want)
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Fatalf("due at %s = %v, want %v", at.Format(time.Kitchen), got, want)
-			}
-		}
-	}
-	check(t0)
-	check(t0.Add(time.Minute), "d-first")
-	check(t0.Add(2*time.Minute), "d-first", "d-a", "d-b")
-	check(t0.Add(time.Hour), "d-first", "d-a", "d-b", "d-late")
 	q, err := s.TSQ(ctx, "d-b", t0.Add(10*time.Minute))
 	if err != nil || q.Outcome != nip.OutcomeCredited || q.TSQAttempts != 1 || !q.NextTSQAt.Equal(t0.Add(10*time.Minute)) {
 		t.Fatalf("tsq keeps stored outcome: %+v, %v", q, err)
 	}
-	check(t0.Add(2*time.Minute), "d-first", "d-a")
-	check(t0.Add(time.Hour), "d-first", "d-a", "d-late", "d-b")
 }
 
 func TestSettlement(t *testing.T) {

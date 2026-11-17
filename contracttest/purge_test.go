@@ -295,14 +295,20 @@ func cbnBalance(t *testing.T, cfg *config.Config, account string) int64 {
 	return bal
 }
 
-func waitFor(t *testing.T, what string, cond func() bool) {
+const waitLimit = 60 * time.Second
+
+func waitFor(t *testing.T, limit time.Duration, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.NewTimer(limit)
+	defer deadline.Stop()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
 	for !cond() {
-		if time.Now().After(deadline) {
+		select {
+		case <-deadline.C:
 			t.Fatalf("timed out waiting for %s", what)
+		case <-tick.C:
 		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -346,7 +352,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		return r
 	}
 	r := start()
-	waitFor(t, "both banks to be active", func() bool {
+	waitFor(t, waitLimit, "both banks to be active", func() bool {
 		for _, b := range r.app.BankStatuses() {
 			if b.Phase != connect.PhaseActive {
 				return false
@@ -377,7 +383,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	if _, err := r.app.PurgeBank("bank-b", false); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "settle-inflight to wait", func() bool {
+	waitFor(t, waitLimit, "settle-inflight to wait", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonSettlementPending, "to settle 1 transfer (net ₦40,000.00)")
 	})
 	if got := storedBank(t, cfg.Dir, "bank-b").Done; !slices.Equal(got, []string{setup.FinalizerStopRouting, setup.FinalizerRevokeConnections}) {
@@ -386,19 +392,19 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	r.stop()
 
 	r = start()
-	waitFor(t, "the removal to resume and wait for settlement", func() bool {
+	waitFor(t, waitLimit, "the removal to resume and wait for settlement", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonSettlementPending, "to settle 1 transfer")
 	})
 	if _, err := r.app.SettleNow(); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the money decision", func() bool {
+	waitFor(t, waitLimit, "the money decision", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonMoneyDecisionNeeded, "holds ₦41,000.00 for 1 customer")
 	})
 	r.stop()
 
 	r = start()
-	waitFor(t, "the money decision after the second restart", func() bool {
+	waitFor(t, waitLimit, "the money decision after the second restart", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonMoneyDecisionNeeded, "holds ₦41,000.00 for 1 customer")
 	})
 	spec := storedStatus(t, cfg.Dir).Applied
@@ -406,7 +412,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	if _, err := r.app.Apply(spec, connect.ApplyOptions{Prune: true, Money: &setup.Removal{Money: setup.MoneyTransfer, To: "bank-a"}}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the moves to wait for settlement", func() bool {
+	waitFor(t, waitLimit, "the moves to wait for settlement", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonSettlementPending, "to settle 1 transfer (net ₦41,000.00)")
 	})
 	if got := storedBank(t, cfg.Dir, "bank-b").Done; !slices.Equal(got, []string{setup.FinalizerStopRouting, setup.FinalizerRevokeConnections, setup.FinalizerSettleInflight, setup.FinalizerDecideMoney}) {
@@ -416,13 +422,13 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 
 	r = start()
 	defer r.stop()
-	waitFor(t, "the moves to wait for settlement after the third restart", func() bool {
+	waitFor(t, waitLimit, "the moves to wait for settlement after the third restart", func() bool {
 		return blockedOn(r.app, "bank-b", setup.ReasonSettlementPending, "to settle 1 transfer (net ₦41,000.00)")
 	})
 	if _, err := r.app.SettleNow(); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "bank-b to be removed", func() bool {
+	waitFor(t, waitLimit, "bank-b to be removed", func() bool {
 		_, err := r.app.Resource(setup.KindBank, "bank-b")
 		return err != nil
 	})

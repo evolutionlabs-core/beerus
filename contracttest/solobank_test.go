@@ -197,7 +197,7 @@ func startSoloBank(t *testing.T, state string) soloBank {
 	site := fmt.Sprintf("http://127.0.0.1:%d", own.Port)
 	api := fmt.Sprintf("https://127.0.0.1:%d", own.APIPort)
 	probe := &bankProbe{t: t, plain: &http.Client{Timeout: controlProbeTimeout}}
-	waitFor(t, "the bank to answer on its own", func() bool {
+	waitFor(t, waitLimit, "the bank to answer on its own", func() bool {
 		select {
 		case err := <-exited:
 			t.Fatalf("the bank exited: %v\n%s", err, logs.String())

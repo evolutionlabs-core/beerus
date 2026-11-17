@@ -78,7 +78,7 @@ func TestSupervisorRestartsABankAndStopsEverything(t *testing.T) {
 			t.Errorf("reset: exit %d, output %q, error %q", code, got, errOut)
 		}
 	})
-	waitFor(t, "beerus up to print that it is running", func() bool {
+	waitFor(t, waitLimit, "beerus up to print that it is running", func() bool {
 		select {
 		case err := <-exited:
 			t.Fatalf("beerus up exited: %v\n%s\n%s", err, out.String(), errOut.String())
@@ -93,7 +93,7 @@ func TestSupervisorRestartsABankAndStopsEverything(t *testing.T) {
 	if got := c.ok("deposit", account, "--bank", "bank-a", "--amount", "5,000.50"); !strings.Contains(got, "Balance ₦5,000.50.") {
 		t.Fatalf("deposit: %q", got)
 	}
-	waitFor(t, "the core and bank-a processes", func() bool {
+	waitFor(t, waitLimit, "the core and bank-a processes", func() bool {
 		found := processesIn(t, dir)
 		return found["core"] != 0 && found["bank-a"] != 0
 	})
@@ -106,11 +106,11 @@ func TestSupervisorRestartsABankAndStopsEverything(t *testing.T) {
 	if err := syscall.Kill(old, syscall.SIGKILL); err != nil {
 		t.Fatalf("kill bank-a: %v", err)
 	}
-	waitFor(t, "bank-a to come back", func() bool {
+	waitFor(t, waitLimit, "bank-a to come back", func() bool {
 		pid := processesIn(t, dir)["bank-a"]
 		return pid != 0 && pid != old
 	})
-	waitFor(t, "the balance and statement to match after the restart", func() bool {
+	waitFor(t, waitLimit, "the balance and statement to match after the restart", func() bool {
 		a, aErr, aCode := c.run("accounts", "--bank", "bank-a")
 		s, sErr, sCode := c.run("statement", account, "--bank", "bank-a")
 		return aCode == 0 && sCode == 0 && aErr == "" && sErr == "" && a == accounts && s == statement
@@ -120,11 +120,11 @@ func TestSupervisorRestartsABankAndStopsEverything(t *testing.T) {
 	if err := syscall.Kill(oldCore, syscall.SIGKILL); err != nil {
 		t.Fatalf("kill core: %v", err)
 	}
-	waitFor(t, "core to come back", func() bool {
+	waitFor(t, waitLimit, "core to come back", func() bool {
 		pid := processesIn(t, dir)["core"]
 		return pid != 0 && pid != oldCore
 	})
-	waitFor(t, "a deposit to work after the core restart", func() bool {
+	waitFor(t, waitLimit, "a deposit to work after the core restart", func() bool {
 		got, _, code := c.run("deposit", account, "--bank", "bank-a", "--amount", "1")
 		return code == 0 && strings.Contains(got, "Balance ₦5,001.50.")
 	})

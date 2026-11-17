@@ -205,8 +205,8 @@ func checkResolve(id, status, outcome string, at time.Time) error {
 		return fmt.Errorf("session %s: %q is not a response code", id, status)
 	case status == SessionOK && outcome != nip.OutcomeCredited:
 		return fmt.Errorf("session %s: a 00 session is credited, not %q", id, outcome)
-	case status != SessionOK && outcome != nip.OutcomeFailed && outcome != OutcomeReversed:
-		return fmt.Errorf("session %s: a %s session is failed or reversed, not %q", id, status, outcome)
+	case status != SessionOK && outcome != nip.OutcomeFailed:
+		return fmt.Errorf("session %s: a %s session is failed, not %q", id, status, outcome)
 	case at.IsZero():
 		return fmt.Errorf("session %s needs a resolved time", id)
 	}
@@ -238,8 +238,6 @@ func (s *Store) Resolve(ctx context.Context, id, status, outcome string, at time
 				return fmt.Errorf("session %s cannot resolve at %s, before it began at %s", id, at.In(clock.Lagos).Format(time.RFC3339), created.In(clock.Lagos).Format(time.RFC3339))
 			}
 			_, err = tx.Exec(ctx, `UPDATE nip_sessions SET status = $2, outcome = $3, resolved_at = $4, next_tsq_at = NULL WHERE session_id = $1`, id, status, outcome, at)
-		case curStatus == status && curOutcome == nip.OutcomeFailed && outcome == OutcomeReversed:
-			_, err = tx.Exec(ctx, `UPDATE nip_sessions SET outcome = $2 WHERE session_id = $1`, id, outcome)
 		default:
 			return fmt.Errorf("session %s is %s/%s and cannot become %s/%s: %w", id, curStatus, curOutcome, status, outcome, ErrTransition)
 		}
@@ -248,24 +246,6 @@ func (s *Store) Resolve(ctx context.Context, id, status, outcome string, at time
 		}
 		return nil
 	})
-}
-
-func (s *Store) RevokeCredit(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE nip_sessions SET outcome = $2 WHERE session_id = $1 AND status = $3 AND outcome = $4`, id, nip.OutcomeFailed, SessionPending, nip.OutcomeCredited)
-	if err != nil {
-		return fmt.Errorf("revoke credit of session %s: %w", id, err)
-	}
-	if tag.RowsAffected() == 1 {
-		return nil
-	}
-	x, err := s.Session(ctx, id)
-	if err != nil {
-		return err
-	}
-	if x.Outcome != nip.OutcomeFailed {
-		return fmt.Errorf("session %s is %s/%s, so its credit cannot be revoked: %w", id, x.Status, x.Outcome, ErrTransition)
-	}
-	return nil
 }
 
 func (s *Store) TSQ(ctx context.Context, id string, next time.Time) (Session, error) {
@@ -314,13 +294,6 @@ func (s *Store) Session(ctx context.Context, id string) (Session, error) {
 		return Session{}, fmt.Errorf("look up session %s: %w", id, err)
 	}
 	return x, nil
-}
-
-func (s *Store) Due(ctx context.Context, at time.Time) ([]Session, error) {
-	return s.sessions(ctx, "due sessions", `
-SELECT `+sessionCols+` FROM nip_sessions
-WHERE status = 'pending' AND next_tsq_at <= $1
-ORDER BY next_tsq_at, created_at, session_id`, at)
 }
 
 func (s *Store) Unsettled(ctx context.Context, upTo time.Time) ([]Session, error) {

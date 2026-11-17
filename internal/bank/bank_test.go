@@ -15,6 +15,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 var t0 = time.Date(2026, 3, 2, 9, 0, 0, 0, clock.Lagos)
@@ -138,7 +139,7 @@ func TestStatementLinesCarryNarration(t *testing.T) {
 		if _, _, err := a.SendNIP(ctx, bank.NIPSend{Key: sid, From: a.custs[0], Amount: 100000, SessionID: sid, To: to, At: t0.Add(time.Hour), Narration: tc.narration}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := a.ReceiveNIP(ctx, sid, a.custs[1], 100000, sender, tc.narration, t0.Add(time.Hour)); err != nil {
+		if _, err := credit(ctx, a.Bank, sid, a.custs[1], 100000, sender, tc.narration, t0.Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
 		sent, _ := a.L.Events(ctx, bank.CustomerAccount(a.custs[0]), 0, 50)
@@ -265,7 +266,7 @@ func TestMoneyIsConservedAcrossBanksUnderFaults(t *testing.T) {
 			receiverCredits := outcome == "success" || outcome == "timeout_success"
 			if receiverCredits {
 				for k := 0; k <= dupes; k++ {
-					r, err := to.ReceiveNIP(ctx, sid, dst, amount, bank.Counterparty{Name: "Y", BankName: from.P.Name}, "", clockAt)
+					r, err := credit(ctx, to.Bank, sid, dst, amount, bank.Counterparty{Name: "Y", BankName: from.P.Name}, "", clockAt)
 					if err != nil {
 						rt.Fatal(err)
 					}
@@ -400,7 +401,7 @@ func TestReviewRegressions(t *testing.T) {
 	if _, err := a.ReverseNIP(ctx, sent.EntryID, sid, at.Add(time.Hour)); err != nil {
 		t.Fatalf("refund to a frozen account, or a client key colliding with the reversal key: %v", err)
 	}
-	if _, err := a.ReceiveNIP(ctx, "123", c1, 100, bank.Counterparty{Name: "X", BankName: "Y"}, "", at); !errors.Is(err, ledger.ErrInvalid) {
+	if _, err := credit(ctx, a.Bank, "123", c1, 100, bank.Counterparty{Name: "X", BankName: "Y"}, "", at); !errors.Is(err, ledger.ErrInvalid) {
 		t.Fatalf("short session ID: %v", err)
 	}
 	if _, err := a.L.OpenAccount(ctx, ledger.Account{Code: bank.CustomerAccount("9020000027"), Name: "Tier one", Kind: ledger.Liability, Customer: true, NUBAN: "9020000027", Product: "savings", Owner: "tier1", KYCTier: 1}); err != nil {
@@ -435,4 +436,12 @@ func TestReviewRegressions(t *testing.T) {
 		t.Fatalf("account status %q %v", status, err)
 	}
 	mustOK(t, a.L)
+}
+
+func credit(ctx context.Context, b *bank.Bank, sessionID, to string, amount int64, from bank.Counterparty, narration string, at time.Time) (bank.CreditAnswer, error) {
+	ans, err := b.Credit(ctx, bank.NIPCredit{SessionID: sessionID, FromCode: from.BankCode, FromBankName: from.BankName, FromNUBAN: from.AccountNumber, FromName: from.Name, ToNUBAN: to, Amount: amount, Narration: narration, CreatedAt: at}, at)
+	if err == nil && ans.Code != nip.OK {
+		err = fmt.Errorf("credit session %s refused with code %s", sessionID, ans.Code)
+	}
+	return ans, err
 }

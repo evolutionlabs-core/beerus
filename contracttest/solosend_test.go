@@ -318,26 +318,15 @@ func TestSoloSendSurvivesRestarts(t *testing.T) {
 	if _, _, err := a.books.SendNIP(context.Background(), bank.NIPSend{Key: "crash-1", From: a.nuban, Amount: soloSendAmount, SessionID: stuck, To: bank.Counterparty{Name: "ADA OBI", AccountNumber: s.members["bank-b"].nuban, BankCode: "000015", BankName: "Bank B"}, At: time.Now(), NoCharges: true, Request: []byte(request), CheckAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	waitForWithin(t, soloRestartFor, "bank A to reverse a send that NIBSS refuses to take", func() bool { return s.open("bank-a") == 0 })
+	waitFor(t, soloRestartFor, "bank A to reverse a send that NIBSS refuses to take", func() bool { return s.open("bank-a") == 0 })
 	check("a refused resend is reversed once", a0-debit, b0+soloSendAmount)
 
 	resumed := pending("credited", "restart-a")
 	s.members["bank-a"].stop()
 	s.startBank("bank-a")
-	waitForWithin(t, soloRestartFor, "bank A to finish the send after its restart", func() bool { return s.open("bank-a") == 0 })
+	waitFor(t, soloRestartFor, "bank A to finish the send after its restart", func() bool { return s.open("bank-a") == 0 })
 	check("resumed once", a0-2*debit, b0+2*soloSendAmount)
 	if status, got := s.query(resumed); status != http.StatusOK || got["status"] != "00" {
 		t.Fatalf("the resumed session: %d %v", status, got)
-	}
-}
-
-func waitForWithin(t *testing.T, limit time.Duration, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(limit)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }

@@ -177,7 +177,7 @@ func startSoloNIBSS(t *testing.T, tsqAfter time.Duration, withBanks ...string) (
 		exited:  exited,
 		logs:    logs,
 	}
-	waitFor(t, "NIBSS to answer on its own", func() bool {
+	waitFor(t, waitLimit, "NIBSS to answer on its own", func() bool {
 		select {
 		case err := <-exited:
 			t.Fatalf("NIBSS exited: %v\n%s", err, logs.String())
@@ -197,7 +197,7 @@ func (s *soloNIBSS) startBank(id string) {
 	m := s.members[id]
 	logs, exited, stop := runSolo(s.t, id, s.dir, s.dbURL)
 	m.logs, m.stop = logs, stop
-	waitFor(s.t, id+" to answer on its own", func() bool {
+	waitFor(s.t, waitLimit, id+" to answer on its own", func() bool {
 		select {
 		case err := <-exited:
 			s.t.Fatalf("%s exited: %v\n%s", id, err, logs.String())

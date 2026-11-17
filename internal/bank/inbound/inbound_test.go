@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -316,11 +315,14 @@ func TestNIPContract(t *testing.T) {
 	}
 	ctx := context.Background()
 	sender := bank.Counterparty{Name: "CHIDI OKAFOR", AccountNumber: "9010000014", BankCode: "000014", BankName: "Bank B"}
-	if _, err := s.bank.ReceiveNIP(ctx, session(2), s.funded, 1000000, sender, "", t0); !errors.Is(err, nip.ErrNoRecord) {
-		t.Fatalf("direct credit of a session answered 25: %v, want %v", err, nip.ErrNoRecord)
+	direct := func(id string) (bank.CreditAnswer, error) {
+		return s.bank.Credit(ctx, bank.NIPCredit{SessionID: id, FromCode: sender.BankCode, FromBankName: sender.BankName, FromNUBAN: sender.AccountNumber, FromName: sender.Name, ToNUBAN: s.funded, Amount: 1000000, CreatedAt: t0}, t0)
 	}
-	if _, err := s.bank.ReceiveNIP(ctx, session(10), s.funded, 1000000, sender, "", t0); err != nil {
-		t.Fatal(err)
+	if ans, err := direct(session(2)); err != nil || ans.Code != nip.NoRecord {
+		t.Fatalf("direct credit of a session answered %q, %v, want %q", ans.Code, err, nip.NoRecord)
+	}
+	if ans, err := direct(session(10)); err != nil || ans.Code != nip.OK {
+		t.Fatalf("direct credit answered %q, %v", ans.Code, err)
 	}
 	if got := s.call(t, "nibss", "GET", "/v1/nip/credits/"+session(10), "", checkBoth); got.body != fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(10)) {
 		t.Fatalf("status of a direct credit: %s", got.body)

@@ -100,7 +100,7 @@ func (p *bankProbe) phase() string {
 
 func (p *bankProbe) want(what string, ui, nip, ob int, phase string) {
 	p.t.Helper()
-	waitFor(p.t, what, func() bool {
+	waitFor(p.t, waitLimit, what, func() bool {
 		return p.ui() == ui && p.nip() == nip && p.openBanking() == ob && p.phase() == phase
 	})
 }
@@ -142,7 +142,7 @@ func TestBankControlOnARealUp(t *testing.T) {
 		}
 		c.run("reset", "beerus")
 	})
-	waitFor(t, "beerus up to print that it is running", func() bool {
+	waitFor(t, waitLimit, "beerus up to print that it is running", func() bool {
 		select {
 		case err := <-exited:
 			t.Fatalf("beerus up exited: %v\n%s\n%s", err, out.String(), errOut.String())
@@ -178,7 +178,7 @@ func TestBankControlOnARealUp(t *testing.T) {
 	p.want("a resumed bank to open again", 200, 200, 404, "active")
 
 	c.ok("fault", "down", "--bank", "bank-a")
-	waitFor(t, "a down bank to refuse NIP calls", func() bool { return p.nip() == 503 && p.openBanking() == 503 })
+	waitFor(t, waitLimit, "a down bank to refuse NIP calls", func() bool { return p.nip() == 503 && p.openBanking() == 503 })
 	if got := p.ui(); got != 200 {
 		t.Fatalf("the site of a down bank answered %d, want 200", got)
 	}
@@ -192,13 +192,13 @@ func TestBankControlOnARealUp(t *testing.T) {
 	if err := syscall.Kill(old, syscall.SIGKILL); err != nil {
 		t.Fatalf("kill bank-a: %v", err)
 	}
-	waitFor(t, "bank-a to come back", func() bool {
+	waitFor(t, waitLimit, "bank-a to come back", func() bool {
 		pid := processesIn(t, dir)["bank-a"]
 		return pid != 0 && pid != old
 	})
 	p.want("the restarted bank to be suspended and down again", 503, 503, 503, "suspended")
 	c.ok("bank", "resume", "bank-a")
-	waitFor(t, "the restarted bank to answer the site but refuse NIP while the fault lasts", func() bool {
+	waitFor(t, waitLimit, "the restarted bank to answer the site but refuse NIP while the fault lasts", func() bool {
 		return p.ui() == 200 && p.nip() == 503 && p.phase() == "active"
 	})
 	c.ok("fault", "clear")

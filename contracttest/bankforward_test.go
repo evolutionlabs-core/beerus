@@ -94,7 +94,7 @@ func TestCustomerCallsReachTheBankProcess(t *testing.T) {
 			t.Errorf("beerus %v while the bank was stopped: exit %d, output %q, error %q", calls[i], r.code, r.out, r.errOut)
 		}
 	}
-	waitFor(t, "the bank to answer again", func() bool {
+	waitFor(t, waitLimit, "the bank to answer again", func() bool {
 		got, _, code := c.run("accounts", "--bank", "bank-a")
 		return code == 0 && strings.Contains(got, "₦3,800.00")
 	})

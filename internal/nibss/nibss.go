@@ -12,8 +12,6 @@ import (
 const (
 	SessionPending = "pending"
 	SessionOK      = "00"
-
-	OutcomeReversed = "reversed"
 )
 
 var (
@@ -61,7 +59,6 @@ type Switch interface {
 	SetLimits(ctx context.Context, id string, l Limits) error
 	Position(ctx context.Context, code string) (Position, error)
 	Session(ctx context.Context, id string) (Session, error)
-	Due(ctx context.Context, at time.Time) ([]Session, error)
 	Unsettled(ctx context.Context, upTo time.Time) ([]Session, error)
 	MarkSettled(ctx context.Context, ids []string, session string, cutoff time.Time) error
 	Unposted(ctx context.Context) ([]Settlement, error)

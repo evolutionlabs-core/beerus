@@ -140,7 +140,7 @@ func startUp(t *testing.T, c *cli, spec string) (*lockedBuffer, *lockedBuffer) {
 			t.Errorf("reset: exit %d, output %q, error %q", code, got, errOut)
 		}
 	})
-	waitFor(t, "beerus up to print that it is running", func() bool {
+	waitFor(t, waitLimit, "beerus up to print that it is running", func() bool {
 		select {
 		case err := <-exited:
 			t.Fatalf("beerus up exited: %v\n%s\n%s", err, out.String(), errOut.String())
@@ -208,7 +208,7 @@ func TestStory(t *testing.T) {
 		t.Errorf("diff after up: %q", got)
 	}
 	banksUp := regexp.MustCompile(`^ID +NAME +PHASE +READY +GEN +MESSAGE\nbank-a +Bank A +active +yes +1 *\nbank-b +Bank B +active +yes +1 *\nbank-c +Bank C +active +yes +1 *\n$`)
-	waitFor(t, "the banks to be active after up", func() bool { return banksUp.MatchString(c.ok("get", "banks")) })
+	waitFor(t, waitLimit, "the banks to be active after up", func() bool { return banksUp.MatchString(c.ok("get", "banks")) })
 	if got := c.fails("clock"); got != "beerus: unknown command \"clock\". Run beerus help." {
 		t.Errorf("clock: %q", got)
 	}
@@ -313,7 +313,7 @@ func TestStory(t *testing.T) {
 			return d["connection_id"] == conn.ConnectionID && d["status"] == "revoked"
 		})
 	}
-	waitFor(t, "one connection.revoked webhook", func() bool { return len(revoked()) == 1 })
+	waitFor(t, waitLimit, "one connection.revoked webhook", func() bool { return len(revoked()) == 1 })
 	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil), 409)
 	if got := c.ok("get", "banks"); !regexp.MustCompile(`bank-b +Bank B +terminating +no +2 +bank bank-b: ` + quote(settlePending)).MatchString(got) {
 		t.Errorf("get banks while terminating: %q", got)
@@ -328,15 +328,15 @@ func TestStory(t *testing.T) {
 
 	sh.expect("beerus nip settle-now", `Settled 1 session at `+hm+` WAT\.\n`)
 	moneyDecision := `bank bank-b: MoneyDecisionNeeded: Bank B holds ₦9,300.00 for 2 customers. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.`
-	waitFor(t, "the money decision to be asked", func() bool { return strings.Contains(c.ok("get", "banks"), moneyDecision) })
+	waitFor(t, waitLimit, "the money decision to be asked", func() bool { return strings.Contains(c.ok("get", "banks"), moneyDecision) })
 	if out, errText, code := c.run("apply", "--prune", "--money", "transfer", "--to", "bank-a", "--wait", "0"); code != 0 || errText != "" || out != "Setup story\n\n  ~ bank bank-b      update   on_remove.money +transfer; on_remove.to +bank-a\n\nPlan: 1 to update.\n" {
 		t.Fatalf("money decision: exit %d, output %q, error %q", code, out, errText)
 	}
-	waitFor(t, "the moves to wait for settlement", func() bool {
+	waitFor(t, waitLimit, "the moves to wait for settlement", func() bool {
 		return strings.Contains(c.ok("get", "banks"), "SettlementPending: Waiting for the 00:00 NIP session to settle 2 transfers (net ₦9,300.00).")
 	})
 	sh.expect("beerus nip settle-now", `Settled 1 session at `+hm+` WAT\.\n`)
-	waitFor(t, "bank-b to be removed", func() bool { return !strings.Contains(c.ok("get", "banks"), "bank-b") })
+	waitFor(t, waitLimit, "bank-b to be removed", func() bool { return !strings.Contains(c.ok("get", "banks"), "bank-b") })
 	if got := c.ok("get", "banks"); !regexp.MustCompile(`^ID +NAME +PHASE +READY +GEN +MESSAGE\nbank-a +Bank A +active +yes +1 *\n$`).MatchString(got) {
 		t.Errorf("get banks at the end: %q", got)
 	}
@@ -359,7 +359,7 @@ func TestStory(t *testing.T) {
 			t.Errorf("banks/%s after its removal: %v", b.ID, err)
 		}
 		for _, port := range []int{b.Port, b.APIPort} {
-			waitFor(t, fmt.Sprintf("port %d of %s to be free", port, b.ID), func() bool { return portOpen(port) })
+			waitFor(t, waitLimit, fmt.Sprintf("port %d of %s to be free", port, b.ID), func() bool { return portOpen(port) })
 		}
 	}
 	if err := os.WriteFile(readd, []byte(fmt.Sprintf(storySpec, sink.srv.URL+"/webhooks")), 0o600); err != nil {

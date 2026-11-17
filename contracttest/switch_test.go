@@ -32,7 +32,7 @@ func (s *Stack) setCap(bank string, minor int64) {
 
 func (s *Stack) limitsReach(bank string) {
 	s.t.Helper()
-	waitFor(s.t, "the limits of "+bank+" to reach NIBSS", func() bool {
+	waitFor(s.t, waitLimit, "the limits of "+bank+" to reach NIBSS", func() bool {
 		r := s.ctl("GET", "/resources/bank/"+bank, nil)
 		return r["observed_generation"] == r["generation"]
 	})
@@ -240,14 +240,14 @@ func TestStatusQueryReportsReversal(t *testing.T) {
 		t.Fatalf("a timed-out transfer: %v then %v", sent, tsq)
 	}
 	s.advance("3h")
-	waitFor(t, "the status query to fail the session", func() bool {
+	waitFor(t, waitLimit, "the status query to fail the session", func() bool {
 		return s.ctl("GET", "/nip/sessions/"+sid, nil)["status"] == "25"
 	})
 	tsq := s.ctl("GET", "/nip/sessions/"+sid, nil)
 	if tsq["outcome"] != "failed" || tsq["resolved_at"] == nil {
 		t.Fatalf("after the failure: %v", tsq)
 	}
-	waitFor(t, "the sender to be reversed", func() bool { return s.balances(home)[from] == before })
+	waitFor(t, waitLimit, "the sender to be reversed", func() bool { return s.balances(home)[from] == before })
 	if n := s.sessionCredits("bank-b", to, sid); n != 0 {
 		t.Fatalf("the beneficiary was credited %d times", n)
 	}
