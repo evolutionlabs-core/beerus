@@ -588,54 +588,6 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '503':
           $ref: '#/components/responses/Unavailable'
-  /v1/control/banks/{bank_id}/limits:
-    put:
-      operationId: setBankLimits
-      tags: [control]
-      summary: Set the net debit cap and collateral of a bank
-      description: The control plane tells NIBSS a new net debit cap and collateral for a bank that is already registered, as the CBN sets them in the real world. Registration carries the first figures. It is an idempotent ensure keyed by `bank_id`. NIBSS keeps the figures and uses the cap on every funds transfer from the bank. An unknown bank returns `404 not_found`.
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/BankIDPath'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/Limits'
-            example:
-              net_debit_cap_minor: 500000000
-              collateral_minor: 0
-      responses:
-        '200':
-          description: NIBSS holds these limits for the bank.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Limits'
-              example:
-                net_debit_cap_minor: 500000000
-                collateral_minor: 0
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthenticated'
-        '404':
-          description: NIBSS has no bank with this ID. The code is `not_found`.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                error:
-                  code: not_found
-                  message: Bank bank-z is not in the NIBSS directory. Register it first.
-                  request_id: req_01JBC8A5T3ZK
-        '405':
-          $ref: '#/components/responses/MethodNotAllowed'
-        '503':
-          $ref: '#/components/responses/Unavailable'
   /v1/registry/clients:
     get:
       operationId: nibssRegistryClients
@@ -1271,22 +1223,6 @@ components:
           type: string
           description: The status to move the bank to.
           enum: [active, suspended, terminating, removed]
-    Limits:
-      type: object
-      description: The limits the control plane sets for a bank.
-      required: [net_debit_cap_minor, collateral_minor]
-      additionalProperties: false
-      properties:
-        net_debit_cap_minor:
-          type: integer
-          format: int64
-          description: The net debit cap in kobo. A transfer that would take the open net debit of the bank above it is refused with `61`. The figure is a Beerus placeholder.
-          minimum: 0
-        collateral_minor:
-          type: integer
-          format: int64
-          description: The collateral the bank holds against its cap, in kobo. It is a Beerus placeholder.
-          minimum: 0
     RegisterBank:
       type: object
       description: What the control plane tells NIBSS about a bank.
@@ -1318,12 +1254,12 @@ components:
           type: integer
           format: int64
           minimum: 0
-          description: The most the bank may owe the other banks before the next settlement, in kobo.
+          description: The net debit cap in kobo. A transfer that would take the open net debit of the bank above it is refused with `61`. The figure is a Beerus placeholder.
         collateral_minor:
           type: integer
           format: int64
           minimum: 0
-          description: The collateral the bank holds with the CBN, in kobo.
+          description: The collateral the bank holds against its cap, in kobo. It is a Beerus placeholder.
     BankPage:
       type: object
       description: One page of the bank directory.

@@ -70,6 +70,7 @@ type App struct {
 	stale        map[string]*staleMember
 	closeRuns    map[string]*closeRun
 	sendReads    map[string]sendRead
+	revokeReads  map[string]revokeRead
 	settling     bool
 	settleDone   *sync.Cond
 	lifeMu       sync.Mutex

@@ -90,7 +90,7 @@ func (a *App) settleWait(ctx context.Context, r setup.Resource) (*setup.Conditio
 	return a.blocked(setup.ReasonSettlementPending, "%s", msg), nil
 }
 
-const sendReadTTL = time.Minute
+const finalizerReadTTL = time.Minute
 
 type sendRead struct {
 	open int
@@ -149,7 +149,7 @@ func (a *App) sendsDue(ctx context.Context) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for id, read := range a.sendReads {
-		if a.clock.Real().Sub(read.at) > sendReadTTL {
+		if a.clock.Real().Sub(read.at) > finalizerReadTTL {
 			delete(a.sendReads, id)
 		}
 	}
@@ -159,7 +159,7 @@ func (a *App) recordedSends(id string) (int, *setup.Condition, error) {
 	a.mu.Lock()
 	read, ok := a.sendReads[id]
 	a.mu.Unlock()
-	if !ok || a.clock.Real().Sub(read.at) > sendReadTTL {
+	if !ok || a.clock.Real().Sub(read.at) > finalizerReadTTL {
 		return 0, a.blocked(setup.ReasonSettlementPending, "Checking the transfers %s is still sending. Try again soon.", id), nil
 	}
 	return read.open, nil, read.err

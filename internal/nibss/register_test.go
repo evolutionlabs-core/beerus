@@ -12,6 +12,15 @@ func member(id, name, code, nuban string) Member {
 	return Member{Institution: nip.Institution{ID: id, Name: name, NIPCode: code, NUBANCode: nuban, Type: "commercial"}}
 }
 
+func registerCapped(t testing.TB, s *Store, id, name, code, nuban string, l Limits) {
+	t.Helper()
+	m := member(id, name, code, nuban)
+	m.Limits = l
+	if err := s.Register(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRegister(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
@@ -69,6 +78,15 @@ func TestRegisterLimits(t *testing.T) {
 	}
 	if got := read(); got != a.Limits {
 		t.Fatalf("limits after a repeat: %+v", got)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE institutions SET net_debit_cap_minor = NULL WHERE id = 'bank-a'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Register(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != a.Limits {
+		t.Fatalf("a missing cap after a register again: %+v", got)
 	}
 	a.Limits = Limits{NetDebitCap: -1}
 	wantErr(t, s.Register(ctx, a), "bank bank-a: net_debit_cap_minor and collateral_minor must not be negative")

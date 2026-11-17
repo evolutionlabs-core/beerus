@@ -17,13 +17,8 @@ var t0 = time.Date(2026, 11, 4, 9, 12, 0, 0, clock.Lagos)
 func sessionStore(t *testing.T) *Store {
 	t.Helper()
 	s := testStore(t)
-	register(t, s, "bank-a", "Bank A", "999001", "901")
-	register(t, s, "bank-b", "Bank B", "999002", "902")
-	for _, id := range []string{"bank-a", "bank-b"} {
-		if err := s.SetLimits(context.Background(), id, Limits{NetDebitCap: 100_000_000}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	registerCapped(t, s, "bank-a", "Bank A", "999001", "901", Limits{NetDebitCap: 100_000_000})
+	registerCapped(t, s, "bank-b", "Bank B", "999002", "902", Limits{NetDebitCap: 100_000_000})
 	return s
 }
 
@@ -216,9 +211,7 @@ func setStatus(t *testing.T, s *Store, id, status string) {
 func TestBeginCapReplayAndNoAnswer(t *testing.T) {
 	ctx := context.Background()
 	s := sessionStore(t)
-	if err := s.SetLimits(ctx, "bank-a", Limits{NetDebitCap: 1_200_000, Collateral: 5}); err != nil {
-		t.Fatal(err)
-	}
+	registerCapped(t, s, "bank-a", "Bank A", "999001", "901", Limits{NetDebitCap: 1_200_000, Collateral: 5})
 	rows := []struct {
 		id       string
 		amount   int64
@@ -248,10 +241,6 @@ func TestBeginCapReplayAndNoAnswer(t *testing.T) {
 	if pos, err = s.Position(ctx, "999002"); err != nil || pos.Inward != 1_200_000 || pos.NetDebit() != 0 {
 		t.Fatalf("position of the receiver: %+v, %v", pos, err)
 	}
-	if err := s.SetLimits(ctx, "bank-z", Limits{}); !errors.Is(err, nip.ErrUnknownInstitution) {
-		t.Fatalf("limits of an unknown bank: %v", err)
-	}
-	wantErr(t, s.SetLimits(ctx, "bank-a", Limits{NetDebitCap: -1}), "bank bank-a: net_debit_cap_minor and collateral_minor must not be negative")
 	changed := transfer("c1", "999002", t0)
 	changed.Amount, changed.Narration = 1, "other"
 	_, _, err = s.Begin(ctx, changed)

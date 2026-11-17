@@ -38,7 +38,12 @@ func (s *Sender) Tick(ctx context.Context) error {
 		return err
 	}
 	for _, row := range due {
-		if _, err := s.check(ctx, b, row); err != nil && ctx.Err() == nil {
+		_, err := s.check(ctx, b, row)
+		switch {
+		case err == nil || ctx.Err() != nil:
+		case errors.Is(err, ErrSendRefused):
+			s.Log.Info("send reversed", "bank", s.Own().ID, "session", row.SessionID, "err", err)
+		default:
 			s.Log.Warn("send not checked; retrying", "bank", s.Own().ID, "session", row.SessionID, "err", err)
 		}
 	}
@@ -49,7 +54,7 @@ func (s *Sender) check(ctx context.Context, b *bank.Bank, row bank.Send) (NIPSes
 	sess, err := s.ask(ctx, row.SessionID, row.Request)
 	if errors.Is(err, ErrSendRefused) {
 		if rerr := s.undo(ctx, b, row.SessionID); rerr != nil {
-			return NIPSession{}, errors.Join(err, rerr)
+			return NIPSession{}, fmt.Errorf("reverse refused send %s: %w", row.SessionID, rerr)
 		}
 		return NIPSession{}, fmt.Errorf("reverse session %s: %w", row.SessionID, err)
 	}

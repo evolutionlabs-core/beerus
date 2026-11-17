@@ -269,7 +269,7 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 		}
 		accts = append(accts, v)
 	}
-	down := a.faultBanks(r.Context(), server.FaultDown)[id]
+	down := a.downBanks()[id]
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.roomRender(w, r, "bank", http.StatusOK, "banks", roomPage{"Title": bk.bank.Name, "Bank": bk.bank, "Accounts": accts, "Totals": t, "Down": down, "Managed": managed, "Status": status, "Next": next, "First": cursor != ""})
@@ -473,13 +473,19 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var te *server.TransferError
-	if !errors.As(err, &te) && !errors.Is(err, view.ErrBadAmount) {
-		a.roomFail(w, r, err)
-		return
+	refused := errors.Is(err, view.ErrBadAmount) || (errors.As(err, &te) && te.Status < http.StatusInternalServerError)
+	status, key, message := http.StatusUnprocessableEntity, web.NewID("idk"), web.Sentence(err.Error())
+	if !refused {
+		a.log.Error("control room transfer", "err", err)
+		status = http.StatusServiceUnavailable
+		if f.Get("key") != "" {
+			key = f.Get("key")
+		}
+		message += " The transfer may or may not have gone through. Check the account, then send again. The same transfer is never sent twice."
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.roomRender(w, r, "transfer", http.StatusUnprocessableEntity, "transfer", roomPage{"Title": "New transfer", "Key": web.NewID("idk"), "Form": f, "Error": web.Sentence(err.Error())})
+	a.roomRender(w, r, "transfer", status, "transfer", roomPage{"Title": "New transfer", "Key": key, "Form": f, "Error": message})
 }
 
 func (a *App) roomConnections(w http.ResponseWriter, r *http.Request) {
@@ -708,7 +714,7 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 		a.roomFail(w, r, err)
 		return
 	}
-	down := a.faultBanks(r.Context(), server.FaultDown)
+	down := a.downBanks()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	inst := a.cfg.Bank(id)

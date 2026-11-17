@@ -59,7 +59,7 @@ Beerus is a copy of Nigeria's banking infrastructure in one Go binary: banks, NI
 - **A change that cannot be saved is undone** in memory before the error is returned.
 
 ## Concurrency
-- **Lock order:** `applyMu` → `stepMu` → `flushMu` → `recMu` → `lifeMu` → `sendLock` → `bankFileMu` → `mu` → `regMu` → `dirMu` → `ctlMu`. Never take an earlier lock while holding a later one. `flushMu` is taken only under `stepMu` or alone, and while it is held the sender takes `mu` and `obMu` for a moment each. `server.Server` keeps its own `lifeMu`, `mu`, `regMu` and `dirMu` in this order, and calls nothing in `connect`.
+- **Lock order:** `applyMu` → `stepMu` → `flushMu` → `recMu` → `lifeMu` → `sendLock` → `bankFileMu` → `mu` → `dirMu` → `ctlMu`. Never take an earlier lock while holding a later one. `flushMu` is taken only under `stepMu` or alone, and while it is held the sender takes `mu` and `obMu` for a moment each. `server.Server` keeps its own `lifeMu`, `mu` and `dirMu` in this order, and calls nothing in `connect`.
 - **`sendLock`** is per sending bank and lives in the bank. `Sender.debit` holds it only around the session ID sequence and the debit with its `nip_sends` insert. It is never held across a NIBSS call.
 - **`bankFileMu`** serialises writes of a bank's own directory (`bank.json`, certificates). It is held across those file writes only. Take it holding no later lock.
 - **`flushMu`** serialises the consent sender, so one outbox row is never sent twice at once. It is held across the signed POST to the widget.

@@ -379,6 +379,7 @@ func printStatement(out map[string]any, nuban string) error {
 func cmdCash(kind string, args []string) error {
 	f := newFlags(kind, true)
 	amount := f.fs.String("amount", "", "amount in `naira`, such as 5000 or 5000.50")
+	key := f.fs.String("idempotency-key", "", "`key` that makes a rerun safe after a timeout; a new one is made when empty")
 	pos, err := f.parse(kind, args, 1)
 	if err != nil {
 		return err
@@ -394,7 +395,7 @@ func cmdCash(kind string, args []string) error {
 	if kind == "withdraw" {
 		path = "withdrawals"
 	}
-	out, err := c.do("POST", bankPath(id, path), map[string]string{"account": pos[0], "amount": *amount})
+	out, err := c.doKeyed("POST", bankPath(id, path), map[string]string{"account": pos[0], "amount": *amount}, *key)
 	if err != nil {
 		return err
 	}
@@ -421,6 +422,7 @@ func cmdTransfer(args []string) error {
 	to := f.fs.String("to", "", "`NUBAN` of the account to pay into")
 	amount := f.fs.String("amount", "", "amount in `naira`, such as 25000 or 2500.50")
 	narration := f.fs.String("narration", "", "`text` shown on the transfer")
+	key := f.fs.String("idempotency-key", "", "`key` that makes a rerun safe after a timeout; a new one is made when empty")
 	dry := f.fs.Bool("dry-run", false, "show the fee, VAT, stamp duty and total debit without sending")
 	if _, err := f.parse("transfer", args, 0); err != nil {
 		return err
@@ -436,7 +438,7 @@ func cmdTransfer(args []string) error {
 	if *dry {
 		path = bankPath(id, "transfers", "quote")
 	}
-	out, err := c.do("POST", path, map[string]string{"from": *from, "to_bank": *toBank, "to": *to, "amount": *amount, "narration": *narration})
+	out, err := c.doKeyed("POST", path, map[string]string{"from": *from, "to_bank": *toBank, "to": *to, "amount": *amount, "narration": *narration}, *key)
 	if err != nil {
 		return err
 	}
