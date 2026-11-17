@@ -108,7 +108,7 @@ func (a *App) openSends(ctx context.Context, b *config.Bank) (int, error) {
 		}
 		return ls.Bank().OpenSends(ctx)
 	}
-	if !pushable(a.bankPhase(b.ID)) {
+	if b.Closed() || !pushable(a.bankPhase(b.ID)) {
 		return 0, nil
 	}
 	var out server.OpenSends
