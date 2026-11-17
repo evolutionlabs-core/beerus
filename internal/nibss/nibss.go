@@ -41,7 +41,9 @@ type ConsentEvent struct {
 	Bank      string    `json:"bank"`
 	ConsentID string    `json:"consent_id"`
 	ClientID  string    `json:"client_id"`
+	PartnerID string    `json:"partner_id"`
 	Status    string    `json:"status"`
+	Via       string    `json:"via"`
 	ChangedAt time.Time `json:"changed_at"`
 	SourceSeq int64     `json:"source_seq"`
 }
@@ -65,6 +67,6 @@ type Switch interface {
 	MarkPosted(ctx context.Context, session string, at time.Time) error
 	Open(ctx context.Context) ([]Session, error)
 	SettledNets(ctx context.Context) (map[string]map[string]int64, error)
-	RecordConsent(ctx context.Context, e ConsentEvent) error
+	RecordConsent(ctx context.Context, e ConsentEvent) (ConsentEvent, bool, error)
 	ConsentLedger(ctx context.Context, bank string, limit int, cursor string) ([]ConsentEvent, string, error)
 }

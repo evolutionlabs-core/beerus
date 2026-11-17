@@ -60,6 +60,9 @@ func (p *Participant) Handler() http.Handler {
 	mux.HandleFunc("/v1/control/banks/{bank_id}", only(http.MethodPut, p.register))
 	mux.HandleFunc("/v1/control/banks/{bank_id}/status", only(http.MethodPut, p.setStatus))
 	mux.HandleFunc("/v1/control/banks/{bank_id}/limits", only(http.MethodPut, p.setLimits))
+	mux.HandleFunc("/v1/control/registry/clients", only(http.MethodGet, p.listClients))
+	mux.HandleFunc("/v1/control/registry/clients/{client_id}", only(http.MethodPut, p.ensureClient))
+	mux.HandleFunc("/v1/control/consents", only(http.MethodGet, p.listConsents))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "NIBSS does not serve this control call.")
 	})

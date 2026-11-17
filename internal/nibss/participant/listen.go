@@ -24,6 +24,9 @@ func (p *Participant) directory() http.Handler {
 	mux.HandleFunc("/v1/bvns", only(http.MethodPost, p.enrolBVN))
 	mux.HandleFunc("/v1/transfers", only(http.MethodPost, p.transfer))
 	mux.HandleFunc("/v1/transfers/{session_id}/status-queries", only(http.MethodPost, p.statusQuery))
+	mux.HandleFunc("/v1/registry/clients", only(http.MethodGet, p.bankListClients))
+	mux.HandleFunc("/v1/registry/clients/{client_id}", only(http.MethodGet, p.bankClient))
+	mux.HandleFunc("/v1/consents", only(http.MethodPost, p.recordConsent))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if p.admit(w, r, "read the bank directory") {
 			api.ServeHTTP(w, r)
