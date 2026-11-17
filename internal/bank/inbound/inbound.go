@@ -113,17 +113,17 @@ func (s *server) unavailable(w http.ResponseWriter, r *http.Request, err error) 
 	WriteUnavailable(w)
 }
 
-func (s *server) authorized(r *http.Request) bool {
+func (c Caller) Allows(r *http.Request) bool {
 	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
 		return false
 	}
 	leaf := r.TLS.PeerCertificates[0]
-	return leaf.Subject.CommonName == s.caller.CommonName && slices.Contains(leaf.Subject.OrganizationalUnit, s.caller.Role)
+	return leaf.Subject.CommonName == c.CommonName && slices.Contains(leaf.Subject.OrganizationalUnit, c.Role)
 }
 
 func (s *server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.authorized(r) {
+		if !s.caller.Allows(r) {
 			writeError(w, http.StatusForbidden, "forbidden", "This certificate may not call the NIP API of this bank. Only NIBSS may.")
 			return
 		}
