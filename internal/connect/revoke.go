@@ -54,7 +54,8 @@ func (a *App) revokesDue(ctx context.Context) {
 			continue
 		}
 		id := r.ID
-		err := a.revokeAtBanks(ctx, a.consentConnections(func(c *Connection) bool { return c.Institution == id }))
+		_, withConsent := a.markRevoked(func(c *Connection) bool { return c.Institution == id })
+		err := a.revokeAtBanks(ctx, withConsent)
 		a.mu.Lock()
 		if a.revokeReads == nil {
 			a.revokeReads = map[string]revokeRead{}
@@ -77,19 +78,6 @@ func (a *App) takeRevokeRead(id string) (revokeRead, bool) {
 	read, ok := a.revokeReads[id]
 	delete(a.revokeReads, id)
 	return read, ok && a.clock.Real().Sub(read.at) <= finalizerReadTTL
-}
-
-func (a *App) consentConnections(inScope func(*Connection) bool) []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	out := []string{}
-	for cid, c := range a.st.Connections {
-		if inScope(c) && c.ConsentID != "" && a.cfg.Bank(c.Institution) != nil {
-			out = append(out, cid)
-		}
-	}
-	sort.Strings(out)
-	return out
 }
 
 func (a *App) markRevoked(inScope func(*Connection) bool) ([]string, []string) {
