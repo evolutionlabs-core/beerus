@@ -129,6 +129,7 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	a.cfg.Banks = slices.DeleteFunc(slices.Clone(a.cfg.Banks), func(x *config.Bank) bool { return x.ID == id })
 	a.mu.Unlock()
 	delete(a.status, id)
+	delete(a.confirms, id)
 	a.lifeMu.Unlock()
 	a.poke()
 	return nil, nil

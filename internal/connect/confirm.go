@@ -2,25 +2,31 @@ package connect
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"sync"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
+const confirmTimeout = 2 * time.Second
+
 type bankConfirm struct {
 	generation int64
+	token      string
+	inflight   bool
 	done       bool
 	attempts   int
 	next       time.Time
 }
 
 type confirmJob struct {
-	b        config.Bank
-	gen      int64
-	attempts int
+	b     config.Bank
+	gen   int64
+	token string
 }
 
 func (a *App) confirmDue(ctx context.Context) {
@@ -47,26 +53,41 @@ func (a *App) confirmDue(ctx context.Context) {
 			continue
 		}
 		c := a.confirms[b.ID]
-		if c != nil && (c.done || now.Before(c.next)) {
+		if c != nil && (c.done || c.inflight || now.Before(c.next)) {
 			continue
 		}
-		job := confirmJob{b: *b, gen: r.Generation}
-		if c != nil {
-			job.attempts = c.attempts
+		token, err := confirmToken()
+		if err != nil {
+			a.log.Error("confirm token", "bank", b.ID, "err", err)
+			continue
 		}
-		jobs = append(jobs, job)
+		if a.confirms == nil {
+			a.confirms = map[string]*bankConfirm{}
+		}
+		next := &bankConfirm{generation: r.Generation, token: token, inflight: true}
+		if c != nil {
+			next.attempts = c.attempts
+		}
+		a.confirms[b.ID] = next
+		jobs = append(jobs, confirmJob{b: *b, gen: r.Generation, token: token})
 	}
 	a.mu.Unlock()
 	a.lifeMu.Unlock()
-	var wg sync.WaitGroup
 	for _, j := range jobs {
-		wg.Add(1)
+		a.confirmWG.Add(1)
 		go func() {
-			defer wg.Done()
+			defer a.confirmWG.Done()
 			a.recordConfirm(j, a.confirmBank(ctx, &j.b))
 		}()
 	}
-	wg.Wait()
+}
+
+func confirmToken() (string, error) {
+	raw := make([]byte, 8)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("read random bytes: %w", err)
+	}
+	return hex.EncodeToString(raw), nil
 }
 
 func (a *App) confirmBank(ctx context.Context, b *config.Bank) error {
@@ -86,16 +107,21 @@ func (a *App) confirmBank(ctx context.Context, b *config.Bank) error {
 func (a *App) recordConfirm(j confirmJob, err error) {
 	now := a.clock.Real()
 	a.lifeMu.Lock()
-	defer a.lifeMu.Unlock()
-	if a.confirms == nil {
-		a.confirms = map[string]*bankConfirm{}
+	c := a.confirms[j.b.ID]
+	if c == nil || c.token != j.token || c.generation != j.gen {
+		a.lifeMu.Unlock()
+		return
 	}
-	c := &bankConfirm{generation: j.gen, done: err == nil, attempts: j.attempts}
-	if err != nil {
-		c.attempts++
-		c.next = now.Add(min(confirmRetry*time.Duration(c.attempts), pushRetryMax))
+	c.inflight = false
+	if err == nil {
+		c.done = true
+		a.lifeMu.Unlock()
+		return
 	}
-	a.confirms[j.b.ID] = c
+	c.attempts++
+	c.next = now.Add(min(clock.Backoff(c.attempts), pushRetryMax))
+	a.lifeMu.Unlock()
+	a.log.Warn("bank not confirmed; retrying", "bank", j.b.ID, "err", err)
 }
 
 func (a *App) takeConfirm(id string, gen int64) bool {

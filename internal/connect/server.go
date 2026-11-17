@@ -145,6 +145,7 @@ func (a *App) Serve(ctx context.Context) error {
 	<-done
 	<-pushDone
 	<-sendsDone
+	a.confirmWG.Wait()
 	a.closeLedgers()
 	return serr
 }

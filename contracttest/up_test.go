@@ -148,19 +148,23 @@ func TestActiveBankServesCustomersAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"Bank A", "Bank B", "Bank C"} {
-		createServing(t, cfg, name)
+		createServing(t, cfg, name, strings.ToLower(strings.ReplaceAll(name, " ", "-")))
 	}
 	pattern := "--participant bank-a --dir " + dir
 	if out, err := exec.Command("pkill", "-STOP", "-f", "--", pattern).CombinedOutput(); err != nil {
 		t.Fatalf("freeze bank-a: %v %s", err, out)
 	}
 	t.Cleanup(func() { _ = exec.Command("pkill", "-CONT", "-f", "--", pattern).Run() })
-	createServing(t, cfg, "Bank D")
+	createServing(t, cfg, "Bank D", "bank-d")
+	if out, err := exec.Command("pkill", "-CONT", "-f", "--", pattern).CombinedOutput(); err != nil {
+		t.Fatalf("thaw bank-a: %v %s", err, out)
+	}
+	c.ok("bank", "purge", "bank-d", "--yes")
+	createServing(t, cfg, "Bank D", "bank-d-2")
 }
 
-func createServing(t *testing.T, cfg *config.Config, name string) {
+func createServing(t *testing.T, cfg *config.Config, name, id string) {
 	t.Helper()
-	id := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
 	if code, out := controlCall(t, cfg, http.MethodPost, "/banks", map[string]string{"name": name}); code >= http.StatusMultipleChoices {
 		t.Fatalf("create %s: %d %v", name, code, out)
 	}

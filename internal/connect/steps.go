@@ -17,11 +17,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-const (
-	confirmTimeout = 2 * time.Second
-	confirmRetry   = 250 * time.Millisecond
-)
-
 func stepIndex(id string) int {
 	return slices.IndexFunc(config.BankSteps(), func(s config.BankStep) bool { return s.ID == id })
 }
