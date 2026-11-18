@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"math"
 	"net/http"
 	"slices"
 	"time"
@@ -29,7 +27,7 @@ func (a *App) schedule() nibss.Schedule {
 }
 
 func (a *App) settleDue(ctx context.Context) {
-	if err := a.postBankSides(ctx); err != nil {
+	if err := a.postBooks(ctx); err != nil {
 		a.log.Error("NIP settlement of bank books", "err", err)
 	}
 }
@@ -43,12 +41,11 @@ func (a *App) settleRun(ctx context.Context, adhoc bool) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return n, a.postBankSides(ctx)
+	return n, a.postBooks(ctx)
 }
 
-func (a *App) postBankSides(ctx context.Context) error {
-	sw := a.nibssStore()
-	if sw == nil {
+func (a *App) postBooks(ctx context.Context) error {
+	if a.role == RoleCore {
 		return nil
 	}
 	a.mu.Lock()
@@ -56,40 +53,31 @@ func (a *App) postBankSides(ctx context.Context) error {
 	a.mu.Unlock()
 	var errs []error
 	for _, l := range ledgers {
-		errs = append(errs, postBankSide(ctx, sw, l))
+		if a.bankGone(l.Inst.ID) {
+			continue
+		}
+		n, err := a.bankNIBSS(l.Inst.ID)
+		if err == nil {
+			err = a.postBank(ctx, n, l)
+		}
+		if err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }
 
-func postBankSide(ctx context.Context, sw *nibss.Store, l *ledgerSource) error {
-	b := l.Bank()
-	posted, err := b.Settlements(ctx)
-	if err != nil {
-		return fmt.Errorf("read the settlements of %s: %w", l.Inst.ID, err)
+func (a *App) bankGone(id string) bool {
+	if a.bankByID(id) == nil {
+		return true
 	}
-	list, err := sw.SettledExcept(ctx, l.Inst.NIPCode, slices.AppendSeq([]string{}, maps.Keys(posted)))
-	if err != nil {
-		return err
-	}
-	for _, x := range list {
-		var p position
-		for _, s := range x.Sessions {
-			if s.FromCode == l.Inst.NIPCode {
-				if p.outward > math.MaxInt64-s.Amount {
-					return fmt.Errorf("settle %s at %s: the amount sent is too large to add", x.Key, l.Inst.ID)
-				}
-				p.outward += s.Amount
-			}
-			if s.ToCode == l.Inst.NIPCode {
-				if p.inward > math.MaxInt64-s.Amount {
-					return fmt.Errorf("settle %s at %s: the amount received is too large to add", x.Key, l.Inst.ID)
-				}
-				p.inward += s.Amount
-			}
-		}
-		if _, err := b.Settle(ctx, x.Key, p.outward, p.inward, x.CutoffAt); err != nil {
-			return fmt.Errorf("settle %s at %s: %w", x.Key, l.Inst.ID, err)
-		}
+	phase := a.bankPhase(id)
+	return phase == PhaseClosed || phase == PhaseTerminating
+}
+
+func (a *App) postBank(ctx context.Context, n server.NIBSSClient, l *ledgerSource) error {
+	if err := server.PostSettlements(ctx, n, l.Bank(), a.clock.Now()); err != nil {
+		return fmt.Errorf("settle %s: %w", l.Inst.ID, err)
 	}
 	return nil
 }
@@ -134,9 +122,8 @@ func (a *App) CheckSettlement(ctx context.Context) (SettlementCheck, error) {
 }
 
 type settlementBooks struct {
-	sw        *nibss.Store
-	nibssNets map[string]map[string]int64
-	open      []nibss.Session
+	sw   *nibss.Store
+	open []nibss.Session
 }
 
 func (a *App) settlementBooks(ctx context.Context) (settlementBooks, error) {
@@ -144,36 +131,20 @@ func (a *App) settlementBooks(ctx context.Context) (settlementBooks, error) {
 	if sw == nil {
 		return settlementBooks{}, errors.New("NIBSS is not open yet; try again soon")
 	}
-	nibssNets, err := sw.SettledNets(ctx)
-	if err != nil {
-		return settlementBooks{}, err
-	}
 	open, err := sw.Open(ctx)
 	if err != nil {
 		return settlementBooks{}, err
 	}
-	return settlementBooks{sw: sw, nibssNets: nibssNets, open: open}, nil
+	return settlementBooks{sw: sw, open: open}, nil
 }
 
 func (s settlementBooks) check(ctx context.Context, a *App, l *ledgerSource) ([]string, error) {
 	var out []string
 	code, id := l.Inst.NIPCode, l.Inst.ID
 	b := l.Bank()
-	posted, err := b.Settlements(ctx)
+	theirs, err := a.bankSettlementProblems(ctx, l)
 	if err != nil {
 		return nil, err
-	}
-	keys := map[string]bool{}
-	for k := range s.nibssNets[code] {
-		keys[k] = true
-	}
-	for k := range posted {
-		keys[k] = true
-	}
-	for _, k := range slices.Sorted(maps.Keys(keys)) {
-		if n, p := s.nibssNets[code][k], posted[k]; n != p {
-			out = append(out, fmt.Sprintf("session %s at %s: NIBSS nets %d, but the bank posted %d", k, id, n, p))
-		}
 	}
 	var want position
 	for _, x := range s.open {
@@ -195,10 +166,6 @@ func (s settlementBooks) check(ctx context.Context, a *App, l *ledgerSource) ([]
 	if owe != want.outward || due != want.inward {
 		out = append(out, fmt.Sprintf("%s has NIP payable %d and receivable %d, but its open NIBSS sessions come to %d and %d", id, owe, due, want.outward, want.inward))
 	}
-	theirs, err := a.bankSettlementProblems(ctx, l)
-	if err != nil {
-		return nil, err
-	}
 	return append(out, theirs...), nil
 }
 
@@ -214,11 +181,18 @@ func (a *App) bankSettlementProblems(ctx context.Context, l *ledgerSource) ([]st
 		}
 		return a.freshBankProblems(ctx, b.URL(), id)
 	}
+	n, err := a.bankNIBSS(id)
+	if err != nil {
+		return nil, err
+	}
 	c, err := a.bankCBN(id)
 	if err != nil {
 		return nil, err
 	}
-	return server.SettlementProblems(ctx, c, l.Bank(), id)
+	if err := a.postBank(ctx, n, l); err != nil {
+		return nil, err
+	}
+	return server.SettlementProblems(ctx, n, c, l.Bank(), id)
 }
 
 func (a *App) freshBankProblems(ctx context.Context, base, id string) ([]string, error) {

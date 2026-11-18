@@ -94,12 +94,16 @@ func (c CBNClient) sessionNets(ctx context.Context, id string) (map[string]int64
 	return out, nil
 }
 
-func SettlementProblems(ctx context.Context, c CBNClient, books *bank.Bank, id string) ([]string, error) {
+func SettlementProblems(ctx context.Context, n NIBSSClient, c CBNClient, books *bank.Bank, id string) ([]string, error) {
 	held, err := books.L.Balance(ctx, bank.Settlement)
 	if err != nil {
 		return nil, fmt.Errorf("read the settlement balance of %s: %w", id, err)
 	}
 	posted, err := books.Settlements(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out, err := nibssProblems(ctx, n, posted, id)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +122,6 @@ func SettlementProblems(ctx context.Context, c CBNClient, books *bank.Bank, id s
 	for k := range moved {
 		keys[k] = true
 	}
-	out := []string{}
 	for _, k := range slices.Sorted(maps.Keys(keys)) {
 		if posted[k] != moved[k] {
 			out = append(out, fmt.Sprintf("session %s at %s: the bank posted %d, but the CBN moved %d", k, id, posted[k], moved[k]))
@@ -161,20 +164,33 @@ func (s *Server) cbnHTTP() (*http.Client, error) {
 }
 
 func (s *Server) CheckSettlement(ctx context.Context) error {
+	n, err := s.NIBSS()
+	if err != nil {
+		return err
+	}
 	c, err := s.CBN()
 	if err != nil {
 		return err
 	}
-	problems, err := SettlementProblems(ctx, c, s.books, s.id)
+	return s.postAndCheck(ctx, n, c)
+}
+
+func (s *Server) postAndCheck(ctx context.Context, n NIBSSClient, c CBNClient) error {
+	booking := PostSettlements(ctx, n, s.books, s.clock.Now())
+	problems, err := SettlementProblems(ctx, n, c, s.books, s.id)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
-		return fmt.Errorf("check the settlement of %s: %w", s.id, err)
+		return fmt.Errorf("check the settlement of %s: %w", s.id, errors.Join(booking, err))
+	}
+	var refused *BookingError
+	if errors.As(booking, &refused) {
+		problems = append(problems, fmt.Sprintf("could not book session %s at %s: %v", refused.SessionID, s.id, refused.Err))
 	}
 	at := s.clock.Real()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.settlementProblems, s.settlementCheckedAt = problems, &at
-	return nil
+	return booking
 }

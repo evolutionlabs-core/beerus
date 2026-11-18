@@ -346,6 +346,18 @@ func (b *Bank) Settle(ctx context.Context, sessionKey string, outward, inward in
 	return b.L.Post(ctx, entry("settle:"+sessionKey, "settlement", at, "NIP settlement "+sessionKey, lines...))
 }
 
+func (b *Bank) LastSettlement(ctx context.Context) (string, error) {
+	var key string
+	err := b.L.Pool().QueryRow(ctx, `SELECT substr(idempotency_key, length('settle:') + 1) FROM journal_entries WHERE kind = 'settlement' ORDER BY id DESC LIMIT 1`).Scan(&key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the newest settlement: %w", err)
+	}
+	return key, nil
+}
+
 func (b *Bank) Settlements(ctx context.Context) (map[string]int64, error) {
 	rows, err := b.L.Pool().Query(ctx, `SELECT substr(e.idempotency_key, length('settle:') + 1), coalesce(sum(jl.amount) FILTER (WHERE a.code = $1), 0)::bigint
 		FROM journal_entries e JOIN journal_lines jl ON jl.entry_id = e.id JOIN gl_accounts a ON a.id = jl.account_id
