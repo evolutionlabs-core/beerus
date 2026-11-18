@@ -103,7 +103,7 @@ func parseInit(args []string) (initPlan, error) {
 	fs.IntVar(&flagged.WidgetPort, "widget-port", flagged.WidgetPort, "widget `port`")
 	fs.IntVar(&flagged.ControlPort, "control-port", flagged.ControlPort, "control API `port`")
 	fs.IntVar(&flagged.HealthPort, "health-port", flagged.HealthPort, "health `port` of the cbn container")
-	if err := parseFlags("init", fs, args); err != nil {
+	if _, err := parseAfter("init", fs, args, 0); err != nil {
 		return initPlan{}, err
 	}
 	local, err := install.FreshLocal(*dir)

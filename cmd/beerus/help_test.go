@@ -173,3 +173,13 @@ func TestHelp(t *testing.T) {
 		}
 	}
 }
+
+func TestCommandsWithoutArgumentsRejectOne(t *testing.T) {
+	for _, command := range []string{"init", "version", "info", "doctor", "apply", "diff", "export", "verify"} {
+		err := dispatch([]string{command, "extra", "--dir", t.TempDir()})
+		want := `unexpected argument "extra"; ` + usageError(command).Error()
+		if err == nil || err.Error() != want {
+			t.Errorf("beerus %s extra: %v, want %q", command, err, want)
+		}
+	}
+}
