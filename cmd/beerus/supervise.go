@@ -62,11 +62,16 @@ func newSupervisor(exe, dir, coreURL, databaseURL string, c *ctl, out io.Writer)
 		log:      slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		logs:     logs,
 	}
-	s.fleet = fleet.New(c.base, c.token, s, s.log)
+	s.fleet = fleet.New(c.base, c.token, bankRunner{s}, s.log)
 	return s
 }
 
-func (s *supervisor) Start(id string) (func(), <-chan struct{}) {
+type bankRunner struct {
+	s *supervisor
+}
+
+func (r bankRunner) Start(id string) (func(), <-chan struct{}) {
+	s := r.s
 	c := s.launch(id, []string{config.DatabaseURLEnv + "=" + s.database}, []string{"run", "--participant", id, "--dir", s.dir, "--core", s.coreURL, "--supervised"})
 	return c.stop, c.done
 }

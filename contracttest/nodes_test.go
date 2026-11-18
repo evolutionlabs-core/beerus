@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -132,10 +132,12 @@ type banks struct {
 	real func() time.Time
 	url  string
 	db   string
+	log  *slog.Logger
 }
 
 func (b banks) Start(id string) (func(), <-chan struct{}) {
 	n := spawn(id, func(ctx context.Context) error {
+		warned := ""
 		for {
 			p, err := participant.New(ctx, b.dir, participant.Options{Real: b.real, BankID: id, CoreURL: b.url, Bind: nodeBind, DatabaseURL: b.db})
 			if err == nil {
@@ -145,6 +147,10 @@ func (b banks) Start(id string) (func(), <-chan struct{}) {
 			}
 			if ctx.Err() != nil {
 				return nil
+			}
+			if msg := fmt.Sprint(err); err != nil && msg != warned {
+				warned = msg
+				b.log.Warn("bank participant not running; retrying", "bank", id, "err", err)
 			}
 			retry := time.NewTimer(nodeRetry)
 			select {
@@ -206,8 +212,8 @@ func startNodes(cfg *config.Config, opts connect.Options) (*nodes, error) {
 	if err != nil {
 		return ns, errors.Join(err, ns.halt())
 	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	f := fleet.New(cfg.ControlURL(), token, banks{dir: cfg.Dir, real: opts.Real, url: cfg.ControlURL(), db: cfg.DatabaseURL}, log)
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	f := fleet.New(cfg.ControlURL(), token, banks{dir: cfg.Dir, real: opts.Real, url: cfg.ControlURL(), db: cfg.DatabaseURL, log: log}, log)
 	ns.stop = spawn("the bank fleet", func(ctx context.Context) error {
 		f.Run(ctx)
 		f.Close()

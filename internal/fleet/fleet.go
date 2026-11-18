@@ -26,7 +26,7 @@ type Runner interface {
 	Start(id string) (stop func(), done <-chan struct{})
 }
 
-type Bank struct {
+type bank struct {
 	ID       string `json:"id"`
 	Phase    string `json:"phase"`
 	Port     int    `json:"port"`
@@ -38,7 +38,7 @@ type Bank struct {
 	} `json:"steps"`
 }
 
-func (b Bank) Startable() bool {
+func (b bank) startable() bool {
 	switch b.Phase {
 	case config.PhaseActive, config.PhaseSuspended, config.PhaseClosing, config.PhaseTerminating:
 		return true
@@ -52,7 +52,7 @@ func (b Bank) Startable() bool {
 	return false
 }
 
-func (b Bank) Fingerprint() string {
+func (b bank) fingerprint() string {
 	return fmt.Sprintf("%d/%d/%s", b.Port, b.APIPort, b.Database)
 }
 
@@ -90,11 +90,11 @@ func (f *Fleet) Run(ctx context.Context) {
 	defer tick.Stop()
 	lastErr := ""
 	for {
-		banks, err := f.Read(ctx)
+		banks, err := f.read(ctx)
 		switch {
 		case err == nil:
 			lastErr = ""
-			f.Sync(banks)
+			f.sync(banks)
 		case err.Error() != lastErr && ctx.Err() == nil:
 			f.log.Warn("core is not readable; keeping the banks as they are", "err", err)
 			lastErr = err.Error()
@@ -107,7 +107,7 @@ func (f *Fleet) Run(ctx context.Context) {
 	}
 }
 
-func (f *Fleet) Read(ctx context.Context) ([]Bank, error) {
+func (f *Fleet) read(ctx context.Context) ([]bank, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.url+banksPath, nil)
 	if err != nil {
 		return nil, fmt.Errorf("read banks: %w", err)
@@ -129,7 +129,7 @@ func (f *Fleet) Read(ctx context.Context) ([]Bank, error) {
 		return nil, fmt.Errorf("read banks: core answered %s", resp.Status)
 	}
 	var list struct {
-		Data []Bank `json:"data"`
+		Data []bank `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &list); err != nil {
 		return nil, fmt.Errorf("read banks: %w", err)
@@ -140,7 +140,7 @@ func (f *Fleet) Read(ctx context.Context) ([]Bank, error) {
 	return list.Data, nil
 }
 
-func (f *Fleet) Sync(banks []Bank) {
+func (f *Fleet) sync(banks []bank) {
 	f.reap()
 	listed := map[string]bool{}
 	for _, b := range banks {
@@ -149,10 +149,10 @@ func (f *Fleet) Sync(banks []Bank) {
 		switch {
 		case b.Phase == config.PhaseClosed:
 			f.drop(b.ID)
-		case running != nil && running.print != b.Fingerprint():
+		case running != nil && running.print != b.fingerprint():
 			f.drop(b.ID)
-		case running == nil && b.Startable():
-			f.bring(b.ID, b.Fingerprint())
+		case running == nil && b.startable():
+			f.bring(b.ID, b.fingerprint())
 		}
 	}
 	for _, id := range slices.Sorted(maps.Keys(f.banks)) {
@@ -160,14 +160,6 @@ func (f *Fleet) Sync(banks []Bank) {
 			f.drop(id)
 		}
 	}
-}
-
-func (f *Fleet) Running() map[string]string {
-	out := map[string]string{}
-	for id, m := range f.banks {
-		out[id] = m.print
-	}
-	return out
 }
 
 func (f *Fleet) Close() {

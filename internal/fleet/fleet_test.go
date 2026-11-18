@@ -17,8 +17,9 @@ import (
 
 type recorder struct {
 	mu      sync.Mutex
+	slow    bool
 	started []string
-	stopped []string
+	dones   map[string]chan struct{}
 }
 
 func (r *recorder) Start(id string) (func(), <-chan struct{}) {
@@ -26,15 +27,24 @@ func (r *recorder) Start(id string) (func(), <-chan struct{}) {
 	defer r.mu.Unlock()
 	r.started = append(r.started, id)
 	done := make(chan struct{})
+	if r.dones == nil {
+		r.dones = map[string]chan struct{}{}
+	}
+	r.dones[id] = done
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			r.mu.Lock()
-			defer r.mu.Unlock()
-			r.stopped = append(r.stopped, id)
-			close(done)
+			if !r.slow {
+				close(done)
+			}
 		})
 	}, done
+}
+
+func (r *recorder) finish(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	close(r.dones[id])
 }
 
 func bankJSON(id, phase string, port int, db string) string {
@@ -74,8 +84,8 @@ func newFleet(t *testing.T) (*Fleet, *recorder, func(string)) {
 
 func running(f *Fleet) []string {
 	ids := []string{}
-	for id, print := range f.Running() {
-		ids = append(ids, id+"="+print)
+	for id, m := range f.banks {
+		ids = append(ids, id+"="+m.print)
 	}
 	slices.Sort(ids)
 	return ids
@@ -102,7 +112,7 @@ func TestFleetSync(t *testing.T) {
 	}
 	for _, st := range steps {
 		serve(st.body)
-		banks, err := f.Read(context.Background())
+		banks, err := f.read(context.Background())
 		if st.wantErr != "" {
 			if err == nil || err.Error() != st.wantErr {
 				t.Fatalf("%s: err %v, want %q", st.name, err, st.wantErr)
@@ -110,8 +120,8 @@ func TestFleetSync(t *testing.T) {
 		} else if err != nil {
 			t.Fatalf("%s: %v", st.name, err)
 		} else {
-			f.Sync(banks)
-			f.Sync(banks)
+			f.sync(banks)
+			f.sync(banks)
 		}
 		if got := running(f); !slices.Equal(got, st.want) {
 			t.Fatalf("%s: running %v, want %v", st.name, got, st.want)
@@ -122,9 +132,28 @@ func TestFleetSync(t *testing.T) {
 	}
 }
 
+func TestFleetWaitsForAStoppingBank(t *testing.T) {
+	f, rec, _ := newFleet(t)
+	rec.slow = true
+	active := []bank{{ID: "a", Phase: config.PhaseActive, Port: 100, APIPort: 101, Database: "db_a"}}
+	closed := []bank{{ID: "a", Phase: config.PhaseClosed, Port: 100, APIPort: 101, Database: "db_a"}}
+	f.sync(active)
+	f.sync(closed)
+	f.sync(active)
+	if got := running(f); len(got) != 0 || !slices.Equal(rec.started, []string{"a"}) {
+		t.Fatalf("while the old process is still stopping: running %v, started %v", got, rec.started)
+	}
+	rec.finish("a")
+	f.sync(active)
+	if got := running(f); !slices.Equal(got, []string{"a=100/101/db_a"}) || !slices.Equal(rec.started, []string{"a", "a"}) {
+		t.Fatalf("after the old process stopped: running %v, started %v", got, rec.started)
+	}
+	rec.slow = false
+}
+
 func TestStartable(t *testing.T) {
-	provisioning := func(phase string, done bool) Bank {
-		b := Bank{Phase: phase}
+	provisioning := func(phase string, done bool) bank {
+		b := bank{Phase: phase}
 		b.Steps = append(b.Steps, struct {
 			ID   string `json:"id"`
 			Done bool   `json:"done"`
@@ -133,20 +162,20 @@ func TestStartable(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name string
-		bank Bank
+		bank bank
 		want bool
 	}{
-		{"active", Bank{Phase: config.PhaseActive}, true},
-		{"suspended", Bank{Phase: config.PhaseSuspended}, true},
-		{"closing", Bank{Phase: config.PhaseClosing}, true},
-		{"terminating", Bank{Phase: config.PhaseTerminating}, true},
-		{"closed", Bank{Phase: config.PhaseClosed}, false},
+		{"active", bank{Phase: config.PhaseActive}, true},
+		{"suspended", bank{Phase: config.PhaseSuspended}, true},
+		{"closing", bank{Phase: config.PhaseClosing}, true},
+		{"terminating", bank{Phase: config.PhaseTerminating}, true},
+		{"closed", bank{Phase: config.PhaseClosed}, false},
 		{"provisioning before the CBN step", provisioning(config.PhaseProvisioning, false), false},
 		{"provisioning after the CBN step", provisioning(config.PhaseProvisioning, true), true},
 		{"repairing after the CBN step", provisioning(config.PhaseRepairing, true), true},
-		{"provisioning without the step", Bank{Phase: config.PhaseProvisioning}, false},
+		{"provisioning without the step", bank{Phase: config.PhaseProvisioning}, false},
 	} {
-		if got := c.bank.Startable(); got != c.want {
+		if got := c.bank.startable(); got != c.want {
 			t.Errorf("%s: startable %v, want %v", c.name, got, c.want)
 		}
 	}
