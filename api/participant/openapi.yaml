@@ -1131,38 +1131,6 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '503':
           $ref: '#/components/responses/Unavailable'
-  /v1/logins:
-    post:
-      operationId: loginCustomer
-      tags: [bank]
-      summary: Check a customer's online banking login
-      description: Checks the username and password of a customer against this bank and returns the customer ID. An aggregator uses it when a customer signs in to see their connections. A wrong username, a wrong password and a closed customer all return the same `422 invalid_login`, so the answer does not say which one it was. The bank never logs the password and never returns it. This call is not a write and takes no `Idempotency-Key`. It does not count failed tries.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/LoginRequest'
-            example:
-              username: ada
-              password: a-long-passphrase
-      responses:
-        '200':
-          description: The login is right.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Login'
-              example:
-                customer_id: cus_01JBC8A5T3ZK
-        '400':
-          $ref: '#/components/responses/BankBadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthenticated'
-        '422':
-          $ref: '#/components/responses/BankUnprocessable'
-        '503':
-          $ref: '#/components/responses/Unavailable'
 components:
   securitySchemes:
     bearerAuth:
@@ -2098,25 +2066,6 @@ components:
           description: The entries, oldest first.
           items:
             $ref: '#/components/schemas/BookEntry'
-    LoginRequest:
-      type: object
-      description: A customer's online banking login.
-      required: [username, password]
-      properties:
-        username:
-          type: string
-          description: The online banking username.
-        password:
-          type: string
-          description: The online banking password. The bank never logs or returns it.
-    Login:
-      type: object
-      description: The customer who signed in.
-      required: [customer_id]
-      properties:
-        customer_id:
-          type: string
-          description: The ID of the customer.
     Error:
       type: object
       description: The body of every error.
@@ -2356,13 +2305,6 @@ components:
                 error:
                   code: invalid_request
                   message: The amount must be above zero, got 0.
-                  request_id: req_01JBC8A5T3ZK
-            invalid_login:
-              summary: The username or password is wrong.
-              value:
-                error:
-                  code: invalid_login
-                  message: The username or password is wrong.
                   request_id: req_01JBC8A5T3ZK
             daily_limit:
               summary: A withdrawal above the daily limit.

@@ -130,11 +130,6 @@ func TestBankAdminAgainstABankServer(t *testing.T) {
 		}, "500000 500000 CASH DEPOSIT"},
 		{"unknown entry", func() (string, error) { _, err := c.line(ctx, opened.NUBAN, "ln_none"); return "", err }, "bank: unknown statement line: ln_none"},
 		{"entries with a bad cursor", func() (string, error) { _, _, err := c.recent(ctx, opened.NUBAN, 10, "nope"); return "", err }, `bank: invalid cursor: "nope"`},
-		{"login", func() (string, error) {
-			id, err := c.login(ctx, "ada", "correct horse battery")
-			return fmt.Sprint(id == made.ID), err
-		}, "true"},
-		{"bad login", func() (string, error) { _, err := c.login(ctx, "ada", "wrong"); return "", err }, "bank: wrong username or password"},
 		{"payout while active", func() (string, error) { return "", c.payout(ctx, "close:bank-a:"+opened.NUBAN, opened.NUBAN, 100) }, "Bank A is active, so it cannot pay out or freeze accounts; that happens only while a bank is closing."},
 		{"freeze while active", func() (string, error) { return "", c.freeze(ctx, "close:bank-a:"+opened.NUBAN+":freeze", opened.NUBAN) }, "Bank A is active, so it cannot pay out or freeze accounts; that happens only while a bank is closing."},
 	}

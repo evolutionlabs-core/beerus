@@ -57,7 +57,6 @@ type bankBooks interface {
 	recent(ctx context.Context, nuban string, limit int, cursor string) ([]FeedLine, string, error)
 	line(ctx context.Context, nuban, id string) (FeedLine, error)
 	sessionLines(ctx context.Context, sessionID string) ([]FeedLine, error)
-	login(ctx context.Context, username, password string) (string, error)
 	check(ctx context.Context) (Check, error)
 }
 
@@ -244,16 +243,6 @@ func (c *bankAdmin) sessionLines(ctx context.Context, sessionID string) ([]FeedL
 		return nil, err
 	}
 	return feedLines(out.Data)
-}
-
-func (c *bankAdmin) login(ctx context.Context, username, password string) (string, error) {
-	var out control.LoginResult
-	err := c.call(ctx, http.MethodPost, "/v1/logins", "", control.LoginRequest{Username: username, Password: password}, &out)
-	var peer *control.PeerError
-	if errors.As(err, &peer) && peer.Code == "invalid_login" {
-		return "", errBadLogin
-	}
-	return out.Customer, err
 }
 
 func (c *bankAdmin) check(ctx context.Context) (Check, error) {

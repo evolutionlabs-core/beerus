@@ -49,7 +49,6 @@ var operations = []struct{ id, method, path string }{
 	{"listBookEntries", http.MethodGet, "/v1/books/accounts/{nuban}/entries"},
 	{"getBookEntry", http.MethodGet, "/v1/books/accounts/{nuban}/entries/{entry_id}"},
 	{"listSessionEntries", http.MethodGet, "/v1/books/sessions/{session_id}"},
-	{"loginCustomer", http.MethodPost, "/v1/logins"},
 }
 
 type found struct {

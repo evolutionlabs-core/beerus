@@ -3,22 +3,18 @@ package connect
 import (
 	"crypto/rand"
 	"crypto/subtle"
-	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
 	"net/url"
-	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
 	widgetCookie     = "beerus_link"
-	customerCookie   = "beerus_customer"
 	otpLife          = 5 * time.Minute
 	maxAttempts      = 5
 	bankLockout      = 15 * time.Minute
@@ -68,12 +64,6 @@ func (a *App) WidgetHandler() http.Handler {
 	mux.HandleFunc("POST /link/cancel", a.widgetCancel)
 	mux.HandleFunc("GET /bank/callback", a.bankCallback)
 	mux.HandleFunc("POST /consent-events", a.consentEvents)
-	mux.HandleFunc("GET /customer", a.customerPage)
-	mux.HandleFunc("POST /customer/login", a.customerLogin)
-	mux.HandleFunc("POST /customer/revoke", a.customerRevoke)
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/customer", http.StatusSeeOther)
-	})
 	return a.sameOrigin(mux)
 }
 
@@ -260,123 +250,4 @@ func otp() string {
 		panic(err)
 	}
 	return fmt.Sprintf("%06d", n.Int64())
-}
-
-func (a *App) customerPage(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	ck, err := r.Cookie(customerCookie)
-	var ws *WidgetSession
-	if err == nil {
-		ws = a.st.WidgetSessions[web.HashSecret(ck.Value)]
-	}
-	if ws == nil || a.clock.Real().After(ws.ExpiresReal) {
-		a.render(w, "customer_login", http.StatusOK, page{"Title": "Your connections", "Banks": a.openInstitutions()})
-		return
-	}
-	owner := ws.LinkSessionID
-	type row struct {
-		ID, Partner, Bank, Status, Since string
-		Active                           bool
-	}
-	rows := []row{}
-	for _, c := range a.st.Connections {
-		if customerKey(c.Institution, c.CustomerID) != owner {
-			continue
-		}
-		bankName := c.Institution
-		if b := a.cfg.Bank(c.Institution); b != nil {
-			bankName = b.Name
-		}
-		p := a.partnerOf(c.PartnerID)
-		name := c.PartnerID
-		if p != nil {
-			name = p.Name
-		}
-		rows = append(rows, row{ID: c.ID, Partner: name, Bank: bankName, Status: c.Status, Since: clock.DateOf(c.CreatedAt).String(), Active: c.Status != "revoked"})
-	}
-	slices.SortFunc(rows, func(x, y row) int {
-		if x.Since == y.Since {
-			return 0
-		}
-		if x.Since < y.Since {
-			return 1
-		}
-		return -1
-	})
-	a.render(w, "customer", http.StatusOK, page{"Title": "Your connections", "Connections": rows, "CSRF": ws.CSRF})
-}
-
-func customerKey(bank, customer string) string {
-	return bank + ":" + customer
-}
-
-func (a *App) customerLogin(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		a.message(w, http.StatusBadRequest, "Request refused", "Try again.")
-		return
-	}
-	bankID := r.PostForm.Get("bank")
-	login := func() (string, error) {
-		books := a.booksOf(bankID)
-		if books == nil {
-			return "", errBadLogin
-		}
-		return books.login(r.Context(), r.PostForm.Get("username"), r.PostForm.Get("password"))
-	}
-	customer, err := login()
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if err != nil {
-		if !errors.Is(err, errBadLogin) {
-			a.log.Error("customer sign-in", "bank", bankID, "err", err)
-		}
-		a.render(w, "customer_login", http.StatusUnauthorized, page{"Title": "Your connections", "Banks": a.openInstitutions(), "Error": "The bank, username or password is wrong."})
-		return
-	}
-	raw, csrf, err := newSession("cs_")
-	if err != nil {
-		a.log.Error("customer session", "err", err)
-		a.message(w, http.StatusInternalServerError, "Something went wrong", "Try again.")
-		return
-	}
-	ws := &WidgetSession{ID: web.HashSecret(raw), LinkSessionID: customerKey(bankID, customer), CSRF: csrf, ExpiresReal: a.clock.Real().Add(30 * time.Minute)}
-	a.st.WidgetSessions[ws.ID] = ws
-	a.dirty()
-	a.setCookie(w, customerCookie, raw, 1800)
-	http.Redirect(w, r, "/customer", http.StatusSeeOther)
-}
-
-func (a *App) customerRevoke(w http.ResponseWriter, r *http.Request) {
-	ck, err := r.Cookie(customerCookie)
-	if err != nil {
-		http.Redirect(w, r, "/customer", http.StatusSeeOther)
-		return
-	}
-	a.mu.Lock()
-	ws := a.st.WidgetSessions[web.HashSecret(ck.Value)]
-	if ws == nil || a.clock.Real().After(ws.ExpiresReal) || r.ParseForm() != nil || subtle.ConstantTimeCompare([]byte(r.PostForm.Get("csrf")), []byte(ws.CSRF)) != 1 {
-		a.mu.Unlock()
-		a.message(w, http.StatusForbidden, "Request refused", "The form expired. Go back and try again.")
-		return
-	}
-	c := a.st.Connections[r.PostForm.Get("connection")]
-	if c == nil || customerKey(c.Institution, c.CustomerID) != ws.LinkSessionID {
-		a.mu.Unlock()
-		a.message(w, http.StatusNotFound, "Not found", "That connection does not exist.")
-		return
-	}
-	if c.Status != "revoked" {
-		a.mu.Unlock()
-		if err := a.revokeConnectionAtBank(c.ID); err != nil {
-			a.message(w, http.StatusServiceUnavailable, "Bank not reachable", "The bank could not be reached to withdraw access. Try again soon.")
-			return
-		}
-		a.mu.Lock()
-	}
-	defer a.mu.Unlock()
-	if a.st.Connections[c.ID] == c {
-		a.setStatus(c, "revoked", "connection_revoked")
-	}
-	http.Redirect(w, r, "/customer", http.StatusSeeOther)
 }

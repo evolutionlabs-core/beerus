@@ -117,7 +117,6 @@ func (s *Server) API() http.Handler {
 	mux.HandleFunc("GET /v1/books/accounts/{nuban}/entries", booked(b.HandleEntries))
 	mux.HandleFunc("GET /v1/books/accounts/{nuban}/entries/{entry_id}", booked(b.HandleEntry))
 	mux.HandleFunc("GET /v1/books/sessions/{session_id}", booked(b.HandleSessionEntries))
-	mux.HandleFunc("POST /v1/logins", booked(b.HandleLogin))
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "A bank does not serve this control call yet.")
 	})

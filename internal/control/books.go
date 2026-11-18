@@ -58,15 +58,6 @@ type LedgerCheck struct {
 	UnbalancedEntries []int64  `json:"unbalanced_entries"`
 }
 
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type LoginResult struct {
-	Customer string `json:"customer_id"`
-}
-
 type ClosurePaid struct {
 	Account string `json:"account_number"`
 	Paid    int64  `json:"paid_minor"`

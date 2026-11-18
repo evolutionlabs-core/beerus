@@ -69,28 +69,4 @@ var pages = template.Must(template.New("").Funcs(view.Funcs()).Funcs(template.Fu
 <h1 class="text-[22px] leading-snug">{{.Heading}}</h1>
 <p class="mt-2 text-[13.5px] leading-relaxed text-muted">{{.Message}}</p>
 {{template "foot" .}}{{end}}
-
-{{define "customer_login"}}{{template "head" .}}
-<h1 class="text-[22px] leading-snug">Your connected apps</h1>
-<p class="mt-2 text-[13.5px] leading-relaxed text-muted">Sign in with your online banking details to see the apps that read your accounts through {{.ConnectBrand}}, and to withdraw access.</p>
-{{template "error" .}}
-<form method="post" action="/customer/login" class="mt-6 space-y-4">
-<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Bank</span><select class="field" name="bank" required>{{range .Banks}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
-<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Username</span><input class="field" type="text" name="username" autocomplete="username" required autofocus></label>
-<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Password</span><input class="field" type="password" name="password" autocomplete="current-password" required></label>
-<button type="submit" class="btn btn-primary mt-2 w-full">Sign in</button>
-</form>
-{{template "foot" .}}{{end}}
-
-{{define "customer"}}{{template "head" .}}
-<h1 class="text-[22px] leading-snug">Your connected apps</h1>
-<p class="mt-2 text-[13.5px] leading-relaxed text-muted">These apps read your accounts through {{.ConnectBrand}}.</p>
-{{if not .Connections}}<p class="mt-6 rounded-xl border border-line px-4 py-8 text-center text-[13.5px] text-muted">No apps are connected.</p>{{end}}
-<ul class="mt-6 space-y-2">
-{{range .Connections}}<li class="flex items-center gap-3 rounded-xl border border-line px-3.5 py-3">
-<span class="flex-1"><span class="block text-[14px]">{{.Partner}}</span><span class="block text-[12.5px] text-muted">{{.Bank}} · since {{.Since}}</span></span>
-{{if .Active}}<form method="post" action="/customer/revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="connection" value="{{.ID}}"><button type="submit" class="btn btn-secondary btn-sm">Withdraw access</button></form>{{else}}<span class="badge badge-bad">{{human .Status}}</span>{{end}}
-</li>{{end}}
-</ul>
-{{template "foot" .}}{{end}}
 `))
