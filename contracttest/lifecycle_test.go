@@ -536,7 +536,7 @@ func TestCloseBank(t *testing.T) {
 	if !saved.Bank("abuja-digital").Closed() {
 		t.Fatal("the closed state was not saved")
 	}
-	again, err := connect.New(saved, connect.Options{})
+	again, err := connect.New(t.Context(), saved, connect.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

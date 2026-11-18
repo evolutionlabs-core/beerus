@@ -47,6 +47,8 @@ type Connect struct {
 	HealthPort       int    `yaml:"health_port"`
 	NIBSSPort        int    `yaml:"nibss_port"`
 	NIBSSControlPort int    `yaml:"-"`
+	CBNPort          int    `yaml:"-"`
+	CBNControlPort   int    `yaml:"-"`
 	LegalName        string `yaml:"legal_name"`
 	BrandName        string `yaml:"brand_name"`
 	RegistryID       string `yaml:"registry_id"`
@@ -255,6 +257,10 @@ func (c *Config) Bank(id string) *Bank {
 		}
 	}
 	return nil
+}
+
+func (c *Config) CBNURL() string {
+	return fmt.Sprintf("http://%s:%d", CBNHost, c.Connect.CBNControlPort)
 }
 
 func (c *Config) ControlURL() string {

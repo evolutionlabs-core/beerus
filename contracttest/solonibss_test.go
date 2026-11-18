@@ -115,8 +115,8 @@ func startSoloNIBSS(t *testing.T, tsqAfter time.Duration, withBanks ...string) (
 	if err := os.Mkdir(stage, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	ports := freePorts(t, 2+2*len(withBanks))
-	cfg := &config.Config{Dir: stage, SetupKey: soloSetupKey, TSQAfter: tsqAfter, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: ports[0], NIBSSControlPort: ports[1]}}
+	ports := freePorts(t, 3+2*len(withBanks))
+	cfg := &config.Config{Dir: stage, SetupKey: soloSetupKey, TSQAfter: tsqAfter, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: ports[0], NIBSSControlPort: ports[1], CBNPort: ports[len(ports)-1]}}
 	if err := config.Prepare(cfg, now); err != nil {
 		t.Fatal(err)
 	}

@@ -47,7 +47,7 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		expected[name] = true
 	}
 	if len(c.Banks) > 0 {
-		expected[config.DatabaseName(c.Dir, cbnID)] = true
+		expected[config.DatabaseName(c.Dir, setup.SystemCBN)] = true
 	}
 	byID := map[string]*config.Bank{}
 	for _, b := range c.Banks {

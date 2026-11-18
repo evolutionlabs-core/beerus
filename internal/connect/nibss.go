@@ -30,14 +30,7 @@ func openNIBSS(ctx context.Context, cfg *config.Config, ctl *ctlStore) (*nibss.S
 	if err != nil {
 		return nil, fmt.Errorf("open the NIBSS directory: %w", err)
 	}
-	if err := ctl.update(func(st *setup.Status) (bool, error) {
-		r := ensureResource(st, setup.KindSystem, setup.SystemNIBSS)
-		if r.Phase == config.PhaseActive {
-			return false, nil
-		}
-		r.Phase = config.PhaseActive
-		return true, nil
-	}); err != nil {
+	if err := markActive(ctl, setup.SystemNIBSS); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -142,7 +135,10 @@ func (a *App) dropNIBSS(ctx context.Context) error {
 	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{name}); err != nil {
 		return fmt.Errorf("drop the NIBSS database: %w", err)
 	}
-	return a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
+	if err := a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
+		return err
+	}
+	return a.ctl.releasePorts(setup.KindSystem, setup.SystemNIBSS)
 }
 
 func memberStatus(b *config.Bank) string {
@@ -373,6 +369,7 @@ func (a *App) registerDue(ctx context.Context) {
 	for _, j := range jobs {
 		a.step(j.st, config.StepDirectory, func() error { return a.registerMember(ctx, j.b) })
 	}
+	a.cbnDue(ctx)
 	for _, j := range stale {
 		a.finishStale(j, a.registerMember(ctx, j.b))
 	}

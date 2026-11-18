@@ -31,7 +31,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Resolve connect.localhost
-        run: echo "127.0.0.1 connect.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
+        run: echo "127.0.0.1 connect.localhost cbn.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: go vet
@@ -62,7 +62,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Resolve local names
-        run: echo "127.0.0.1 connect.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
+        run: echo "127.0.0.1 connect.localhost cbn.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
       - name: Contract suite on the full stack
         run: go test -count=1 -timeout 25m ./contracttest
 
@@ -92,7 +92,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Resolve local names
-        run: echo "127.0.0.1 connect.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
+        run: echo "127.0.0.1 connect.localhost cbn.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
       - name: Start the stack
         run: |
           mkdir -p "$RUNNER_TEMP/beerus-state"

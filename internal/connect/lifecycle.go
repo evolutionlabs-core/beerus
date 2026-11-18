@@ -383,8 +383,10 @@ func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool)
 
 func CheckPorts(c *config.Config) error {
 	ports := []int{c.Connect.PartnerPort, c.Connect.WidgetPort, c.Connect.ControlPort, c.Connect.HealthPort, c.Connect.NIBSSPort}
-	if c.Connect.NIBSSControlPort != 0 {
-		ports = append(ports, c.Connect.NIBSSControlPort)
+	for _, p := range []int{c.Connect.NIBSSControlPort, c.Connect.CBNControlPort, c.Connect.CBNPort} {
+		if p != 0 {
+			ports = append(ports, p)
+		}
 	}
 	for _, b := range c.Banks {
 		if !b.Closed() {

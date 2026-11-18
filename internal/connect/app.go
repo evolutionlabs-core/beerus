@@ -19,9 +19,11 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
+	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -52,14 +54,15 @@ type App struct {
 	partnerMu    sync.Mutex
 	swept        time.Time
 	ledgers      []*ledgerSource
-	rtgs         *rtgs
-	rtgsTried    time.Time
-	rtgsOpening  bool
 	nibss        *nibss.Store
 	nibssTried   time.Time
 	nibssOpening bool
 	nibssCtl     *nibssAdmin
 	nibssEnsured time.Time
+	cbnCtl       *cbnAdmin
+	localCBN     *cbnparticipant.Participant
+	localNIBSS   *nibssparticipant.Participant
+	cbnEnsured   time.Time
 	dirSynced    bool
 	dirAttempts  int
 	dirNext      time.Time
@@ -72,9 +75,8 @@ type App struct {
 	stale        map[string]*staleMember
 	closeRuns    map[string]*closeRun
 	sendReads    map[string]sendRead
+	moveReads    map[string]moveRead
 	revokeReads  map[string]revokeRead
-	settling     bool
-	settleDone   *sync.Cond
 	lifeMu       sync.Mutex
 	recMu        sync.Mutex
 	stepMu       sync.Mutex
@@ -95,6 +97,7 @@ type App struct {
 	vault        *vault
 	obHTTP       *http.Client
 	nibssBanks   map[string]*http.Client
+	cbnBanks     map[string]*http.Client
 	role         string
 	coreURL      string
 	pushWake     chan struct{}
@@ -117,7 +120,7 @@ type Options struct {
 	BankWrap func(http.RoundTripper) http.RoundTripper
 }
 
-func New(cfg *config.Config, o Options) (*App, error) {
+func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 	key, err := config.WebhookKey(cfg)
 	if err != nil {
 		return nil, err
@@ -142,7 +145,6 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		statePath: cfg.Path("stub-state.json"),
 		sending:   make(chan struct{}, 4),
 	}
-	a.settleDone = sync.NewCond(&a.mu)
 	if a.log == nil {
 		a.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
@@ -188,7 +190,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		if err := a.claimBank(b); err != nil {
 			return nil, err
 		}
-		ls, err := openLedgerSource(context.Background(), cfg, a.ctl, a.clock, b)
+		ls, err := openLedgerSource(ctx, cfg, a.ctl, a.clock, b)
 		if err != nil {
 			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
 			continue
@@ -199,10 +201,13 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	if err := a.prepareNIBSS(); err != nil {
 		return nil, err
 	}
-	if err := a.ensureRTGS(); err != nil {
+	if err := a.prepareCBN(); err != nil {
 		return nil, err
 	}
-	a.settleDue()
+	if err := a.openParticipants(ctx); err != nil {
+		a.closeLedgers()
+		return nil, err
+	}
 	a.initLifecycle()
 	return a, nil
 }
@@ -236,11 +241,14 @@ func (a *App) closeLedgers() {
 	for _, l := range a.ledgers {
 		l.Close()
 	}
-	if a.rtgs != nil {
-		a.rtgs.Close()
-	}
 	if a.nibss != nil {
 		a.nibss.Close()
+	}
+	if a.localCBN != nil {
+		a.localCBN.Close()
+	}
+	if a.localNIBSS != nil {
+		a.localNIBSS.Close()
 	}
 }
 
@@ -313,6 +321,7 @@ func (a *App) Run(ctx context.Context) {
 func (a *App) Step(ctx context.Context) {
 	a.confirmDue(ctx)
 	a.registerDue(ctx)
+	a.settleDue(ctx)
 	a.stepLocked(ctx)
 }
 
@@ -327,10 +336,9 @@ func (a *App) stepLocked(ctx context.Context) {
 	if err := a.ensureNIBSSDir(); err != nil {
 		a.log.Error("NIBSS directory not written", "err", err)
 	}
-	if err := a.ensureRTGS(); err != nil {
-		a.log.Error("CBN ledger", "err", err)
+	if err := a.ensureCBNDir(); err != nil {
+		a.log.Error("CBN directory not written", "err", err)
 	}
-	a.settleDue()
 	a.refreshTokens()
 	a.retryRevokes()
 	a.runConnections()
@@ -345,13 +353,6 @@ func (a *App) stepLocked(ctx context.Context) {
 			defer func() { <-a.sending }()
 			a.deliver(d)
 		}(d)
-	}
-}
-
-func (a *App) settleDue() {
-	now := a.clock.Now()
-	if _, err := a.settle(now, false); err != nil {
-		a.log.Error("NIP settlement", "err", err)
 	}
 }
 

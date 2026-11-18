@@ -31,7 +31,7 @@ func TestCustomerCallsReachTheBankProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	ports := stackPorts(t, 1)
-	local := fmt.Sprintf("database_url: postgres:///postgres\nconnect:\n  host: connect.localhost\n  partner_port: %d\n  widget_port: %d\n  control_port: %d\n  health_port: %d\n  nibss_port: %d\n  sync_interval: 1m\n  refresh_min_interval: 1m\n", ports[0], ports[1], ports[2], ports[3], ports[4])
+	local := fmt.Sprintf("database_url: postgres:///postgres\nconnect:\n  host: connect.localhost\n  partner_port: %d\n  widget_port: %d\n  control_port: %d\n  health_port: %d\n  nibss_port: %d\n  cbn_port: %d\n  sync_interval: 1m\n  refresh_min_interval: 1m\n", ports[0], ports[1], ports[2], ports[3], ports[4], ports[5])
 	if err := os.WriteFile(filepath.Join(dir, "local.yaml"), []byte(local), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -104,5 +104,8 @@ func TestCustomerCallsReachTheBankProcess(t *testing.T) {
 	c.ok("bank", "close", "bank-a", "--money", "leave", "--yes")
 	if got := c.fails("statement", account, "--bank", "bank-a"); got != "beerus: Bank A is closed." {
 		t.Errorf("statement of a closed bank: %q", got)
+	}
+	if got := c.ok("nip", "settlement"); !strings.Contains(got, `"problems": []`) {
+		t.Errorf("settlement after the close: %q", got)
 	}
 }

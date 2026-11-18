@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
 
@@ -14,8 +16,9 @@ import (
 )
 
 const (
-	coreID    = "core"
-	stopGrace = 10 * time.Second
+	coreID        = "core"
+	stopGrace     = 10 * time.Second
+	healthTimeout = 3 * time.Second
 )
 
 type supervisor struct {
@@ -29,6 +32,7 @@ type supervisor struct {
 	logs      *syncWriter
 	core      *child
 	nibss     *child
+	cbn       *child
 	banks     map[string]*child
 	order     []string
 	stopping  map[string]*child
@@ -95,6 +99,46 @@ func (s *supervisor) awaitCore(ctx context.Context) error {
 	}
 }
 
+func (s *supervisor) awaitHealth(ctx context.Context, name string, c *child, health func(context.Context, *http.Client) error) error {
+	deadline := time.NewTimer(startTimeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(startRetry)
+	defer tick.Stop()
+	client := &http.Client{Timeout: healthTimeout}
+	for {
+		err := health(ctx, client)
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-c.firstExit:
+			return fmt.Errorf("%s exited before it was ready: %s", name, exitText(c.exit))
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("wait for %s: %w", name, err)
+		case <-tick.C:
+		}
+	}
+}
+
+func controlHealth(ctx context.Context, client *http.Client, name string, port int, token string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/v1/health", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return errors.New(name + " answered " + resp.Status)
+	}
+	return nil
+}
+
 func (s *supervisor) watch(ctx context.Context) {
 	ctx, s.watchStop = context.WithCancel(ctx)
 	s.watchDone = make(chan struct{})
@@ -118,10 +162,10 @@ func (s *supervisor) shutdown() {
 	for _, c := range s.stopping {
 		<-c.done
 	}
-	if s.nibss != nil {
-		s.nibss.stop()
-		<-s.nibss.done
+	for _, c := range []*child{s.nibss, s.core, s.cbn} {
+		if c != nil {
+			c.stop()
+			<-c.done
+		}
 	}
-	s.core.stop()
-	<-s.core.done
 }

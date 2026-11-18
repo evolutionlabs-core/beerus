@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
@@ -26,6 +28,27 @@ type NIBSSFile struct {
 	ControlPort int    `json:"control_port"`
 	WorldID     string `json:"world_id"`
 	TSQAfter    string `json:"tsq_after"`
+	Sessions    int    `json:"sessions"`
+	CBNPort     int    `json:"cbn_port"`
+
+	HolidaysAdd    []string `json:"holidays_add"`
+	HolidaysRemove []string `json:"holidays_remove"`
+}
+
+func (f NIBSSFile) Calendar() (clock.Calendar, error) {
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return clock.Calendar{}, fmt.Errorf("load country pack: %w", err)
+	}
+	add, err := parseHolidays("add", f.HolidaysAdd)
+	if err != nil {
+		return clock.Calendar{}, err
+	}
+	remove, err := parseHolidays("remove", f.HolidaysRemove)
+	if err != nil {
+		return clock.Calendar{}, err
+	}
+	return clock.NewCalendar(pack.Fixed.Days, add, remove), nil
 }
 
 func (f NIBSSFile) StatusQueryAfter() time.Duration {
@@ -86,6 +109,10 @@ func (f NIBSSFile) check(dir string) error {
 		return fmt.Errorf("database is %q, but core names the NIBSS database %q", f.Database, DatabaseName(dir, NIBSSID))
 	case !validDuration(f.TSQAfter):
 		return fmt.Errorf("tsq_after needs a duration above zero, not %q", f.TSQAfter)
+	case f.Sessions <= 0:
+		return fmt.Errorf("sessions must be above zero, not %d", f.Sessions)
+	case f.CBNPort <= 0:
+		return fmt.Errorf("cbn_port must be above zero, not %d", f.CBNPort)
 	}
 	return nil
 }
@@ -96,13 +123,22 @@ func validDuration(s string) bool {
 }
 
 func (c *Config) nibssFileBytes(worldID string) ([]byte, error) {
-	raw, err := json.MarshalIndent(NIBSSFile{
+	file := NIBSSFile{
 		Database:    DatabaseName(c.Dir, NIBSSID),
 		Port:        c.Connect.NIBSSPort,
 		ControlPort: c.Connect.NIBSSControlPort,
 		WorldID:     worldID,
 		TSQAfter:    c.TSQAfter.String(),
-	}, "", "  ")
+		Sessions:    c.Sessions(),
+		CBNPort:     c.Connect.CBNPort,
+
+		HolidaysAdd:    []string{},
+		HolidaysRemove: []string{},
+	}
+	if c.Holidays != nil {
+		file.HolidaysAdd, file.HolidaysRemove = append(file.HolidaysAdd, c.Holidays.Add...), append(file.HolidaysRemove, c.Holidays.Remove...)
+	}
+	raw, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode NIBSS config: %w", err)
 	}

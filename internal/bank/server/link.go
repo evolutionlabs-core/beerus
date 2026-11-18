@@ -39,7 +39,17 @@ func (e *PeerError) Error() string {
 }
 
 func NewLink(token, bind string) Link {
-	return Link{Client: &http.Client{Timeout: peerTimeout, Transport: &http.Transport{IdleConnTimeout: peerIdleTimeout, MaxIdleConnsPerHost: 2}}, Token: token, Bind: bind}
+	l := Link{Token: token, Bind: bind}
+	l.Client = &http.Client{Timeout: peerTimeout, Transport: &http.Transport{IdleConnTimeout: peerIdleTimeout, MaxIdleConnsPerHost: 2, DialContext: l.dial}}
+	return l
+}
+
+func (l Link) dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err == nil && !l.Remote() && strings.HasSuffix(host, localhostHost) {
+		addr = net.JoinHostPort(loopback, port)
+	}
+	return (&net.Dialer{Timeout: cbnDialTimeout}).DialContext(ctx, network, addr)
 }
 
 func (l Link) Multi() bool {

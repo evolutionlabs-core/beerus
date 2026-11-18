@@ -1,4 +1,4 @@
-package connect
+package nibss
 
 import (
 	"testing"
@@ -10,7 +10,7 @@ import (
 )
 
 func TestSessionSchedule(t *testing.T) {
-	s := schedule{per: 12}
+	s := Schedule{Per: 12}
 	at := func(day string, hh, mm int) time.Time {
 		d, err := clock.ParseDate(day)
 		if err != nil {
@@ -33,18 +33,18 @@ func TestSessionSchedule(t *testing.T) {
 		{at("2026-11-08", 23, 59), "2026-11-09T02:00"},
 		{at("2026-11-09", 1, 30), "2026-11-09T02:00"},
 	} {
-		got := s.key(s.next(c.booked.Add(-time.Nanosecond)))
+		got := s.Key(s.Next(c.booked.Add(-time.Nanosecond)))
 		if got != c.key {
 			t.Errorf("a transfer booked at %s settles in %s, want %s", c.booked.Format(time.RFC3339), got, c.key)
 		}
 	}
-	if got := s.next(at("2026-11-06", 22, 0)); !got.Equal(at("2026-11-07", 0, 0)) {
+	if got := s.Next(at("2026-11-06", 22, 0)); !got.Equal(at("2026-11-07", 0, 0)) {
 		t.Errorf("last Friday session closes at %s", got)
 	}
-	if got := s.next(at("2026-11-07", 0, 0)); !got.Equal(at("2026-11-09", 2, 0)) {
+	if got := s.Next(at("2026-11-07", 0, 0)); !got.Equal(at("2026-11-09", 2, 0)) {
 		t.Errorf("first session after Friday closes at %s", got)
 	}
-	four := (&App{cfg: &config.Config{}}).schedule()
+	four := Schedule{Per: config.DefaultNIPSessions}
 	for _, c := range []struct {
 		booked time.Time
 		key    string
@@ -54,7 +54,7 @@ func TestSessionSchedule(t *testing.T) {
 		{at("2026-11-02", 23, 0), "2026-11-03T00:00"},
 		{at("2026-11-07", 9, 0), "2026-11-09T06:00"},
 	} {
-		if got := four.key(four.next(c.booked.Add(-time.Nanosecond))); got != c.key {
+		if got := four.Key(four.Next(c.booked.Add(-time.Nanosecond))); got != c.key {
 			t.Errorf("with the default schedule, a transfer booked at %s settles in %s, want %s", c.booked.Format(time.RFC3339), got, c.key)
 		}
 	}
@@ -65,7 +65,7 @@ func TestSessionScheduleSkipsHolidays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := schedule{per: 12, cal: clock.NewCalendar(pack.Fixed.Days, nil, nil)}
+	s := Schedule{Per: 12, Cal: clock.NewCalendar(pack.Fixed.Days, nil, nil)}
 	at := func(day string, hh int) time.Time {
 		d, err := clock.ParseDate(day)
 		if err != nil {
@@ -87,7 +87,7 @@ func TestSessionScheduleSkipsHolidays(t *testing.T) {
 		{"first session after Christmas Day", at("2026-12-25", 0), at("2026-12-28", 2)},
 		{"New Year's Day then the weekend", at("2027-01-01", 5), at("2027-01-04", 2)},
 	} {
-		if got := s.next(c.booked); !got.Equal(c.want) {
+		if got := s.Next(c.booked); !got.Equal(c.want) {
 			t.Errorf("%s: next session after %s closes at %s, want %s", c.name, c.booked.Format(time.RFC3339), got.Format(time.RFC3339), c.want.Format(time.RFC3339))
 		}
 	}
@@ -95,19 +95,19 @@ func TestSessionScheduleSkipsHolidays(t *testing.T) {
 
 func TestScheduleFollowsCalendar(t *testing.T) {
 	friday := clock.Date{Y: 2026, M: 11, D: 6}
-	plain := schedule{per: 12}
-	closed := schedule{per: 12, cal: clock.NewCalendar(nil, []clock.Date{friday.AddDays(3)}, nil)}
+	plain := Schedule{Per: 12}
+	closed := Schedule{Per: 12, Cal: clock.NewCalendar(nil, []clock.Date{friday.AddDays(3)}, nil)}
 	from := friday.AddDays(2).Start()
-	if got := plain.next(from); !got.Equal(friday.AddDays(3).Start().Add(2 * time.Hour)) {
+	if got := plain.Next(from); !got.Equal(friday.AddDays(3).Start().Add(2 * time.Hour)) {
 		t.Fatalf("plain next session %s", got)
 	}
-	if got := closed.next(from); !got.Equal(friday.AddDays(4).Start().Add(2 * time.Hour)) {
+	if got := closed.Next(from); !got.Equal(friday.AddDays(4).Start().Add(2 * time.Hour)) {
 		t.Errorf("next session with the extra holiday %s", got)
 	}
 }
 
 func TestPreviousSession(t *testing.T) {
-	s := schedule{per: 4}
+	s := Schedule{Per: 4}
 	at := func(day string, hh, mm int) time.Time {
 		d, err := clock.ParseDate(day)
 		if err != nil {
@@ -125,11 +125,11 @@ func TestPreviousSession(t *testing.T) {
 		{at("2026-11-08", 12, 0), at("2026-11-07", 0, 0)},
 		{at("2026-11-09", 1, 0), at("2026-11-07", 0, 0)},
 	} {
-		got := s.prev(c.now)
+		got := s.Prev(c.now)
 		if !got.Equal(c.want) {
 			t.Errorf("the session before %s is %s, want %s", c.now.Format(time.RFC3339), got.Format(time.RFC3339), c.want.Format(time.RFC3339))
 		}
-		if next := s.next(got.Add(-time.Nanosecond)); !next.Equal(got) {
+		if next := s.Next(got.Add(-time.Nanosecond)); !next.Equal(got) {
 			t.Errorf("%s is not a session cutoff", got.Format(time.RFC3339))
 		}
 	}

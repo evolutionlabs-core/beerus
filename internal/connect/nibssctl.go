@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -22,9 +23,11 @@ const (
 	nibssEnquiriesPath = "/v1/control/name-enquiries"
 	nibssClientsPath   = "/v1/control/registry/clients"
 	nibssConsentsPath  = "/v1/control/consents"
+	nibssSettlePath    = "/v1/control/settlement-sessions"
 	nibssPage          = 500
 	nibssAway          = "NIBSS is not available right now. Try again soon."
 	nibssHost          = "127.0.0.1"
+	nibssSettleTimeout = 30 * time.Second
 )
 
 type nibssAdmin struct {
@@ -128,6 +131,16 @@ type consentPage struct {
 func (n *nibssAdmin) consents(ctx context.Context, q url.Values) (consentPage, error) {
 	var out consentPage
 	return out, n.call(ctx, http.MethodGet, nibssConsentsPath+"?"+q.Encode(), nil, nil, &out)
+}
+
+func (n *nibssAdmin) settle(ctx context.Context, adhoc bool) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, nibssSettleTimeout)
+	defer cancel()
+	var out struct {
+		Posted int `json:"posted_sessions"`
+	}
+	err := n.call(ctx, http.MethodPost, nibssSettlePath, nil, map[string]bool{"adhoc": adhoc}, &out)
+	return out.Posted, err
 }
 
 func (n *nibssAdmin) call(ctx context.Context, method, path string, header http.Header, in, out any) error {

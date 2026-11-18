@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -74,7 +73,7 @@ func cmdRun(args []string) error {
 		if err != nil {
 			return err
 		}
-		app, err := connect.New(c, connect.Options{Logger: log, Role: connect.RoleCore, CoreURL: *core, Bind: *bind})
+		app, err := connect.New(ctx, c, connect.Options{Logger: log, Role: connect.RoleCore, CoreURL: *core, Bind: *bind})
 		if err != nil {
 			return err
 		}
@@ -88,47 +87,9 @@ func cmdRun(args []string) error {
 	return participant.Run(ctx, *dir, participant.Options{Logger: log, BankID: *which, CoreURL: *core, Bind: *bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
 }
 
-func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
-	ok, err := connect.Initialized(dir)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		if err := initFromEnv(dir); err != nil {
-			return err
-		}
-	}
-	c, err := connect.LoadConfig(dir)
-	if err != nil {
-		return err
-	}
-	if id := os.Getenv("BEERUS_PARTNER_ID"); ok && os.Getenv("BEERUS_PARTNER_REDIRECT_URI") != "" && c.Partner(id) == nil {
-		log.Warn("BEERUS_PARTNER_* only applies when the setup is first made; register the partner with beerus partner add once Beerus is running", "partner", id)
-	}
-	if err := c.EnsureCertificates(clock.New(nil).Real()); err != nil {
-		return err
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
-	mux.HandleFunc("GET /ca.crt", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, c.Path("ca", "root.crt")) })
-	if c.Connect.HealthPort <= 0 {
-		return fmt.Errorf("%s has no connect.health_port; set it to the port the cbn container listens on", c.Path(connect.LocalFile))
-	}
-	srv := &http.Server{Addr: net.JoinHostPort(bind, strconv.Itoa(c.Connect.HealthPort)), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	go func() {
-		<-ctx.Done()
-		_ = srv.Shutdown(context.Background())
-	}()
-	log.Info("cbn: certificates issued", "dir", dir)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
-}
-
 func initFromEnv(dir string) error {
 	local := connect.DefaultLocal()
-	for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &local.Connect.PartnerPort, "BEERUS_WIDGET_PORT": &local.Connect.WidgetPort, "BEERUS_CONTROL_PORT": &local.Connect.ControlPort, "BEERUS_HEALTH_PORT": &local.Connect.HealthPort, "BEERUS_NIBSS_PORT": &local.Connect.NIBSSPort} {
+	for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &local.Connect.PartnerPort, "BEERUS_WIDGET_PORT": &local.Connect.WidgetPort, "BEERUS_CONTROL_PORT": &local.Connect.ControlPort, "BEERUS_HEALTH_PORT": &local.Connect.HealthPort, "BEERUS_NIBSS_PORT": &local.Connect.NIBSSPort, "BEERUS_CBN_PORT": &local.Connect.CBNPort} {
 		n, err := envNumber(key, true)
 		if err != nil {
 			return err

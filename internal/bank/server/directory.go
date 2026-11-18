@@ -65,6 +65,10 @@ func (s *Server) directoryClient() (*http.Client, error) {
 }
 
 func NIBSSHTTP(dir, id string) (*http.Client, error) {
+	return peerHTTP(dir, id, config.NIBSSHost, nil)
+}
+
+func peerHTTP(dir, id, host string, dial func(context.Context, string, string) (net.Conn, error)) (*http.Client, error) {
 	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "banks", id, "client.crt"), filepath.Join(dir, "banks", id, "client.key"))
 	if err != nil {
 		return nil, fmt.Errorf("load bank client certificate: %w", err)
@@ -76,17 +80,17 @@ func NIBSSHTTP(dir, id string) (*http.Client, error) {
 	tc := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      pool,
-		ServerName:   config.NIBSSHost,
+		ServerName:   host,
 		MinVersion:   tls.VersionTLS12,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 || cs.PeerCertificates[0].Subject.CommonName != config.NIBSSHost {
-				return errors.New("the server presented another certificate identity than NIBSS")
+			if len(cs.PeerCertificates) == 0 || cs.PeerCertificates[0].Subject.CommonName != host {
+				return fmt.Errorf("the server presented another certificate identity than %s", host)
 			}
 			return nil
 		},
 	}
 	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &http.Client{Timeout: directoryTimeout, CheckRedirect: noRedirect, Transport: &http.Transport{TLSClientConfig: tc, IdleConnTimeout: directoryIdle, MaxIdleConnsPerHost: 1}}, nil
+	return &http.Client{Timeout: directoryTimeout, CheckRedirect: noRedirect, Transport: &http.Transport{TLSClientConfig: tc, IdleConnTimeout: directoryIdle, MaxIdleConnsPerHost: 1, DialContext: dial}}, nil
 }
 
 func (s *Server) nibssBase() (string, error) {

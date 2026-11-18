@@ -1024,6 +1024,15 @@ components:
           description: Things an operator must look at. A bank lists each consent event NIBSS refused for good, with the reason. It is absent when there is nothing to report.
           items:
             type: string
+        settlement_checked_at:
+          type: string
+          format: date-time
+          description: When a bank last compared its books with the CBN. Only a bank reports it.
+        settlement_problems:
+          type: array
+          description: Where a bank's books disagree with the CBN's settlement balance or postings, one sentence for each. Only a bank reports it. It is absent when the books agree.
+          items:
+            type: string
     PhaseRequest:
       type: object
       description: The phase the control plane wants.

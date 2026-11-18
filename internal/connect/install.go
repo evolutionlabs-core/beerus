@@ -163,7 +163,7 @@ func checkPostgres(ctx context.Context, url string) error {
 }
 
 func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *ctlStore, st setup.Status) error {
-	name := config.DatabaseName(cfg.Dir, cbnID)
+	name := config.DatabaseName(cfg.Dir, setup.SystemCBN)
 	steps := []string{config.StepDatabase, config.StepLedgerSchema, setup.StepSettlement}
 	err := in.ensure(ctl, st, setup.SystemCBN, steps[0], stepNameCBNCreate, steps, func() (string, error) {
 		if err := ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
@@ -182,12 +182,15 @@ func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *ctl
 		return err
 	}
 	return in.ensure(ctl, st, setup.SystemCBN, steps[2], stepNameCBNOpen, steps, func() (string, error) {
-		r, err := openRTGS(ctx, cfg, ctl, in.clock)
+		open, err := store.Open(ctx, cfg.DatabaseURL, name)
 		if err != nil {
 			return "", err
 		}
-		r.Close()
-		return "", nil
+		open.Close()
+		if err := ensureCBNPorts(ctl, cfg); err != nil {
+			return "", err
+		}
+		return "", cfg.EnsureCBNDir(in.clock.Real())
 	})
 }
 

@@ -28,14 +28,16 @@ func validPhase(p string) bool {
 }
 
 type State struct {
-	ParticipantID      string   `json:"participant_id"`
-	Kind               string   `json:"kind"`
-	Phase              string   `json:"phase"`
-	Reason             string   `json:"reason,omitempty"`
-	Generation         int64    `json:"generation"`
-	ObservedGeneration int64    `json:"observed_generation"`
-	Steps              []Step   `json:"steps"`
-	Problems           []string `json:"problems,omitempty"`
+	ParticipantID       string     `json:"participant_id"`
+	Kind                string     `json:"kind"`
+	Phase               string     `json:"phase"`
+	Reason              string     `json:"reason,omitempty"`
+	Generation          int64      `json:"generation"`
+	ObservedGeneration  int64      `json:"observed_generation"`
+	Steps               []Step     `json:"steps"`
+	Problems            []string   `json:"problems,omitempty"`
+	SettlementProblems  []string   `json:"settlement_problems,omitempty"`
+	SettlementCheckedAt *time.Time `json:"settlement_checked_at,omitempty"`
 }
 
 type PhaseRequest struct {
@@ -149,6 +151,8 @@ func (s *Server) state() State {
 	s.lifeMu.Unlock()
 	s.mu.Lock()
 	out.Problems = slices.Clone(s.problems)
+	out.SettlementProblems = slices.Clone(s.settlementProblems)
+	out.SettlementCheckedAt = s.settlementCheckedAt
 	s.mu.Unlock()
 	gen := s.phaseGen.Load()
 	out.Generation, out.ObservedGeneration = gen, gen

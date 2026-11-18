@@ -88,7 +88,7 @@ func (a *App) position(ctx context.Context, b *config.Bank) (map[string]any, err
 		collateral = b.Collateral
 	}
 	now := a.clock.Now()
-	return map[string]any{"bank_id": b.ID, "nip_code": b.NIPCode, "net_debit_cap_minor": b.Cap(), "cap_source": source, "collateral_minor": collateral, "open_outward_minor": open.Outward, "open_inward_minor": open.Inward, "position_minor": pos, "headroom_minor": b.Cap() - pos, "next_session": ts(a.schedule().next(now))}, nil
+	return map[string]any{"bank_id": b.ID, "nip_code": b.NIPCode, "net_debit_cap_minor": b.Cap(), "cap_source": source, "collateral_minor": collateral, "open_outward_minor": open.Outward, "open_inward_minor": open.Inward, "position_minor": pos, "headroom_minor": b.Cap() - pos, "next_session": ts(a.schedule().Next(now))}, nil
 }
 
 func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
@@ -109,20 +109,40 @@ func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlNIPSettlement(w http.ResponseWriter, r *http.Request) {
-	c, err := a.CheckSettlement()
+	c, err := a.CheckSettlement(r.Context())
 	if err != nil {
-		a.log.Error("check settlement", "err", err)
-		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", web.SomethingWentWrong)
+		a.settlementFailed(w, r, "check settlement", err)
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, c)
 }
 
+func (a *App) settlementFailed(w http.ResponseWriter, r *http.Request, msg string, err error) {
+	var cbnDown *cbnDownError
+	var nibssDown *nibssDownError
+	var peer *server.PeerError
+	switch {
+	case errors.As(err, &cbnDown):
+		a.log.Warn(msg, "err", err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", cbnAway)
+		return
+	case errors.As(err, &nibssDown):
+		a.log.Warn(msg, "err", err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", nibssAway)
+		return
+	case errors.As(err, &peer) && peer.Status == http.StatusServiceUnavailable:
+		a.log.Warn(msg, "err", err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", peer.Message)
+		return
+	}
+	a.log.Error(msg, "err", err)
+	web.WriteError(w, r, http.StatusInternalServerError, "internal_error", web.SomethingWentWrong)
+}
+
 func (a *App) ctlSettleNow(w http.ResponseWriter, r *http.Request) {
-	n, err := a.SettleNow()
+	n, err := a.SettleNow(r.Context())
 	if err != nil {
-		a.log.Error("settle now", "err", err)
-		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", web.SomethingWentWrong)
+		a.settlementFailed(w, r, "settle now", err)
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, map[string]any{"settled_sessions": n, "at": ts(a.clock.Now())})

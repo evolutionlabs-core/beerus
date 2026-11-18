@@ -14,6 +14,7 @@ x-beerus: &beerus
     BEERUS_WIDGET_PORT: "7444"
     BEERUS_CONTROL_PORT: "7480"
     BEERUS_HEALTH_PORT: "7490"
+    BEERUS_CBN_PORT: "7446"
   volumes:
     - ${BEERUS_STATE:-state}:/state
 
@@ -44,6 +45,11 @@ services:
       BEERUS_PARTNER_WEBHOOK_URL: ${BEERUS_PARTNER_WEBHOOK_URL:-}
     ports:
       - "127.0.0.1:7490:7490"
+      - "127.0.0.1:7446:7446"
+    networks:
+      default:
+        aliases:
+          - cbn.localhost
     depends_on:
       postgres:
         condition: service_healthy

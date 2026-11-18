@@ -45,14 +45,21 @@ func (a *App) Serve(ctx context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	errc := make(chan error, 8)
+	cbnDone, err := a.serveCBN(runCtx, errc)
+	if err != nil {
+		cancel()
+		return err
+	}
 	nibssDone, err := a.serveNIBSS(runCtx, errc)
 	if err != nil {
 		cancel()
+		<-cbnDone
 		return err
 	}
 	defer func() {
 		cancel()
 		<-nibssDone
+		<-cbnDone
 	}()
 	type srv struct {
 		s   *http.Server
