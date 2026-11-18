@@ -17,13 +17,9 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
-	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
-	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -43,8 +39,6 @@ type App struct {
 	isDirty      atomic.Bool
 	limiters     map[string]*rate.Limiter
 	idem         web.Idempotency
-	senders      map[string]*server.Sender
-	faults       map[string]*server.Faults
 	client       *http.Client
 	wake         chan struct{}
 	statePath    string
@@ -52,13 +46,9 @@ type App struct {
 	pmu          sync.RWMutex
 	partnerMu    sync.Mutex
 	swept        time.Time
-	ledgers      []*ledgerSource
 	nibssCtl     *nibssAdmin
 	nibssEnsured time.Time
 	cbnCtl       *cbnAdmin
-	localCBN     *cbnparticipant.Participant
-	localNIBSS   *nibssparticipant.Participant
-	cbnEnsured   time.Time
 	dirSynced    bool
 	dirAttempts  int
 	dirNext      time.Time
@@ -66,7 +56,6 @@ type App struct {
 	regProblem   string
 	regAttempts  int
 	regNext      time.Time
-	registries   map[string]*server.RegistryCache
 	ledgerNotes  map[string]string
 	stale        map[string]*staleMember
 	closeRuns    map[string]*closeRun
@@ -77,7 +66,6 @@ type App struct {
 	recMu        sync.Mutex
 	stepMu       sync.Mutex
 	status       map[string]*BankStatus
-	sites        map[string]*siteServer
 	serving      bool
 	warnings     []string
 	driftAt      time.Time
@@ -86,21 +74,12 @@ type App struct {
 	confirms     map[string]*bankConfirm
 	confirmWG    sync.WaitGroup
 	refreshing   map[string]*refreshFlight
-	obMu         sync.Mutex
-	obs          map[string]*openbanking.Server
-	poolMu       sync.RWMutex
-	pools        map[string]*ledgerSource
 	vault        *vault
 	obHTTP       *http.Client
-	nibssBanks   map[string]*http.Client
-	cbnBanks     map[string]*http.Client
-	role         string
 	coreURL      string
 	pushWake     chan struct{}
 	link         server.Link
-	banking      *server.Banking
 	probeHTTP    *http.Client
-	sender       *consent.Sender
 	obKey        *ecdsa.PrivateKey
 	bankWrap     func(http.RoundTripper) http.RoundTripper
 	eventJTI     jtiSet
@@ -110,13 +89,12 @@ type Options struct {
 	Real     func() time.Time
 	Logger   *slog.Logger
 	Client   *http.Client
-	Role     string
 	CoreURL  string
 	Bind     string
 	BankWrap func(http.RoundTripper) http.RoundTripper
 }
 
-func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
+func New(cfg *config.Config, o Options) (*App, error) {
 	key, err := config.WebhookKey(cfg)
 	if err != nil {
 		return nil, err
@@ -136,7 +114,6 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 		coreURL:   o.CoreURL,
 		client:    o.Client,
 		bankWrap:  o.BankWrap,
-		role:      o.Role,
 		wake:      make(chan struct{}, 1),
 		statePath: cfg.Path("stub-state.json"),
 		sending:   make(chan struct{}, 4),
@@ -171,9 +148,7 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New(o.Real)
-	a.banking = &server.Banking{Src: bookSource{a}, Clock: a.clock, Log: a.log}
-	a.sender = a.newSender()
-	if err := a.prepareOpenBanking(); err != nil {
+	if err := cfg.EnsureCertificates(a.clock.Real()); err != nil {
 		return nil, err
 	}
 	if a.vault, err = loadVault(cfg.Path("connect", "vault.key")); err != nil {
@@ -186,15 +161,6 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 		if err := a.claimBank(b); err != nil {
 			return nil, err
 		}
-		if a.role == RoleCore {
-			continue
-		}
-		ls, err := openLedgerSource(ctx, cfg, a.ctl, a.clock, b)
-		if err != nil {
-			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
-			continue
-		}
-		a.addLedger(ls)
 	}
 	if err := a.prepareNIBSS(); err != nil {
 		return nil, err
@@ -202,57 +168,8 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 	if err := a.prepareCBN(); err != nil {
 		return nil, err
 	}
-	if err := a.openParticipants(ctx); err != nil {
-		a.closeLedgers()
-		return nil, err
-	}
 	a.initLifecycle()
 	return a, nil
-}
-
-func (a *App) addLedger(ls *ledgerSource) {
-	a.ledgers = append(a.ledgers, ls)
-	a.poolMu.Lock()
-	if a.pools == nil {
-		a.pools = map[string]*ledgerSource{}
-	}
-	a.pools[ls.Inst.ID] = ls
-	a.poolMu.Unlock()
-}
-
-func (a *App) obLedger(id string) *ledgerSource {
-	a.poolMu.RLock()
-	defer a.poolMu.RUnlock()
-	return a.pools[id]
-}
-
-func (a *App) ledgerFor(institution string) *ledgerSource {
-	for _, l := range a.ledgers {
-		if l.Inst.ID == institution {
-			return l
-		}
-	}
-	return nil
-}
-
-func (a *App) closeLedgers() {
-	for _, l := range a.ledgers {
-		l.Close()
-	}
-	if a.localCBN != nil {
-		a.localCBN.Close()
-	}
-	if a.localNIBSS != nil {
-		a.localNIBSS.Close()
-	}
-}
-
-func (a *App) Close() {
-	a.closeLedgers()
-}
-
-func (a *App) Banking() *server.Banking {
-	return a.banking
 }
 
 func (a *App) Config() *config.Config {
@@ -320,7 +237,6 @@ func (a *App) Run(ctx context.Context) {
 func (a *App) Step(ctx context.Context) {
 	a.confirmDue(ctx)
 	a.registerDue(ctx)
-	a.settleDue(ctx)
 	a.stepLocked(ctx)
 }
 
@@ -333,9 +249,6 @@ func (a *App) stepLocked(ctx context.Context) {
 	}
 	if err := a.ensureNIBSSDir(); err != nil {
 		a.log.Error("NIBSS directory not written", "err", err)
-	}
-	if err := a.ensureCBNDir(); err != nil {
-		a.log.Error("CBN directory not written", "err", err)
 	}
 	a.refreshTokens()
 	a.retryRevokes()
@@ -366,9 +279,6 @@ func (a *App) sweep() {
 		}
 	}
 	a.pruneFaultsLocked(a.clock.Now())
-	for _, f := range a.faults {
-		f.Prune(a.clock.Now())
-	}
 	for k, ls := range a.st.LinkSessions {
 		if real.Sub(ls.ExpiresReal) > 7*24*time.Hour {
 			delete(a.st.LinkSessions, k)
@@ -694,20 +604,9 @@ func (a *App) RevokeAtBank(ctx context.Context, connID string) error {
 	}
 	bank, consent := c.Institution, c.ConsentID
 	a.mu.Unlock()
-	if b := a.cfg.Bank(bank); a.role == RoleCore && b != nil && consent != "" {
-		if err := a.revokeRemote(ctx, b, consent); err != nil {
-			return err
-		}
-		return nil
-	}
-	ob := a.openBanking(bank)
-	if ob == nil || consent == "" {
+	b := a.cfg.Bank(bank)
+	if b == nil || consent == "" {
 		return errNotFound
 	}
-	if err := ob.RevokeByBank(ctx, consent, "bank"); err != nil {
-		return err
-	}
-	a.sender.Events(context.WithoutCancel(ctx))
-	a.sender.Ledger(context.WithoutCancel(ctx))
-	return nil
+	return a.revokeRemote(ctx, b, consent)
 }

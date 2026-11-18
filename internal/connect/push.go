@@ -10,11 +10,13 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 const (
@@ -257,4 +259,25 @@ func (a *App) syncFaults(ctx context.Context, id, base string, downs []server.Fa
 		}
 	}
 	return nil
+}
+
+func (a *App) noteLedger(bank string, problems []string) {
+	note := strings.Join(problems, " ")
+	a.mu.Lock()
+	same := a.ledgerNotes[bank] == note
+	if a.ledgerNotes == nil {
+		a.ledgerNotes = map[string]string{}
+	}
+	a.ledgerNotes[bank] = note
+	a.mu.Unlock()
+	if same {
+		return
+	}
+	now := a.clock.Real()
+	a.recordBank(bank, func(r *setup.Resource) bool {
+		if len(problems) == 0 {
+			return clearCondition(r, setup.ConditionConsentLedger)
+		}
+		return setCondition(r, setup.Condition{Type: setup.ConditionConsentLedger, Status: "False", Reason: setup.ReasonRejected, Message: note, ChangedAt: now})
+	})
 }

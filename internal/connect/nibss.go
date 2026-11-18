@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -76,17 +75,6 @@ func (a *App) syncDirectory(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func (a *App) dropNIBSS(ctx context.Context) error {
-	name := config.DatabaseName(a.cfg.Dir, setup.SystemNIBSS)
-	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{name}); err != nil {
-		return fmt.Errorf("drop the NIBSS database: %w", err)
-	}
-	if err := a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
-		return err
-	}
-	return a.ctl.releasePorts(setup.KindSystem, setup.SystemNIBSS)
 }
 
 func memberStatus(b *config.Bank) string {
@@ -270,8 +258,6 @@ type staleJob struct {
 func (a *App) registerDue(ctx context.Context) {
 	a.syncDirectoryDue(ctx)
 	a.registryDue(ctx)
-	a.sender.Events(ctx)
-	a.sender.Ledger(ctx)
 	a.closingCallsDue(ctx)
 	a.revokesDue(ctx)
 	a.sendsDue(ctx)

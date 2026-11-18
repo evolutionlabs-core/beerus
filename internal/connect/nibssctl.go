@@ -32,7 +32,6 @@ const (
 	nibssOpenSuffix    = "/open-sessions"
 	nibssPage          = 500
 	nibssAway          = "NIBSS is not available right now. Try again soon."
-	nibssHost          = "127.0.0.1"
 	nibssSettleTimeout = 30 * time.Second
 )
 

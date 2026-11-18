@@ -194,26 +194,6 @@ func (s *ctlStore) Release(o setup.Owned) error {
 	})
 }
 
-func (s *ctlStore) releasePorts(kind, id string) error {
-	st, err := s.status()
-	if err != nil {
-		return err
-	}
-	r := findResource(&st, kind, id)
-	if r == nil {
-		return nil
-	}
-	for _, o := range slices.Clone(r.Owned) {
-		if o.Kind != ownedPort {
-			continue
-		}
-		if err := s.Release(o); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *ctlStore) forget(kind, id string) error {
 	return s.update(func(st *setup.Status) (bool, error) {
 		n := len(st.Resources)

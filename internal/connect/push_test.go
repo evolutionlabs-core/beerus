@@ -107,7 +107,6 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 	a := &App{
 		cfg:      bankDirConfig(t, &config.Bank{ID: "bank-a", Port: 1}, &config.Bank{ID: "bank-b", Port: 2}),
 		ctl:      ctl,
-		role:     RoleCore,
 		st:       newState(),
 		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		clock:    clock.New(nil),
