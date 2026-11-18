@@ -17,7 +17,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -415,7 +414,7 @@ func (a *App) decideMoney(ctx context.Context, r setup.Resource) (*setup.Conditi
 		return nil, fmt.Errorf("encode the close result: %w", err)
 	}
 	if err := a.ctl.Update(func(st *setup.Status) (bool, error) {
-		cur := state.FindResource(st, setup.KindBank, id)
+		cur := setup.FindResource(st, setup.KindBank, id)
 		if cur == nil {
 			return false, errNotFound
 		}
@@ -505,7 +504,7 @@ func (a *App) targetChange(id string) (suspended, changing bool, err error) {
 	if sb, ok := bankIn(st.Applied, id); ok && sb.State == setup.StateSuspended {
 		suspended = true
 	}
-	if r := state.FindResource(&st, setup.KindBank, id); r != nil && r.Generation != r.ObservedGeneration {
+	if r := setup.FindResource(&st, setup.KindBank, id); r != nil && r.Generation != r.ObservedGeneration {
 		changing = true
 	}
 	return suspended, changing, nil

@@ -19,7 +19,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -192,7 +191,7 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 	if err != nil {
 		return BankStatus{}, fmt.Errorf("read control.json: %w", err)
 	}
-	if r := state.FindResource(&stored, setup.KindBank, id); r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
+	if r := setup.FindResource(&stored, setup.KindBank, id); r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
 		return BankStatus{}, applyFail(http.StatusConflict, codeBeingRemoved, "banks[%s] is being removed, and its id is never reused. Choose another id.", id)
 	}
 	err = a.applyEdit(ctx, func(sp *setup.Spec) error {

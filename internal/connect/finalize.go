@@ -8,7 +8,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 type ApplyOptions struct {
@@ -117,7 +116,7 @@ func (a *App) advanceFinalizers(ctx context.Context, lists map[string][]finalize
 		kind, id := r.Kind, r.ID
 		closed := false
 		uerr := a.ctl.Update(func(st *setup.Status) (bool, error) {
-			cur := state.FindResource(st, kind, id)
+			cur := setup.FindResource(st, kind, id)
 			if cur == nil || nextFinalizer(*cur) != name {
 				return false, nil
 			}

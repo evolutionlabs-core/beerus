@@ -138,7 +138,7 @@ func TestInstall(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {
-				if r := state.FindResource(&st, setup.KindSystem, id); r == nil || r.Phase != config.PhaseActive {
+				if r := setup.FindResource(&st, setup.KindSystem, id); r == nil || r.Phase != config.PhaseActive {
 					t.Errorf("%s after install: %+v", id, r)
 				}
 			}
@@ -198,7 +198,7 @@ func TestInstall(t *testing.T) {
 				t.Errorf("install made %s", name)
 			}
 		}
-		r := state.FindResource(&st, setup.KindSystem, setup.SystemCBN)
+		r := setup.FindResource(&st, setup.KindSystem, setup.SystemCBN)
 		if r == nil || r.Allocated.Port == 0 || r.Allocated.APIPort == 0 {
 			t.Errorf("CBN ports: %+v", r)
 		}

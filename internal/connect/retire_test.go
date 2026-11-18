@@ -54,7 +54,7 @@ func TestRetiringABankNeedsItsAcknowledgement(t *testing.T) {
 	}
 	setBankPhase(a, b.ID, PhaseTerminating)
 	if err := a.ctl.Update(func(st *setup.Status) (bool, error) {
-		delete(state.FindResource(st, setup.KindBank, b.ID).Steps, stepRetired)
+		delete(setup.FindResource(st, setup.KindBank, b.ID).Steps, stepRetired)
 		return true, nil
 	}); err != nil {
 		t.Fatal(err)

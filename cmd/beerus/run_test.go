@@ -1,12 +1,11 @@
 package main
 
 import (
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func TestEnvNumberRejectsBadValues(t *testing.T) {
@@ -62,7 +61,7 @@ func TestInitFromEnvReadsTheSetupFile(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), c.err) {
 					t.Fatalf("error %v, want %q", err, c.err)
 				}
-				if ok, _ := state.Initialized(dir); ok {
+				if ok, _ := setup.Initialized(dir); ok {
 					t.Fatal("a bad setup file still created the state")
 				}
 				return
@@ -70,7 +69,7 @@ func TestInitFromEnvReadsTheSetupFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			cfg, err := state.LoadConfig(dir)
+			cfg, err := setup.LoadConfig(dir)
 			if err != nil {
 				t.Fatal(err)
 			}

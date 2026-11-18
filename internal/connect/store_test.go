@@ -49,7 +49,7 @@ func initConfigWith(t *testing.T, today clock.Date, local setup.Local) *config.C
 	if err := install.Init(dir, banktest.Spec("beerus"), local, today); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := state.LoadConfig(dir)
+	cfg, err := setup.LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

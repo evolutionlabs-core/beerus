@@ -108,7 +108,7 @@ func (a *App) applyEdit(ctx context.Context, edit func(*setup.Spec) error, opt A
 	}
 	defer a.applyMu.Unlock()
 	_, err := a.applyLocked(ctx, func(st setup.Status) (setup.Spec, error) {
-		cp, err := state.CloneStatus(st)
+		cp, err := st.Clone()
 		if err != nil {
 			return setup.Spec{}, err
 		}
@@ -182,18 +182,18 @@ func (a *App) syncSetupFile(desired setup.Spec) error {
 	})
 	raw, err := setup.Export(spec)
 	if err != nil {
-		return fmt.Errorf("encode %s: %w", state.SpecFile, err)
+		return fmt.Errorf("encode %s: %w", setup.SpecFile, err)
 	}
-	path := a.cfg.Path(state.SpecFile)
+	path := a.cfg.Path(setup.SpecFile)
 	if cur, err := os.ReadFile(path); err == nil {
-		if parsed, errs := setup.Parse(state.SpecFile, cur); len(errs) == 0 {
+		if parsed, errs := setup.Parse(setup.SpecFile, cur); len(errs) == 0 {
 			if same, err := setup.Export(parsed); err == nil && bytes.Equal(same, raw) {
 				return nil
 			}
 		}
 	}
 	if err := config.WriteSecret(path, string(raw)); err != nil {
-		return fmt.Errorf("the plan was applied, but %s could not be updated: %w", state.SpecFile, err)
+		return fmt.Errorf("the plan was applied, but %s could not be updated: %w", setup.SpecFile, err)
 	}
 	return nil
 }
@@ -274,7 +274,7 @@ func andList(xs []string) string {
 }
 
 func moneyOpen(st *setup.Status, id string) bool {
-	r := state.FindResource(st, setup.KindBank, id)
+	r := setup.FindResource(st, setup.KindBank, id)
 	return r == nil || (r.Phase != config.PhaseClosed && !slices.Contains(r.Done, setup.FinalizerDecideMoney))
 }
 
@@ -557,7 +557,7 @@ func (a *App) makePartner(desired setup.Spec, id string) (*config.Partner, error
 	if err != nil {
 		return nil, err
 	}
-	p := state.RuntimePartner(sp, setup.PartnerKeys{CertCN: id, APIKeySHA256: config.HashKey(key)}, setup.PartnerLocal{})
+	p := setup.RuntimePartner(sp, setup.PartnerKeys{CertCN: id, APIKeySHA256: config.HashKey(key)}, setup.PartnerLocal{})
 	if err := a.issuePartnerCert(p); err != nil {
 		return nil, err
 	}
@@ -576,7 +576,7 @@ func (a *App) discardPartners(ad *admission) error {
 
 func pinnedCodes(st *setup.Status, old setup.Bank, id string, created map[string]string) (string, string) {
 	nip, nuban := old.NIPCode, old.NUBANCode
-	if r := state.FindResource(st, setup.KindBank, id); r != nil {
+	if r := setup.FindResource(st, setup.KindBank, id); r != nil {
 		nip, nuban = cmp.Or(nip, r.Allocated.NIPCode), cmp.Or(nuban, r.Allocated.NUBANCode)
 	}
 	return cmp.Or(nip, created[fieldNIPCode]), cmp.Or(nuban, created[fieldNUBANCode])
@@ -656,13 +656,13 @@ func admit(st *setup.Status, ad *admission) (bool, error) {
 		}
 	}
 	for id := range ad.retarget {
-		if r := state.FindResource(st, setup.KindBank, id); r != nil {
+		if r := setup.FindResource(st, setup.KindBank, id); r != nil {
 			r.Money = ad.money
 			r.Attempts, r.NextAttemptAt = 0, nil
 			clearMoneyConditions(r)
 		}
 	}
-	sum, err := state.SpecSum(st.Applied)
+	sum, err := setup.SpecSum(st.Applied)
 	if err != nil {
 		return false, err
 	}
@@ -705,16 +705,16 @@ func admitBank(st *setup.Status, act setup.Action, ad *admission, fields map[str
 			Steps: map[string]string{config.StepAllocate: state.StepDone},
 		}
 	case setup.OpUpdate:
-		if r := state.FindResource(st, setup.KindBank, act.ID); r != nil {
+		if r := setup.FindResource(st, setup.KindBank, act.ID); r != nil {
 			r.Generation++
 		}
 	case setup.OpClose:
-		if r := state.FindResource(st, setup.KindBank, act.ID); r != nil {
+		if r := setup.FindResource(st, setup.KindBank, act.ID); r != nil {
 			d, _ := bankIn(ad.pl.desired, act.ID)
 			leaving(r, config.PhaseClosing, finalizerNames(bankFinalizers)[:len(bankFinalizers)-1], d.OnRemove, ad.now)
 		}
 	case setup.OpRemove:
-		if r := state.FindResource(st, setup.KindBank, act.ID); r != nil {
+		if r := setup.FindResource(st, setup.KindBank, act.ID); r != nil {
 			b, _ := bankIn(ad.pl.st.Applied, act.ID)
 			leaving(r, config.PhaseTerminating, finalizerNames(bankFinalizers), b.OnRemove, ad.now)
 		}
@@ -737,11 +737,11 @@ func admitPartner(st *setup.Status, act setup.Action, ad *admission) {
 			Owned:              []setup.Owned{{Kind: state.OwnedDir, Name: "partners/" + act.ID}},
 		}
 	case setup.OpUpdate:
-		if r := state.FindResource(st, setup.KindPartner, act.ID); r != nil {
+		if r := setup.FindResource(st, setup.KindPartner, act.ID); r != nil {
 			r.Generation++
 		}
 	case setup.OpRemove:
-		if r := state.FindResource(st, setup.KindPartner, act.ID); r != nil {
+		if r := setup.FindResource(st, setup.KindPartner, act.ID); r != nil {
 			leaving(r, config.PhaseTerminating, finalizerNames(partnerFinalizers), nil, ad.now)
 		}
 	}
@@ -754,14 +754,14 @@ func (a *App) startAdmitted(ad *admission) {
 		return
 	}
 	for _, act := range ad.pl.plan.Actions {
-		r := state.FindResource(&st, act.Kind, act.ID)
+		r := setup.FindResource(&st, act.Kind, act.ID)
 		if r == nil {
 			continue
 		}
 		switch {
 		case act.Kind == setup.KindBank && act.Op == setup.OpCreate:
 			sb, _ := bankIn(st.Applied, act.ID)
-			b := state.RuntimeBank(sb, *r)
+			b := setup.RuntimeBank(sb, *r)
 			a.lifeMu.Lock()
 			a.mu.Lock()
 			a.cfg.Banks = append(slices.Clone(a.cfg.Banks), b)
@@ -884,7 +884,7 @@ func (a *App) parseRequest(w http.ResponseWriter, r *http.Request) (setup.Spec, 
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"file":"setup.yaml","spec":"<the file's text>"}.`)
 		return setup.Spec{}, ApplyOptions{}, false
 	}
-	spec, errs := setup.Parse(cmp.Or(req.File, state.SpecFile), []byte(req.Spec))
+	spec, errs := setup.Parse(cmp.Or(req.File, setup.SpecFile), []byte(req.Spec))
 	if len(errs) > 0 {
 		a.writeApplyError(w, r, planFailure(errs))
 		return setup.Spec{}, ApplyOptions{}, false

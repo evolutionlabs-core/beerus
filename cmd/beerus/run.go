@@ -21,7 +21,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/install"
 	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func envOr(key, fallback string) string {
@@ -71,7 +70,7 @@ func cmdRun(args []string) error {
 	case "cbn":
 		return runCBN(ctx, *dir, *bind, log)
 	case "core":
-		c, err := state.LoadConfig(*dir)
+		c, err := setup.LoadConfig(*dir)
 		if err != nil {
 			return err
 		}

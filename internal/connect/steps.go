@@ -53,7 +53,7 @@ func (a *App) initLifecycle() {
 		a.log.Error("read control.json", "err", err)
 	}
 	for _, b := range a.cfg.Banks {
-		r := state.FindResource(&stored, setup.KindBank, b.ID)
+		r := setup.FindResource(&stored, setup.KindBank, b.ID)
 		st := newStatus(b, a.provisionedAtStart(b, r))
 		a.status[b.ID] = st
 		if r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
@@ -85,7 +85,7 @@ func (a *App) provisionedAtStart(b *config.Bank, r *setup.Resource) bool {
 
 func (a *App) recordBank(id string, fn func(r *setup.Resource) bool) {
 	err := a.ctl.Update(func(st *setup.Status) (bool, error) {
-		r := state.FindResource(st, setup.KindBank, id)
+		r := setup.FindResource(st, setup.KindBank, id)
 		if r == nil {
 			return false, nil
 		}
@@ -188,7 +188,7 @@ func (a *App) needsRepairLocked(st *BankStatus, stored setup.Status) bool {
 	if st.Phase != PhaseClosing && st.Phase != PhaseTerminating {
 		return false
 	}
-	r := state.FindResource(&stored, setup.KindBank, st.ID)
+	r := setup.FindResource(&stored, setup.KindBank, st.ID)
 	if r == nil || nextFinalizer(*r) == setup.FinalizerPurgeOwned || slices.Contains(r.Done, setup.FinalizerPurgeOwned) {
 		return false
 	}
@@ -201,7 +201,7 @@ func (a *App) bankGeneration(id string) int64 {
 		a.log.Error("read control.json", "err", err)
 		return 0
 	}
-	if r := state.FindResource(&st, setup.KindBank, id); r != nil {
+	if r := setup.FindResource(&st, setup.KindBank, id); r != nil {
 		return r.Generation
 	}
 	return 0
@@ -437,7 +437,7 @@ func (a *App) checkDrift() {
 		}
 		delete(a.strikes, b.ID)
 		var done []string
-		if r := state.FindResource(&stored, setup.KindBank, b.ID); r != nil {
+		if r := setup.FindResource(&stored, setup.KindBank, b.ID); r != nil {
 			done = r.Done
 		}
 		a.lifeMu.Lock()

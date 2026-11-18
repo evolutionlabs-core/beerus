@@ -18,7 +18,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 var resetToday = clock.Date{Y: 2026, M: 11, D: 3}
@@ -35,7 +34,7 @@ func TestResetRefusesTheWrongName(t *testing.T) {
 	if err := cmdReset([]string{"--dir", dir}, &out); err == nil || !strings.Contains(err.Error(), "usage") {
 		t.Fatalf("reset without a name: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, state.SpecFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, setup.SpecFile)); err != nil {
 		t.Fatalf("a refused reset touched the dir: %v", err)
 	}
 }
@@ -101,7 +100,7 @@ func TestResetClearsASetupFromAnOlderBeerus(t *testing.T) {
 			if !strings.Contains(out.String(), "Cleared "+dir) {
 				t.Fatalf("output: %s", out.String())
 			}
-			ok, err := state.Initialized(dir)
+			ok, err := setup.Initialized(dir)
 			if err != nil || ok {
 				t.Fatalf("after reset: %v %v", ok, err)
 			}
@@ -128,7 +127,7 @@ func TestResetClearsAnOldDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
-	if _, err := state.Initialized(dir); !errors.Is(err, setup.ErrOldSetup) {
+	if _, err := setup.Initialized(dir); !errors.Is(err, setup.ErrOldSetup) {
 		t.Fatalf("old dir before reset: %v", err)
 	}
 	var out bytes.Buffer
@@ -145,14 +144,14 @@ func TestResetClearsAnOldDir(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatalf("left in the dir: %v", entries)
 	}
-	ok, err := state.Initialized(dir)
+	ok, err := setup.Initialized(dir)
 	if err != nil || ok {
 		t.Fatalf("after reset: %v %v", ok, err)
 	}
 	if err := install.Init(dir, banktest.Spec(defaultSetupName), install.DefaultLocal(), resetToday); err != nil {
 		t.Fatalf("up after reset: %v", err)
 	}
-	if _, err := state.LoadConfig(dir); err != nil {
+	if _, err := setup.LoadConfig(dir); err != nil {
 		t.Fatalf("load after reset: %v", err)
 	}
 }
@@ -229,7 +228,7 @@ func TestResetDropsALeftoverNIBSSSnapshotDatabase(t *testing.T) {
 	if err := cmdReset([]string{defaultSetupName, "--dir", dir}, &out); err != nil {
 		t.Fatal(err)
 	}
-	want := "Dropped databases:\n  " + live + "\n  " + leftover + "\nCleared " + dir + " (kept " + state.LocalFile + "). Run beerus init to start again.\n"
+	want := "Dropped databases:\n  " + live + "\n  " + leftover + "\nCleared " + dir + " (kept " + setup.LocalFile + "). Run beerus init to start again.\n"
 	if out.String() != want {
 		t.Fatalf("output: %q, want %q", out.String(), want)
 	}

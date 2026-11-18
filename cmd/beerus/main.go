@@ -21,7 +21,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -170,7 +169,7 @@ func cmdInfo(args []string) error {
 	if _, err := parseAfter("info", fs, args, 0); err != nil {
 		return err
 	}
-	c, err := state.LoadConfig(*dir)
+	c, err := setup.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}
@@ -184,7 +183,7 @@ func cmdDoctor(args []string) error {
 	if _, err := parseAfter("doctor", fs, args, 0); err != nil {
 		return err
 	}
-	c, err := state.LoadConfig(*dir)
+	c, err := setup.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}
@@ -222,7 +221,7 @@ type ctl struct {
 }
 
 func newCtl() (*ctl, error) {
-	c, err := state.LoadConfig(defaultDir())
+	c, err := setup.LoadConfig(defaultDir())
 	if err != nil {
 		return nil, fmt.Errorf("%w (run beerus init or set BEERUS_DIR)", err)
 	}

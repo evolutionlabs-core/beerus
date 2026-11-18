@@ -9,7 +9,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func (a *App) reconcileNow(ctx context.Context) {
@@ -45,7 +44,7 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	if !ok {
 		return
 	}
-	want := state.RuntimeBank(sb, r)
+	want := setup.RuntimeBank(sb, r)
 	a.lifeMu.Lock()
 	b := a.cfg.Bank(r.ID)
 	if b == nil {
@@ -116,7 +115,7 @@ func (a *App) updatePartner(id string) {
 		a.log.Error("read control.json", "err", err)
 		return
 	}
-	r := state.FindResource(&st, setup.KindPartner, id)
+	r := setup.FindResource(&st, setup.KindPartner, id)
 	sp, ok := partnerIn(st.Applied, id)
 	if r == nil || r.Partner == nil || !ok {
 		return
@@ -126,10 +125,10 @@ func (a *App) updatePartner(id string) {
 		a.log.Error("read local.yaml", "err", err)
 		return
 	}
-	a.replacePartner(id, state.RuntimePartner(sp, *r.Partner, local.Partners[id]))
+	a.replacePartner(id, setup.RuntimePartner(sp, *r.Partner, local.Partners[id]))
 	gen := r.Generation
 	if err := a.ctl.Update(func(st *setup.Status) (bool, error) {
-		cur := state.FindResource(st, setup.KindPartner, id)
+		cur := setup.FindResource(st, setup.KindPartner, id)
 		if cur == nil || cur.ObservedGeneration == gen {
 			return false, nil
 		}

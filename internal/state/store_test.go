@@ -150,14 +150,14 @@ func TestCBNPortClaimsFollowTheConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r := FindResource(&setup.Status{Resources: diskStatus(t, s).Resources}, setup.KindSystem, setup.SystemCBN)
+	r := setup.FindResource(&setup.Status{Resources: diskStatus(t, s).Resources}, setup.KindSystem, setup.SystemCBN)
 	if r == nil || len(r.Owned) != 2 || !slices.Contains(r.Owned, setup.Owned{Kind: OwnedPort, Name: "39200"}) || slices.Contains(r.Owned, setup.Owned{Kind: OwnedPort, Name: "39100"}) {
 		t.Fatalf("claims after the port changed: %+v", r)
 	}
 	if err := s.ReleasePorts(setup.KindSystem, setup.SystemCBN); err != nil {
 		t.Fatal(err)
 	}
-	if r := FindResource(&setup.Status{Resources: diskStatus(t, s).Resources}, setup.KindSystem, setup.SystemCBN); r == nil || len(r.Owned) != 0 {
+	if r := setup.FindResource(&setup.Status{Resources: diskStatus(t, s).Resources}, setup.KindSystem, setup.SystemCBN); r == nil || len(r.Owned) != 0 {
 		t.Fatalf("claims after the release: %+v", r)
 	}
 }

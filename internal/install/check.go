@@ -6,7 +6,6 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func CheckStart(dir string) error {
@@ -24,7 +23,7 @@ func CheckStart(dir string) error {
 }
 
 func loadSetup(dir string) (setup.Status, bool, error) {
-	ok, err := state.Initialized(dir)
+	ok, err := setup.Initialized(dir)
 	if err != nil || !ok {
 		return setup.Status{}, false, err
 	}
@@ -36,7 +35,7 @@ func loadSetup(dir string) (setup.Status, bool, error) {
 }
 
 func systemPhase(st setup.Status, id string) string {
-	if r := state.FindResource(&st, setup.KindSystem, id); r != nil {
+	if r := setup.FindResource(&st, setup.KindSystem, id); r != nil {
 		return r.Phase
 	}
 	return ""

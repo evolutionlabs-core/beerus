@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"net/http"
 	"os"
 	"os/exec"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/install"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -144,7 +144,7 @@ func TestActiveBankServesCustomersAtOnce(t *testing.T) {
 	}
 	c := newCLIAt(t, dir)
 	startUp(t, c, "")
-	cfg, err := state.LoadConfig(dir)
+	cfg, err := setup.LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

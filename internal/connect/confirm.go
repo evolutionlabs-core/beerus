@@ -10,7 +10,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 const confirmTimeout = 2 * time.Second
@@ -44,12 +43,12 @@ func (a *App) confirmDue(ctx context.Context) {
 	a.lifeMu.Lock()
 	a.mu.Lock()
 	for id, c := range a.confirms {
-		if r := state.FindResource(&stored, setup.KindBank, id); a.cfg.Bank(id) == nil || r == nil || r.Generation != c.generation {
+		if r := setup.FindResource(&stored, setup.KindBank, id); a.cfg.Bank(id) == nil || r == nil || r.Generation != c.generation {
 			delete(a.confirms, id)
 		}
 	}
 	for _, b := range a.cfg.Banks {
-		st, r := a.status[b.ID], state.FindResource(&stored, setup.KindBank, b.ID)
+		st, r := a.status[b.ID], setup.FindResource(&stored, setup.KindBank, b.ID)
 		if st == nil || r == nil || (st.Phase != PhaseProvisioning && st.Phase != PhaseRepairing) || !st.Steps[stepIndex(config.StepSite)].Done || !st.Steps[stepIndex(config.StepAPI)].Done {
 			continue
 		}

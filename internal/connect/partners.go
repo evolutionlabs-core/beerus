@@ -177,7 +177,7 @@ func (a *App) issuePartnerCert(p *config.Partner) error {
 }
 
 func resum(st *setup.Status) error {
-	sum, err := state.SpecSum(st.Applied)
+	sum, err := setup.SpecSum(st.Applied)
 	if err != nil {
 		return err
 	}

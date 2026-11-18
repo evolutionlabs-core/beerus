@@ -25,7 +25,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 type result struct {
@@ -151,7 +150,7 @@ func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
 	if r := invoke(cmdVerify, "", false, "--dir", dir, "--json"); !regexp.MustCompile(`^\{\n  "setup_sha256": "[0-9a-f]{64}"\n\}\n$`).MatchString(r.out) {
 		t.Fatalf("verify --json: %+v", r)
 	}
-	c, err := state.LoadConfig(dir)
+	c, err := setup.LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,10 +335,10 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	if r := d(cmdApply, "", false, "-f", renamed, "--wait", "60s"); r.code != 0 || !strings.Contains(r.out, "~ bank bank-c") {
 		t.Fatalf("apply a rename: %+v", r)
 	}
-	if info, err := os.Stat(filepath.Join(dir, state.SpecFile)); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(filepath.Join(dir, setup.SpecFile)); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("setup.yaml after the rename: %v %v", info, err)
 	}
-	if kept, err := os.ReadFile(filepath.Join(dir, state.SpecFile)); err != nil || !strings.Contains(string(kept), "name: Abuja Digital") || strings.Contains(string(kept), "name: Bank C") {
+	if kept, err := os.ReadFile(filepath.Join(dir, setup.SpecFile)); err != nil || !strings.Contains(string(kept), "name: Abuja Digital") || strings.Contains(string(kept), "name: Bank C") {
 		t.Fatalf("setup.yaml did not follow the apply: %v\n%s", err, kept)
 	}
 	if got := banks(); !regexp.MustCompile(`bank-c\s+Abuja Digital\s+active\s+yes\s+2`).MatchString(got) {
@@ -509,7 +508,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	if tombs := mustStatus(t, dir).Tombstones; len(tombs) != 1 || tombs[0].ID != "bank-b" || tombs[0].Status != "removed" {
 		t.Fatalf("tombstones cached after the purge: %+v", tombs)
 	}
-	if kept, err := os.ReadFile(filepath.Join(dir, state.SpecFile)); err != nil || strings.Contains(string(kept), "bank-b") || !strings.Contains(string(kept), "id: bank-a") || !strings.Contains(string(kept), "id: bank-c") {
+	if kept, err := os.ReadFile(filepath.Join(dir, setup.SpecFile)); err != nil || strings.Contains(string(kept), "bank-b") || !strings.Contains(string(kept), "id: bank-a") || !strings.Contains(string(kept), "id: bank-c") {
 		t.Fatalf("setup.yaml still lists the purged bank: %v\n%s", err, kept)
 	}
 	if _, err := cl.send("POST", "/banks/bank-c/purge", map[string]bool{"bogus": true}); err == nil || !strings.Contains(err.Error(), "settle_now") {
@@ -571,7 +570,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 		t.Fatalf("databases left after reset: %v %v", left, err)
 	}
 	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) != 1 || entries[0].Name() != state.LocalFile {
+	if err != nil || len(entries) != 1 || entries[0].Name() != setup.LocalFile {
 		t.Fatalf("left in the dir after reset: %v %v", entries, err)
 	}
 }
@@ -582,7 +581,7 @@ func cmdReset2(e *cli, args []string) error {
 
 func mustConfig(t *testing.T, dir string) *config.Config {
 	t.Helper()
-	c, err := state.LoadConfig(dir)
+	c, err := setup.LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

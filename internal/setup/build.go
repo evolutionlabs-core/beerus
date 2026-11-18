@@ -1,4 +1,4 @@
-package state
+package setup
 
 import (
 	"cmp"
@@ -12,14 +12,11 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 const (
 	SpecFile    = "setup.yaml"
-	LocalFile   = "local.yaml"
 	OldSpecFile = "beerus.yaml"
-	StatusFile  = "control.json"
 
 	DefaultConnectHost = "connect.localhost"
 	DefaultNIBSSPort   = 7481
@@ -32,14 +29,14 @@ const (
 	defaultPurpose    = "to read your account details, balances and transactions"
 )
 
-var TypeHistoryDays = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
+var typeHistoryDays = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
 
 func refuseOld(dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, OldSpecFile)); err != nil {
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(dir, StatusFile)); errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%s: %w", dir, setup.ErrOldSetup)
+		return fmt.Errorf("%s: %w", dir, ErrOldSetup)
 	}
 	return nil
 }
@@ -59,8 +56,8 @@ func Initialized(dir string) (bool, error) {
 	}
 }
 
-func SpecSum(s setup.Spec) (string, error) {
-	raw, err := setup.Export(s)
+func SpecSum(s Spec) (string, error) {
+	raw, err := Export(s)
 	if err != nil {
 		return "", err
 	}
@@ -68,10 +65,10 @@ func SpecSum(s setup.Spec) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func portHolders(ln setup.LocalConnect, st setup.Status) map[int]string {
+func portHolders(ln LocalConnect, st Status) map[int]string {
 	holders := map[int]string{ln.PartnerPort: "connect.partner_port", ln.WidgetPort: "connect.widget_port", ln.ControlPort: "connect.control_port", ln.HealthPort: "connect.health_port"}
 	for _, r := range st.Resources {
-		if r.Kind == setup.KindSystem {
+		if r.Kind == KindSystem {
 			holders[r.Allocated.Port] = r.ID + " control API"
 			if r.Allocated.APIPort != 0 {
 				holders[r.Allocated.APIPort] = r.ID + " API"
@@ -84,7 +81,7 @@ func portHolders(ln setup.LocalConnect, st setup.Status) map[int]string {
 	return holders
 }
 
-func nibssPort(ln setup.LocalConnect, st setup.Status) (int, error) {
+func nibssPort(ln LocalConnect, st Status) (int, error) {
 	port := ln.NIBSSPort
 	if port == 0 {
 		port = DefaultNIBSSPort
@@ -95,9 +92,9 @@ func nibssPort(ln setup.LocalConnect, st setup.Status) (int, error) {
 	return port, nil
 }
 
-func cbnPort(ln setup.LocalConnect, nibss int, st setup.Status) (int, error) {
-	own := setup.Status{Resources: slices.DeleteFunc(slices.Clone(st.Resources), func(r setup.Resource) bool {
-		return r.Kind == setup.KindSystem && r.ID == setup.SystemCBN
+func cbnPort(ln LocalConnect, nibss int, st Status) (int, error) {
+	own := Status{Resources: slices.DeleteFunc(slices.Clone(st.Resources), func(r Resource) bool {
+		return r.Kind == KindSystem && r.ID == SystemCBN
 	})}
 	holders := portHolders(ln, own)
 	holders[nibss] = "connect.nibss_port"
@@ -107,7 +104,7 @@ func cbnPort(ln setup.LocalConnect, nibss int, st setup.Status) (int, error) {
 		}
 		return ln.CBNPort, nil
 	}
-	if r := FindResource(&st, setup.KindSystem, setup.SystemCBN); r != nil && r.Allocated.APIPort != 0 {
+	if r := FindResource(&st, KindSystem, SystemCBN); r != nil && r.Allocated.APIPort != 0 {
 		return r.Allocated.APIPort, nil
 	}
 	port := DefaultCBNPort
@@ -123,23 +120,23 @@ func LoadConfig(dir string) (*config.Config, error) {
 	if err := refuseOld(dir); err != nil {
 		return nil, err
 	}
-	st, err := setup.LoadStatus(dir)
+	st, err := LoadStatus(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("%s holds no Beerus setup; run beerus init to make one", dir)
 		}
 		return nil, err
 	}
-	local, err := setup.LoadLocal(dir)
+	local, err := LoadLocal(dir)
 	if err != nil {
 		return nil, err
 	}
 	return BuildConfig(dir, st, local)
 }
 
-func BuildConfig(dir string, st setup.Status, local setup.Local) (*config.Config, error) {
+func BuildConfig(dir string, st Status, local Local) (*config.Config, error) {
 	spec := st.Applied.Spec
-	def := setup.DefaultSpec(st.Applied.Metadata.Name).Spec
+	def := DefaultSpec(st.Applied.Metadata.Name).Spec
 	tsqAfter, err := time.ParseDuration(cmp.Or(spec.NIP.TSQAfter, def.NIP.TSQAfter))
 	if err != nil {
 		return nil, fmt.Errorf("nip.tsq_after %q: %w", spec.NIP.TSQAfter, err)
@@ -177,24 +174,24 @@ func BuildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 			CACNumber:    cmp.Or(spec.Connect.CACNumber, defaultCACNumber),
 		},
 	}
-	if r := FindResource(&st, setup.KindSystem, setup.SystemNIBSS); r != nil {
+	if r := FindResource(&st, KindSystem, SystemNIBSS); r != nil {
 		c.Connect.NIBSSControlPort = r.Allocated.Port
 	}
-	if r := FindResource(&st, setup.KindSystem, setup.SystemCBN); r != nil {
+	if r := FindResource(&st, KindSystem, SystemCBN); r != nil {
 		c.Connect.CBNControlPort = r.Allocated.Port
 	}
 	if len(spec.Holidays.Add)+len(spec.Holidays.Remove) > 0 {
 		c.Holidays = &config.Holidays{Add: spec.Holidays.Add, Remove: spec.Holidays.Remove}
 	}
 	for _, b := range spec.Banks {
-		r := FindResource(&st, setup.KindBank, b.ID)
+		r := FindResource(&st, KindBank, b.ID)
 		if r == nil {
 			continue
 		}
 		c.Banks = append(c.Banks, RuntimeBank(b, *r))
 	}
 	for _, p := range spec.Partners {
-		r := FindResource(&st, setup.KindPartner, p.ID)
+		r := FindResource(&st, KindPartner, p.ID)
 		if r == nil || r.Partner == nil {
 			continue
 		}
@@ -206,18 +203,18 @@ func BuildConfig(dir string, st setup.Status, local setup.Local) (*config.Config
 	return c, nil
 }
 
-func RuntimeBank(b setup.Bank, r setup.Resource) *config.Bank {
+func RuntimeBank(b Bank, r Resource) *config.Bank {
 	state := b.State
 	switch r.Phase {
 	case config.PhaseClosed:
-		state = setup.StateClosed
+		state = StateClosed
 	case config.PhaseClosing, config.PhaseTerminating:
-		state = setup.StateSuspended
-		if slices.Contains(r.Done, setup.FinalizerDecideMoney) {
-			state = setup.StateClosed
+		state = StateSuspended
+		if slices.Contains(r.Done, FinalizerDecideMoney) {
+			state = StateClosed
 		}
 	}
-	if state == setup.StateActive {
+	if state == StateActive {
 		state = ""
 	}
 	ob := b.OpenBanking
@@ -227,7 +224,7 @@ func RuntimeBank(b setup.Bank, r setup.Resource) *config.Bank {
 		Type:           b.Type,
 		NIPCode:        cmp.Or(b.NIPCode, r.Allocated.NIPCode),
 		NUBANCode:      cmp.Or(b.NUBANCode, r.Allocated.NUBANCode),
-		HistoryDays:    TypeHistoryDays[b.Type],
+		HistoryDays:    typeHistoryDays[b.Type],
 		Port:           r.Allocated.Port,
 		APIPort:        r.Allocated.APIPort,
 		Database:       r.Allocated.Database,
@@ -239,7 +236,7 @@ func RuntimeBank(b setup.Bank, r setup.Resource) *config.Bank {
 	}
 }
 
-func RuntimePartner(p setup.Partner, k setup.PartnerKeys, l setup.PartnerLocal) *config.Partner {
+func RuntimePartner(p Partner, k PartnerKeys, l PartnerLocal) *config.Partner {
 	out := &config.Partner{ID: p.ID, Name: p.Name, LegalName: cmp.Or(p.LegalName, p.Name), Purpose: cmp.Or(p.Purpose, defaultPurpose), CertCN: k.CertCN, APIKeySHA256: k.APIKeySHA256, CertSHA256: k.CertSHA256, RedirectURIs: p.RedirectURIs, WebhookURL: p.WebhookURL}
 	if len(l.RedirectURIs) > 0 {
 		out.RedirectURIs = l.RedirectURIs

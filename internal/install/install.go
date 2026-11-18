@@ -84,7 +84,7 @@ func Install(ctx context.Context, dir string, spec setup.Spec, local setup.Local
 	if err != nil {
 		return err
 	}
-	cfg, err := state.LoadConfig(dir)
+	cfg, err := setup.LoadConfig(dir)
 	if err != nil {
 		return err
 	}

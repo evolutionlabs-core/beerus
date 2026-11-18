@@ -17,7 +17,7 @@ import (
 )
 
 func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) error {
-	ok, err := state.Initialized(dir)
+	ok, err := setup.Initialized(dir)
 	if err != nil {
 		return err
 	}
@@ -38,7 +38,7 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
-	if err := writeYAML(filepath.Join(dir, state.LocalFile), local); err != nil {
+	if err := writeYAML(filepath.Join(dir, setup.LocalFile), local); err != nil {
 		return err
 	}
 	if local, err = setup.LoadLocal(dir); err != nil {
@@ -53,14 +53,14 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 		{Kind: setup.KindSystem, ID: setup.SystemCBN, Phase: config.PhaseProvisioning},
 		{Kind: setup.KindSystem, ID: setup.SystemNIBSS, Phase: config.PhaseProvisioning},
 	}
-	cfg, err := state.BuildConfig(dir, st, local)
+	cfg, err := setup.BuildConfig(dir, st, local)
 	if err != nil {
 		return err
 	}
 	if err := allocateCBN(cfg, &st); err != nil {
 		return err
 	}
-	if cfg, err = state.BuildConfig(dir, st, local); err != nil {
+	if cfg, err = setup.BuildConfig(dir, st, local); err != nil {
 		return err
 	}
 	if err := allocateBanks(cfg, &st); err != nil {
@@ -71,22 +71,22 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 		return err
 	}
 	st.Resources = append(st.Resources, keys...)
-	if cfg, err = state.BuildConfig(dir, st, local); err != nil {
+	if cfg, err = setup.BuildConfig(dir, st, local); err != nil {
 		return err
 	}
 	if err := config.Prepare(cfg, time.Now()); err != nil {
 		return err
 	}
 	recordCertPrints(cfg, &st)
-	if st.AppliedSHA256, err = state.SpecSum(st.Applied); err != nil {
+	if st.AppliedSHA256, err = setup.SpecSum(st.Applied); err != nil {
 		return err
 	}
 	raw, err := setup.Export(spec)
 	if err != nil {
 		return err
 	}
-	if err := config.WriteSecret(filepath.Join(dir, state.SpecFile), string(raw)); err != nil {
-		return fmt.Errorf("write %s: %w", state.SpecFile, err)
+	if err := config.WriteSecret(filepath.Join(dir, setup.SpecFile), string(raw)); err != nil {
+		return fmt.Errorf("write %s: %w", setup.SpecFile, err)
 	}
 	if _, err := state.Create(dir, st); err != nil {
 		return err
@@ -183,7 +183,7 @@ func issuePartnerKeys(dir string, partners []setup.Partner) ([]setup.Resource, e
 
 func recordCertPrints(cfg *config.Config, st *setup.Status) {
 	for _, p := range cfg.Partners {
-		if r := state.FindResource(st, setup.KindPartner, p.ID); r != nil && r.Partner != nil {
+		if r := setup.FindResource(st, setup.KindPartner, p.ID); r != nil && r.Partner != nil {
 			r.Partner.CertSHA256 = p.CertSHA256
 		}
 	}

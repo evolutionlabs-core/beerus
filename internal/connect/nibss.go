@@ -108,7 +108,7 @@ func (a *App) registerMember(ctx context.Context, b config.Bank) error {
 		}
 	}
 	if err := a.ctl.Update(func(st *setup.Status) (bool, error) {
-		r := state.FindResource(st, setup.KindBank, b.ID)
+		r := setup.FindResource(st, setup.KindBank, b.ID)
 		if r == nil || r.Steps[config.StepDirectory] == state.StepDone {
 			return false, nil
 		}

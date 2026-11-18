@@ -1,8 +1,6 @@
 package state
 
 import (
-	"encoding/json"
-	"fmt"
 	"slices"
 	"sync"
 
@@ -43,22 +41,10 @@ func Create(dir string, st setup.Status) (*Store, error) {
 	return s, nil
 }
 
-func CloneStatus(st setup.Status) (setup.Status, error) {
-	raw, err := json.Marshal(st)
-	if err != nil {
-		return setup.Status{}, fmt.Errorf("copy status: %w", err)
-	}
-	var out setup.Status
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return setup.Status{}, fmt.Errorf("copy status: %w", err)
-	}
-	return out, nil
-}
-
 func (s *Store) Status() (setup.Status, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return CloneStatus(s.st)
+	return s.st.Clone()
 }
 
 func (s *Store) SetupKey() uint64 {
@@ -70,7 +56,7 @@ func (s *Store) SetupKey() uint64 {
 func (s *Store) change(fn func(*setup.Status) (bool, error)) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	work, err := CloneStatus(s.st)
+	work, err := s.st.Clone()
 	if err != nil {
 		return 0, err
 	}
@@ -93,7 +79,7 @@ func (s *Store) flush(version uint64) error {
 		return nil
 	}
 	s.mu.Lock()
-	st, err := CloneStatus(s.st)
+	st, err := s.st.Clone()
 	latest := s.version
 	s.mu.Unlock()
 	if err != nil {
@@ -124,17 +110,8 @@ func (s *Store) Update(fn func(*setup.Status) (bool, error)) error {
 	return s.flush(v)
 }
 
-func FindResource(st *setup.Status, kind, id string) *setup.Resource {
-	for i := range st.Resources {
-		if st.Resources[i].Kind == kind && st.Resources[i].ID == id {
-			return &st.Resources[i]
-		}
-	}
-	return nil
-}
-
 func EnsureResource(st *setup.Status, kind, id string) *setup.Resource {
-	if r := FindResource(st, kind, id); r != nil {
+	if r := setup.FindResource(st, kind, id); r != nil {
 		return r
 	}
 	st.Resources = append(st.Resources, setup.Resource{Kind: kind, ID: id})
@@ -185,7 +162,7 @@ func (s *Store) ReleasePorts(kind, id string) error {
 	if err != nil {
 		return err
 	}
-	r := FindResource(&st, kind, id)
+	r := setup.FindResource(&st, kind, id)
 	if r == nil {
 		return nil
 	}

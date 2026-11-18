@@ -265,7 +265,7 @@ func (a *App) bankRetired(id string) bool {
 		a.log.Error("read control.json", "err", err)
 		return false
 	}
-	r := state.FindResource(&st, setup.KindBank, id)
+	r := setup.FindResource(&st, setup.KindBank, id)
 	return r != nil && r.Steps[stepRetired] == state.StepDone
 }
 

@@ -8,7 +8,6 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 const (
@@ -25,13 +24,13 @@ func DefaultLocal() setup.Local {
 	return setup.Local{
 		DatabaseURL: defaultDatabaseURL,
 		Connect: setup.LocalConnect{
-			Host:         state.DefaultConnectHost,
+			Host:         setup.DefaultConnectHost,
 			PartnerPort:  defaultPartnerPort,
 			WidgetPort:   defaultWidgetPort,
 			ControlPort:  defaultControlPort,
 			HealthPort:   defaultHealthPort,
-			NIBSSPort:    state.DefaultNIBSSPort,
-			CBNPort:      state.DefaultCBNPort,
+			NIBSSPort:    setup.DefaultNIBSSPort,
+			CBNPort:      setup.DefaultCBNPort,
 			SyncInterval: defaultSyncInterval,
 			RefreshEvery: defaultRefreshEvery,
 		},
@@ -40,7 +39,7 @@ func DefaultLocal() setup.Local {
 
 func FreshLocal(dir string) (setup.Local, error) {
 	var local setup.Local
-	found, err := readYAML(filepath.Join(dir, state.LocalFile), &local)
+	found, err := readYAML(filepath.Join(dir, setup.LocalFile), &local)
 	if err != nil {
 		return setup.Local{}, err
 	}

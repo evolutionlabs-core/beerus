@@ -14,7 +14,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 var createSteps = []string{config.StepAllocate, config.StepDirectory, config.StepDatabase, config.StepLedgerSchema, config.StepOpenBankingSchema, config.StepCerts, config.StepCBN, config.StepSite, config.StepAPI}
@@ -131,7 +130,7 @@ func TestRestartResumesProvisioning(t *testing.T) {
 	if err := setup.SaveStatus(cfg.Dir, st); err != nil {
 		t.Fatal(err)
 	}
-	again, err := state.LoadConfig(cfg.Dir)
+	again, err := setup.LoadConfig(cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +187,7 @@ func TestResetDropsEveryDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != state.LocalFile {
+	if len(entries) != 1 || entries[0].Name() != setup.LocalFile {
 		names := []string{}
 		for _, e := range entries {
 			names = append(names, e.Name())

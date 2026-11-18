@@ -58,24 +58,24 @@ func FindResetTarget(dir string) (ResetTarget, error) {
 	}
 	t := ResetTarget{Dir: dir}
 	var old oldSetup
-	hasOld, err := readYAML(filepath.Join(dir, state.OldSpecFile), &old)
+	hasOld, err := readYAML(filepath.Join(dir, setup.OldSpecFile), &old)
 	if err != nil {
 		return t, err
 	}
 	var current oldSetup
 	hasSpec := false
-	_, statErr := os.Stat(filepath.Join(dir, state.StatusFile))
+	_, statErr := os.Stat(filepath.Join(dir, setup.StatusFile))
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-		return t, fmt.Errorf("look for %s: %w", state.StatusFile, statErr)
+		return t, fmt.Errorf("look for %s: %w", setup.StatusFile, statErr)
 	}
 	hasStatus := statErr == nil
 	if hasStatus {
-		if hasSpec, err = readYAML(filepath.Join(dir, state.SpecFile), &current); err != nil {
+		if hasSpec, err = readYAML(filepath.Join(dir, setup.SpecFile), &current); err != nil {
 			return t, err
 		}
 	}
 	var local setup.Local
-	if _, err := readYAML(filepath.Join(dir, state.LocalFile), &local); err != nil {
+	if _, err := readYAML(filepath.Join(dir, setup.LocalFile), &local); err != nil {
 		return t, err
 	}
 	switch {
@@ -145,7 +145,7 @@ func Reset(ctx context.Context, dir, databaseURL string) ([]string, error) {
 		return nil, fmt.Errorf("read %s: %w", dir, err)
 	}
 	for _, e := range entries {
-		if e.Name() == state.LocalFile {
+		if e.Name() == setup.LocalFile {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
