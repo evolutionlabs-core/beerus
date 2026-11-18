@@ -234,7 +234,7 @@ func TestBookRoutes(t *testing.T) {
 		t.Fatalf("customers %v, %v", customers, err)
 	}
 	customer := func(c bank.Customer, username string) string {
-		return fmt.Sprintf(`{"id":%q,"name":%q,"phone":%q,"bvn":%q,"status":"active",%s"dob":%q,"created_at":%q}`, c.ID, c.Name, c.Phone, c.BVN, username, c.DOB.String(), adminNow.Format(time.RFC3339Nano))
+		return fmt.Sprintf(`{"id":%q,"name":%q,"phone":%q,"bvn":%q,"status":"active",%s"dob":%q,"created_at":%q}`, c.ID, c.Name, c.Phone, c.BVN, username, c.DOB.String(), adminNow.Local().Format(time.RFC3339Nano))
 	}
 	entry := func(l bank.FeedLine, rest string) string {
 		return fmt.Sprintf(`{"id":%q,"account":%q,"seq":%d,"amount_minor":%d,"balance_after_minor":%d,"posted_at":%q,"value_date":%q,"narration":%q,%s"reference":%q%s}`, l.Key, l.NUBAN, l.Seq, l.Amount, l.BalanceAfter, adminNow.Format(time.RFC3339Nano), clock.DateOf(adminNow).String(), l.Narration, rest, l.BankRef, "")
