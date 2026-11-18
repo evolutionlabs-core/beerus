@@ -244,9 +244,6 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 		t.Skip("starts a full stack; run without -short")
 	}
 	s := &Stack{t: t, people: map[string]persona{}, origin: time.Now(), base: stackBase(t)}
-	if opts.Real == nil {
-		opts.Real = s.realNow
-	}
 	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
 		cfg, err := connect.LoadConfig(dir)
 		if err != nil {
@@ -626,7 +623,7 @@ func parseSpan(s string) (time.Duration, error) {
 }
 
 func (s *Stack) today() clock.Date {
-	return clock.New(s.realNow).Today()
+	return clock.DateOf(s.realNow())
 }
 
 type persona struct {

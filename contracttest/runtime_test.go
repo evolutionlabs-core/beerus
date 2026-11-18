@@ -6,7 +6,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -73,14 +72,9 @@ type run struct {
 	stop func()
 }
 
-var runOrigins sync.Map
-
 func runOnce(t *testing.T, cfg *config.Config) run {
 	t.Helper()
-	started, _ := runOrigins.LoadOrStore(cfg.Dir, time.Now())
-	origin := started.(time.Time)
-	base := stackBase(t)
-	ns, err := startNodes(cfg, connect.Options{Real: func() time.Time { return base.Add(time.Since(origin)) }})
+	ns, err := startNodes(cfg, connect.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

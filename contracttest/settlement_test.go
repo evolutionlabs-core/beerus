@@ -108,7 +108,7 @@ func TestSettlementCheckDoesNotTrustTheBooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	at := clock.New(nil).Now()
+	at := clock.New().Now()
 	_, err = ledger.New(st.Pool, nil).Post(context.Background(), ledger.Entry{
 		Key: "tamper", Kind: "feed", PostingDate: clock.DateOf(at), PostedAt: at, Narration: "Tamper",
 		Lines: []ledger.Line{{Account: bank.Vault, Amount: 100}, {Account: bank.NIPInward, Amount: -100}},
