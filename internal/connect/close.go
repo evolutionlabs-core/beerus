@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"maps"
 	"net/http"
 	"slices"
@@ -454,7 +455,7 @@ func (a *App) closeChoices(ctx context.Context, r setup.Resource, imp CloseImpac
 		if total == 0 {
 			return choice, "", nil
 		}
-		return nil, "", a.blocked(setup.ReasonMoneyDecisionNeeded, "%s holds %s for %s. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.", imp.Bank.Name, bank.Naira(total), view.Plural(held, "customer", "customers"))
+		return nil, "", a.blocked(setup.ReasonMoneyDecisionNeeded, "%s holds %s for %s. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.", imp.Bank.Name, money.Naira(total), view.Plural(held, "customer", "customers"))
 	}
 	for _, cu := range imp.Customers {
 		choice[cu.ID] = rm.Money
@@ -549,7 +550,7 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 				continue
 			}
 			if err := from.payout(ctx, key, acc.NUBAN, amount); err != nil {
-				return CloseResult{}, fmt.Errorf("pay out %s from %s: %w", bank.Naira(amount), acc.NUBAN, err)
+				return CloseResult{}, fmt.Errorf("pay out %s from %s: %w", money.Naira(amount), acc.NUBAN, err)
 			}
 			paid[acc.Owner] += amount
 			continue
@@ -571,10 +572,10 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		}
 		tr, err := a.transfer(ctx, server.TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: moveKey, Closure: true})
 		if err != nil {
-			return CloseResult{}, fmt.Errorf("move %s from %s: %w", bank.Naira(bal), acc.NUBAN, err)
+			return CloseResult{}, fmt.Errorf("move %s from %s: %w", money.Naira(bal), acc.NUBAN, err)
 		}
 		if tr.Status != nip.Success {
-			return CloseResult{}, fmt.Errorf("move %s from %s: session %s is %s", bank.Naira(bal), acc.NUBAN, tr.SessionID, tr.Status)
+			return CloseResult{}, fmt.Errorf("move %s from %s: session %s is %s", money.Naira(bal), acc.NUBAN, tr.SessionID, tr.Status)
 		}
 	}
 	for _, acc := range imp.Accounts {
@@ -690,18 +691,18 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 			res.Left += bal
 		case setup.MoneyPayout:
 			if live.Status != "frozen" {
-				return CloseResult{}, fmt.Errorf("%s keeps %s as an NDIC claim but is %s, not frozen", acc.NUBAN, bank.Naira(bal), live.Status)
+				return CloseResult{}, fmt.Errorf("%s keeps %s as an NDIC claim but is %s, not frozen", acc.NUBAN, money.Naira(bal), live.Status)
 			}
 			res.Lines = append(res.Lines, line(acc.NUBAN, setup.OutcomeClaim, bal))
 			res.Claims += bal
 		default:
-			return CloseResult{}, fmt.Errorf("%s still holds %s after its money was moved", acc.NUBAN, bank.Naira(bal))
+			return CloseResult{}, fmt.Errorf("%s still holds %s after its money was moved", acc.NUBAN, money.Naira(bal))
 		}
 	}
 	for o, c := range choice {
 		if c == setup.MoneyPayout {
 			if want := min(paid[o]+held[o], imp.InsuredLimit); paid[o] != want {
-				return CloseResult{}, fmt.Errorf("customer %s was paid out %s, but the insured amount is %s", o, bank.Naira(paid[o]), bank.Naira(want))
+				return CloseResult{}, fmt.Errorf("customer %s was paid out %s, but the insured amount is %s", o, money.Naira(paid[o]), money.Naira(want))
 			}
 		}
 	}

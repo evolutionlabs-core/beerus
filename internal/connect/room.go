@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"html/template"
 	"net"
 	"net/http"
@@ -170,7 +171,7 @@ type lineView struct {
 }
 
 func newLineView(b *config.Bank, l bank.FeedLine) lineView {
-	return lineView{FeedLine: l, Bank: b, Description: bank.Normalise(l.Narration), Href: "/ui/accounts/" + url.PathEscape(acctKey(b.ID, l.NUBAN)) + "/lines/" + url.PathEscape(l.Key)}
+	return lineView{FeedLine: l, Bank: b, Description: view.Normalise(l.Narration), Href: "/ui/accounts/" + url.PathEscape(acctKey(b.ID, l.NUBAN)) + "/lines/" + url.PathEscape(l.Key)}
 }
 
 func (a *App) roomFail(w http.ResponseWriter, r *http.Request, err error) {
@@ -441,7 +442,7 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 	f := r.PostForm
 	req := server.TransferRequest{FromBank: f.Get("from_bank"), From: strings.TrimSpace(f.Get("from")), ToBank: f.Get("to_bank"), To: strings.TrimSpace(f.Get("to")), Narration: strings.TrimSpace(f.Get("narration")), Key: f.Get("key")}
-	amount, err := bank.ParseNaira(f.Get("amount"))
+	amount, err := money.ParseNaira(f.Get("amount"))
 	if err != nil {
 		err = view.ErrBadAmount
 	} else {

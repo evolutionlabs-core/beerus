@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -270,7 +271,7 @@ func (s *Banking) Cash(ctx context.Context, bankID, kind string, req CashRequest
 	if err != nil {
 		return CashResult{}, err
 	}
-	amount, err := bank.ParseNaira(req.Amount)
+	amount, err := money.ParseNaira(req.Amount)
 	if err != nil {
 		return CashResult{}, fmt.Errorf("%w: %w", ledger.ErrInvalid, err)
 	}

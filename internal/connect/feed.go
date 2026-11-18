@@ -4,11 +4,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/view"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
@@ -50,7 +50,7 @@ func toTxn(partner string, acct *AccountRec, p bankLine) Txn {
 		Status:         "posted",
 		ValueDate:      p.ValueDate.String(),
 		DescriptionRaw: p.Narration,
-		Description:    bank.Normalise(p.Narration),
+		Description:    view.Normalise(p.Narration),
 		References:     References{SessionID: strp(p.SessionID), BankReference: strp(p.BankRef)},
 		Channel:        p.Channel,
 	}

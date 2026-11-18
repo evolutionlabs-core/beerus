@@ -1,6 +1,7 @@
 package bank_test
 
 import (
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"math"
 	"strings"
 	"testing"
@@ -26,29 +27,29 @@ func TestNairaParseAndFormat(t *testing.T) {
 		{"99999999999999999999", 0, `amount "99999999999999999999" must be a positive naira amount`},
 	}
 	for _, c := range parsed {
-		got, err := bank.ParseNaira(c.in)
+		got, err := money.ParseNaira(c.in)
 		if got != c.want || (err == nil) != (c.err == "") || (err != nil && err.Error() != c.err) {
 			t.Errorf("ParseNaira(%q) = %d, %v; want %d, %q", c.in, got, err, c.want, c.err)
 		}
 	}
 	for minor, want := range map[int64]string{0: "₦0.00", 5: "₦0.05", 123456789: "₦1,234,567.89", -250050: "−₦2,500.50"} {
-		if got := bank.FormatNaira(minor); got != want {
+		if got := money.FormatNaira(minor); got != want {
 			t.Errorf("FormatNaira(%d) = %q, want %q", minor, got, want)
 		}
 	}
-	if got := bank.Naira(-250050); got != "-₦2,500.50" {
+	if got := money.Naira(-250050); got != "-₦2,500.50" {
 		t.Errorf("Naira(-250050) = %q", got)
 	}
 }
 
 func TestTransferLimits(t *testing.T) {
-	if _, ok := bank.AddMinor(math.MaxInt64, 1); ok {
+	if _, ok := money.AddMinor(math.MaxInt64, 1); ok {
 		t.Error("AddMinor did not report an overflow")
 	}
-	if _, ok := bank.AddMinor(math.MinInt64, -1); ok {
+	if _, ok := money.AddMinor(math.MinInt64, -1); ok {
 		t.Error("AddMinor did not report an underflow")
 	}
-	if got, ok := bank.AddMinor(40, 2); !ok || got != 42 {
+	if got, ok := money.AddMinor(40, 2); !ok || got != 42 {
 		t.Errorf("AddMinor(40, 2) = %d, %v", got, ok)
 	}
 	if got, ok := bank.TotalDebit(10000, charges.Transfer{Fee: 1075, VAT: 80, StampDuty: 50}); !ok || got != 11205 {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"io"
 	"net/url"
 	"os"
@@ -236,7 +237,7 @@ func cmdAccount(args []string) error {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Opened %s account %s for %s (%s) at %s. Balance %s.\n", a.Type, a.NUBAN, a.Name, a.Customer, id, bank.FormatNaira(a.Balance))
+			fmt.Printf("Opened %s account %s for %s (%s) at %s. Balance %s.\n", a.Type, a.NUBAN, a.Name, a.Customer, id, money.FormatNaira(a.Balance))
 			return nil
 		})
 	case "close":
@@ -344,7 +345,7 @@ func printAccounts(out map[string]any) error {
 	w := newTable()
 	fmt.Fprintln(w, "NUBAN\tOWNER\tCUSTOMER\tTYPE\tSTATUS\tBALANCE")
 	for _, r := range rows {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.NUBAN, r.Name, r.Customer, r.Type, r.Status, bank.FormatNaira(r.Balance))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.NUBAN, r.Name, r.Customer, r.Type, r.Status, money.FormatNaira(r.Balance))
 	}
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("print accounts: %w", err)
@@ -366,7 +367,7 @@ func printStatement(out map[string]any, nuban string) error {
 	w := newTable()
 	fmt.Fprintln(w, "DATE\tTIME\tAMOUNT\tBALANCE\tNARRATION\tSESSION")
 	for _, r := range rows {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ValueDate, stamp(r.PostedAt), bank.FormatNaira(r.Amount), bank.FormatNaira(r.BalanceAfter), r.Narration, r.SessionID)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ValueDate, stamp(r.PostedAt), money.FormatNaira(r.Amount), money.FormatNaira(r.BalanceAfter), r.Narration, r.SessionID)
 	}
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("print the statement: %w", err)
@@ -408,7 +409,7 @@ func cmdCash(kind string, args []string) error {
 		if kind == "withdraw" {
 			verb, prep = "Withdrew", "from"
 		}
-		fmt.Printf("%s %s %s account %s at %s. Balance %s.\n", verb, bank.FormatNaira(r.Amount), prep, r.Account, id, bank.FormatNaira(r.Balance))
+		fmt.Printf("%s %s %s account %s at %s. Balance %s.\n", verb, money.FormatNaira(r.Amount), prep, r.Account, id, money.FormatNaira(r.Balance))
 		return nil
 	})
 }
@@ -461,7 +462,7 @@ func chargeSentence(r server.TransferResult) string {
 		amount int64
 	}{{"fee", r.Fee}, {"VAT", r.VAT}, {"stamp duty", r.StampDuty}} {
 		if c.amount != 0 {
-			parts = append(parts, c.name+" "+bank.FormatNaira(c.amount))
+			parts = append(parts, c.name+" "+money.FormatNaira(c.amount))
 		}
 	}
 	switch len(parts) {
@@ -475,14 +476,14 @@ func chargeSentence(r server.TransferResult) string {
 
 func printQuote(c *ctl, r server.TransferResult) error {
 	if r.Kind == "internal" {
-		fmt.Printf("Moving %s from %s to %s, %s, costs no charges. Balance after %s.\n", bank.FormatNaira(r.Amount), r.From, r.To, r.ToName, bank.FormatNaira(r.BalanceAfter))
+		fmt.Printf("Moving %s from %s to %s, %s, costs no charges. Balance after %s.\n", money.FormatNaira(r.Amount), r.From, r.To, r.ToName, money.FormatNaira(r.BalanceAfter))
 	} else {
 		to, err := bankStatus(c, r.ToBank)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Sending %s to %s at %s.\n", bank.FormatNaira(r.Amount), r.ToName, to.Name)
-		fmt.Printf("%s Total debit %s. Balance after %s.\n", chargeSentence(r), bank.FormatNaira(r.TotalDebit), bank.FormatNaira(r.BalanceAfter))
+		fmt.Printf("Sending %s to %s at %s.\n", money.FormatNaira(r.Amount), r.ToName, to.Name)
+		fmt.Printf("%s Total debit %s. Balance after %s.\n", chargeSentence(r), money.FormatNaira(r.TotalDebit), money.FormatNaira(r.BalanceAfter))
 	}
 	fmt.Println("This was a quote. Nothing was sent.")
 	return nil
@@ -491,15 +492,15 @@ func printQuote(c *ctl, r server.TransferResult) error {
 func printTransfer(c *ctl, r server.TransferResult) error {
 	at := stamp(r.At)
 	if r.Kind == "internal" {
-		fmt.Printf("Moved %s from %s to %s, %s, at %s. Balance %s.\n", bank.FormatNaira(r.Amount), r.From, r.To, r.ToName, at, bank.FormatNaira(r.BalanceAfter))
+		fmt.Printf("Moved %s from %s to %s, %s, at %s. Balance %s.\n", money.FormatNaira(r.Amount), r.From, r.To, r.ToName, at, money.FormatNaira(r.BalanceAfter))
 		return nil
 	}
 	to, err := bankStatus(c, r.ToBank)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Sending %s to %s at %s.\n", bank.FormatNaira(r.Amount), r.ToName, to.Name)
-	charges := fmt.Sprintf("%s Total debit %s. Balance %s.", chargeSentence(r), bank.FormatNaira(r.TotalDebit), bank.FormatNaira(r.BalanceAfter))
+	fmt.Printf("Sending %s to %s at %s.\n", money.FormatNaira(r.Amount), r.ToName, to.Name)
+	charges := fmt.Sprintf("%s Total debit %s. Balance %s.", chargeSentence(r), money.FormatNaira(r.TotalDebit), money.FormatNaira(r.BalanceAfter))
 	switch r.Status {
 	case nip.Success:
 		fmt.Printf("Session %s: success at %s\n%s\n", r.SessionID, at, charges)
@@ -510,7 +511,7 @@ func printTransfer(c *ctl, r server.TransferResult) error {
 		}
 		fmt.Printf("Session %s: pending. Beerus will check with NIBSS at %s. Run beerus nip status %s.\n%s\n", r.SessionID, stamp(*r.NextCheckAt), r.SessionID, charges)
 	case nip.Reversed:
-		fmt.Printf("Session %s: failed with code %s. The debit and its charges were reversed at %s. Balance %s.\n", r.SessionID, r.ResponseCode, at, bank.FormatNaira(r.BalanceAfter))
+		fmt.Printf("Session %s: failed with code %s. The debit and its charges were reversed at %s. Balance %s.\n", r.SessionID, r.ResponseCode, at, money.FormatNaira(r.BalanceAfter))
 	default:
 		return fmt.Errorf("the transfer came back with the unknown status %q", r.Status)
 	}
@@ -746,7 +747,7 @@ func printSession(s nibss.Session, wasPending bool) {
 	if wasPending && s.Status != nibss.SessionPending && s.Status != nibss.SessionOK {
 		fmt.Println("The session was pending; this check resolved it.")
 	}
-	fmt.Printf("Amount %s from %s (bank code %s) to %s (bank code %s), started at %s.\n", bank.FormatNaira(s.Amount), s.FromNUBAN, s.FromCode, s.ToNUBAN, s.ToCode, stamp(s.CreatedAt))
+	fmt.Printf("Amount %s from %s (bank code %s) to %s (bank code %s), started at %s.\n", money.FormatNaira(s.Amount), s.FromNUBAN, s.FromCode, s.ToNUBAN, s.ToCode, stamp(s.CreatedAt))
 	if s.Settlement != "" {
 		fmt.Printf("Settled in settlement session %s.\n", s.Settlement)
 	}

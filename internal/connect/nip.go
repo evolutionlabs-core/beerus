@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"net/http"
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
@@ -216,14 +216,14 @@ func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"cap":"5000000","collateral":"5000000"}.`)
 		return
 	}
-	capMinor, err := bank.ParseNaira(body.Cap)
+	capMinor, err := money.ParseNaira(body.Cap)
 	if err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "cap: "+err.Error())
 		return
 	}
 	var collateral int64
 	if body.Collateral != "" {
-		if collateral, err = bank.ParseNaira(body.Collateral); err != nil {
+		if collateral, err = money.ParseNaira(body.Collateral); err != nil {
 			web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "collateral: "+err.Error())
 			return
 		}

@@ -2,9 +2,9 @@ package server
 
 import (
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"net/http"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -30,7 +30,7 @@ func (s *Banking) transferRequest(w http.ResponseWriter, r *http.Request) (Trans
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"from":"9010000014","to_bank":"bank-b","to":"9020000011","amount":"25000"}.`)
 		return TransferRequest{}, false
 	}
-	amount, err := bank.ParseNaira(body.Amount)
+	amount, err := money.ParseNaira(body.Amount)
 	if err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return TransferRequest{}, false

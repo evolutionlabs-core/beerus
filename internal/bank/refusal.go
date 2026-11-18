@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"unicode"
 	"unicode/utf8"
 
@@ -26,12 +27,12 @@ func CheckNarration(n string) error {
 }
 
 func TotalDebit(amount int64, c charges.Transfer) (int64, bool) {
-	total, ok := AddMinor(amount, c.Fee)
+	total, ok := money.AddMinor(amount, c.Fee)
 	if ok {
-		total, ok = AddMinor(total, c.VAT)
+		total, ok = money.AddMinor(total, c.VAT)
 	}
 	if ok {
-		total, ok = AddMinor(total, c.StampDuty)
+		total, ok = money.AddMinor(total, c.StampDuty)
 	}
 	return total, ok
 }
@@ -51,7 +52,7 @@ func (e *InsufficientFundsError) Unwrap() error {
 }
 
 func (e *InsufficientFundsError) Message() string {
-	return fmt.Sprintf("Account %s holds %s and %s was asked for; withdraw %s or less.", e.Account, FormatNaira(e.Balance), FormatNaira(e.Amount), FormatNaira(max(e.Balance, 0)))
+	return fmt.Sprintf("Account %s holds %s and %s was asked for; withdraw %s or less.", e.Account, money.FormatNaira(e.Balance), money.FormatNaira(e.Amount), money.FormatNaira(max(e.Balance, 0)))
 }
 
 type PayoutTooLargeError struct {
@@ -69,7 +70,7 @@ func (e *PayoutTooLargeError) Unwrap() error {
 }
 
 func (e *PayoutTooLargeError) Message() string {
-	return fmt.Sprintf("Account %s holds %s and a payout of %s was asked for; pay out %s or less.", e.Account, FormatNaira(e.Balance), FormatNaira(e.Amount), FormatNaira(max(e.Balance, 0)))
+	return fmt.Sprintf("Account %s holds %s and a payout of %s was asked for; pay out %s or less.", e.Account, money.FormatNaira(e.Balance), money.FormatNaira(e.Amount), money.FormatNaira(max(e.Balance, 0)))
 }
 
 type DailyLimitError struct {
@@ -88,7 +89,7 @@ func (e *DailyLimitError) Unwrap() error {
 }
 
 func (e *DailyLimitError) Message() string {
-	return fmt.Sprintf("Account %s has used %s of its %s daily limit and %s was asked for; withdraw %s or less today.", e.Account, FormatNaira(e.Used), FormatNaira(e.Limit), FormatNaira(e.Amount), FormatNaira(max(e.Limit-e.Used, 0)))
+	return fmt.Sprintf("Account %s has used %s of its %s daily limit and %s was asked for; withdraw %s or less today.", e.Account, money.FormatNaira(e.Used), money.FormatNaira(e.Limit), money.FormatNaira(e.Amount), money.FormatNaira(max(e.Limit-e.Used, 0)))
 }
 
 func (b *Bank) CashRefusal(ctx context.Context, account string, amount int64, err error) error {

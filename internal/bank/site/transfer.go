@@ -3,11 +3,11 @@ package site
 import (
 	"context"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"net/http"
 	"net/url"
 	"strings"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -62,7 +62,7 @@ func (s *site) transferRequest(ctx context.Context, sess *session, f url.Values)
 	if !ok {
 		return server.TransferRequest{}, errChooseAccount
 	}
-	amount, err := bank.ParseNaira(f.Get("amount"))
+	amount, err := money.ParseNaira(f.Get("amount"))
 	if err != nil {
 		return server.TransferRequest{}, view.ErrBadAmount
 	}

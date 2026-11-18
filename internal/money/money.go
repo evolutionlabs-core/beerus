@@ -1,4 +1,4 @@
-package bank
+package money
 
 import (
 	"fmt"

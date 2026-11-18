@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"net/http"
 	"strings"
 	"time"
@@ -150,7 +151,7 @@ func PostingError(nuban string, err error) error {
 func TotalDebit(amount int64, c charges.Transfer) (int64, error) {
 	total, ok := bank.TotalDebit(amount, c)
 	if !ok {
-		return 0, Refused(http.StatusUnprocessableEntity, nip.SystemError, "amount_too_large", fmt.Errorf("%s is too large to add the transfer charges to. Nothing was debited", bank.Naira(amount)))
+		return 0, Refused(http.StatusUnprocessableEntity, nip.SystemError, "amount_too_large", fmt.Errorf("%s is too large to add the transfer charges to. Nothing was debited", money.Naira(amount)))
 	}
 	return total, nil
 }
@@ -197,7 +198,7 @@ func (q Quoter) Quote(ctx context.Context, b *bank.Bank, rt Route, req TransferR
 	if err != nil {
 		return res, fmt.Errorf("read balance of %s: %w", req.From, err)
 	}
-	if room, ok := bank.AddMinor(bal, sender.OverdraftLimit); ok && room < res.TotalDebit {
+	if room, ok := money.AddMinor(bal, sender.OverdraftLimit); ok && room < res.TotalDebit {
 		return res, PostingError(req.From, ledger.ErrInsufficientFunds)
 	}
 	res.BalanceAfter = bal - res.TotalDebit
