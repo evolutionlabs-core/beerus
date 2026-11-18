@@ -337,13 +337,14 @@ func TestBuildChangeableFields(t *testing.T) {
 		{
 			name: "open banking",
 			desired: func(s *Spec) {
-				bank(s, "bank-a").OpenBanking = OpenBanking{ConsentMonths: 6, RefreshDays: 30, DormantDays: 90, AssertionSeconds: 300}
+				bank(s, "bank-a").OpenBanking = OpenBanking{ConsentMonths: 6, RefreshDays: 30, DormantDays: 90, AssertionSeconds: 300, AccessSeconds: 900}
 			},
 			want: []Action{{Op: OpUpdate, Kind: KindBank, ID: "bank-a", Fields: []FieldChange{
 				{Path: "open_banking.consent_months", From: "0", To: "6"},
 				{Path: "open_banking.refresh_days", From: "0", To: "30"},
 				{Path: "open_banking.dormant_days", From: "0", To: "90"},
 				{Path: "open_banking.assertion_seconds", From: "0", To: "300"},
+				{Path: "open_banking.access_seconds", From: "0", To: "900"},
 			}}},
 		},
 		{

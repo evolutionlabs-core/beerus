@@ -17,6 +17,7 @@ type BankAPI struct {
 	RefreshDays      int `yaml:"refresh_days,omitempty"`
 	DormantDays      int `yaml:"dormant_days,omitempty"`
 	AssertionSeconds int `yaml:"assertion_seconds,omitempty"`
+	AccessSeconds    int `yaml:"access_seconds,omitempty"`
 }
 
 func (c *Config) APIPortOffset() int {
@@ -48,7 +49,7 @@ func (c *Config) validatePorts() error {
 		return fmt.Errorf("ports.api_offset and ports.window cannot be negative")
 	}
 	for _, b := range c.Banks {
-		for name, v := range map[string]int{"consent_months": b.API.ConsentMonths, "refresh_days": b.API.RefreshDays, "dormant_days": b.API.DormantDays, "assertion_seconds": b.API.AssertionSeconds} {
+		for name, v := range map[string]int{"consent_months": b.API.ConsentMonths, "refresh_days": b.API.RefreshDays, "dormant_days": b.API.DormantDays, "assertion_seconds": b.API.AssertionSeconds, "access_seconds": b.API.AccessSeconds} {
 			if v < 0 {
 				return fmt.Errorf("bank %s open_banking.%s cannot be negative", b.ID, name)
 			}

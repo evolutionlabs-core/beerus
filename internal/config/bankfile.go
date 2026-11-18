@@ -52,6 +52,7 @@ type BankFileAPI struct {
 	RefreshDays      int `json:"refresh_days"`
 	DormantDays      int `json:"dormant_days"`
 	AssertionSeconds int `json:"assertion_seconds"`
+	AccessSeconds    int `json:"access_seconds"`
 }
 
 type BankFileMissingError struct {
