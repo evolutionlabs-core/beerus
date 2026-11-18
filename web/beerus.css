@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 @source "../internal/connect";
+@source "../internal/aggregator";
 @source "../internal/bank/site";
 @source "../internal/view";
 @source inline("bank-a bank-b");
