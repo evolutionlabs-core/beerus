@@ -453,10 +453,7 @@ func (a *App) partnerConnections(id string) int {
 
 func (a *App) bankImpact(ctx context.Context, act *setup.Action) error {
 	im := act.Impact
-	a.mu.Lock()
-	open := a.ledgerFor(act.ID) != nil
-	a.mu.Unlock()
-	if open {
+	if a.booksOf(act.ID) != nil {
 		ci, err := a.CloseImpact(ctx, act.ID)
 		if err != nil && !errors.Is(err, errNotFound) {
 			return err

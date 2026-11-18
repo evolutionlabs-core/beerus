@@ -2,18 +2,24 @@ package connect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
+
+func ensuredSteps() []string {
+	return []string{config.StepDatabase, config.StepLedgerSchema, config.StepOpenBankingSchema}
+}
 
 func stepIndex(id string) int {
 	return slices.IndexFunc(config.BankSteps(), func(s config.BankStep) bool { return s.ID == id })
@@ -46,9 +52,9 @@ func (a *App) initLifecycle() {
 		a.log.Error("read control.json", "err", err)
 	}
 	for _, b := range a.cfg.Banks {
-		st := newStatus(b, a.ledgerFor(b.ID) != nil)
-		a.status[b.ID] = st
 		r := findResource(&stored, setup.KindBank, b.ID)
+		st := newStatus(b, a.provisionedAtStart(b, r))
+		a.status[b.ID] = st
 		if r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
 			st.Phase = r.Phase
 			continue
@@ -67,6 +73,13 @@ func (a *App) initLifecycle() {
 			st.Steps[i].Done = st.Steps[i].ID == config.StepAllocate && r != nil && r.Steps[config.StepAllocate] == stepDone
 		}
 	}
+}
+
+func (a *App) provisionedAtStart(b *config.Bank, r *setup.Resource) bool {
+	if a.role == RoleCore {
+		return r != nil && r.Phase != PhaseProvisioning
+	}
+	return a.ledgerFor(b.ID) != nil
 }
 
 func (a *App) recordBank(id string, fn func(r *setup.Resource) bool) {
@@ -200,25 +213,9 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	a.lifeMu.Unlock()
 	ok := a.step(st, config.StepAllocate, func() error {
 		return a.claimBank(b)
-	}) && a.stepDone(st, config.StepDirectory) && a.step(st, config.StepDatabase, func() error {
-		return store.Create(ctx, a.cfg.DatabaseURL, b.Database)
-	}) && a.step(st, config.StepLedgerSchema, func() error {
-		n, err := store.Migrate(ctx, a.cfg.DatabaseURL, b.Database, ledger.Migrate)
-		if err != nil {
-			return err
-		}
-		a.nameStep(st, config.StepLedgerSchema, config.MigrationCount(n))
-		return nil
-	}) && a.step(st, config.StepOpenBankingSchema, func() error {
-		n, err := store.Migrate(ctx, a.cfg.DatabaseURL, b.Database, openbanking.Migrate)
-		if err != nil {
-			return err
-		}
-		a.nameStep(st, config.StepOpenBankingSchema, config.MigrationCount(n))
-		return a.openLedger(b)
-	}) && a.step(st, config.StepCerts, func() error {
+	}) && a.stepDone(st, config.StepDirectory) && a.bankStorage(ctx, b, st) && a.step(st, config.StepCerts, func() error {
 		return a.bankCerts(b)
-	}) && a.stepDone(st, config.StepCBN) && a.step(st, config.StepSite, func() error {
+	}) && a.stepDone(st, config.StepCBN) && a.bankBooksReady(ctx, b, st) && a.step(st, config.StepSite, func() error {
 		if b.Closed() {
 			return nil
 		}
@@ -251,6 +248,70 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	st.Phase, st.Reason, st.Attempts, st.NextAttemptAt = phase, "", 0, nil
 	a.lifeMu.Unlock()
 	a.pokePush()
+}
+
+func (a *App) bankStorage(ctx context.Context, b *config.Bank, st *BankStatus) bool {
+	if a.role == RoleCore {
+		return true
+	}
+	return a.step(st, config.StepDatabase, func() error {
+		return store.Create(ctx, a.cfg.DatabaseURL, b.Database)
+	}) && a.step(st, config.StepLedgerSchema, func() error {
+		n, err := store.Migrate(ctx, a.cfg.DatabaseURL, b.Database, ledger.Migrate)
+		if err != nil {
+			return err
+		}
+		a.nameStep(st, config.StepLedgerSchema, config.MigrationCount(n))
+		return nil
+	}) && a.step(st, config.StepOpenBankingSchema, func() error {
+		n, err := store.Migrate(ctx, a.cfg.DatabaseURL, b.Database, openbanking.Migrate)
+		if err != nil {
+			return err
+		}
+		a.nameStep(st, config.StepOpenBankingSchema, config.MigrationCount(n))
+		return a.openLedger(b)
+	})
+}
+
+func (a *App) bankBooksReady(ctx context.Context, b *config.Bank, st *BankStatus) bool {
+	if a.role != RoleCore {
+		return true
+	}
+	admin, err := a.adminOf(b.ID)
+	if err != nil {
+		return false
+	}
+	state, err := admin.state(ctx)
+	if err != nil {
+		return false
+	}
+	for _, id := range ensuredSteps() {
+		i := slices.IndexFunc(state.Steps, func(s server.Step) bool { return s.ID == id })
+		if i < 0 {
+			return false
+		}
+		theirs := state.Steps[i]
+		if !theirs.Done && theirs.Error == "" {
+			return false
+		}
+		if !a.step(st, id, func() error {
+			if !theirs.Done {
+				return errors.New(theirs.Error)
+			}
+			a.copyStepName(st, id, theirs.Name)
+			return nil
+		}) {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) copyStepName(st *BankStatus, id, name string) {
+	i := stepIndex(id)
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	st.Steps[i].Name = name
 }
 
 func (st *BankStatus) leavingLocked() bool {
@@ -405,17 +466,11 @@ func (a *App) checkDrift() {
 }
 
 func (a *App) probe(b *config.Bank) (string, []string) {
-	a.mu.Lock()
-	ls := a.ledgerFor(b.ID)
-	a.mu.Unlock()
 	rebuild := []string{config.StepDatabase, config.StepLedgerSchema, config.StepOpenBankingSchema, config.StepSite, config.StepAPI}
-	if ls == nil {
-		return "its ledger is not open", rebuild
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := ls.Ping(ctx); err != nil {
-		return "its database cannot be reached: " + err.Error(), rebuild
+	if reason := a.probeBooks(ctx, b); reason != "" {
+		return reason, rebuild
 	}
 	if b.Closed() {
 		return "", nil
@@ -426,6 +481,29 @@ func (a *App) probe(b *config.Bank) (string, []string) {
 		return "", nil
 	}
 	return "online banking is not answering", []string{config.StepSite, config.StepAPI}
+}
+
+func (a *App) probeBooks(ctx context.Context, b *config.Bank) string {
+	if a.role == RoleCore {
+		admin, err := a.adminOf(b.ID)
+		if err == nil {
+			_, err = admin.state(ctx)
+		}
+		if err != nil {
+			return "its database cannot be reached: " + err.Error()
+		}
+		return ""
+	}
+	a.mu.Lock()
+	ls := a.ledgerFor(b.ID)
+	a.mu.Unlock()
+	if ls == nil {
+		return "its ledger is not open"
+	}
+	if err := ls.Ping(ctx); err != nil {
+		return "its database cannot be reached: " + err.Error()
+	}
+	return ""
 }
 
 func (a *App) detach(b *config.Bank, from string) {

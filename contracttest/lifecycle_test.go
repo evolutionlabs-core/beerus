@@ -514,9 +514,13 @@ func TestCloseBank(t *testing.T) {
 		t.Fatalf("account.removed webhooks: %v", got)
 	}
 	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil), 409)
-	if _, err := http.Get(s.cfg.Bank("abuja-digital").URL() + "/login"); err == nil {
-		t.Fatal("online banking still answers")
-	}
+	waitFor(t, waitLimit, "online banking to stop answering", func() bool {
+		resp, err := http.Get(s.cfg.Bank("abuja-digital").URL() + "/login")
+		if err == nil {
+			resp.Body.Close()
+		}
+		return err != nil
+	})
 	for _, path := range []string{"/banks/abuja-digital/resume", "/banks/abuja-digital/suspend", "/banks/abuja-digital/close"} {
 		if _, err := s.ctlTry("POST", path, map[string]any{"to": "bank-a"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
 			t.Fatalf("%s on a closed bank: %v", path, err)

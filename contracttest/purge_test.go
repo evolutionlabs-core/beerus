@@ -355,19 +355,12 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		return true
 	})
 	open := func(bank, name, phone, dob, username, naira string) string {
-		c, err := r.app.Banking().CreateCustomer(t.Context(), bank, server.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
-		if err != nil {
-			t.Fatal(err)
-		}
-		acc, err := r.app.Banking().OpenAccount(t.Context(), bank, server.AccountRequest{Customer: c.ID, Type: "current"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := r.app.Banking().Cash(t.Context(), bank, "deposit", server.CashRequest{Account: acc.NUBAN, Amount: naira}); err != nil {
-			t.Fatal(err)
-		}
+		c := postControl(t, cfg, "/banks/"+bank+"/customers", bank+"-customer-"+username, server.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
+		acc := postControl(t, cfg, "/banks/"+bank+"/accounts", bank+"-account-"+username, server.AccountRequest{Customer: c["id"].(string), Type: "current"})
+		nuban := acc["nuban"].(string)
+		postControl(t, cfg, "/banks/"+bank+"/deposits", bank+"-deposit-"+username, server.CashRequest{Account: nuban, Amount: naira})
 		r.app.SyncAll(t.Context())
-		return acc.NUBAN
+		return nuban
 	}
 	from := open("bank-a", "Tunde Motors Ltd", "08032345678", "1979-07-02", "tunde", "50000")
 	to := open("bank-b", "Chidi Okafor", "08034567890", "1995-05-30", "chidi", "1000")
@@ -439,6 +432,38 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	if rep, err := connect.Doctor(context.Background(), final, false); err != nil || !rep.Clean() || len(rep.Missing) != 0 {
 		t.Fatalf("doctor: %+v %v", rep, err)
 	}
+}
+
+func postControl(t *testing.T, cfg *config.Config, path, key string, body any) map[string]any {
+	t.Helper()
+	token, err := config.ReadSecret(cfg.Path("control-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, cfg.ControlURL()+path, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out := map[string]any{}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode >= http.StatusMultipleChoices {
+		t.Fatalf("POST %s answered %d %v", path, resp.StatusCode, out)
+	}
+	return out
 }
 
 func sendByControl(t *testing.T, cfg *config.Config, bank, key string, body map[string]string) (map[string]any, error) {

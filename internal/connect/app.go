@@ -186,6 +186,9 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 		if err := a.claimBank(b); err != nil {
 			return nil, err
 		}
+		if a.role == RoleCore {
+			continue
+		}
 		ls, err := openLedgerSource(ctx, cfg, a.ctl, a.clock, b)
 		if err != nil {
 			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
@@ -208,6 +211,9 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 }
 
 func (a *App) addLedger(ls *ledgerSource) {
+	if a.role == RoleCore {
+		panic("TMPCHECK addLedger in core")
+	}
 	a.ledgers = append(a.ledgers, ls)
 	a.poolMu.Lock()
 	if a.pools == nil {
@@ -218,12 +224,18 @@ func (a *App) addLedger(ls *ledgerSource) {
 }
 
 func (a *App) obLedger(id string) *ledgerSource {
+	if a.role == RoleCore {
+		panic("TMPCHECK obLedger in core")
+	}
 	a.poolMu.RLock()
 	defer a.poolMu.RUnlock()
 	return a.pools[id]
 }
 
 func (a *App) ledgerFor(institution string) *ledgerSource {
+	if a.role == RoleCore {
+		panic("TMPCHECK ledgerFor in core")
+	}
 	for _, l := range a.ledgers {
 		if l.Inst.ID == institution {
 			return l

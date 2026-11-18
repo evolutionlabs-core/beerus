@@ -91,9 +91,11 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	var ls *ledgerSource
 	if b != nil {
 		a.detach(b, config.StepSite)
-		a.mu.Lock()
-		ls = a.ledgerFor(id)
-		a.mu.Unlock()
+		if a.role != RoleCore {
+			a.mu.Lock()
+			ls = a.ledgerFor(id)
+			a.mu.Unlock()
+		}
 		a.detach(b, config.StepDatabase)
 	}
 	var errs []error
@@ -101,7 +103,7 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	case ls != nil:
 		errs = append(errs, ls.Drop(ctx))
 	case r.Allocated.Database != "":
-		errs = append(errs, store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{r.Allocated.Database}))
+		errs = append(errs, a.dropBankDatabase(ctx, r.Allocated.Database))
 	}
 	a.forgetOpenBanking(id)
 	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.memberGone(ctx, id))
