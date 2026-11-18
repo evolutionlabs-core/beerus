@@ -119,4 +119,49 @@ func TestReconnectWithLaterStartKeepsTheEarlierFromAndTheBalanceInvariant(t *tes
 	if posted != 4 || sum != 8500 || opening+sum != rec.Ledger || rec.Ledger != 18_500 {
 		t.Fatalf("opening %d + %d posted lines worth %d != ledger %d, want 4 lines worth 8500 and ledger 18500", opening, posted, sum, rec.Ledger)
 	}
+
+	for _, c := range []struct {
+		id    string
+		start clock.Date
+		from  string
+	}{
+		{"con_3", clock.Date{Y: 2026, M: time.October, D: 10}, "2026-10-10"},
+		{"con_4", clock.Date{Y: 2026, M: time.October, D: 14}, "2026-10-10"},
+		{"con_5", clock.Date{Y: 2026, M: time.October, D: 5}, "2026-10-05"},
+	} {
+		c3 := connect(c.id, "obc_"+c.id, link("lks_"+c.id, c.start))
+		a.mu.Lock()
+		a.setStatus(c3, "revoked", "connection_revoked")
+		a.mu.Unlock()
+		if rec.From.String() != c.from {
+			t.Fatalf("after reconnecting from %s: account from %s, want %s", c.start, rec.From, c.from)
+		}
+	}
+
+	today := a.clock.Today()
+	for _, c := range []struct {
+		name string
+		from clock.Date
+		asOf clock.Date
+		want int
+	}{
+		{"the day before the first date", clock.Date{Y: 2026, M: time.March, D: 1}, clock.Date{Y: 2026, M: time.February, D: 28}, http.StatusOK},
+		{"two days before the first date", clock.Date{Y: 2026, M: time.March, D: 1}, clock.Date{Y: 2026, M: time.February, D: 27}, http.StatusUnprocessableEntity},
+		{"the day before a leap day first date", clock.Date{Y: 2024, M: time.March, D: 1}, clock.Date{Y: 2024, M: time.February, D: 29}, http.StatusOK},
+		{"before a leap day first date", clock.Date{Y: 2024, M: time.March, D: 1}, clock.Date{Y: 2024, M: time.February, D: 28}, http.StatusUnprocessableEntity},
+		{"the day before a year start first date", clock.Date{Y: 2026, M: time.January, D: 1}, clock.Date{Y: 2025, M: time.December, D: 31}, http.StatusOK},
+		{"before a year start first date", clock.Date{Y: 2026, M: time.January, D: 1}, clock.Date{Y: 2025, M: time.December, D: 30}, http.StatusUnprocessableEntity},
+		{"yesterday", clock.Date{Y: 2026, M: time.March, D: 1}, today.AddDays(-1), http.StatusOK},
+		{"today", clock.Date{Y: 2026, M: time.March, D: 1}, today, http.StatusUnprocessableEntity},
+		{"tomorrow", clock.Date{Y: 2026, M: time.March, D: 1}, today.AddDays(1), http.StatusUnprocessableEntity},
+		{"a first date in the far future", clock.Date{Y: 2126, M: time.March, D: 1}, clock.Date{Y: 2126, M: time.February, D: 28}, http.StatusUnprocessableEntity},
+	} {
+		a.mu.Lock()
+		rec.From = c.from
+		a.mu.Unlock()
+		status, body := callPartner(t, partner, a.getBalance, http.MethodGet, "/v1/accounts/"+accID+"/balance?as_of="+c.asOf.String(), "", map[string]string{"id": accID})
+		if status != c.want {
+			t.Errorf("%s: as_of %s with first date %s gave %d %v, want %d", c.name, c.asOf, c.from, status, body, c.want)
+		}
+	}
 }

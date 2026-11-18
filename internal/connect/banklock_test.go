@@ -271,6 +271,65 @@ func TestConcurrentCallersRefreshAnExpiredTokenOnce(t *testing.T) {
 	}
 }
 
+func TestTokenIsReusedOrRefreshedByItsExpiry(t *testing.T) {
+	now := clock.New().Real()
+	for _, c := range []struct {
+		name    string
+		expires time.Duration
+		usable  bool
+		due     bool
+	}{
+		{"expired an hour ago", -time.Hour, false, true},
+		{"inside the margin", refreshMargin - 10*time.Second, false, true},
+		{"just past the margin", refreshMargin + 10*time.Second, true, true},
+		{"inside the look-ahead", refreshAhead - 10*time.Second, true, true},
+		{"just past the look-ahead", refreshAhead + 10*time.Second, true, false},
+		{"far future", 100 * 365 * 24 * time.Hour, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			for _, use := range []string{"access", "refresh ahead"} {
+				var refreshes atomic.Int64
+				entered := make(chan struct{}, 4)
+				release := make(chan struct{})
+				close(release)
+				a, b := newRefreshApp(t, now, &refreshes, entered, release)
+				a.mu.Lock()
+				err := a.vaultPut("con_1", bankToken{Access: "old-at", Refresh: "old-rt", AccessExpires: now.Add(c.expires), RefreshExpires: now.Add(2 * time.Hour)})
+				a.mu.Unlock()
+				if err != nil {
+					t.Fatalf("store token: %v", err)
+				}
+				want := int64(0)
+				switch use {
+				case "access":
+					if !c.usable {
+						want = 1
+					}
+					tok, err := a.accessToken("con_1", b, false)
+					if err != nil {
+						t.Fatalf("access token: %v", err)
+					}
+					wantTok := "new-at-1"
+					if c.usable {
+						wantTok = "old-at"
+					}
+					if tok != wantTok {
+						t.Fatalf("access token %q, want %q", tok, wantTok)
+					}
+				case "refresh ahead":
+					if c.due {
+						want = 1
+					}
+					a.refreshConnectionToken("con_1")
+				}
+				if n := refreshes.Load(); n != want {
+					t.Fatalf("%s: %d refresh calls, want %d", use, n, want)
+				}
+			}
+		})
+	}
+}
+
 func TestConcurrentCallersNeverOverwriteNewerTokens(t *testing.T) {
 	const wait = 5 * time.Second
 	now := clock.New().Real()

@@ -25,13 +25,9 @@ type refresher struct {
 	failed   error
 }
 
-func failedRecently(failedAt, now time.Time) bool {
-	return now.Sub(failedAt) < refreshFailFast
-}
-
 func (r *refresher) do(ctx context.Context, clk *clock.Clock, fetch func(context.Context) error) error {
 	r.mu.Lock()
-	if r.failed != nil && failedRecently(r.failedAt, clk.Real()) {
+	if r.failed != nil && clk.Real().Sub(r.failedAt) < refreshFailFast {
 		err := r.failed
 		r.mu.Unlock()
 		return err

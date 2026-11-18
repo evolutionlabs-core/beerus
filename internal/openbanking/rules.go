@@ -14,16 +14,8 @@ func expiresAt(now time.Time, life time.Duration) time.Time {
 	return now.Add(life)
 }
 
-func tokenExpiries(now time.Time, accessLife time.Duration, refreshDays int) (access, refresh time.Time) {
-	return expiresAt(now, accessLife), now.AddDate(0, 0, refreshDays)
-}
-
 func assertionWindow(exp, now time.Time, life time.Duration) bool {
 	return !exp.Before(now) && !exp.After(expiresAt(now, life))
-}
-
-func withinGrace(now, rotatedAt time.Time, grace time.Duration) bool {
-	return now.Sub(rotatedAt) <= grace
 }
 
 func addMonths(t time.Time, n int) time.Time {
@@ -50,10 +42,6 @@ func consentStatus(c *Consent, now time.Time, dormantDays int) Status {
 		return Dormant
 	}
 	return Authorised
-}
-
-func historyFloor(today clock.Date, days int) clock.Date {
-	return today.AddDays(-days)
 }
 
 func asOfAllowed(d, today, floor clock.Date) bool {

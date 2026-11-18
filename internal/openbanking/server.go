@@ -438,7 +438,7 @@ func (s *Server) Resume(ctx context.Context) error {
 }
 
 func (s *Server) HistoryFloor() clock.Date {
-	return historyFloor(clock.DateOf(s.cfg.Clock.Now()), s.cfg.HistoryDays)
+	return clock.DateOf(s.cfg.Clock.Now()).AddDays(-s.cfg.HistoryDays)
 }
 
 func (s *Server) Request(ctx context.Context, requestURI, clientID string) (*Request, error) {
@@ -800,7 +800,7 @@ func (s *Server) refreshGrant(w http.ResponseWriter, r *http.Request, client *Cl
 	}
 	if !first {
 		cur, err := s.cfg.Store.Token(ctx, h)
-		if err != nil || !withinGrace(now, cur.RotatedAt, s.cfg.RefreshGrace) {
+		if err != nil || now.Sub(cur.RotatedAt) > s.cfg.RefreshGrace {
 			_ = s.cfg.Store.RevokeFamily(ctx, tok.Family)
 			fail(w, http.StatusBadRequest, "invalid_grant", "The refresh token was already used.")
 			return
@@ -814,7 +814,7 @@ func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clien
 	now := s.cfg.Clock.Real()
 	access, refresh := random("oba_", 24), random("obr_", 24)
 	terms := s.currentTerms()
-	accessUntil, refreshUntil := tokenExpiries(now, terms.AccessLife, terms.RefreshDays)
+	accessUntil, refreshUntil := expiresAt(now, terms.AccessLife), now.AddDate(0, 0, terms.RefreshDays)
 	for _, t := range []*Token{
 		{Hash: Hash(access), Kind: "access", ExpiresAt: accessUntil},
 		{Hash: Hash(refresh), Kind: "refresh", ExpiresAt: refreshUntil},

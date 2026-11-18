@@ -62,3 +62,26 @@ func TestCalendar(t *testing.T) {
 		t.Error("the zero calendar has no holidays")
 	}
 }
+
+func TestDateAddDays(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		from Date
+		n    int
+		want string
+	}{
+		{"the day before", Date{2026, 11, 14}, -1, "2026-11-13"},
+		{"month start", Date{2026, 3, 1}, -1, "2026-02-28"},
+		{"leap day", Date{2028, 3, 1}, -1, "2028-02-29"},
+		{"year start", Date{2027, 1, 1}, -1, "2026-12-31"},
+		{"90 days", Date{2026, 3, 1}, -90, "2025-12-01"},
+		{"366 days across a leap day", Date{2028, 3, 1}, -366, "2027-03-01"},
+		{"no days", Date{2026, 3, 1}, 0, "2026-03-01"},
+		{"forward over year end", Date{2026, 12, 31}, 1, "2027-01-01"},
+		{"far future", Date{2126, 3, 1}, -1, "2126-02-28"},
+	} {
+		if got := c.from.AddDays(c.n).String(); got != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
+	}
+}
