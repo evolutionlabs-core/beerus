@@ -24,7 +24,7 @@ func TestNairaParseAndFormat(t *testing.T) {
 		{"12.345", 0, `amount "12.345" must look like 25000 or 25000.50 (naira)`},
 		{"abc", 0, `amount "abc" must look like 25000 or 25000.50 (naira)`},
 		{"", 0, `amount "" must look like 25000 or 25000.50 (naira)`},
-		{"99999999999999999999", 0, `amount "99999999999999999999" must be a positive naira amount`},
+		{"99999999999999999999", 0, `amount "99999999999999999999" is too large; the largest amount is ₦92,233,720,368,547,758.07`},
 	}
 	for _, c := range parsed {
 		got, err := money.ParseNaira(c.in)

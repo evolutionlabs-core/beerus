@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/evolutionlabs-core/beerus/internal/control"
 	"github.com/evolutionlabs-core/beerus/internal/money"
+	"math"
 	"net/http"
 	"strings"
 
@@ -61,6 +62,10 @@ func NewRoute(req control.TransferRequest, from, to *config.Bank, fromPhase, toP
 	return Route{FromBank: from.ID, ToBank: to.ID, FromName: from.Name, ToName: to.Name, FromCode: from.NIPCode, ToCode: to.NIPCode}, nil
 }
 
+func overflowMessage() string {
+	return fmt.Sprintf("this would take the balance past the largest amount an account can hold, %s. Use a smaller amount", money.Naira(math.MaxInt64))
+}
+
 func AccountError(side, nuban string, err error) error {
 	if errors.Is(err, ledger.ErrUnknownAccount) {
 		return control.Refused(http.StatusUnprocessableEntity, nip.InvalidAccount, "invalid_account", fmt.Errorf("the %s account %s does not exist", side, nuban))
@@ -78,6 +83,8 @@ func PostingError(nuban string, err error) error {
 		return control.Refused(http.StatusUnprocessableEntity, nip.Restricted, "account_restricted", fmt.Errorf("account %s cannot be debited: %w", nuban, err))
 	case errors.Is(err, ledger.ErrDailyLimit):
 		return control.Refused(http.StatusUnprocessableEntity, nip.OverCap, "daily_limit", fmt.Errorf("account %s has reached its daily limit", nuban))
+	case errors.Is(err, ledger.ErrOverflow):
+		return control.Refused(http.StatusUnprocessableEntity, nip.SystemError, "invalid_amount", errors.New(overflowMessage()))
 	case errors.Is(err, ledger.ErrIdempotency):
 		return control.Refused(http.StatusUnprocessableEntity, nip.SystemError, "idempotency_key_reused", errors.New("that idempotency key was used for a different transfer"))
 	}

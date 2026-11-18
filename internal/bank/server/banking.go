@@ -317,6 +317,8 @@ func WriteBankingError(w http.ResponseWriter, r *http.Request, log *slog.Logger,
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "nubans_used", clean(err))
 	case errors.Is(err, ledger.ErrIdempotency):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "idempotency_key_reused", "That Idempotency-Key was used for a different request.")
+	case errors.Is(err, ledger.ErrOverflow):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_amount", web.Sentence(overflowMessage()))
 	case errors.Is(err, ledger.ErrInvalid):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", clean(err))
 	case errors.As(err, &ue):

@@ -1,6 +1,7 @@
 package money
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -16,6 +17,9 @@ func ParseNaira(s string) (int64, error) {
 		frac += "0"
 	}
 	n, err := strconv.ParseInt(whole+frac, 10, 64)
+	if errors.Is(err, strconv.ErrRange) {
+		return 0, fmt.Errorf("amount %q is too large; the largest amount is %s", s, Naira(math.MaxInt64))
+	}
 	if err != nil || n <= 0 {
 		return 0, fmt.Errorf("amount %q must be a positive naira amount", s)
 	}
