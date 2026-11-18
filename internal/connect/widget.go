@@ -318,14 +318,14 @@ func (a *App) customerLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bankID := r.PostForm.Get("bank")
-	login := func() (bank.Customer, error) {
-		l := a.obLedger(bankID)
-		if l == nil {
-			return bank.Customer{}, bank.ErrBadLogin
+	login := func() (string, error) {
+		books := a.booksOf(bankID)
+		if books == nil {
+			return "", bank.ErrBadLogin
 		}
-		return l.Bank().Authenticate(r.Context(), r.PostForm.Get("username"), r.PostForm.Get("password"))
+		return books.login(r.Context(), r.PostForm.Get("username"), r.PostForm.Get("password"))
 	}
-	cust, err := login()
+	customer, err := login()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err != nil {
@@ -341,7 +341,7 @@ func (a *App) customerLogin(w http.ResponseWriter, r *http.Request) {
 		a.message(w, http.StatusInternalServerError, "Something went wrong", "Try again.")
 		return
 	}
-	ws := &WidgetSession{ID: web.HashSecret(raw), LinkSessionID: customerKey(bankID, cust.ID), CSRF: csrf, ExpiresReal: a.clock.Real().Add(30 * time.Minute)}
+	ws := &WidgetSession{ID: web.HashSecret(raw), LinkSessionID: customerKey(bankID, customer), CSRF: csrf, ExpiresReal: a.clock.Real().Add(30 * time.Minute)}
 	a.st.WidgetSessions[ws.ID] = ws
 	a.dirty()
 	a.setCookie(w, customerCookie, raw, 1800)

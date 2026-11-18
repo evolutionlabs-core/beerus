@@ -3,7 +3,6 @@ package connect
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -92,7 +91,6 @@ func (a *App) CloseImpact(ctx context.Context, id string) (CloseImpact, error) {
 		}
 	}
 	a.mu.Lock()
-	ls := a.ledgerFor(id)
 	connected := map[string]bool{}
 	partners := map[string]bool{}
 	for _, c := range a.st.Connections {
@@ -108,30 +106,28 @@ func (a *App) CloseImpact(ctx context.Context, id string) (CloseImpact, error) {
 		}
 	}
 	a.mu.Unlock()
-	if ls == nil {
+	books := a.booksOf(id)
+	if books == nil && st.Phase == PhaseClosed {
+		return sortedImpact(out, partners), nil
+	}
+	if books == nil {
 		return CloseImpact{}, fmt.Errorf("the books of %s are not open", b.Name)
 	}
-	holders, err := allCustomers(ctx, ls)
+	holders, err := books.customers(ctx)
 	if err != nil {
 		return CloseImpact{}, err
 	}
-	now := a.clock.Now()
-	bk := ls.Bank()
+	owned, err := accountsByOwner(ctx, books)
+	if err != nil {
+		return CloseImpact{}, err
+	}
 	for _, cust := range holders {
-		accs, err := bk.CustomerAccounts(ctx, cust.ID)
-		if err != nil {
-			return CloseImpact{}, err
-		}
 		cu := ImpactCustomer{ID: cust.ID, Name: cust.Name}
-		for _, acc := range accs {
-			bal, err := bk.BalanceAt(ctx, acc.NUBAN, now)
-			if err != nil {
-				return CloseImpact{}, err
-			}
-			out.Accounts = append(out.Accounts, ImpactAccount{NUBAN: acc.NUBAN, Name: acc.Name, Type: acc.Product, Owner: cust.ID, Balance: bal, Connected: connected[acctKey(id, acc.NUBAN)]})
+		for _, acc := range owned[cust.ID] {
+			out.Accounts = append(out.Accounts, ImpactAccount{NUBAN: acc.NUBAN, Name: acc.Name, Type: acc.Type, Owner: cust.ID, Balance: acc.Balance, Connected: connected[acctKey(id, acc.NUBAN)]})
 			cu.Accounts++
-			if bal > 0 {
-				cu.Deposits += bal
+			if acc.Balance > 0 {
+				cu.Deposits += acc.Balance
 			}
 		}
 		cu.Insured = min(cu.Deposits, out.InsuredLimit)
@@ -141,6 +137,10 @@ func (a *App) CloseImpact(ctx context.Context, id string) (CloseImpact, error) {
 		out.Uninsured += cu.Uninsured
 		out.Customers = append(out.Customers, cu)
 	}
+	return sortedImpact(out, partners), nil
+}
+
+func sortedImpact(out CloseImpact, partners map[string]bool) CloseImpact {
 	for p := range partners {
 		out.Partners = append(out.Partners, p)
 	}
@@ -148,14 +148,32 @@ func (a *App) CloseImpact(ctx context.Context, id string) (CloseImpact, error) {
 	sort.Slice(out.Accounts, func(i, j int) bool { return out.Accounts[i].NUBAN < out.Accounts[j].NUBAN })
 	sort.Slice(out.Connections, func(i, j int) bool { return out.Connections[i].ID < out.Connections[j].ID })
 	sort.Strings(out.Partners)
-	return out, nil
+	return out
 }
 
-func allCustomers(ctx context.Context, ls *ledgerSource) ([]bank.Customer, error) {
-	out := []bank.Customer{}
+func accountsByOwner(ctx context.Context, books bankBooks) (map[string][]server.AccountJSON, error) {
+	out := map[string][]server.AccountJSON{}
 	cursor := ""
 	for {
-		page, next, err := ls.Bank().Customers(ctx, bank.MaxPage, cursor)
+		page, next, err := books.accounts(ctx, "", bank.MaxPage, cursor)
+		if err != nil {
+			return nil, err
+		}
+		for _, acc := range page {
+			out[acc.Customer] = append(out[acc.Customer], acc)
+		}
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
+}
+
+func accountsOf(ctx context.Context, books bankBooks, customer string) ([]server.AccountJSON, error) {
+	out := []server.AccountJSON{}
+	cursor := ""
+	for {
+		page, next, err := books.accounts(ctx, customer, bank.MaxPage, cursor)
 		if err != nil {
 			return nil, err
 		}
@@ -411,7 +429,6 @@ func (a *App) decideMoney(ctx context.Context, r setup.Resource) (*setup.Conditi
 	b.State = setup.StateClosed
 	a.mu.Unlock()
 	a.lifeMu.Unlock()
-	a.detach(b, config.StepSite)
 	if _, err := a.ensureBankDir(id, false); err != nil {
 		return nil, err
 	}
@@ -493,15 +510,11 @@ func (a *App) targetChange(id string) (suspended, changing bool, err error) {
 }
 
 func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice map[string]string, to string) (CloseResult, error) {
-	now := a.clock.Now()
-	a.mu.Lock()
-	from, dest := a.ledgerFor(id), a.ledgerFor(to)
-	a.mu.Unlock()
+	from, dest := a.booksOf(id), a.booksOf(to)
 	if from == nil {
 		return CloseResult{}, fmt.Errorf("the books of %s are not open", id)
 	}
-	bk := from.Bank()
-	payouts, err := bk.ClosurePayouts(ctx)
+	payouts, err := from.payouts(ctx)
 	if err != nil {
 		return CloseResult{}, err
 	}
@@ -509,12 +522,23 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 	for _, acc := range imp.Accounts {
 		paid[acc.Owner] += payouts[acc.NUBAN]
 	}
-	for _, acc := range imp.Accounts {
-		c := choice[acc.Owner]
-		bal, err := bk.BalanceAt(ctx, acc.NUBAN, now)
+	holders := map[string]bank.Customer{}
+	if to != "" {
+		all, err := from.customers(ctx)
 		if err != nil {
 			return CloseResult{}, err
 		}
+		for _, c := range all {
+			holders[c.ID] = c
+		}
+	}
+	for _, acc := range imp.Accounts {
+		c := choice[acc.Owner]
+		live, err := from.account(ctx, acc.NUBAN)
+		if err != nil {
+			return CloseResult{}, err
+		}
+		bal := live.Balance
 		if c == setup.MoneyLeave || bal <= 0 {
 			continue
 		}
@@ -524,7 +548,7 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 			if amount <= 0 {
 				continue
 			}
-			if _, err := bk.ClosurePayout(ctx, key, acc.NUBAN, amount, now); err != nil {
+			if err := from.payout(ctx, key, acc.NUBAN, amount); err != nil {
 				return CloseResult{}, fmt.Errorf("pay out %s from %s: %w", bank.Naira(amount), acc.NUBAN, err)
 			}
 			paid[acc.Owner] += amount
@@ -533,7 +557,11 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		if dest == nil {
 			return CloseResult{}, fmt.Errorf("the books of %s are not open", to)
 		}
-		nuban, err := a.closureAccount(ctx, from, dest, acc, now)
+		holder, err := holderOf(holders, acc.Owner)
+		if err != nil {
+			return CloseResult{}, err
+		}
+		nuban, err := a.closureAccount(ctx, id, dest, a.bankByID(to), holder, acc)
 		if err != nil {
 			return CloseResult{}, err
 		}
@@ -553,17 +581,25 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		if choice[acc.Owner] != setup.MoneyPayout {
 			continue
 		}
-		bal, err := bk.BalanceAt(ctx, acc.NUBAN, now)
+		live, err := from.account(ctx, acc.NUBAN)
 		if err != nil {
 			return CloseResult{}, err
 		}
-		if bal > 0 {
-			if err := bk.FreezeAccount(ctx, acc.NUBAN); err != nil {
+		if live.Balance > 0 {
+			if err := from.freeze(ctx, "close:"+id+":"+acc.NUBAN+":freeze", acc.NUBAN); err != nil {
 				return CloseResult{}, err
 			}
 		}
 	}
 	return a.closeOutcome(ctx, id, imp, choice, from)
+}
+
+func holderOf(holders map[string]bank.Customer, owner string) (bank.Customer, error) {
+	c, ok := holders[owner]
+	if !ok {
+		return bank.Customer{}, fmt.Errorf("read customer %s: %w", owner, bank.ErrUnknownCustomer)
+	}
+	return c, nil
 }
 
 func (a *App) closureKey(ctx context.Context, id, nuban, key string) (string, error) {
@@ -583,7 +619,7 @@ func (a *App) closureKey(ctx context.Context, id, nuban, key string) (string, er
 	return fmt.Sprintf("%s:%d", key, failed), nil
 }
 
-func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choice map[string]string, from *ledgerSource) (CloseResult, error) {
+func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choice map[string]string, from bankBooks) (CloseResult, error) {
 	all, err := a.nibssCtl.closureSessions(ctx, id)
 	if err != nil {
 		return CloseResult{}, fmt.Errorf("read back closure moves: %w", err)
@@ -591,8 +627,7 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 	sent := slices.DeleteFunc(all, func(x nibss.ClosureSession) bool {
 		return x.Status != nibss.SessionOK && x.Status != nibss.SessionPending
 	})
-	bk := from.Bank()
-	payouts, err := bk.ClosurePayouts(ctx)
+	payouts, err := from.payouts(ctx)
 	if err != nil {
 		return CloseResult{}, err
 	}
@@ -639,12 +674,12 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 		}
 	}
 	held := map[string]int64{}
-	readAt := a.clock.Now()
 	for _, acc := range imp.Accounts {
-		bal, err := bk.BalanceAt(ctx, acc.NUBAN, readAt)
+		live, err := from.account(ctx, acc.NUBAN)
 		if err != nil {
 			return CloseResult{}, fmt.Errorf("read back the balance of %s: %w", acc.NUBAN, err)
 		}
+		bal := live.Balance
 		if bal <= 0 {
 			continue
 		}
@@ -654,12 +689,8 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 			res.Lines = append(res.Lines, line(acc.NUBAN, setup.OutcomeLeft, bal))
 			res.Left += bal
 		case setup.MoneyPayout:
-			status, err := bk.AccountStatus(ctx, acc.NUBAN)
-			if err != nil {
-				return CloseResult{}, err
-			}
-			if status != "frozen" {
-				return CloseResult{}, fmt.Errorf("%s keeps %s as an NDIC claim but is %s, not frozen", acc.NUBAN, bank.Naira(bal), status)
+			if live.Status != "frozen" {
+				return CloseResult{}, fmt.Errorf("%s keeps %s as an NDIC claim but is %s, not frozen", acc.NUBAN, bank.Naira(bal), live.Status)
 			}
 			res.Lines = append(res.Lines, line(acc.NUBAN, setup.OutcomeClaim, bal))
 			res.Claims += bal
@@ -677,31 +708,33 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 	return res, nil
 }
 
-func (a *App) closureAccount(ctx context.Context, from, dest *ledgerSource, acc ImpactAccount, at time.Time) (string, error) {
-	cust, err := from.Bank().Customer(ctx, acc.Owner)
+func (a *App) closureAccount(ctx context.Context, fromID string, dest bankBooks, to *config.Bank, cust bank.Customer, acc ImpactAccount) (string, error) {
+	found, err := dest.customersByBVN(ctx, cust.BVN)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("find %s at %s: %w", cust.Name, to.Name, err)
 	}
-	db := dest.Bank()
-	holder, err := db.CustomerByBVN(ctx, cust.BVN)
-	if errors.Is(err, bank.ErrUnknownCustomer) {
-		holder, err = db.CreateCustomer(ctx, "close:"+from.Inst.ID+":"+cust.ID, cust.Name, cust.Phone, cust.DOB, cust.BVN, "", "", at)
+	holder := ""
+	if i := slices.IndexFunc(found, func(c bank.Customer) bool { return c.Status == bank.CustomerActive }); i >= 0 {
+		holder = found[i].ID
+	} else {
+		created, err := dest.createCustomer(ctx, "close:"+fromID+":"+cust.ID, cust)
+		if err != nil {
+			return "", fmt.Errorf("find %s at %s: %w", cust.Name, to.Name, err)
+		}
+		holder = created.ID
 	}
-	if err != nil {
-		return "", fmt.Errorf("find %s at %s: %w", cust.Name, dest.Inst.Name, err)
-	}
-	have, err := db.CustomerAccounts(ctx, holder.ID)
+	have, err := accountsOf(ctx, dest, holder)
 	if err != nil {
 		return "", err
 	}
 	for _, x := range have {
-		if x.Product == acc.Type && x.Status != "closed" {
+		if x.Type == acc.Type && x.Status != "closed" {
 			return x.NUBAN, nil
 		}
 	}
-	opened, err := db.OpenAccount(ctx, "close:"+from.Inst.ID+":"+acc.NUBAN, holder.ID, acc.Type, at)
+	opened, err := dest.openAccount(ctx, "close:"+fromID+":"+acc.NUBAN, holder, acc.Type)
 	if err != nil {
-		return "", fmt.Errorf("open an account for %s at %s: %w", cust.Name, dest.Inst.Name, err)
+		return "", fmt.Errorf("open an account for %s at %s: %w", cust.Name, to.Name, err)
 	}
 	return opened.NUBAN, nil
 }

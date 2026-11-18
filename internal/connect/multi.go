@@ -11,8 +11,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 )
 
-const RoleCore = "core"
-
 const probeTimeout = 5 * time.Second
 
 func (a *App) bankCopy(id string) (config.Bank, bool) {

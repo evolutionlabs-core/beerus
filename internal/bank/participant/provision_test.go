@@ -297,3 +297,103 @@ func TestRetryDue(t *testing.T) {
 		t.Error("a bank that never failed is not due")
 	}
 }
+
+func TestBankRebuildsADroppedDatabase(t *testing.T) {
+	s := newStage(t)
+	p := s.start(t, s.dbURL)
+	ctx := t.Context()
+	p.Ensure(ctx)
+	if p.booksLost(ctx) {
+		t.Fatal("a healthy database was reported lost")
+	}
+	if err := store.DropDatabases(ctx, s.dbURL, []string{p.cfg.Banks[0].Database}); err != nil {
+		t.Fatal(err)
+	}
+	if !p.booksLost(ctx) {
+		t.Fatal("a dropped database was not reported lost")
+	}
+	p.forgetBooks()
+	st := s.status(t, p)
+	if st.Phase != config.PhaseActive || st.Steps[2].Done || st.Steps[3].Done || st.Steps[4].Done || st.Steps[2].CompletedAt != nil {
+		t.Fatalf("after the loss: phase %s, steps %+v", st.Phase, rows(st))
+	}
+	p.Ensure(ctx)
+	st = s.status(t, p)
+	if st.Phase != config.PhaseActive || !st.Steps[2].Done || !st.Steps[3].Done || !st.Steps[4].Done || st.Steps[2].CompletedAt == nil || p.booksLost(ctx) {
+		t.Fatalf("after the rebuild: phase %s, steps %+v", st.Phase, rows(st))
+	}
+}
+
+func TestLaterStepFailureRedoesTheDatabaseStep(t *testing.T) {
+	s := newStage(t)
+	p := s.start(t, s.dbURL)
+	ctx := t.Context()
+	p.Ensure(ctx)
+	p.forgetBooks()
+	p.steps[2].Done = true
+	if err := store.DropDatabases(ctx, s.dbURL, []string{p.cfg.Banks[0].Database}); err != nil {
+		t.Fatal(err)
+	}
+	p.ensureDue(ctx)
+	st := s.status(t, p)
+	if st.Steps[2].Done || st.Steps[3].Done || st.Steps[3].Error == "" {
+		t.Fatalf("after the failed step: steps %+v", rows(st))
+	}
+	p.retryAt = p.clock.Real()
+	p.ensureDue(ctx)
+	st = s.status(t, p)
+	if !st.Steps[2].Done || !st.Steps[3].Done || !st.Steps[4].Done || p.booksLost(ctx) {
+		t.Fatalf("after the retry: steps %+v", rows(st))
+	}
+}
+
+func (s *stage) setPhase(t *testing.T, p *Participant, phase string) {
+	t.Helper()
+	body := `{"phase":"` + phase + `","generation":5,"world_id":"wld_1"}`
+	r := httptest.NewRequest(http.MethodPut, "/v1/phase", strings.NewReader(body))
+	r.RemoteAddr = "127.0.0.1:1"
+	r.Header.Set("Authorization", "Bearer "+s.token)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	p.Server().API().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("set phase answered %d %s", w.Code, w.Body)
+	}
+}
+
+func TestClosedBankDoesNotRebuildItsDatabase(t *testing.T) {
+	s := newStage(t)
+	p := s.start(t, s.dbURL)
+	ctx := t.Context()
+	p.Ensure(ctx)
+	name := p.cfg.Banks[0].Database
+	if err := store.DropDatabases(ctx, s.dbURL, []string{name}); err != nil {
+		t.Fatal(err)
+	}
+	p.forgetBooks()
+	s.setPhase(t, p, config.PhaseClosed)
+	p.Ensure(ctx)
+	st := s.status(t, p)
+	if st.Steps[2].Done || st.Steps[3].Done || st.Steps[4].Done {
+		t.Fatalf("a closed bank rebuilt: %+v", rows(st))
+	}
+	if got, err := store.List(ctx, s.dbURL, name); err != nil || len(got) != 0 {
+		t.Fatalf("databases of a closed bank: %v, %v", got, err)
+	}
+	if msg := st.Steps[2].Error; msg != "the bank is closed, so its database is left alone" {
+		t.Fatalf("step error %q", msg)
+	}
+}
+
+func TestBankRefusesRequestsWhileItsBooksAreRebuilt(t *testing.T) {
+	s := newStage(t)
+	p := s.start(t, s.dbURL)
+	p.Ensure(t.Context())
+	if _, err := p.Server().Books(); err != nil {
+		t.Fatal(err)
+	}
+	p.forgetBooks()
+	if _, err := p.Server().Books(); err == nil {
+		t.Fatal("the closed books were still handed out")
+	}
+}

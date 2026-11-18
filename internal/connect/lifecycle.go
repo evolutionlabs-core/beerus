@@ -9,10 +9,11 @@ import (
 	"os"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -64,11 +65,6 @@ type BankStatus struct {
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 }
 
-type siteServer struct {
-	srv *http.Server
-	api *http.Server
-}
-
 func (a *App) BankStatuses() []BankStatus {
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
@@ -99,10 +95,6 @@ func (a *App) bankPhaseReason(id string) (string, string) {
 		return PhaseActive, ""
 	}
 	return PhaseProvisioning, ""
-}
-
-func (a *App) bankReady(id string) bool {
-	return a.bankPhase(id) != PhaseProvisioning
 }
 
 func (a *App) BankWarnings() []string {
@@ -142,18 +134,19 @@ func portFree(p int) bool {
 }
 
 func (a *App) postgresRoom(ctx context.Context) error {
-	a.mu.Lock()
-	if len(a.ledgers) == 0 {
-		a.mu.Unlock()
+	if len(a.bankList()) == 0 {
 		return nil
 	}
-	pool := a.ledgers[0].Pool()
-	a.mu.Unlock()
+	conn, err := pgx.Connect(ctx, a.cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("connect to Postgres: %w", err)
+	}
+	defer conn.Close(context.WithoutCancel(ctx))
 	var max, used int
-	if err := pool.QueryRow(ctx, `SELECT setting::int FROM pg_settings WHERE name = 'max_connections'`).Scan(&max); err != nil {
+	if err := conn.QueryRow(ctx, `SELECT setting::int FROM pg_settings WHERE name = 'max_connections'`).Scan(&max); err != nil {
 		return err
 	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity`).Scan(&used); err != nil {
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity`).Scan(&used); err != nil {
 		return err
 	}
 	if used+connectionsPerBank+5 > max {
@@ -272,61 +265,12 @@ func (a *App) SetBankSuspended(ctx context.Context, id string, suspended bool) e
 	return nil
 }
 
-func (a *App) startBankSite(b *config.Bank) error {
-	a.lifeMu.Lock()
-	serving := a.serving
-	_, running := a.sites[b.ID]
-	a.lifeMu.Unlock()
-	if !serving || running || a.role == RoleCore {
-		return nil
-	}
-	a.forgetOpenBanking(b.ID)
-	h := a.bankHandler(b.ID)
-	if h == nil {
-		return fmt.Errorf("no ledger for %s", b.ID)
-	}
-	ls, err := a.link.Listen(b.Port)
-	if err != nil {
-		return err
-	}
-	api, err := a.startBankAPI(b)
-	if err != nil {
-		for _, l := range ls {
-			l.Close()
-		}
-		return err
-	}
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
-	for _, l := range ls {
-		go func(l net.Listener) { _ = srv.Serve(l) }(l)
-	}
-	a.lifeMu.Lock()
-	a.sites[b.ID] = &siteServer{srv: srv, api: api}
-	a.lifeMu.Unlock()
-	return nil
-}
-
-func (a *App) stopBankSites(ctx context.Context) {
-	a.lifeMu.Lock()
-	sites := a.sites
-	a.sites = map[string]*siteServer{}
-	a.serving = false
-	a.lifeMu.Unlock()
-	ids := make([]string, 0, len(sites))
-	for id := range sites {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		_ = sites[id].srv.Shutdown(ctx)
-		if sites[id].api != nil {
-			_ = sites[id].api.Shutdown(ctx)
-		}
-	}
+func (a *App) noBanks() bool {
+	return len(a.bankList()) == 0
 }
 
 func (a *App) noSuchBank(w http.ResponseWriter, r *http.Request) {
-	if len(a.bankList()) == 0 {
+	if a.noBanks() {
 		web.WriteError(w, r, http.StatusNotFound, "not_found", server.NoBanksMessage)
 		return
 	}
@@ -337,11 +281,18 @@ func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
 	if a.writeApplyError(w, r, err) {
 		return
 	}
+	var down *bankDownError
+	var notReady *bankNotReadyError
 	switch {
+	case errors.As(err, &notReady):
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", notReady.Error())
 	case errors.Is(err, server.ErrInvalid):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 	case errors.Is(err, errNotFound):
 		a.noSuchBank(w, r)
+	case errors.As(err, &down):
+		a.log.Warn("bank not reachable", "bank", down.ID, "err", err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", fmt.Sprintf(bankAway, down.Name))
 	default:
 		a.log.Error("bank lifecycle", "err", err)
 		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", err.Error())
@@ -405,11 +356,4 @@ func CheckPorts(c *config.Config) error {
 		return fmt.Errorf("port %d is already in use by another program; free it or change it in local.yaml", p)
 	}
 	return nil
-}
-
-func (a *App) siteProbeURL(b *config.Bank) string {
-	if a.role == RoleCore {
-		return b.URL() + "/health"
-	}
-	return fmt.Sprintf("http://127.0.0.1:%d/login", b.Port)
 }

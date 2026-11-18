@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
@@ -16,6 +17,8 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
+
+const snapshotInfix = "_snap_"
 
 type PurgeImpact struct {
 	Bank        BankStatus `json:"bank"`
@@ -58,6 +61,8 @@ func (a *App) PurgeImpact(ctx context.Context, id string) (PurgeImpact, error) {
 	return out, nil
 }
 
+const stepRetired = "retired"
+
 func (a *App) PurgeBank(ctx context.Context, id string, settleNow bool) (setup.Resource, error) {
 	err := a.applyEdit(ctx, func(sp *setup.Spec) error {
 		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
@@ -87,23 +92,15 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 		return a.blocked(setup.ReasonSettlementPending, "%s", waiting), nil
 	}
 	b := a.bankByID(id)
-	a.dropBankState(id)
-	var ls *ledgerSource
 	if b != nil {
-		a.detach(b, config.StepSite)
-		a.mu.Lock()
-		ls = a.ledgerFor(id)
-		a.mu.Unlock()
-		a.detach(b, config.StepDatabase)
+		if err := a.retireBank(ctx, b); err != nil {
+			return nil, fmt.Errorf("purge %s: %w", id, err)
+		}
 	}
 	var errs []error
-	switch {
-	case ls != nil:
-		errs = append(errs, ls.Drop(ctx))
-	case r.Allocated.Database != "":
-		errs = append(errs, store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{r.Allocated.Database}))
+	if r.Allocated.Database != "" {
+		errs = append(errs, a.dropBankDatabase(ctx, r.Allocated.Database))
 	}
-	a.forgetOpenBanking(id)
 	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.memberGone(ctx, id))
 	a.dropBankRows(id)
 	if err := errors.Join(errs...); err != nil {
@@ -246,4 +243,80 @@ func (a *App) ctlPurgeBank(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	web.WriteJSON(w, http.StatusAccepted, res)
+}
+
+func (a *App) dropBankDatabase(ctx context.Context, name string) error {
+	all, err := store.List(ctx, a.cfg.DatabaseURL, name)
+	if err != nil {
+		return fmt.Errorf("list the databases of %s: %w", name, err)
+	}
+	owned := slices.DeleteFunc(all, func(n string) bool { return n != name && !strings.HasPrefix(n, name+snapshotInfix) })
+	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, owned); err != nil {
+		return fmt.Errorf("drop database %s: %w", name, err)
+	}
+	return a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
+}
+
+func (a *App) bankRetired(id string) bool {
+	st, err := a.ctl.status()
+	if err != nil {
+		a.log.Error("read control.json", "err", err)
+		return false
+	}
+	r := findResource(&st, setup.KindBank, id)
+	return r != nil && r.Steps[stepRetired] == stepDone
+}
+
+func (a *App) retireBank(ctx context.Context, b *config.Bank) error {
+	a.recordBank(b.ID, func(r *setup.Resource) bool {
+		if r.Steps[stepRetired] == stepDone {
+			return false
+		}
+		if r.Steps == nil {
+			r.Steps = map[string]string{}
+		}
+		r.Steps[stepRetired] = stepDone
+		return true
+	})
+	if !a.bankRetired(b.ID) {
+		return fmt.Errorf("retire %s: the retirement was not saved", b.ID)
+	}
+	err := a.closeAtBank(ctx, b)
+	if err != nil && unreachable(err) && !a.mustRetireLive(b.ID) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("retire %s: %w", b.ID, err)
+	}
+	return nil
+}
+
+func (a *App) mustRetireLive(id string) bool {
+	switch a.bankPhase(id) {
+	case PhaseActive, PhaseSuspended, PhaseClosing, PhaseTerminating:
+		return true
+	}
+	return false
+}
+
+func (a *App) closeAtBank(ctx context.Context, b *config.Bank) error {
+	w, err := a.wishFor(b.ID)
+	if err != nil {
+		return err
+	}
+	if err := a.syncBank(ctx, b.ID, b.URL(), wishGeneration(a.WorldID(), w), w); err != nil {
+		return err
+	}
+	admin, err := a.adminOf(b.ID)
+	if err != nil {
+		return err
+	}
+	state, err := admin.state(ctx)
+	if err != nil {
+		return err
+	}
+	if state.Phase != PhaseClosed {
+		return fmt.Errorf("%s has not closed yet", b.ID)
+	}
+	return nil
 }

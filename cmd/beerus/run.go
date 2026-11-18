@@ -73,7 +73,7 @@ func cmdRun(args []string) error {
 		if err != nil {
 			return err
 		}
-		app, err := connect.New(ctx, c, connect.Options{Logger: log, Role: connect.RoleCore, CoreURL: *core, Bind: *bind})
+		app, err := connect.New(c, connect.Options{Logger: log, CoreURL: *core, Bind: *bind})
 		if err != nil {
 			return err
 		}

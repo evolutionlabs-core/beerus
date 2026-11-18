@@ -453,10 +453,7 @@ func (a *App) partnerConnections(id string) int {
 
 func (a *App) bankImpact(ctx context.Context, act *setup.Action) error {
 	im := act.Impact
-	a.mu.Lock()
-	open := a.ledgerFor(act.ID) != nil
-	a.mu.Unlock()
-	if open {
+	if a.booksOf(act.ID) != nil {
 		ci, err := a.CloseImpact(ctx, act.ID)
 		if err != nil && !errors.Is(err, errNotFound) {
 			return err
@@ -941,7 +938,7 @@ func (a *App) applyFailed(w http.ResponseWriter, r *http.Request, err error) {
 func (a *App) ctlResources(w http.ResponseWriter, r *http.Request) {
 	limit, cursor, err := server.ListParams(r)
 	if err != nil {
-		a.banking.Error(w, r, err)
+		a.bankingError(w, r, err)
 		return
 	}
 	kind := r.URL.Query().Get("kind")

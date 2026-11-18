@@ -33,45 +33,16 @@ func (e *badAnswerError) Unwrap() error {
 	return e.err
 }
 
-type statusWriter struct {
-	http.ResponseWriter
-	status int
+func (a *App) atBank(w http.ResponseWriter, r *http.Request) {
+	a.forwardToBank(w, r, false)
 }
 
-func (w *statusWriter) WriteHeader(code int) {
-	if w.status == 0 {
-		w.status = code
-	}
-	w.ResponseWriter.WriteHeader(code)
+func (a *App) atBankSyncing(w http.ResponseWriter, r *http.Request) {
+	a.forwardToBank(w, r, true)
 }
 
-func (w *statusWriter) Write(b []byte) (int, error) {
-	if w.status == 0 {
-		w.status = http.StatusOK
-	}
-	return w.ResponseWriter.Write(b)
-}
-
-func (a *App) atBank(local http.HandlerFunc) http.HandlerFunc {
-	return a.bankRoute(local, false)
-}
-
-func (a *App) atBankSyncing(local http.HandlerFunc) http.HandlerFunc {
-	return a.bankRoute(local, true)
-}
-
-func (a *App) bankRoute(local http.HandlerFunc, sync bool) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if a.role != RoleCore {
-			sw := &statusWriter{ResponseWriter: w}
-			local(sw, r)
-			if sync && sw.status != 0 && sw.status < http.StatusMultipleChoices {
-				a.SyncAll(r.Context())
-			}
-			return
-		}
-		a.forwardToBank(w, r, sync)
-	}
+func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
+	server.WriteBankingError(w, r, a.log, a.noBanks, err)
 }
 
 func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
@@ -93,7 +64,7 @@ func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 	write := r.Method != http.MethodGet
 	if write {
 		if phase != PhaseActive {
-			a.banking.Error(w, r, server.NotActiveError{Name: b.Name, Phase: phase})
+			a.bankingError(w, r, server.NotActiveError{Name: b.Name, Phase: phase})
 			return
 		}
 	}
@@ -118,7 +89,7 @@ func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 			return
 		}
 		a.log.Warn("bank not reachable", "bank", id, "err", err)
-		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", fmt.Sprintf("%s is not running or cannot be reached. Run beerus get banks to see its state, then try again.", b.Name))
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", fmt.Sprintf(bankAway, b.Name))
 		return
 	}
 	for _, name := range []string{"Content-Type", "Idempotent-Replayed"} {

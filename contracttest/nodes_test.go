@@ -171,7 +171,6 @@ type nodes struct {
 
 func startNodes(cfg *config.Config, opts connect.Options) (*nodes, error) {
 	ns := &nodes{}
-	opts.Role = connect.RoleCore
 	opts.Bind = nodeBind
 	if err := cfg.EnsureCertificates(time.Now()); err != nil {
 		return ns, err
@@ -187,7 +186,7 @@ func startNodes(cfg *config.Config, opts connect.Options) (*nodes, error) {
 	if err := ns.order[0].await(func(ctx context.Context) bool { return cbnAnswers(ctx, cfg.Dir) }); err != nil {
 		return ns, errors.Join(err, ns.halt())
 	}
-	if ns.app, err = connect.New(context.Background(), cfg, opts); err != nil {
+	if ns.app, err = connect.New(cfg, opts); err != nil {
 		return ns, errors.Join(err, ns.halt())
 	}
 	core := spawn("core", ns.app.Serve)

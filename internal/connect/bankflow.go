@@ -56,15 +56,15 @@ func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSess
 }
 
 func (a *App) accountOwner(ctx context.Context, bankID, nuban string) (string, error) {
-	l := a.obLedger(bankID)
-	if l == nil {
+	books := a.booksOf(bankID)
+	if books == nil {
 		return "", fmt.Errorf("the books of %s are not open", bankID)
 	}
-	acc, err := l.Account(ctx, nuban)
+	acc, err := books.account(ctx, nuban)
 	if err != nil {
 		return "", fmt.Errorf("look up the owner of %s: %w", nuban, err)
 	}
-	return acc.Owner, nil
+	return acc.Customer, nil
 }
 
 type bankCallbackInput struct {

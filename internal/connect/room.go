@@ -1,7 +1,6 @@
 package connect
 
 import (
-	"context"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -127,49 +126,40 @@ func (a *App) roomLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 type book struct {
-	bank *config.Bank
-	ls   *ledgerSource
+	bank  *config.Bank
+	books bankBooks
 }
 
 func (a *App) books() []book {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	out := []book{}
-	for _, b := range a.cfg.Banks {
-		if ls := a.ledgerFor(b.ID); ls != nil {
-			out = append(out, book{b, ls})
+	for _, b := range a.bankList() {
+		if bb := a.booksOf(b.ID); bb != nil {
+			out = append(out, book{b, bb})
 		}
 	}
 	return out
 }
 
 func (a *App) bookOf(id string) (book, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	b := a.cfg.Bank(id)
+	b := a.bankByID(id)
 	if b == nil {
 		return book{}, false
 	}
-	ls := a.ledgerFor(id)
-	return book{b, ls}, ls != nil
+	bb := a.booksOf(id)
+	return book{b, bb}, bb != nil
 }
 
 type acctView struct {
-	ledger.Account
+	server.AccountJSON
 	Key       string
-	Type      string
 	Bank      *config.Bank
 	Holder    string
 	Ledger    int64
 	Available int64
 }
 
-func (bk book) acctView(ctx context.Context, acc ledger.Account) (acctView, error) {
-	bal, err := bk.ls.Bank().L.Balance(ctx, acc.Code)
-	if err != nil {
-		return acctView{}, fmt.Errorf("read balance of %s: %w", acc.NUBAN, err)
-	}
-	return acctView{Account: acc, Key: acctKey(bk.bank.ID, acc.NUBAN), Type: acc.Product, Bank: bk.bank, Holder: acc.Name, Ledger: bal, Available: bal}, nil
+func (bk book) acctView(acc server.AccountJSON) acctView {
+	return acctView{AccountJSON: acc, Key: acctKey(bk.bank.ID, acc.NUBAN), Bank: bk.bank, Holder: acc.Name, Ledger: acc.Balance, Available: acc.Balance}
 }
 
 type lineView struct {
@@ -185,9 +175,14 @@ func newLineView(b *config.Bank, l bank.FeedLine) lineView {
 
 func (a *App) roomFail(w http.ResponseWriter, r *http.Request, err error) {
 	a.log.Error("control room", "path", r.URL.Path, "err", err)
+	status, msg := http.StatusInternalServerError, err.Error()
+	var down *bankDownError
+	if errors.As(err, &down) {
+		status, msg = http.StatusServiceUnavailable, fmt.Sprintf(bankAway, down.Name)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.roomRender(w, r, "room_failed", http.StatusInternalServerError, "", roomPage{"Title": "Something went wrong", "Error": err.Error()})
+	a.roomRender(w, r, "room_failed", status, "", roomPage{"Title": "Something went wrong", "Error": msg})
 }
 
 func (a *App) roomOverview(w http.ResponseWriter, r *http.Request) {
@@ -198,7 +193,7 @@ func (a *App) roomOverview(w http.ResponseWriter, r *http.Request) {
 	sums := []bankSum{}
 	var total int64
 	for _, bk := range a.books() {
-		t, err := bk.ls.Bank().Totals(r.Context())
+		t, err := bk.books.totals(r.Context())
 		if err != nil {
 			a.roomFail(w, r, err)
 			return
@@ -243,13 +238,13 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	t, err := bk.ls.Bank().Totals(ctx)
+	t, err := bk.books.totals(ctx)
 	if err != nil {
 		a.roomFail(w, r, err)
 		return
 	}
 	cursor := r.URL.Query().Get("cursor")
-	page, next, err := bk.ls.Bank().Accounts(ctx, "", pageSize, cursor)
+	page, next, err := bk.books.accounts(ctx, "", pageSize, cursor)
 	if errors.Is(err, bank.ErrBadCursor) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -262,12 +257,7 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 	}
 	accts := []acctView{}
 	for _, acc := range page {
-		v, err := bk.acctView(ctx, acc)
-		if err != nil {
-			a.roomFail(w, r, err)
-			return
-		}
-		accts = append(accts, v)
+		accts = append(accts, bk.acctView(acc))
 	}
 	down := a.downBanks()[id]
 	a.mu.Lock()
@@ -275,14 +265,14 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 	a.roomRender(w, r, "bank", http.StatusOK, "banks", roomPage{"Title": bk.bank.Name, "Bank": bk.bank, "Accounts": accts, "Totals": t, "Down": down, "Managed": managed, "Status": status, "Next": next, "First": cursor != ""})
 }
 
-func (a *App) roomAccountOf(w http.ResponseWriter, r *http.Request) (book, ledger.Account, bool) {
+func (a *App) roomAccountOf(w http.ResponseWriter, r *http.Request) (book, server.AccountJSON, bool) {
 	id, nuban := splitKey(r.PathValue("key"))
 	bk, ok := a.bookOf(id)
-	var acc ledger.Account
+	var acc server.AccountJSON
 	var err error
 	if ok {
-		acc, err = bk.ls.Account(r.Context(), nuban)
-		ok = err == nil && acc.Customer
+		acc, err = bk.books.account(r.Context(), nuban)
+		ok = err == nil
 	}
 	if !ok && err != nil && !errors.Is(err, ledger.ErrUnknownAccount) {
 		a.roomFail(w, r, err)
@@ -302,13 +292,9 @@ func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	v, err := bk.acctView(ctx, acc)
-	if err != nil {
-		a.roomFail(w, r, err)
-		return
-	}
+	v := bk.acctView(acc)
 	cursor := r.URL.Query().Get("cursor")
-	ls, next, err := bk.ls.Bank().Recent(ctx, acc.NUBAN, pageSize, cursor)
+	ls, next, err := bk.books.recent(ctx, acc.NUBAN, pageSize, cursor)
 	if errors.Is(err, bank.ErrBadCursor) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -362,7 +348,7 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	l, err := bk.ls.Bank().Line(ctx, acc.NUBAN, r.PathValue("line"))
+	l, err := bk.books.line(ctx, acc.NUBAN, r.PathValue("line"))
 	if errors.Is(err, bank.ErrUnknownLine) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -373,11 +359,7 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 		a.roomFail(w, r, err)
 		return
 	}
-	v, err := bk.acctView(ctx, acc)
-	if err != nil {
-		a.roomFail(w, r, err)
-		return
-	}
+	v := bk.acctView(acc)
 	if err := a.markRemoved(ctx, []bank.FeedLine{l}); err != nil {
 		a.roomFail(w, r, err)
 		return
@@ -386,7 +368,7 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 	var debit, credit, charges int64
 	if l.SessionID != "" {
 		for _, other := range a.books() {
-			ls, err := other.ls.Bank().SessionLines(ctx, l.SessionID)
+			ls, err := other.books.sessionLines(ctx, l.SessionID)
 			if err != nil {
 				a.roomFail(w, r, err)
 				return
@@ -626,7 +608,7 @@ func (a *App) roomBanks(w http.ResponseWriter, r *http.Request) {
 		if statuses[bk.bank.ID].Phase == PhaseClosed {
 			continue
 		}
-		t, err := bk.ls.Bank().Totals(r.Context())
+		t, err := bk.books.totals(r.Context())
 		if err != nil {
 			a.roomFail(w, r, err)
 			return

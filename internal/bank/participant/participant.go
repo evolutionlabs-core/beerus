@@ -23,6 +23,8 @@ const (
 	settleEvery  = 2 * time.Second
 	shutdownWait = 5 * time.Second
 	ensureLimit  = 30 * time.Second
+	healEvery    = 2 * time.Second
+	pingLimit    = 5 * time.Second
 )
 
 type Options struct {
@@ -168,6 +170,7 @@ func (p *Participant) Serve(ctx context.Context) error {
 	go func() {
 		defer close(provisioned)
 		p.provision(ctx)
+		p.heal(ctx)
 	}()
 	tick := time.NewTicker(flushEvery)
 	defer tick.Stop()
