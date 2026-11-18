@@ -13,8 +13,10 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 )
 
@@ -39,6 +41,7 @@ type Participant struct {
 	id     string
 	dir    string
 	cfg    *config.Config
+	fees   *charges.Schedule
 	log    *slog.Logger
 	clock  *clock.Clock
 	link   server.Link
@@ -63,16 +66,17 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 	if o.DatabaseURL == "" {
 		return nil, fmt.Errorf("%s is not set; set it to the Postgres URL of the bank", config.DatabaseURLEnv)
 	}
-	cfg, err := f.Config(dir, o.DatabaseURL)
+	cfg := f.Config(dir, o.DatabaseURL)
+	pack, err := countrypack.Nigeria()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load country pack: %w", err)
 	}
 	token, err := config.ReadSecret(filepath.Join(config.BankDir(dir, f.ID), config.BankTokenFile))
 	if err != nil {
 		return nil, fmt.Errorf("control token: %w", err)
 	}
 	b := cfg.Banks[0]
-	p := &Participant{id: b.ID, dir: dir, cfg: cfg, log: o.Logger, clock: clock.New(), link: server.NewLink(token, o.Bind)}
+	p := &Participant{id: b.ID, dir: dir, cfg: cfg, fees: charges.New(pack.Fees), log: o.Logger, clock: clock.New(), link: server.NewLink(token, o.Bind)}
 	if p.log == nil {
 		p.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
@@ -81,7 +85,7 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 	p.srv = server.New(server.Config{
 		Dir:       dir,
 		Bank:      *b,
-		Fees:      cfg.Fees(),
+		Fees:      p.fees,
 		NIBSSPort: cfg.Connect.NIBSSPort,
 		CBNPort:   cfg.Connect.CBNPort,
 		CoreURL:   coreURL,

@@ -69,7 +69,7 @@ func (p *Participant) openBooks(ctx context.Context, b *config.Bank) error {
 		return nil
 	}
 	inst := bank.Profile{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode}
-	books, err := store.OpenBooks(ctx, p.cfg.DatabaseURL, b.Database, inst, p.cfg.Fees(), p.clock.Now(), openbanking.Migrate)
+	books, err := store.OpenBooks(ctx, p.cfg.DatabaseURL, b.Database, inst, p.fees, p.clock.Now(), openbanking.Migrate)
 	if err != nil {
 		return err
 	}

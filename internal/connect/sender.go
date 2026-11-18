@@ -38,7 +38,7 @@ func (a *App) bankSender(id string) *server.Sender {
 			}
 			return nil
 		},
-		Fees:     a.cfg.Fees(),
+		Fees:     a.fees,
 		Clock:    a.clock,
 		Log:      a.log,
 		SetupKey: a.setupKey,

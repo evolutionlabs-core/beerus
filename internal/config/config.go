@@ -19,9 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
@@ -136,39 +134,20 @@ type Config struct {
 	Partners    []*Partner    `yaml:"partners"`
 	Holidays    *Holidays     `yaml:"holidays,omitempty"`
 	Dir         string        `yaml:"-"`
-	calendar    clock.Calendar
-	fees        *charges.Schedule
 }
 
 const DatabaseURLEnv = "BEERUS_DATABASE_URL"
 
-func (c *Config) Fees() *charges.Schedule {
-	return c.fees
-}
-
-func (c *Config) Calendar() clock.Calendar {
-	return c.calendar
-}
-
-func (c *Config) buildFees(pack *countrypack.Pack) {
-	c.fees = charges.New(pack.Fees)
-}
-
-func (c *Config) buildCalendar(pack *countrypack.Pack) error {
+func (c *Config) validateHolidays() error {
 	var h Holidays
 	if c.Holidays != nil {
 		h = *c.Holidays
 	}
-	add, err := parseHolidays("add", h.Add)
-	if err != nil {
+	if _, err := parseHolidays("add", h.Add); err != nil {
 		return err
 	}
-	remove, err := parseHolidays("remove", h.Remove)
-	if err != nil {
-		return err
-	}
-	c.calendar = clock.NewCalendar(pack.Fixed.Days, add, remove)
-	return nil
+	_, err := parseHolidays("remove", h.Remove)
+	return err
 }
 
 func parseHolidays(name string, list []string) ([]clock.Date, error) {
@@ -282,12 +261,7 @@ func (c *Config) Finish() error {
 	if err := c.validatePorts(); err != nil {
 		return err
 	}
-	pack, err := countrypack.Nigeria()
-	if err != nil {
-		return fmt.Errorf("load country pack: %w", err)
-	}
-	c.buildFees(pack)
-	return c.buildCalendar(pack)
+	return c.validateHolidays()
 }
 
 func randomToken(prefix string, n int) (string, error) {

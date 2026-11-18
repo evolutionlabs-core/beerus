@@ -20,8 +20,10 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -54,6 +56,7 @@ type App struct {
 	partnerMu    sync.Mutex
 	swept        time.Time
 	ledgers      []*ledgerSource
+	fees         *charges.Schedule
 	nibssCtl     *nibssAdmin
 	nibssEnsured time.Time
 	cbnCtl       *cbnAdmin
@@ -171,6 +174,13 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New()
+	if a.role != RoleCore {
+		pack, err := countrypack.Nigeria()
+		if err != nil {
+			return nil, fmt.Errorf("load country pack: %w", err)
+		}
+		a.fees = charges.New(pack.Fees)
+	}
 	a.banking = &server.Banking{Src: bookSource{a}, Clock: a.clock, Log: a.log}
 	a.sender = a.newSender()
 	if err := a.prepareOpenBanking(); err != nil {
@@ -189,7 +199,7 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 		if a.role == RoleCore {
 			continue
 		}
-		ls, err := openLedgerSource(ctx, cfg, a.ctl, a.clock, b)
+		ls, err := openLedgerSource(ctx, cfg, a.ctl, a.clock, a.fees, b)
 		if err != nil {
 			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)
 			continue

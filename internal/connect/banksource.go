@@ -10,6 +10,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
@@ -28,8 +29,8 @@ func profileOf(b *config.Bank) bank.Profile {
 	return bank.Profile{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode}
 }
 
-func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *state.Store, clk *clock.Clock, b *config.Bank) (*ledgerSource, error) {
-	books, err := store.OpenBooks(ctx, cfg.DatabaseURL, b.Database, profileOf(b), cfg.Fees(), clk.Now(), openbanking.Migrate)
+func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *state.Store, clk *clock.Clock, fees *charges.Schedule, b *config.Bank) (*ledgerSource, error) {
+	books, err := store.OpenBooks(ctx, cfg.DatabaseURL, b.Database, profileOf(b), fees, clk.Now(), openbanking.Migrate)
 	if err != nil {
 		return nil, err
 	}

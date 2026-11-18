@@ -11,8 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
+	"github.com/evolutionlabs-core/beerus/internal/charges"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
@@ -54,6 +56,10 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		t.Fatal(err)
+	}
 	clk := clock.New()
 	before := clk.Now()
 	b := &config.Bank{ID: "bank-g", Name: "Bank G", NIPCode: "999007", NUBANCode: "907", Database: config.DatabaseName(cfg.Dir, "bank-g")}
@@ -69,7 +75,7 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 	}
 	var first time.Time
 	for round := range 2 {
-		ls, err := openLedgerSource(t.Context(), cfg, ctl, clk, b)
+		ls, err := openLedgerSource(t.Context(), cfg, ctl, clk, charges.New(pack.Fees), b)
 		if err != nil {
 			t.Fatal(err)
 		}

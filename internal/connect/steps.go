@@ -338,7 +338,7 @@ func (a *App) openLedger(b *config.Bank) error {
 	a.mu.Unlock()
 	if ls == nil {
 		var err error
-		if ls, err = openLedgerSource(context.Background(), a.cfg, a.ctl, a.clock, b); err != nil {
+		if ls, err = openLedgerSource(context.Background(), a.cfg, a.ctl, a.clock, a.fees, b); err != nil {
 			return err
 		}
 		a.mu.Lock()
