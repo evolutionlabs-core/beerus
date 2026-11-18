@@ -28,6 +28,7 @@ func (p *Participant) directory() http.Handler {
 	mux.HandleFunc("/v1/registry/clients/{client_id}", only(http.MethodGet, p.bankClient))
 	mux.HandleFunc("/v1/consents", only(http.MethodPost, p.recordConsent))
 	mux.HandleFunc("/v1/settlement-reports", only(http.MethodGet, p.settlementReports))
+	mux.HandleFunc("/v1/settlement-position", only(http.MethodGet, p.settlementPosition))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if p.admit(w, r, "read the bank directory") {
 			api.ServeHTTP(w, r)

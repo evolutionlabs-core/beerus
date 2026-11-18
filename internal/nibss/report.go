@@ -5,11 +5,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -31,42 +31,6 @@ type reportRow struct {
 	key      string
 	cutoffAt time.Time
 	postedAt time.Time
-}
-
-func (x Settlement) Position(code string) (outward, inward int64, err error) {
-	for _, s := range x.Sessions {
-		if s.FromCode == code {
-			if outward > math.MaxInt64-s.Amount {
-				return 0, 0, fmt.Errorf("settle %s at %s: the amount sent is too large to add", x.Key, code)
-			}
-			outward += s.Amount
-		}
-		if s.ToCode == code {
-			if inward > math.MaxInt64-s.Amount {
-				return 0, 0, fmt.Errorf("settle %s at %s: the amount received is too large to add", x.Key, code)
-			}
-			inward += s.Amount
-		}
-	}
-	return outward, inward, nil
-}
-
-func (x Settlement) Report(code string, postedAt time.Time) (Report, error) {
-	outward, inward, err := x.Position(code)
-	if err != nil {
-		return Report{}, err
-	}
-	net, ok := addNet(inward, -outward)
-	if !ok {
-		return Report{}, fmt.Errorf("settle %s at %s: the net is too large to add", x.Key, code)
-	}
-	transfers := 0
-	for _, s := range x.Sessions {
-		if s.FromCode == code || s.ToCode == code {
-			transfers++
-		}
-	}
-	return Report{SessionID: x.Key, CutoffAt: x.CutoffAt.In(clock.Lagos), PostedAt: postedAt.In(clock.Lagos), Outward: outward, Inward: inward, Net: net, Transfers: transfers}, nil
 }
 
 func encodeReportCursor(r reportRow) string {
@@ -164,20 +128,42 @@ func (s *Store) reports(ctx context.Context, code string, found []reportRow) ([]
 	for _, r := range found {
 		keys = append(keys, r.key)
 	}
-	list, err := s.sessions(ctx, "sessions in settlement reports", `SELECT `+sessionCols+` FROM nip_sessions WHERE settlement_session = ANY($1) ORDER BY resolved_at, session_id`, keys)
+	rows, err := s.pool.Query(ctx, `SELECT settlement_session,
+		coalesce(sum(amount_minor) FILTER (WHERE from_code = $1), 0),
+		coalesce(sum(amount_minor) FILTER (WHERE to_code = $1), 0),
+		count(*) FILTER (WHERE from_code = $1 OR to_code = $1)
+		FROM nip_sessions WHERE settlement_session = ANY($2) GROUP BY settlement_session`, code, keys)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sum sessions in settlement reports: %w", err)
 	}
-	groups := map[string][]Session{}
-	for _, x := range list {
-		groups[x.Settlement] = append(groups[x.Settlement], x)
+	defer rows.Close()
+	totals := map[string]Report{}
+	for rows.Next() {
+		var key string
+		var t Report
+		var outward, inward pgtype.Numeric
+		if err := rows.Scan(&key, &outward, &inward, &t.Transfers); err != nil {
+			return nil, fmt.Errorf("read sessions in settlement reports: %w", err)
+		}
+		var ok bool
+		if t.Outward, ok = minor(outward); !ok {
+			return nil, &SumError{Msg: fmt.Sprintf("settle %s at %s: the amount sent is too large to add", key, code)}
+		}
+		if t.Inward, ok = minor(inward); !ok {
+			return nil, &SumError{Msg: fmt.Sprintf("settle %s at %s: the amount received is too large to add", key, code)}
+		}
+		totals[key] = t
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sum sessions in settlement reports: %w", err)
 	}
 	for _, r := range found {
-		report, err := Settlement{Key: r.key, CutoffAt: r.cutoffAt, Sessions: groups[r.key]}.Report(code, r.postedAt)
-		if err != nil {
-			return nil, err
+		t := totals[r.key]
+		net, ok := addNet(t.Inward, -t.Outward)
+		if !ok {
+			return nil, &SumError{Msg: fmt.Sprintf("settle %s at %s: the net is too large to add", r.key, code)}
 		}
-		out = append(out, report)
+		out = append(out, Report{SessionID: r.key, CutoffAt: r.cutoffAt.In(clock.Lagos), PostedAt: r.postedAt.In(clock.Lagos), Outward: t.Outward, Inward: t.Inward, Net: net, Transfers: t.Transfers})
 	}
 	return out, nil
 }

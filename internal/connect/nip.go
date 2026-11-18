@@ -121,7 +121,17 @@ func (a *App) settlementFailed(w http.ResponseWriter, r *http.Request, msg strin
 	var cbnDown *cbnDownError
 	var nibssDown *nibssDownError
 	var peer *server.PeerError
+	var unchecked *uncheckedError
+	var away *server.UnavailableError
 	switch {
+	case errors.As(err, &unchecked):
+		a.log.Warn(msg, "err", err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", web.Sentence(unchecked.Name+" "+unchecked.Why)+" Try again soon.")
+		return
+	case errors.As(err, &away):
+		a.log.Warn(msg, "err", err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", away.Msg)
+		return
 	case errors.As(err, &cbnDown):
 		a.log.Warn(msg, "err", err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", cbnAway)

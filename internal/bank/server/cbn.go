@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -94,24 +95,83 @@ func (c CBNClient) sessionNets(ctx context.Context, id string) (map[string]int64
 	return out, nil
 }
 
-func SettlementProblems(ctx context.Context, n NIBSSClient, c CBNClient, books *bank.Bank, id string) ([]string, error) {
-	held, err := books.L.Balance(ctx, bank.Settlement)
-	if err != nil {
-		return nil, fmt.Errorf("read the settlement balance of %s: %w", id, err)
-	}
-	posted, err := books.Settlements(ctx)
+func settlementProblems(ctx context.Context, n NIBSSClient, c CBNClient, books *bank.Bank, id string) ([]string, error) {
+	before, err := books.OpenSends(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out, err := nibssProblems(ctx, n, posted, id)
-	if err != nil {
-		return nil, err
-	}
-	moved, err := c.sessionNets(ctx, id)
+	snap, err := books.SettlementBooks(ctx)
 	if err != nil {
 		return nil, err
 	}
 	at, err := c.Balance(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	pos, err := n.position(ctx, snap.Last)
+	if err != nil {
+		return nil, err
+	}
+	again, err := books.SettlementBooks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	after, err := books.OpenSends(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	nipStill := snap.Payable == again.Payable && snap.Receivable == again.Receivable && snap.Last == again.Last
+	if nipStill && nipOff(snap, pos, before == 0 && after == 0) {
+		out = append(out, nipLine(id, snap, pos))
+		detail, err := nibssDetail(ctx, n, books, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, detail...)
+	}
+	cbnStill := snap.Held == again.Held && snap.Last == again.Last
+	if cbnStill && pos.Settlements == 0 && snap.Held != at {
+		out = append(out, fmt.Sprintf("%s's books show %d at the CBN, but the CBN shows %d", id, snap.Held, at))
+		detail, err := cbnDetail(ctx, c, books, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, detail...)
+	}
+	return out, nil
+}
+
+func nipLine(id string, snap bank.SettlementBooks, pos settlementPosition) string {
+	line := fmt.Sprintf("%s has NIP payable %d and receivable %d, but its open NIBSS sessions come to %d and %d", id, snap.Payable, snap.Receivable, pos.Outward, pos.Inward)
+	if pos.PendingInward > 0 {
+		line += fmt.Sprintf(", with %d inward still pending", pos.PendingInward)
+	}
+	return line
+}
+
+func nipOff(snap bank.SettlementBooks, pos settlementPosition, noOpenSends bool) bool {
+	upper := int64(math.MaxInt64)
+	if pos.PendingInward <= math.MaxInt64-pos.Inward {
+		upper = pos.Inward + pos.PendingInward
+	}
+	return (noOpenSends && snap.Payable != pos.Outward) || snap.Receivable < pos.Inward || snap.Receivable > upper
+}
+
+func nibssDetail(ctx context.Context, n NIBSSClient, books *bank.Bank, id string) ([]string, error) {
+	posted, err := books.Settlements(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return nibssProblems(ctx, n, posted, id)
+}
+
+func cbnDetail(ctx context.Context, c CBNClient, books *bank.Bank, id string) ([]string, error) {
+	posted, err := books.Settlements(ctx)
+	if err != nil {
+		return nil, err
+	}
+	moved, err := c.sessionNets(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -122,13 +182,11 @@ func SettlementProblems(ctx context.Context, n NIBSSClient, c CBNClient, books *
 	for k := range moved {
 		keys[k] = true
 	}
+	out := []string{}
 	for _, k := range slices.Sorted(maps.Keys(keys)) {
 		if posted[k] != moved[k] {
 			out = append(out, fmt.Sprintf("session %s at %s: the bank posted %d, but the CBN moved %d", k, id, posted[k], moved[k]))
 		}
-	}
-	if held != at {
-		out = append(out, fmt.Sprintf("%s's books show %d at the CBN, but the CBN shows %d", id, held, at))
 	}
 	return out, nil
 }
@@ -175,22 +233,35 @@ func (s *Server) CheckSettlement(ctx context.Context) error {
 	return s.postAndCheck(ctx, n, c)
 }
 
-func (s *Server) postAndCheck(ctx context.Context, n NIBSSClient, c CBNClient) error {
-	booking := PostSettlements(ctx, n, s.books, s.clock.Now())
-	problems, err := SettlementProblems(ctx, n, c, s.books, s.id)
+type BookCheck struct {
+	Problems []string
+	Booking  error
+}
+
+func CheckBooks(ctx context.Context, n NIBSSClient, c CBNClient, books *bank.Bank, id string, now time.Time) (BookCheck, error) {
+	booking := PostSettlements(ctx, n, books, now)
+	problems, err := settlementProblems(ctx, n, c, books, id)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return err
+			return BookCheck{}, err
 		}
-		return fmt.Errorf("check the settlement of %s: %w", s.id, errors.Join(booking, err))
+		return BookCheck{}, fmt.Errorf("check the settlement of %s: %w", id, errors.Join(booking, err))
 	}
 	var refused *BookingError
 	if errors.As(booking, &refused) {
-		problems = append(problems, fmt.Sprintf("could not book session %s at %s: %v", refused.SessionID, s.id, refused.Err))
+		problems = append(problems, fmt.Sprintf("could not book session %s at %s: %v", refused.SessionID, id, refused.Err))
+	}
+	return BookCheck{Problems: problems, Booking: booking}, nil
+}
+
+func (s *Server) postAndCheck(ctx context.Context, n NIBSSClient, c CBNClient) error {
+	check, err := CheckBooks(ctx, n, c, s.books, s.id, s.clock.Now())
+	if err != nil {
+		return err
 	}
 	at := s.clock.Real()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.settlementProblems, s.settlementCheckedAt = problems, &at
-	return booking
+	s.settlementProblems, s.settlementCheckedAt = check.Problems, &at
+	return check.Booking
 }

@@ -3,6 +3,7 @@ package ledger_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
@@ -74,6 +75,38 @@ func TestPostingAndBalances(t *testing.T) {
 		t.Fatalf("unknown account: %v", err)
 	}
 	verify(t, l)
+}
+
+func TestBalancesReadSeveralAccountsAtOnce(t *testing.T) {
+	l, ctx := setup(t)
+	if _, err := l.Post(ctx, e("dep", ln("CASH", 100000), ln("C1", -100000))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Post(ctx, e("fee", ln("C1", 300), ln("INCOME", -300))); err != nil {
+		t.Fatal(err)
+	}
+	rows := []struct {
+		name  string
+		codes []string
+		want  map[string]int64
+		err   error
+	}{
+		{"none", nil, map[string]int64{}, nil},
+		{"every kind", []string{"CASH", "INCOME", "C1", "C2"}, map[string]int64{"CASH": 100000, "INCOME": 300, "C1": 99700, "C2": 0}, nil},
+		{"one account twice", []string{"C1", "C1"}, map[string]int64{"C1": 99700}, nil},
+		{"an unknown account", []string{"CASH", "MISSING"}, nil, ledger.ErrUnknownAccount},
+	}
+	for _, r := range rows {
+		got, err := l.Balances(ctx, r.codes...)
+		if !errors.Is(err, r.err) || !maps.Equal(got, r.want) {
+			t.Errorf("%s: %v, %v, want %v, %v", r.name, got, err, r.want, r.err)
+		}
+		for code, want := range got {
+			if one, err := l.Balance(ctx, code); err != nil || one != want {
+				t.Errorf("%s: Balance(%s) is %d, %v, want %d", r.name, code, one, err, want)
+			}
+		}
+	}
 }
 
 func TestAppendOnlyAndDeferredBalanceCheck(t *testing.T) {

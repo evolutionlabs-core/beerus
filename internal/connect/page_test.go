@@ -129,12 +129,11 @@ func TestTransferFormCarriesAFreshKey(t *testing.T) {
 
 func TestOpenSendsBlockClosing(t *testing.T) {
 	a := newTestApp(t, Options{})
-	b := a.bankByID("bank-a")
 	for sends, want := range map[int]string{
 		1: "Bank A has 1 transfer still being sent. Wait for it to finish.",
 		2: "Bank A has 2 transfers still being sent. Wait for them to finish.",
 	} {
-		got, err := a.inflightWith(t.Context(), b.NIPCode, "bank-a", sends)
+		got, err := a.inflightWith(t.Context(), "bank-a", sends)
 		if err != nil || got != want {
 			t.Fatalf("%d open sends: %q, %v, want %q", sends, got, err, want)
 		}

@@ -70,16 +70,24 @@ func (p *Participant) settleNow(ctx context.Context, adhoc bool) (int, error) {
 	}
 }
 
-func (p *Participant) settlePass(ctx context.Context, adhoc bool) (int, error) {
+func (p *Participant) schedule() (nibss.Schedule, error) {
 	f, err := config.LoadNIBSSFile(p.dir)
 	if err != nil {
-		return 0, err
+		return nibss.Schedule{}, err
 	}
 	cal, err := f.Calendar()
 	if err != nil {
+		return nibss.Schedule{}, err
+	}
+	return nibss.Schedule{Per: f.Sessions, Cal: cal}, nil
+}
+
+func (p *Participant) settlePass(ctx context.Context, adhoc bool) (int, error) {
+	sched, err := p.schedule()
+	if err != nil {
 		return 0, err
 	}
-	todo, err := p.store.Settle(ctx, nibss.Schedule{Per: f.Sessions, Cal: cal}, p.clock.Now(), adhoc)
+	todo, err := p.store.Settle(ctx, sched, p.clock.Now(), adhoc)
 	if err != nil {
 		return 0, fmt.Errorf("settle sessions: %w", err)
 	}

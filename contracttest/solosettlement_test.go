@@ -76,7 +76,58 @@ func TestSoloNIBSSServesSettlementReportsToTheirBank(t *testing.T) {
 			t.Errorf("%s: got %d %s, want %d %s", r.name, status, got, r.status, r.want)
 		}
 	}
-	status, got := s.call("nip", banks["bank-a"], http.MethodGet, url+"?limit=1", "", "")
+	positionURL := s.dirURL + "/v1/settlement-position"
+	position := func(outward, inward, pending int64, transfers, settlements int) string {
+		return fmt.Sprintf(`{"outward_minor":%d,"inward_minor":%d,"pending_inward_minor":%d,"transfers":%d,"settlements":%d}`, outward, inward, pending, transfers, settlements)
+	}
+	positions := []struct {
+		name   string
+		client *http.Client
+		url    string
+		status int
+		want   string
+	}{
+		{"bank a position", banks["bank-a"], positionURL, 200, position(579, 200, 0, 4, 3)},
+		{"bank b position", banks["bank-b"], positionURL, 200, position(200, 579, 0, 4, 3)},
+		{"bank a after the first", banks["bank-a"], positionURL + "?after=2026-11-04T12:00", 200, position(79, 0, 0, 2, 2)},
+		{"bank a after the last posted", banks["bank-a"], positionURL + "?after=2026-11-04T18:00", 200, position(9, 0, 0, 1, 1)},
+		{"bank a after a session that is not posted", banks["bank-a"], positionURL + "?after=2026-11-04T23:00", 200, position(579, 200, 0, 4, 3)},
+		{"position of a stranger", banks["bank-z"], positionURL, 403, errBody("forbidden", "This certificate may not read its settlement position. bank-z is not a bank NIBSS knows.")},
+	}
+	for _, r := range positions {
+		status, got := s.call("nip", r.client, http.MethodGet, r.url, "", "")
+		if status != r.status || got != r.want {
+			t.Errorf("%s: got %d %s, want %d %s", r.name, status, got, r.status, r.want)
+		}
+	}
+	open := s.control + "/v1/control/banks/%s/open-sessions"
+	controls := []struct {
+		name   string
+		url    string
+		token  string
+		status int
+		want   string
+	}{
+		{"open sessions of bank a", fmt.Sprintf(open, "bank-a"), s.token, 200, `{"bank_id":"bank-a","transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":1}`},
+		{"open sessions of an unknown bank", fmt.Sprintf(open, "bank-z"), s.token, 404, errBody("not_found", "Bank bank-z is not in the NIBSS directory. Register it first.")},
+		{"open sessions without a token", fmt.Sprintf(open, "bank-a"), "", 401, errBody("unauthenticated", "A valid control token is required.")},
+	}
+	for _, r := range controls {
+		status, got := s.call("nip", s.plain, http.MethodGet, r.url, r.token, "")
+		if status != r.status || got != r.want {
+			t.Errorf("%s: got %d %s, want %d %s", r.name, status, got, r.status, r.want)
+		}
+	}
+	status, got := s.call("participant", s.plain, http.MethodGet, s.control+"/v1/status", s.token, "")
+	var st struct {
+		Problems       []string `json:"problems"`
+		PostedSessions *int     `json:"posted_sessions"`
+	}
+	wantProblem := "settlement session 2026-11-04T23:00 was cut off at 2026-11-04T23:00:00+01:00 and is not posted to the CBN yet"
+	if err := json.Unmarshal([]byte(got), &st); err != nil || status != 200 || len(st.Problems) != 1 || st.Problems[0] != wantProblem || st.PostedSessions == nil || *st.PostedSessions != 2 {
+		t.Errorf("status: got %d %s %v, want the problem %q and 2 posted sessions", status, got, err, wantProblem)
+	}
+	status, got = s.call("nip", banks["bank-a"], http.MethodGet, url+"?limit=1", "", "")
 	var page struct {
 		NextCursor string `json:"next_cursor"`
 	}

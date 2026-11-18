@@ -41,7 +41,7 @@ func (a *App) PurgeImpact(ctx context.Context, id string) (PurgeImpact, error) {
 	if err != nil {
 		return PurgeImpact{}, err
 	}
-	waiting, err := a.inflightWith(ctx, b.NIPCode, id, sends)
+	waiting, err := a.inflightWith(ctx, id, sends)
 	if err != nil {
 		return PurgeImpact{}, err
 	}
@@ -79,7 +79,7 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	if cond != nil || err != nil {
 		return cond, err
 	}
-	waiting, err := a.inflightWith(ctx, r.Allocated.NIPCode, id, sends)
+	waiting, err := a.inflightWith(ctx, id, sends)
 	if err != nil {
 		return nil, err
 	}

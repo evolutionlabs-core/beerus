@@ -843,6 +843,85 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/settlement-position:
+    get:
+      operationId: nibssSettlementPosition
+      tags: [nibss]
+      summary: Read what NIBSS holds for the calling bank that no settlement report covers
+      description: Totals what NIBSS holds for the bank that makes the call, and that no settlement report up to and including `after` covers. It counts transfers still pending, transfers that succeeded and are not settled yet, and transfers in settlement sessions that are not posted to the CBN or are posted after `after`. A bank reads only its own position. NIBSS takes the bank from the caller's certificate identity. When a bank has finished its sends, its NIP payable must equal `outward_minor`. Its NIP receivable must lie from `inward_minor` to `inward_minor` plus `pending_inward_minor`. To count from the newest report a bank has booked, send its `session_id` as `after`. A session that NIBSS does not know as posted counts every posted session.
+      parameters:
+        - name: after
+          in: query
+          required: false
+          description: The `session_id` of the newest settlement report the bank has booked. Sessions posted up to and including it are left out.
+          schema:
+            type: string
+          example: '2026-11-14T10:00'
+      responses:
+        '200':
+          description: The settlement position of the bank.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementPosition'
+              example:
+                outward_minor: 150000
+                inward_minor: 40000
+                pending_inward_minor: 0
+                transfers: 3
+                settlements: 1
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/ServerError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/control/banks/{bank_id}/open-sessions:
+    get:
+      operationId: controlOpenSessions
+      tags: [control]
+      summary: Count the transfers of a bank that are not settled yet
+      description: The control plane asks NIBSS what is still open for a bank. A transfer is open while it is pending, or while it succeeded and is not in a settlement session yet. `unposted_settlements` counts the settlement sessions that hold a transfer of the bank and are not posted to the CBN yet. An unknown bank returns `404 not_found`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BankIDPath'
+      responses:
+        '200':
+          description: The open transfers of the bank.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenSessions'
+              example:
+                bank_id: bank-a
+                transfers: 2
+                outward_minor: 150000
+                inward_minor: 40000
+                unposted_settlements: 0
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          description: NIBSS has no bank with this ID. The code is `not_found`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_found
+                  message: Bank bank-z is not in the NIBSS directory. Register it first.
+                  request_id: req_01JBC8A5T3ZK
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/ServerError'
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/control/registry/clients:
@@ -1581,6 +1660,64 @@ components:
           type: integer
           minimum: 1
           description: The number of transfers the bank sent or received in the session.
+    SettlementPosition:
+      type: object
+      description: What NIBSS holds for a bank that no settlement report up to the `after` session covers.
+      required: [outward_minor, inward_minor, pending_inward_minor, transfers, settlements]
+      properties:
+        outward_minor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: What the bank sent in the counted transfers, pending ones included, in kobo.
+        inward_minor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: What the bank received in counted transfers that succeeded, in kobo.
+        pending_inward_minor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: What the bank may still receive in counted transfers that are pending, in kobo.
+        transfers:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The number of counted transfers the bank sent or received.
+        settlements:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The number of settlement sessions that hold a transfer of the bank and that the reports up to `after` do not cover.
+    OpenSessions:
+      type: object
+      description: The transfers of a bank that are not settled yet.
+      required: [bank_id, transfers, outward_minor, inward_minor, unposted_settlements]
+      properties:
+        bank_id:
+          type: string
+          description: The bank.
+        transfers:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The number of open transfers the bank sent or received.
+        outward_minor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: What the bank sent in open transfers, in kobo.
+        inward_minor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: What the bank received in open transfers that succeeded, in kobo.
+        unposted_settlements:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The number of settlement sessions with a transfer of the bank that are not posted to the CBN yet.
     SettlementReportPage:
       type: object
       description: One page of settlement reports.
@@ -1775,6 +1912,17 @@ components:
             error:
               code: bank_closed
               message: Bank A is closed.
+              request_id: req_01JBC8A5T3ZK
+    ServerError:
+      description: NIBSS cannot answer this for good, for example when the sessions of the bank add up to more than it can hold. The code is `internal_error`. Trying again gives the same answer.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: internal_error
+              message: NIBSS cannot add up the sessions of this bank.
               request_id: req_01JBC8A5T3ZK
     Unavailable:
       description: The participant cannot answer now. The code is `unavailable`. Try again soon.

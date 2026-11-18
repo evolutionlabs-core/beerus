@@ -358,6 +358,25 @@ func (b *Bank) LastSettlement(ctx context.Context) (string, error) {
 	return key, nil
 }
 
+type SettlementBooks struct {
+	Payable    int64
+	Receivable int64
+	Held       int64
+	Last       string
+}
+
+func (b *Bank) SettlementBooks(ctx context.Context) (SettlementBooks, error) {
+	bal, err := b.L.Balances(ctx, NIPOutward, NIPInward, Settlement)
+	if err != nil {
+		return SettlementBooks{}, fmt.Errorf("read the settlement books: %w", err)
+	}
+	last, err := b.LastSettlement(ctx)
+	if err != nil {
+		return SettlementBooks{}, fmt.Errorf("read the settlement books: %w", err)
+	}
+	return SettlementBooks{Payable: bal[NIPOutward], Receivable: bal[NIPInward], Held: bal[Settlement], Last: last}, nil
+}
+
 func (b *Bank) Settlements(ctx context.Context) (map[string]int64, error) {
 	rows, err := b.L.Pool().Query(ctx, `SELECT substr(e.idempotency_key, length('settle:') + 1), coalesce(sum(jl.amount) FILTER (WHERE a.code = $1), 0)::bigint
 		FROM journal_entries e JOIN journal_lines jl ON jl.entry_id = e.id JOIN gl_accounts a ON a.id = jl.account_id

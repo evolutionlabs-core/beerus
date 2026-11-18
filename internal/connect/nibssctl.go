@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,6 +25,8 @@ const (
 	nibssClientsPath   = "/v1/control/registry/clients"
 	nibssConsentsPath  = "/v1/control/consents"
 	nibssSettlePath    = "/v1/control/settlement-sessions"
+	nibssStatusPath    = "/v1/status"
+	nibssOpenSuffix    = "/open-sessions"
 	nibssPage          = 500
 	nibssAway          = "NIBSS is not available right now. Try again soon."
 	nibssHost          = "127.0.0.1"
@@ -141,6 +144,35 @@ func (n *nibssAdmin) settle(ctx context.Context, adhoc bool) (int, error) {
 	}
 	err := n.call(ctx, http.MethodPost, nibssSettlePath, nil, map[string]bool{"adhoc": adhoc}, &out)
 	return out.Posted, err
+}
+
+func (n *nibssAdmin) status(ctx context.Context) (int, []string, error) {
+	var out struct {
+		Posted   *int     `json:"posted_sessions"`
+		Problems []string `json:"problems"`
+	}
+	if err := n.call(ctx, http.MethodGet, nibssStatusPath, nil, nil, &out); err != nil {
+		return 0, nil, fmt.Errorf("read the status of NIBSS: %w", err)
+	}
+	if out.Posted == nil {
+		return 0, nil, fmt.Errorf("NIBSS could not count its settlement sessions: %s", strings.Join(out.Problems, "; "))
+	}
+	return *out.Posted, out.Problems, nil
+}
+
+type openSessions struct {
+	Transfers int   `json:"transfers"`
+	Outward   int64 `json:"outward_minor"`
+	Inward    int64 `json:"inward_minor"`
+	Unposted  int   `json:"unposted_settlements"`
+}
+
+func (n *nibssAdmin) openSessions(ctx context.Context, id string) (openSessions, error) {
+	var out openSessions
+	if err := n.call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id)+nibssOpenSuffix, nil, nil, &out); err != nil {
+		return openSessions{}, fmt.Errorf("read the open sessions of %s at NIBSS: %w", id, err)
+	}
+	return out, nil
 }
 
 func (n *nibssAdmin) call(ctx context.Context, method, path string, header http.Header, in, out any) error {
