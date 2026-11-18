@@ -110,6 +110,7 @@ func (p *Participant) ensureDue(ctx context.Context) {
 			p.srv.Provision(p.steps, runningPhase(b), fmt.Sprintf("Step %s failed. Trying again.", e.id))
 			return
 		}
+		p.srv.Provision(p.steps, runningPhase(b), "")
 	}
 	p.attempts = 0
 	p.srv.Provision(p.steps, runningPhase(b), "")

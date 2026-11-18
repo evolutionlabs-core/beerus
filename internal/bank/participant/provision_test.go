@@ -255,3 +255,24 @@ func TestSetupPageGivesWayToTheBankWithoutLeavingThePortUnserved(t *testing.T) {
 		t.Fatal("a second promote is not a no-op")
 	}
 }
+
+func TestStatusCanBeReadWhileTheBankProvisions(t *testing.T) {
+	s := newStage(t)
+	p := s.start(t, s.dbURL)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.Ensure(t.Context())
+	}()
+	for {
+		st := s.status(t, p)
+		select {
+		case <-done:
+			if st = s.status(t, p); st.Phase != config.PhaseActive {
+				t.Fatalf("after provisioning: phase %s, steps %+v", st.Phase, rows(st))
+			}
+			return
+		default:
+		}
+	}
+}

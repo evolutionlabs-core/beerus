@@ -97,7 +97,7 @@ func New(c Config) *Server {
 		clock:     c.Clock,
 		fees:      c.Fees,
 		phase:     c.Phase,
-		steps:     c.Steps,
+		steps:     slices.Clone(c.Steps),
 		bank:      c.Bank,
 		worldID:   web.NewID("wld"),
 		replays:   map[string]*web.Record{},
