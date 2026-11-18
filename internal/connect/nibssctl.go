@@ -82,13 +82,10 @@ func (n *nibssAdmin) setStatus(ctx context.Context, id, status string) error {
 	return n.Call(ctx, http.MethodPut, nibssBanksPath+url.PathEscape(id)+"/status", nil, statusBody{Status: status}, nil)
 }
 
-func (n *nibssAdmin) ensureClient(ctx context.Context, c openbanking.RegistryClient, createOnly bool) (openbanking.RegistryClient, error) {
+func (n *nibssAdmin) ensureClient(ctx context.Context, c openbanking.RegistryClient) (openbanking.RegistryClient, error) {
 	var out openbanking.RegistryClient
 	body := clientBody{Name: c.Name, LegalName: c.LegalName, CAC: c.CAC, Role: c.Role, CertCN: c.CertCN, JWK: c.JWK, RedirectURIs: c.RedirectURIs}
-	var header http.Header
-	if createOnly {
-		header = http.Header{"If-None-Match": {"*"}}
-	}
+	header := http.Header{"If-None-Match": {"*"}}
 	return out, n.Call(ctx, http.MethodPut, nibssClientsPath+"/"+url.PathEscape(c.ID), header, body, &out)
 }
 

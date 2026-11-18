@@ -237,12 +237,6 @@ func (a *App) partnerOf(id string) *config.Partner {
 	return a.cfg.Partner(id)
 }
 
-func (a *App) partnersSnapshot() []*config.Partner {
-	a.pmu.RLock()
-	defer a.pmu.RUnlock()
-	return append([]*config.Partner(nil), a.cfg.Partners...)
-}
-
 func (a *App) connectHost() string {
 	if a.link.Remote() {
 		return a.cfg.Connect.Host

@@ -48,7 +48,7 @@ func (a *App) addRegistryClient(ctx context.Context, req registryRequest) (openb
 		req.LegalName = req.Name
 	}
 	c := openbanking.RegistryClient{ID: req.ID, Name: req.Name, LegalName: req.LegalName, CAC: req.CAC, Role: config.AggregatorRole, CertCN: req.CertCN, JWK: openbanking.JWKOf(ec, req.ID), RedirectURIs: req.RedirectURIs}
-	return a.nibssCtl.ensureClient(ctx, c, true)
+	return a.nibssCtl.ensureClient(ctx, c)
 }
 
 func (a *App) nibssFailed(w http.ResponseWriter, r *http.Request, err error) {

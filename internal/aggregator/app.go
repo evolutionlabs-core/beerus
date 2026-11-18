@@ -103,7 +103,6 @@ func New(dir string, o Options) (*App, error) {
 		log:       o.Logger,
 		limiters:  map[string]*rate.Limiter{},
 		link:      control.NewLink(token, o.Bind),
-		token:     token,
 		client:    o.Client,
 		bankWrap:  o.BankWrap,
 		wake:      make(chan struct{}, 1),
@@ -170,10 +169,6 @@ func (a *App) loadOwnState() error {
 	}
 	a.st = st
 	return nil
-}
-
-func (a *App) Config() *config.Config {
-	return a.cfg
 }
 
 func (a *App) dirty() {
