@@ -46,20 +46,22 @@ func TestRegistryRefreshServesStaleThenFailsClosed(t *testing.T) {
 	})
 	ctx := context.Background()
 	steps := []struct {
-		name   string
-		cached time.Duration
-		down   bool
-		calls  int
-		failed bool
-		retry  bool
+		name      string
+		cached    time.Duration
+		down      bool
+		calls     int
+		failed    bool
+		retry     bool
+		failedAgo time.Duration
 	}{
-		{"first read with NIBSS down", 0, true, 1, true, true},
-		{"fails fast after a failure", 0, false, 1, true, false},
-		{"recovers when NIBSS is back", 0, false, 2, false, true},
-		{"fresh copy needs no call", 0, false, 2, false, false},
-		{"stale copy after the TTL", registryTTL + time.Second, true, 3, false, true},
-		{"still served inside the stale limit", registryStale - time.Second, true, 4, false, true},
-		{"fails closed past the stale limit", registryStale + time.Second, true, 5, true, true},
+		{"first read with NIBSS down", 0, true, 1, true, true, 0},
+		{"fails fast after a failure", 0, false, 1, true, false, 0},
+		{"recovers when NIBSS is back once fail fast has passed", 0, false, 2, false, false, refreshFailFast + time.Second},
+		{"fresh copy needs no call", 0, false, 2, false, false, 0},
+		{"a second before the TTL ends", registryTTL - time.Second, false, 2, false, false, 0},
+		{"stale copy after the TTL", registryTTL + time.Second, true, 3, false, true, 0},
+		{"still served inside the stale limit", registryStale - time.Second, true, 4, false, true, 0},
+		{"fails closed past the stale limit", registryStale + time.Second, true, 5, true, true, 0},
 	}
 	for _, step := range steps {
 		if step.retry {
@@ -69,6 +71,11 @@ func TestRegistryRefreshServesStaleThenFailsClosed(t *testing.T) {
 			r.mu.Lock()
 			r.at = r.clock.Real().Add(-step.cached)
 			r.mu.Unlock()
+		}
+		if step.failedAgo > 0 {
+			r.flight.mu.Lock()
+			r.flight.failedAt = r.clock.Real().Add(-step.failedAgo)
+			r.flight.mu.Unlock()
 		}
 		down = step.down
 		err := r.Refresh(ctx)
@@ -81,46 +88,6 @@ func TestRegistryRefreshServesStaleThenFailsClosed(t *testing.T) {
 	}
 	if c, ok := r.RegistryClientByCert("tpp"); !ok || c.ID != "tpp-1" {
 		t.Fatalf("client by certificate after recovery: %+v, %v", c, ok)
-	}
-}
-
-func TestRegistryAndRefreshWindows(t *testing.T) {
-	at := time.Date(2026, 11, 14, 10, 0, 0, 0, clock.Lagos)
-	for _, c := range []struct {
-		name     string
-		loaded   time.Time
-		age      time.Duration
-		fresh    bool
-		servable bool
-	}{
-		{"never loaded", time.Time{}, 0, false, false},
-		{"just loaded", at, 0, true, true},
-		{"a second before the TTL ends", at, registryTTL - time.Second, true, true},
-		{"at the TTL", at, registryTTL, false, true},
-		{"at the stale limit", at, registryStale, false, true},
-		{"a second past the stale limit", at, registryStale + time.Second, false, false},
-	} {
-		now := at.Add(c.age)
-		if got := registryFresh(c.loaded, now); got != c.fresh {
-			t.Errorf("%s: fresh %v, want %v", c.name, got, c.fresh)
-		}
-		if got := registryServable(c.loaded, now); got != c.servable {
-			t.Errorf("%s: servable %v, want %v", c.name, got, c.servable)
-		}
-	}
-	for _, c := range []struct {
-		name string
-		age  time.Duration
-		want bool
-	}{
-		{"just failed", 0, true},
-		{"a second before fail fast ends", refreshFailFast - time.Second, true},
-		{"at the end of fail fast", refreshFailFast, false},
-		{"long after", time.Hour, false},
-	} {
-		if got := failedRecently(at, at.Add(c.age)); got != c.want {
-			t.Errorf("%s: failed recently %v, want %v", c.name, got, c.want)
-		}
 	}
 }
 

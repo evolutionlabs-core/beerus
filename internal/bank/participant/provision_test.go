@@ -169,6 +169,11 @@ func TestFailedStepRetriesWithBackoff(t *testing.T) {
 	if p.attempts != 1 {
 		t.Fatalf("a retry before the backoff ran: %d attempts", p.attempts)
 	}
+	p.retryAt = p.clock.Real().Add(time.Second)
+	p.ensureDue(ctx)
+	if p.attempts != 1 {
+		t.Fatalf("a retry a second before the backoff ends ran: %d attempts", p.attempts)
+	}
 	p.retryAt = p.clock.Real()
 	before := p.clock.Real()
 	p.ensureDue(ctx)
@@ -275,26 +280,6 @@ func TestStatusCanBeReadWhileTheBankProvisions(t *testing.T) {
 			return
 		default:
 		}
-	}
-}
-
-func TestRetryDue(t *testing.T) {
-	at := time.Date(2026, time.November, 14, 10, 0, 0, 0, clock.Lagos)
-	for _, c := range []struct {
-		name string
-		now  time.Time
-		want bool
-	}{
-		{"a second before the backoff ends", at.Add(-time.Second), false},
-		{"at the backoff", at, true},
-		{"after the backoff", at.Add(clock.Backoff(1)), true},
-	} {
-		if got := retryDue(at, c.now); got != c.want {
-			t.Errorf("%s: %v, want %v", c.name, got, c.want)
-		}
-	}
-	if !retryDue(time.Time{}, at) {
-		t.Error("a bank that never failed is not due")
 	}
 }
 

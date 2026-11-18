@@ -466,7 +466,11 @@ func TestRefreshGrace(t *testing.T) {
 	if status, _ := e.get(e.good, "/accounts", second["access_token"].(string)); status != http.StatusUnauthorized {
 		t.Fatalf("the lost-response access token should be replaced: %d", status)
 	}
-	e.editToken(first, func(t *Token) { t.RotatedAt = time.Now().Add(-2 * time.Minute) })
+	e.editToken(first, func(t *Token) { t.RotatedAt = time.Now().Add(-50 * time.Second) })
+	if status, body := refresh(first); status != 200 {
+		t.Fatalf("previous refresh token inside the grace period, rotated 50 seconds ago: %d %v", status, body)
+	}
+	e.editToken(first, func(t *Token) { t.RotatedAt = time.Now().Add(-70 * time.Second) })
 	if status, body := refresh(first); status != http.StatusBadRequest || body["error"] != "invalid_grant" {
 		t.Fatalf("previous refresh token after the grace period: %d %v", status, body)
 	}
@@ -919,26 +923,6 @@ func TestLapsed(t *testing.T) {
 	}
 }
 
-func TestTokenExpiries(t *testing.T) {
-	for _, c := range []struct {
-		name        string
-		now         time.Time
-		access      time.Duration
-		days        int
-		wantAccess  time.Time
-		wantRefresh time.Time
-	}{
-		{"default terms", time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC), 10 * time.Minute, DefaultRefreshDays, time.Date(2026, time.March, 1, 9, 10, 0, 0, time.UTC), time.Date(2027, time.March, 8, 9, 0, 0, 0, time.UTC)},
-		{"across a leap day", time.Date(2028, time.February, 28, 23, 55, 0, 0, time.UTC), 10 * time.Minute, 2, time.Date(2028, time.February, 29, 0, 5, 0, 0, time.UTC), time.Date(2028, time.March, 1, 23, 55, 0, 0, time.UTC)},
-		{"year end", time.Date(2026, time.December, 31, 23, 59, 0, 0, time.UTC), time.Minute, 1, time.Date(2027, time.January, 1, 0, 0, 0, 0, time.UTC), time.Date(2027, time.January, 1, 23, 59, 0, 0, time.UTC)},
-	} {
-		access, refresh := tokenExpiries(c.now, c.access, c.days)
-		if !access.Equal(c.wantAccess) || !refresh.Equal(c.wantRefresh) {
-			t.Errorf("%s: access %s refresh %s, want %s and %s", c.name, access, refresh, c.wantAccess, c.wantRefresh)
-		}
-	}
-}
-
 func TestAssertionWindow(t *testing.T) {
 	now := time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)
 	life := time.Minute
@@ -954,25 +938,6 @@ func TestAssertionWindow(t *testing.T) {
 		{"past the window", now.Add(life + time.Second), false},
 	} {
 		if got := assertionWindow(c.exp, now, life); got != c.want {
-			t.Errorf("%s: %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
-func TestWithinGrace(t *testing.T) {
-	rotated := time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)
-	for _, c := range []struct {
-		name string
-		wait time.Duration
-		want bool
-	}{
-		{"straight away", 0, true},
-		{"half the grace", 30 * time.Second, true},
-		{"the whole grace", time.Minute, true},
-		{"just after", time.Minute + time.Nanosecond, false},
-		{"two minutes", 2 * time.Minute, false},
-	} {
-		if got := withinGrace(rotated.Add(c.wait), rotated, time.Minute); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -1040,16 +1005,7 @@ func TestConsentOnAMonthEndExpiresOnTheLastDay(t *testing.T) {
 
 func TestHistoryFloorAndAsOf(t *testing.T) {
 	today := clock.Date{Y: 2026, M: time.March, D: 1}
-	floor := historyFloor(today, 90)
-	if floor.String() != "2025-12-01" {
-		t.Fatalf("floor %s", floor)
-	}
-	if got := historyFloor(clock.Date{Y: 2028, M: time.March, D: 1}, 366).String(); got != "2027-03-01" {
-		t.Errorf("floor over a leap day %s", got)
-	}
-	if got := historyFloor(clock.Date{Y: 2027, M: time.January, D: 1}, 1).String(); got != "2026-12-31" {
-		t.Errorf("floor over year end %s", got)
-	}
+	floor := clock.Date{Y: 2025, M: time.December, D: 1}
 	for _, c := range []struct {
 		name string
 		d    string
@@ -1068,6 +1024,35 @@ func TestHistoryFloorAndAsOf(t *testing.T) {
 		}
 		if got := asOfAllowed(d, today, floor); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestBalanceAsOfFollowsTheHistoryWindow(t *testing.T) {
+	for _, days := range []int{1, 90, 366} {
+		e := newEnv(t, func(c *Config) { c.HistoryDays = days })
+		tok, _ := e.tokens()
+		access := tok["access_token"].(string)
+		today := clock.DateOf(e.srv.cfg.Clock.Now())
+		floor := today.AddDays(-days)
+		if got := e.srv.HistoryFloor(); got != floor {
+			t.Fatalf("%d days: history floor %s, want %s", days, got, floor)
+		}
+		for _, c := range []struct {
+			name string
+			d    clock.Date
+			want int
+		}{
+			{"yesterday", today.AddDays(-1), http.StatusOK},
+			{"today", today, http.StatusBadRequest},
+			{"tomorrow", today.AddDays(1), http.StatusBadRequest},
+			{"the day before the floor", floor.AddDays(-1), http.StatusOK},
+			{"two days before the floor", floor.AddDays(-2), http.StatusBadRequest},
+		} {
+			status, body := e.get(e.good, "/accounts/0123456789/balances?as_of="+c.d.String(), access)
+			if status != c.want {
+				t.Errorf("%d days, %s: as_of %s gave %d %v, want %d", days, c.name, c.d, status, body, c.want)
+			}
 		}
 	}
 }

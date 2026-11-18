@@ -88,7 +88,7 @@ func (r *RegistryCache) Refresh(ctx context.Context) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !registryServable(r.at, r.clock.Real()) {
+	if r.at.IsZero() || r.clock.Real().Sub(r.at) > registryStale {
 		return fmt.Errorf("read the registry: %w", err)
 	}
 	if msg := err.Error(); r.warned != msg {
@@ -98,18 +98,10 @@ func (r *RegistryCache) Refresh(ctx context.Context) error {
 	return nil
 }
 
-func registryFresh(at, now time.Time) bool {
-	return !at.IsZero() && now.Sub(at) < registryTTL
-}
-
-func registryServable(at, now time.Time) bool {
-	return !at.IsZero() && now.Sub(at) <= registryStale
-}
-
 func (r *RegistryCache) fresh() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return registryFresh(r.at, r.clock.Real())
+	return !r.at.IsZero() && r.clock.Real().Sub(r.at) < registryTTL
 }
 
 func (r *RegistryCache) load(ctx context.Context) error {
