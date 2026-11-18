@@ -91,7 +91,7 @@ func serveHealth(ctx context.Context, ln net.Listener, ca string) error {
 }
 
 func (s *supervisor) startCBN() {
-	s.cbn = s.launch(config.CBNID, "", []string{config.DatabaseURLEnv + "=" + s.database}, []string{"run", "--participant", config.CBNID, "--dir", s.dir, "--supervised"})
+	s.cbn = s.launch(config.CBNID, []string{config.DatabaseURLEnv + "=" + s.database}, []string{"run", "--participant", config.CBNID, "--dir", s.dir, "--supervised"})
 }
 
 func (s *supervisor) awaitCBN(ctx context.Context) error {

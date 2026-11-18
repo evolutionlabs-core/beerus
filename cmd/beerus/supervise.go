@@ -7,12 +7,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"slices"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/fleet"
 )
 
 const (
@@ -33,9 +34,7 @@ type supervisor struct {
 	core      *child
 	nibss     *child
 	cbn       *child
-	banks     map[string]*child
-	order     []string
-	stopping  map[string]*child
+	fleet     *fleet.Fleet
 	watchStop context.CancelFunc
 	watchDone chan struct{}
 }
@@ -53,7 +52,7 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 
 func newSupervisor(exe, dir, coreURL, databaseURL string, c *ctl, out io.Writer) *supervisor {
 	logs := &syncWriter{w: out}
-	return &supervisor{
+	s := &supervisor{
 		exe:      exe,
 		dir:      dir,
 		coreURL:  coreURL,
@@ -62,13 +61,18 @@ func newSupervisor(exe, dir, coreURL, databaseURL string, c *ctl, out io.Writer)
 		clock:    clock.New(nil),
 		log:      slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		logs:     logs,
-		banks:    map[string]*child{},
-		stopping: map[string]*child{},
 	}
+	s.fleet = fleet.New(c.base, c.token, s, s.log)
+	return s
+}
+
+func (s *supervisor) Start(id string) (func(), <-chan struct{}) {
+	c := s.launch(id, []string{config.DatabaseURLEnv + "=" + s.database}, []string{"run", "--participant", id, "--dir", s.dir, "--core", s.coreURL, "--supervised"})
+	return c.stop, c.done
 }
 
 func (s *supervisor) startCore() {
-	s.core = s.launch(coreID, "", nil, []string{"run", "--participant", coreID, "--dir", s.dir, "--supervised"})
+	s.core = s.launch(coreID, nil, []string{"run", "--participant", coreID, "--dir", s.dir, "--supervised"})
 }
 
 func (s *supervisor) awaitCore(ctx context.Context) error {
@@ -144,7 +148,7 @@ func (s *supervisor) watch(ctx context.Context) {
 	s.watchDone = make(chan struct{})
 	go func() {
 		defer close(s.watchDone)
-		s.reconcile(ctx)
+		s.fleet.Run(ctx)
 	}()
 }
 
@@ -153,15 +157,7 @@ func (s *supervisor) shutdown() {
 		s.watchStop()
 		<-s.watchDone
 	}
-	for _, id := range s.order {
-		s.banks[id].stop()
-	}
-	for _, id := range slices.Backward(slices.Clone(s.order)) {
-		<-s.banks[id].done
-	}
-	for _, c := range s.stopping {
-		<-c.done
-	}
+	s.fleet.Close()
 	for _, c := range []*child{s.nibss, s.core, s.cbn} {
 		if c != nil {
 			c.stop()

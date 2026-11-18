@@ -9,7 +9,7 @@ import (
 )
 
 func (s *supervisor) startNIBSS() {
-	s.nibss = s.launch(config.NIBSSID, "", []string{config.DatabaseURLEnv + "=" + s.database}, []string{"run", "--participant", config.NIBSSID, "--dir", s.dir, "--supervised"})
+	s.nibss = s.launch(config.NIBSSID, []string{config.DatabaseURLEnv + "=" + s.database}, []string{"run", "--participant", config.NIBSSID, "--dir", s.dir, "--supervised"})
 }
 
 func (s *supervisor) awaitNIBSS(ctx context.Context) error {

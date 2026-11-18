@@ -24,7 +24,6 @@ const (
 
 type child struct {
 	id        string
-	print     string
 	env       []string
 	quit      chan struct{}
 	quitOnce  sync.Once
@@ -54,8 +53,8 @@ func (c *child) remember(line string) {
 	}
 }
 
-func (s *supervisor) launch(id, print string, env, args []string) *child {
-	c := &child{id: id, print: print, env: env, quit: make(chan struct{}), done: make(chan struct{}), firstExit: make(chan struct{})}
+func (s *supervisor) launch(id string, env, args []string) *child {
+	c := &child{id: id, env: env, quit: make(chan struct{}), done: make(chan struct{}), firstExit: make(chan struct{})}
 	go s.keep(c, args)
 	return c
 }

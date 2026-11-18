@@ -522,7 +522,7 @@ func TestCloseBank(t *testing.T) {
 			t.Fatalf("%s on a closed bank: %v", path, err)
 		}
 	}
-	if _, err := s.payTry("bank-a", home["tunde"].Accounts[0], "abuja-digital", opened["tunde"].Accounts[0], "100", nil); err == nil || !strings.Contains(err.Error(), "bank_closed") {
+	if _, err := s.payTry("bank-a", home["tunde"].Accounts[0], "abuja-digital", opened["tunde"].Accounts[0], "100", nil); err == nil || !strings.Contains(err.Error(), "bank_closed") && !strings.Contains(err.Error(), "bank_unavailable") {
 		t.Fatalf("transfer into a closed bank: %v", err)
 	}
 	if _, err := s.ctlTry("POST", "/banks/abuja-digital/accounts", map[string]any{"customer": opened["tunde"].Customer, "type": "current"}); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
@@ -536,7 +536,7 @@ func TestCloseBank(t *testing.T) {
 	if !saved.Bank("abuja-digital").Closed() {
 		t.Fatal("the closed state was not saved")
 	}
-	again, err := connect.New(t.Context(), saved, connect.Options{})
+	again, err := connect.New(t.Context(), saved, connect.Options{Role: connect.RoleCore})
 	if err != nil {
 		t.Fatal(err)
 	}

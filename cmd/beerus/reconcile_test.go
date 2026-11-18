@@ -52,13 +52,7 @@ func newReconcileStack(t *testing.T) (*supervisor, func(string)) {
 	s := newSupervisor(exe, t.TempDir(), "http://"+lis.Addr().String(), "", &ctl{base: "http://" + lis.Addr().String()}, io.Discard)
 	t.Cleanup(func() {
 		srv.Close()
-		for _, c := range s.banks {
-			c.stop()
-			<-c.done
-		}
-		for _, c := range s.stopping {
-			<-c.done
-		}
+		s.fleet.Close()
 	})
 	return s, func(v string) {
 		mu.Lock()
@@ -69,8 +63,8 @@ func newReconcileStack(t *testing.T) (*supervisor, func(string)) {
 
 func running(s *supervisor) []string {
 	ids := []string{}
-	for id, c := range s.banks {
-		ids = append(ids, id+"="+c.print)
+	for id, print := range s.fleet.Running() {
+		ids = append(ids, id+"="+print)
 	}
 	slices.Sort(ids)
 	return ids
@@ -96,7 +90,7 @@ func TestReconcileBanks(t *testing.T) {
 	}
 	for _, st := range steps {
 		serve(st.body)
-		banks, err := s.readBanks(context.Background())
+		banks, err := s.fleet.Read(context.Background())
 		if st.wantErr != "" {
 			if err == nil || err.Error() != st.wantErr {
 				t.Fatalf("%s: err %v, want %q", st.name, err, st.wantErr)
@@ -111,7 +105,7 @@ func TestReconcileBanks(t *testing.T) {
 		}
 		deadline := time.Now().Add(syncDeadline)
 		for {
-			s.sync(banks)
+			s.fleet.Sync(banks)
 			got := running(s)
 			if slices.Equal(got, st.want) {
 				break
