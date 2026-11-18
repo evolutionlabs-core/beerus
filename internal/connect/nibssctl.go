@@ -159,6 +159,19 @@ func (n *nibssAdmin) status(ctx context.Context) (int, []string, error) {
 	return *out.Posted, out.Problems, nil
 }
 
+func (n *nibssAdmin) nextCutoff(ctx context.Context) (time.Time, error) {
+	var out struct {
+		NextCutoffAt *time.Time `json:"next_cutoff_at"`
+	}
+	if err := n.call(ctx, http.MethodGet, nibssStatusPath, nil, nil, &out); err != nil {
+		return time.Time{}, fmt.Errorf("read the next NIP session of NIBSS: %w", err)
+	}
+	if out.NextCutoffAt == nil {
+		return time.Time{}, errors.New("NIBSS did not report its next NIP session")
+	}
+	return *out.NextCutoffAt, nil
+}
+
 type openSessions struct {
 	Transfers     int   `json:"transfers"`
 	Outward       int64 `json:"outward_minor"`

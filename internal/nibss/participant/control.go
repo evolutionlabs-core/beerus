@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -25,14 +27,15 @@ type step struct {
 }
 
 type state struct {
-	ParticipantID      string   `json:"participant_id"`
-	Kind               string   `json:"kind"`
-	Phase              string   `json:"phase"`
-	Generation         int64    `json:"generation"`
-	ObservedGeneration int64    `json:"observed_generation"`
-	Steps              []step   `json:"steps"`
-	Problems           []string `json:"problems"`
-	PostedSessions     *int     `json:"posted_sessions,omitempty"`
+	ParticipantID      string     `json:"participant_id"`
+	Kind               string     `json:"kind"`
+	Phase              string     `json:"phase"`
+	Generation         int64      `json:"generation"`
+	ObservedGeneration int64      `json:"observed_generation"`
+	Steps              []step     `json:"steps"`
+	Problems           []string   `json:"problems"`
+	PostedSessions     *int       `json:"posted_sessions,omitempty"`
+	NextCutoffAt       *time.Time `json:"next_cutoff_at,omitempty"`
 }
 
 type registerRequest struct {
@@ -126,7 +129,16 @@ func (p *Participant) status(w http.ResponseWriter, r *http.Request) {
 		Phase:         phaseActive,
 		Steps:         []step{{config.StepDatabase, "Making the NIBSS database", true}, {stepSchema, "Migrating the NIBSS database", true}},
 	}
-	problems, posted, err := p.settlementState(r.Context())
+	now := p.clock.Now()
+	sched, err := p.schedule()
+	if err != nil {
+		st.Problems = []string{"NIBSS could not check its settlements: " + err.Error()}
+		web.WriteJSON(w, http.StatusOK, st)
+		return
+	}
+	next := sched.Next(now).In(clock.Lagos)
+	st.NextCutoffAt = &next
+	problems, posted, err := p.settlementState(r.Context(), sched, now)
 	if err != nil {
 		st.Problems = []string{"NIBSS could not check its settlements: " + err.Error()}
 	} else {
@@ -135,12 +147,8 @@ func (p *Participant) status(w http.ResponseWriter, r *http.Request) {
 	web.WriteJSON(w, http.StatusOK, st)
 }
 
-func (p *Participant) settlementState(ctx context.Context) ([]string, int, error) {
-	sched, err := p.schedule()
-	if err != nil {
-		return nil, 0, err
-	}
-	problems, err := p.store.SettlementProblems(ctx, sched, p.clock.Now())
+func (p *Participant) settlementState(ctx context.Context, sched nibss.Schedule, now time.Time) ([]string, int, error) {
+	problems, err := p.store.SettlementProblems(ctx, sched, now)
 	if err != nil {
 		return nil, 0, err
 	}

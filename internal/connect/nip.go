@@ -91,8 +91,11 @@ func (a *App) position(ctx context.Context, b *config.Bank) (map[string]any, err
 	if b.Collateral > 0 {
 		collateral = b.Collateral
 	}
-	now := a.clock.Now()
-	return map[string]any{"bank_id": b.ID, "nip_code": b.NIPCode, "net_debit_cap_minor": b.Cap(), "cap_source": source, "collateral_minor": collateral, "open_outward_minor": open.Outward, "open_inward_minor": open.Inward, "position_minor": pos, "headroom_minor": b.Cap() - pos, "next_session": ts(a.schedule().Next(now))}, nil
+	next, err := a.nibssCtl.nextCutoff(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"bank_id": b.ID, "nip_code": b.NIPCode, "net_debit_cap_minor": b.Cap(), "cap_source": source, "collateral_minor": collateral, "open_outward_minor": open.Outward, "open_inward_minor": open.Inward, "position_minor": pos, "headroom_minor": b.Cap() - pos, "next_session": ts(next)}, nil
 }
 
 func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
@@ -103,8 +106,7 @@ func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
 	for _, b := range banks {
 		row, err := a.position(r.Context(), b)
 		if err != nil {
-			a.log.Error("NIP positions", "err", err)
-			web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The positions could not be worked out.")
+			a.settlementFailed(w, r, "NIP positions", err)
 			return
 		}
 		out = append(out, row)
@@ -231,8 +233,7 @@ func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
 	a.mu.Unlock()
 	row, err := a.position(r.Context(), b)
 	if err != nil {
-		a.log.Error("NIP positions", "err", err)
-		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The position could not be worked out.")
+		a.settlementFailed(w, r, "NIP position", err)
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, row)

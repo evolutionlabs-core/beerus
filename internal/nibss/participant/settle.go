@@ -75,6 +75,10 @@ func (p *Participant) schedule() (nibss.Schedule, error) {
 	if err != nil {
 		return nibss.Schedule{}, err
 	}
+	return scheduleOf(f)
+}
+
+func scheduleOf(f config.NIBSSFile) (nibss.Schedule, error) {
 	cal, err := f.Calendar()
 	if err != nil {
 		return nibss.Schedule{}, err

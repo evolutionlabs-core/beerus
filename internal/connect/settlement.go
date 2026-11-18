@@ -10,17 +10,12 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 )
 
 const (
 	bankCheckWait = 15 * time.Second
 	bankCheckPoll = 200 * time.Millisecond
 )
-
-func (a *App) schedule() nibss.Schedule {
-	return nibss.Schedule{Per: a.cfg.Sessions(), Cal: a.cfg.Calendar()}
-}
 
 func (a *App) settleDue(ctx context.Context) {
 	if err := a.postBooks(ctx); err != nil {
