@@ -72,11 +72,11 @@ func (a *App) openParticipants(ctx context.Context) error {
 	if a.role == RoleCore {
 		return nil
 	}
-	cbn, err := cbnparticipant.New(ctx, a.cfg.Dir, cbnparticipant.Options{Logger: a.log, Real: a.clock.Real, DatabaseURL: a.cfg.DatabaseURL})
+	cbn, err := cbnparticipant.New(ctx, a.cfg.Dir, cbnparticipant.Options{Logger: a.log, DatabaseURL: a.cfg.DatabaseURL})
 	if err != nil {
 		return err
 	}
-	ns, err := nibssparticipant.New(ctx, a.cfg.Dir, nibssparticipant.Options{Logger: a.log, Real: a.clock.Real, DatabaseURL: a.cfg.DatabaseURL})
+	ns, err := nibssparticipant.New(ctx, a.cfg.Dir, nibssparticipant.Options{Logger: a.log, DatabaseURL: a.cfg.DatabaseURL})
 	if err != nil {
 		cbn.Close()
 		return err

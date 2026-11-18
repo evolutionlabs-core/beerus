@@ -107,7 +107,6 @@ type App struct {
 }
 
 type Options struct {
-	Real     func() time.Time
 	Logger   *slog.Logger
 	Client   *http.Client
 	Role     string
@@ -170,7 +169,7 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 		}
 	}
 	a.st = st
-	a.clock = clock.New(o.Real)
+	a.clock = clock.New()
 	a.banking = &server.Banking{Src: bookSource{a}, Clock: a.clock, Log: a.log}
 	a.sender = a.newSender()
 	if err := a.prepareOpenBanking(); err != nil {

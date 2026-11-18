@@ -14,7 +14,7 @@ import (
 
 func TestStatusWithoutTheSettlementCountReportsAProblem(t *testing.T) {
 	dir := t.TempDir()
-	p := &Participant{dir: dir, log: slog.New(slog.DiscardHandler), clock: clock.New(nil)}
+	p := &Participant{dir: dir, log: slog.New(slog.DiscardHandler), clock: clock.New()}
 	w := httptest.NewRecorder()
 	p.status(w, httptest.NewRequest(http.MethodGet, "/v1/status", nil))
 	var got map[string]any

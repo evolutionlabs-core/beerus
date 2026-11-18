@@ -15,23 +15,18 @@ func mustLagos() *time.Location {
 	return loc
 }
 
-type Clock struct {
-	real func() time.Time
-}
+type Clock struct{}
 
-func New(real func() time.Time) *Clock {
-	if real == nil {
-		real = time.Now
-	}
-	return &Clock{real: real}
+func New() *Clock {
+	return &Clock{}
 }
 
 func (c *Clock) Now() time.Time {
-	return c.real().In(Lagos).Truncate(time.Millisecond)
+	return time.Now().In(Lagos).Truncate(time.Millisecond)
 }
 
 func (c *Clock) Real() time.Time {
-	return c.real()
+	return time.Now()
 }
 
 func (c *Clock) Today() Date {
