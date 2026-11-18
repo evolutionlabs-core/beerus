@@ -20,7 +20,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/core"
 	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -44,7 +44,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	}
 	s := newBankStack(t)
 	s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
-	s.waitPhase("abuja-digital", connect.PhaseActive, 60*time.Second)
+	s.waitPhase("abuja-digital", core.PhaseActive, 60*time.Second)
 	bank := *s.cfg.Bank("abuja-digital")
 	home := s.persona("adaeze")
 	target := s.openAccount(s.join("adaeze", "abuja-digital"), "current")
@@ -179,7 +179,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
-	again, err := connect.New(c, connect.Options{})
+	again, err := core.New(c, core.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 		if st.ID == "abuja-digital" {
 			t.Fatal("the bank came back after a restart")
 		}
-		if st.Phase != connect.PhaseActive {
+		if st.Phase != core.PhaseActive {
 			t.Fatalf("%s is %s after a restart", st.ID, st.Phase)
 		}
 	}
@@ -202,7 +202,7 @@ func TestPurgeRules(t *testing.T) {
 	}
 	s := newStubStack(t)
 	s.ctl("POST", "/banks", map[string]any{"name": "Acme Bank", "type": "digital"})
-	s.waitPhase("acme-bank", connect.PhaseActive, 60*time.Second)
+	s.waitPhase("acme-bank", core.PhaseActive, 60*time.Second)
 	oldBank, err := s.app.Resource(setup.KindBank, "acme-bank")
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +214,7 @@ func TestPurgeRules(t *testing.T) {
 	s.ctl("POST", "/nip/settle-now", nil)
 	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "acme-bank", "outcome": "credited", "count": 5})
 	s.ctl("POST", "/banks/acme-bank/close", map[string]any{"money": "leave"})
-	s.waitPhase("acme-bank", connect.PhaseClosed, 60*time.Second)
+	s.waitPhase("acme-bank", core.PhaseClosed, 60*time.Second)
 	oldBalance := cbnBalance(t, s.cfg, "acme-bank")
 	s.ctl("POST", "/banks/acme-bank/purge", nil)
 	s.waitGone("bank", "acme-bank")
@@ -228,9 +228,9 @@ func TestPurgeRules(t *testing.T) {
 		t.Fatalf("create with a chosen code: %v", err)
 	}
 	s.ctl("POST", "/banks", map[string]any{"name": "Acme Bank", "type": "digital"})
-	s.waitPhase("acme-bank-2", connect.PhaseActive, 60*time.Second)
+	s.waitPhase("acme-bank-2", core.PhaseActive, 60*time.Second)
 	s.ctl("POST", "/banks", map[string]any{"name": "Bank-B", "type": "digital"})
-	s.waitPhase("bank-b-2", connect.PhaseActive, 60*time.Second)
+	s.waitPhase("bank-b-2", core.PhaseActive, 60*time.Second)
 	fresh, err := s.app.Resource(setup.KindBank, "acme-bank-2")
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +249,7 @@ func TestPurgeRules(t *testing.T) {
 	}
 	for _, id := range []string{"acme-bank-2", "bank-b-2", "bank-b", "bank-a"} {
 		s.ctl("POST", "/banks/"+id+"/close", map[string]any{"money": "leave"})
-		s.waitPhase(id, connect.PhaseClosed, 60*time.Second)
+		s.waitPhase(id, core.PhaseClosed, 60*time.Second)
 		if imp := s.ctl("GET", "/banks/"+id+"/purge", nil); fmt.Sprint(imp["blockers"]) != "[]" {
 			t.Fatalf("purge preview of %s: %v", id, imp)
 		}
@@ -266,7 +266,7 @@ func TestPurgeRules(t *testing.T) {
 	if len(c.Banks) != 0 {
 		t.Fatal("the setup still lists a purged bank")
 	}
-	again, err := connect.New(c, connect.Options{})
+	again, err := core.New(c, core.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func waitFor(t *testing.T, limit time.Duration, what string, cond func() bool) {
 	}
 }
 
-func blockedOn(app *connect.App, id, reason, text string) bool {
+func blockedOn(app *core.App, id, reason, text string) bool {
 	r, err := app.Resource(setup.KindBank, id)
 	if err != nil {
 		return false
@@ -349,7 +349,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	r := start()
 	waitFor(t, waitLimit, "both banks to be active", func() bool {
 		for _, b := range r.app.BankStatuses() {
-			if b.Phase != connect.PhaseActive {
+			if b.Phase != core.PhaseActive {
 				return false
 			}
 		}
@@ -397,7 +397,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	})
 	spec := storedStatus(t, cfg.Dir).Applied
 	spec.Spec.Banks = slices.DeleteFunc(spec.Spec.Banks, func(b setup.Bank) bool { return b.ID == "bank-b" })
-	if _, err := r.app.Apply(t.Context(), spec, connect.ApplyOptions{Prune: true, Money: &setup.Removal{Money: setup.MoneyTransfer, To: "bank-a"}}); err != nil {
+	if _, err := r.app.Apply(t.Context(), spec, core.ApplyOptions{Prune: true, Money: &setup.Removal{Money: setup.MoneyTransfer, To: "bank-a"}}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, waitLimit, "the moves to wait for settlement", func() bool {

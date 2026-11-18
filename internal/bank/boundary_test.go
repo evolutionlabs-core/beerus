@@ -15,7 +15,7 @@ const (
 
 var forbidden = []string{
 	modulePath + "/internal/nibss",
-	modulePath + "/internal/connect",
+	modulePath + "/internal/core",
 	modulePath + "/internal/setup",
 	modulePath + "/cmd",
 }

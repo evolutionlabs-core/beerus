@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/core"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -28,7 +28,7 @@ func (s *Stack) waitBank(id string) map[string]any {
 			st := d.(map[string]any)
 			if st["id"] == id {
 				last = st
-				if st["phase"] != connect.PhaseProvisioning {
+				if st["phase"] != core.PhaseProvisioning {
 					return st
 				}
 			}
@@ -95,7 +95,7 @@ func (s *Stack) settleUntil(id, phase string) {
 
 func (s *Stack) closeResult(id string) map[string]any {
 	s.t.Helper()
-	s.settleUntil(id, connect.PhaseClosed)
+	s.settleUntil(id, core.PhaseClosed)
 	res, ok := s.ctl("GET", "/resources/bank/"+id, nil)["result"].(map[string]any)
 	if !ok {
 		s.t.Fatalf("bank %s has no close result", id)
@@ -121,11 +121,11 @@ func TestCreateBank(t *testing.T) {
 	s := newBankStack(t)
 	p := s.persona("adaeze")
 	out := s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
-	if out["id"] != "abuja-digital" || out["phase"] != connect.PhaseProvisioning {
+	if out["id"] != "abuja-digital" || out["phase"] != core.PhaseProvisioning {
 		t.Fatalf("create: %v", out)
 	}
 	st := s.waitBank("abuja-digital")
-	if st["phase"] != connect.PhaseActive {
+	if st["phase"] != core.PhaseActive {
 		t.Fatalf("phase: %v", st)
 	}
 	for _, step := range st["steps"].([]any) {
@@ -196,7 +196,7 @@ func TestSuspendBank(t *testing.T) {
 	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
 	chidi, tunde := s.persona("chidi").Accounts[0], s.persona("tunde").Accounts[0]
 	st := s.ctl("POST", "/banks/bank-b/suspend", nil)
-	if st["phase"] != connect.PhaseSuspended {
+	if st["phase"] != core.PhaseSuspended {
 		t.Fatalf("suspend: %v", st)
 	}
 	if _, err := s.payTry("bank-b", chidi, "bank-a", tunde, "1000", nil); err == nil || !strings.Contains(err.Error(), "bank_not_active") {
@@ -284,7 +284,7 @@ func TestBankRepairsDrift(t *testing.T) {
 	tick := time.NewTicker(200 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		st := s.waitPhase("bank-b", connect.PhaseActive, 30*time.Second)
+		st := s.waitPhase("bank-b", core.PhaseActive, 30*time.Second)
 		rebuilt, _ := time.Parse(time.RFC3339Nano, fmt.Sprint(st["steps"].([]any)[2].(map[string]any)["at"]))
 		if rebuilt.After(dropped) {
 			break
@@ -317,7 +317,7 @@ func TestBankRepairsDrift(t *testing.T) {
 	}
 	timeout.Reset(60 * time.Second)
 	for {
-		st := s.waitPhase("bank-b", connect.PhaseTerminating, 30*time.Second)
+		st := s.waitPhase("bank-b", core.PhaseTerminating, 30*time.Second)
 		if ne := s.ctl("GET", "/nip/name-enquiry?bank_code="+s.cfg.Bank("bank-b").NIPCode+"&account_number="+p.Accounts[0], nil); ne["response_code"] != "91" {
 			t.Fatalf("name enquiry at a terminating bank that is being repaired: %v", ne)
 		}
@@ -340,7 +340,7 @@ func TestOpenAccountAtNewBank(t *testing.T) {
 	}
 	s := newBankStack(t)
 	s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
-	s.waitPhase("abuja-digital", connect.PhaseActive, 60*time.Second)
+	s.waitPhase("abuja-digital", core.PhaseActive, 60*time.Second)
 	p := s.join("adaeze", "abuja-digital")
 	if p.BVN != s.persona("adaeze").BVN {
 		t.Fatalf("a second bank gave adaeze BVN %s, want %s", p.BVN, s.persona("adaeze").BVN)
@@ -374,7 +374,7 @@ func TestCloseImpact(t *testing.T) {
 	}
 	s := newBankStack(t)
 	s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
-	s.waitPhase("abuja-digital", connect.PhaseActive, 60*time.Second)
+	s.waitPhase("abuja-digital", core.PhaseActive, 60*time.Second)
 	empty := s.ctl("GET", "/banks/abuja-digital/close", nil)
 	if len(empty["customers"].([]any)) != 0 || empty["deposits_minor"] != float64(0) {
 		t.Fatalf("new bank impact: %v", empty)
@@ -400,7 +400,7 @@ func TestCloseImpact(t *testing.T) {
 	if st := s.ctl("GET", "/banks", nil); !strings.Contains(fmt.Sprint(st["data"]), "abuja-digital") {
 		t.Fatalf("banks: %v", st)
 	}
-	s.waitPhase("abuja-digital", connect.PhaseActive, time.Second)
+	s.waitPhase("abuja-digital", core.PhaseActive, time.Second)
 	big := s.ctl("GET", "/banks/bank-a/close", nil)
 	if big["insured_minor"].(float64)+big["uninsured_minor"].(float64) != big["deposits_minor"].(float64) || len(big["customers"].([]any)) == 0 {
 		t.Fatalf("bank-a impact: %v", big)
@@ -416,7 +416,7 @@ func TestCloseBank(t *testing.T) {
 	}
 	s := newBankStack(t)
 	s.ctl("POST", "/banks", map[string]any{"name": "Abuja Digital", "type": "digital"})
-	s.waitPhase("abuja-digital", connect.PhaseActive, 60*time.Second)
+	s.waitPhase("abuja-digital", core.PhaseActive, 60*time.Second)
 	fund := map[string]string{"adaeze": "25000", "tunde": "10000"}
 	home, opened := map[string]persona{}, map[string]persona{}
 	for _, id := range []string{"adaeze", "tunde"} {
@@ -531,7 +531,7 @@ func TestCloseBank(t *testing.T) {
 	if _, err := s.ctlTry("POST", "/banks/abuja-digital/accounts", map[string]any{"customer": opened["tunde"].Customer, "type": "current"}); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
 		t.Fatalf("open account at a closed bank: %v", err)
 	}
-	s.waitPhase("abuja-digital", connect.PhaseClosed, time.Second)
+	s.waitPhase("abuja-digital", core.PhaseClosed, time.Second)
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -539,12 +539,12 @@ func TestCloseBank(t *testing.T) {
 	if !saved.Bank("abuja-digital").Closed() {
 		t.Fatal("the closed state was not saved")
 	}
-	again, err := connect.New(saved, connect.Options{})
+	again, err := core.New(saved, core.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, st := range again.BankStatuses() {
-		if st.ID == "abuja-digital" && st.Phase != connect.PhaseClosed {
+		if st.ID == "abuja-digital" && st.Phase != core.PhaseClosed {
 			t.Fatalf("after restart: %s", st.Phase)
 		}
 	}
@@ -560,7 +560,7 @@ func TestClosePaysInsuredDeposits(t *testing.T) {
 	}
 	s := newBankStack(t)
 	s.ctl("POST", "/banks", map[string]any{"name": "Kano Microfinance", "type": "microfinance"})
-	s.waitPhase("kano-microfinance", connect.PhaseActive, 60*time.Second)
+	s.waitPhase("kano-microfinance", core.PhaseActive, 60*time.Second)
 	if imp := s.ctl("GET", "/banks/bank-a/close", nil); !strings.Contains(fmt.Sprint(imp["blockers"]), "Kano Microfinance settles through this bank") {
 		t.Fatalf("bank-a blockers: %v", imp["blockers"])
 	}
@@ -620,7 +620,7 @@ func TestBanksFilterByState(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s.ctl("POST", "/banks/bank-b/close", map[string]any{"money": "leave"})
-	s.waitPhase("bank-b", connect.PhaseClosed, 60*time.Second)
+	s.waitPhase("bank-b", core.PhaseClosed, 60*time.Second)
 	ids := func(state string) []string {
 		out := []string{}
 		for _, d := range s.ctl("GET", "/banks?state="+state, nil)["data"].([]any) {

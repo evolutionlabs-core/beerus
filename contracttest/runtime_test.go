@@ -12,7 +12,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/aggregator"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/core"
 	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -70,7 +70,7 @@ func checkProvisioned(t *testing.T, r setup.Resource) {
 }
 
 type run struct {
-	app  *connect.App
+	app  *core.App
 	stop func()
 }
 
@@ -97,7 +97,7 @@ func TestFreshUpMakesBothBanksActive(t *testing.T) {
 	}
 	for _, st := range s.ctl("GET", "/banks", nil)["data"].([]any) {
 		m := st.(map[string]any)
-		if m["phase"] != connect.PhaseActive {
+		if m["phase"] != core.PhaseActive {
 			t.Errorf("%v is %v", m["id"], m["phase"])
 		}
 	}
@@ -138,12 +138,12 @@ func TestRestartResumesProvisioning(t *testing.T) {
 	second := runOnce(t, again)
 	defer second.stop()
 	waitFor(t, waitLimit, "both banks to be active again", func() bool {
-		return !slices.ContainsFunc(second.app.BankStatuses(), func(b connect.BankStatus) bool { return b.Phase != connect.PhaseActive })
+		return !slices.ContainsFunc(second.app.BankStatuses(), func(b core.BankStatus) bool { return b.Phase != core.PhaseActive })
 	})
 	checkProvisioned(t, activeBank(t, cfg.Dir, "bank-b"))
 	checkProvisioned(t, activeBank(t, cfg.Dir, "bank-a"))
 	for _, b := range second.app.BankStatuses() {
-		if b.Phase != connect.PhaseActive {
+		if b.Phase != core.PhaseActive {
 			t.Errorf("%s is %s after the restart", b.ID, b.Phase)
 		}
 	}

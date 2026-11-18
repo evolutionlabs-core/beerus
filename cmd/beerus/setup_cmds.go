@@ -27,7 +27,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/core"
 	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -185,7 +185,7 @@ func listAnd(xs []string) string {
 type applyRequest struct {
 	File string `json:"file"`
 	Spec string `json:"spec"`
-	connect.ApplyOptions
+	core.ApplyOptions
 }
 
 type planReply struct {
@@ -668,7 +668,7 @@ func cmdApply(e *cli, args []string) error {
 	if err != nil {
 		return err
 	}
-	req.ApplyOptions = connect.ApplyOptions{Prune: *prune, Money: rm, SettleNow: *settle}
+	req.ApplyOptions = core.ApplyOptions{Prune: *prune, Money: rm, SettleNow: *settle}
 	if err := e.confirm(c, &req, *asJSON, setup.OpRemove); err != nil {
 		return err
 	}
@@ -1105,7 +1105,7 @@ func cmdBankEnd(e *cli, args []string) error {
 	if err != nil {
 		return err
 	}
-	req := applyRequest{File: filepath.Join(*dir, setup.SpecFile), Spec: string(raw), ApplyOptions: connect.ApplyOptions{Prune: verb == "purge" && *yes, Money: rm, SettleNow: *settle}}
+	req := applyRequest{File: filepath.Join(*dir, setup.SpecFile), Spec: string(raw), ApplyOptions: core.ApplyOptions{Prune: verb == "purge" && *yes, Money: rm, SettleNow: *settle}}
 	if !*yes {
 		if err := e.confirm(c, &req, *asJSON, op); err != nil {
 			return err
@@ -1201,7 +1201,7 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 	if err := printInfo(c); err != nil {
 		return err
 	}
-	fmt.Fprintf(e.out, "\nControl room        %s\n", connect.RoomURL(c, cl.token))
+	fmt.Fprintf(e.out, "\nControl room        %s\n", core.RoomURL(c, cl.token))
 	sup := newSupervisor(exe, *dir, c.ControlURL(), c.DatabaseURL, cl, e.errOut)
 	sup.startCBN()
 	defer sup.shutdown()

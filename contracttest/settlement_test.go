@@ -13,11 +13,11 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/core"
 	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 )
 
-func checkSettled(t *testing.T, app *connect.App) connect.SettlementCheck {
+func checkSettled(t *testing.T, app *core.App) core.SettlementCheck {
 	t.Helper()
 	c, err := app.CheckSettlement(t.Context())
 	if err != nil {
@@ -87,7 +87,7 @@ func TestNIPSessionsCannotChangeOnALiveSetup(t *testing.T) {
 	checkSettled(t, s.app)
 	cfg := s.loadConfig()
 	cfg.NIPSessions = 12
-	if _, err := connect.New(cfg, connect.Options{}); err != nil {
+	if _, err := core.New(cfg, core.Options{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := nibssparticipant.New(t.Context(), cfg.Dir, nibssparticipant.Options{Bind: nodeBind, DatabaseURL: cfg.DatabaseURL}); err == nil || !strings.Contains(err.Error(), "nip_sessions must stay 1") {

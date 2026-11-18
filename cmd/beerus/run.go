@@ -19,7 +19,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/core"
 	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -52,7 +52,7 @@ func cmdRun(args []string) error {
 	which := fs.String("participant", "", "what to run: cbn, core, nibss, connect or a bank ID")
 	bind := fs.String("bind", envOr("BEERUS_BIND", "127.0.0.1"), "`address` to listen on")
 	supervised := fs.Bool("supervised", false, "stop when standard input closes")
-	core := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "`URL` of the core participant's control API, for banks")
+	coreURL := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "`URL` of the core participant's control API, for banks")
 	if _, err := parseAfter("run", fs, args, 0); err != nil {
 		return err
 	}
@@ -75,7 +75,7 @@ func cmdRun(args []string) error {
 		if err != nil {
 			return err
 		}
-		app, err := connect.New(c, connect.Options{Logger: log, CoreURL: *core, Bind: *bind})
+		app, err := core.New(c, core.Options{Logger: log, CoreURL: *coreURL, Bind: *bind})
 		if err != nil {
 			return err
 		}
@@ -86,7 +86,7 @@ func cmdRun(args []string) error {
 	case connectID:
 		return aggregator.Run(ctx, *dir, aggregator.Options{Logger: log, Bind: *bind})
 	}
-	return participant.Run(ctx, *dir, participant.Options{Logger: log, BankID: *which, CoreURL: *core, Bind: *bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
+	return participant.Run(ctx, *dir, participant.Options{Logger: log, BankID: *which, CoreURL: *coreURL, Bind: *bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
 }
 
 func initFromEnv(dir string) error {

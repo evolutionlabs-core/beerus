@@ -15,7 +15,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
 	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/core"
 	"github.com/evolutionlabs-core/beerus/internal/fleet"
 	"github.com/evolutionlabs-core/beerus/internal/install"
 	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
@@ -166,7 +166,7 @@ func (b banks) Start(id string) (func(), <-chan struct{}) {
 }
 
 type nodes struct {
-	app     *connect.App
+	app     *core.App
 	agg     *aggregator.App
 	order   []*node
 	stop    *node
@@ -190,12 +190,12 @@ func startNodes(cfg *config.Config, opts aggregator.Options) (*nodes, error) {
 	if err := ns.order[0].await(func(ctx context.Context) bool { return cbnAnswers(ctx, cfg.Dir) }); err != nil {
 		return ns, errors.Join(err, ns.halt())
 	}
-	if ns.app, err = connect.New(cfg, connect.Options{Bind: nodeBind}); err != nil {
+	if ns.app, err = core.New(cfg, core.Options{Bind: nodeBind}); err != nil {
 		return ns, errors.Join(err, ns.halt())
 	}
-	core := spawn("core", ns.app.Serve)
-	ns.order = append(ns.order, core)
-	if err := core.await(func(ctx context.Context) bool { return coreAnswers(ctx, cfg) }); err != nil {
+	coreNode := spawn("core", ns.app.Serve)
+	ns.order = append(ns.order, coreNode)
+	if err := coreNode.await(func(ctx context.Context) bool { return coreAnswers(ctx, cfg) }); err != nil {
 		return ns, errors.Join(err, ns.halt())
 	}
 	nibss, err := nibssparticipant.New(context.Background(), cfg.Dir, nibssparticipant.Options{Bind: nodeBind, DatabaseURL: cfg.DatabaseURL})

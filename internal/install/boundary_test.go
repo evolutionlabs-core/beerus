@@ -11,7 +11,7 @@ import (
 const (
 	modulePath   = "github.com/evolutionlabs-core/beerus"
 	installPath  = modulePath + "/internal/install"
-	connectPath  = modulePath + "/internal/connect"
+	corePath  = modulePath + "/internal/core"
 	cmdPath      = modulePath + "/cmd/beerus"
 	contractPath = modulePath + "/contracttest"
 )
@@ -50,7 +50,7 @@ func TestOnlyTheCommandImportsInstall(t *testing.T) {
 			t.Errorf("the tests of %s import %s; only %s and %s may", pkg, installPath, cmdPath, contractPath)
 		}
 	}
-	for _, p := range []string{cmdPath, connectPath, installPath, contractPath} {
+	for _, p := range []string{cmdPath, corePath, installPath, contractPath} {
 		if !listed[p] {
 			t.Errorf("%s is not covered by the boundary check", p)
 		}
@@ -58,14 +58,14 @@ func TestOnlyTheCommandImportsInstall(t *testing.T) {
 }
 
 func TestControlPlaneDoesNotReachInstall(t *testing.T) {
-	for _, dep := range goList(t, "-deps", connectPath) {
+	for _, dep := range goList(t, "-deps", corePath) {
 		if dep == installPath {
-			t.Errorf("%s reaches %s", connectPath, installPath)
+			t.Errorf("%s reaches %s", corePath, installPath)
 		}
 	}
 	for _, dep := range goList(t, "-deps", installPath) {
-		if dep == connectPath {
-			t.Errorf("%s reaches %s", installPath, connectPath)
+		if dep == corePath {
+			t.Errorf("%s reaches %s", installPath, corePath)
 		}
 	}
 	if !slices.Contains(goList(t, "-deps", cmdPath), installPath) {
