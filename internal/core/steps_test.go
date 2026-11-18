@@ -95,8 +95,25 @@ func TestFinalizerFailureBacksOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := setup.FindResource(&st, setup.KindBank, "bank-b")
-	if r.Attempts != 1 || r.NextAttemptAt == nil || len(r.Done) != 0 || len(r.Conditions) != 1 || r.Conditions[0].Reason != setup.ReasonStepFailed {
+	if r.Attempts != 1 || r.NextAttemptAt == nil || len(r.Done) != 0 || len(r.Conditions) != 1 || r.Conditions[0].Reason != reasonRetrying || r.Conditions[0].Type != setup.ConditionProgressing {
 		t.Fatalf("after a failure: %+v", r)
+	}
+	for range quietAttempts {
+		if err := a.ctl.Update(func(st *setup.Status) (bool, error) {
+			setup.FindResource(st, setup.KindBank, "bank-b").NextAttemptAt = nil
+			return true, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		a.advanceFinalizers(t.Context(), lists)
+	}
+	st, err = a.ctl.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = setup.FindResource(&st, setup.KindBank, "bank-b")
+	if len(r.Conditions) != 1 || r.Conditions[0].Reason != setup.ReasonStepFailed || r.Conditions[0].Message != "one: postgres is down" {
+		t.Fatalf("after repeated failures: %+v", r.Conditions)
 	}
 }
 

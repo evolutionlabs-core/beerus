@@ -277,7 +277,9 @@ func TestBankChangesWaitForNIBSS(t *testing.T) {
 			}
 		}
 		waiting, err := a.Resource(setup.KindBank, "bank-b")
-		degraded := slices.ContainsFunc(waiting.Conditions, func(c setup.Condition) bool { return c.Type == setup.ConditionDegraded && c.Status == "True" })
+		degraded := slices.ContainsFunc(waiting.Conditions, func(c setup.Condition) bool {
+			return (c.Type == setup.ConditionDegraded || c.Reason == reasonRetrying) && c.Status == "True"
+		})
 		if err != nil || waiting.ObservedGeneration >= waiting.Generation || !degraded {
 			t.Fatalf("%v with NIBSS down was observed: generation %d/%d, degraded %v, %v", o.changes, waiting.ObservedGeneration, waiting.Generation, degraded, err)
 		}
@@ -297,7 +299,9 @@ func TestBankChangesWaitForNIBSS(t *testing.T) {
 		tick.Stop()
 		stop()
 		done, err := a.Resource(setup.KindBank, "bank-b")
-		degraded = slices.ContainsFunc(done.Conditions, func(c setup.Condition) bool { return c.Type == setup.ConditionDegraded && c.Status == "True" })
+		degraded = slices.ContainsFunc(done.Conditions, func(c setup.Condition) bool {
+			return (c.Type == setup.ConditionDegraded || c.Reason == reasonRetrying) && c.Status == "True"
+		})
 		if err != nil || done.ObservedGeneration != done.Generation || degraded || done.Phase != o.phase {
 			t.Fatalf("%v after NIBSS answered: phase %s, generation %d/%d, degraded %v, %v", o.changes, done.Phase, done.ObservedGeneration, done.Generation, degraded, err)
 		}
