@@ -20,25 +20,24 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 )
 
-func registryServer(now *time.Time, transport roundTrip) *Server {
+func registryServer(transport roundTrip) *Server {
 	return New(Config{
 		Bank:    config.Bank{ID: "bank-a", Name: "Bank A"},
 		CoreURL: "http://core.invalid",
 		Link:    Link{Client: &http.Client{Transport: transport}},
 		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:   clock.New(func() time.Time { return *now }),
+		Clock:   clock.New(),
 	})
 }
 
-func registryCache(now *time.Time, fetch func(context.Context) ([]*openbanking.RegistryClient, error)) *RegistryCache {
-	return NewRegistryCache("bank-a", clock.New(func() time.Time { return *now }), slog.New(slog.NewTextHandler(io.Discard, nil)), fetch)
+func registryCache(fetch func(context.Context) ([]*openbanking.RegistryClient, error)) *RegistryCache {
+	return NewRegistryCache("bank-a", clock.New(), slog.New(slog.NewTextHandler(io.Discard, nil)), fetch)
 }
 
 func TestRegistryRefreshServesStaleThenFailsClosed(t *testing.T) {
-	now := time.Date(2026, 11, 14, 10, 0, 0, 0, clock.Lagos)
 	var calls int
 	down := true
-	r := registryCache(&now, func(context.Context) ([]*openbanking.RegistryClient, error) {
+	r := registryCache(func(context.Context) ([]*openbanking.RegistryClient, error) {
 		calls++
 		if down {
 			return nil, errors.New("NIBSS is down")
@@ -47,23 +46,31 @@ func TestRegistryRefreshServesStaleThenFailsClosed(t *testing.T) {
 	})
 	ctx := context.Background()
 	steps := []struct {
-		name    string
-		advance time.Duration
-		down    bool
-		calls   int
-		failed  bool
+		name   string
+		cached time.Duration
+		down   bool
+		calls  int
+		failed bool
+		retry  bool
 	}{
-		{"first read with NIBSS down", 0, true, 1, true},
-		{"NIBSS up", 2 * refreshFailFast, false, 2, false},
-		{"fresh copy needs no call", registryTTL - time.Second, false, 2, false},
-		{"stale copy after the TTL", 2 * time.Second, true, 3, false},
-		{"still served inside the stale limit", registryStale - 2*registryTTL, true, 4, false},
-		{"fails closed past the stale limit", registryTTL, true, 5, true},
-		{"fails fast after a failure", refreshFailFast / 2, false, 5, true},
-		{"recovers when NIBSS is back", 2 * refreshFailFast, false, 6, false},
+		{"first read with NIBSS down", 0, true, 1, true, true},
+		{"fails fast after a failure", 0, false, 1, true, false},
+		{"recovers when NIBSS is back", 0, false, 2, false, true},
+		{"fresh copy needs no call", 0, false, 2, false, false},
+		{"stale copy after the TTL", registryTTL + time.Second, true, 3, false, true},
+		{"still served inside the stale limit", registryStale - time.Second, true, 4, false, true},
+		{"fails closed past the stale limit", registryStale + time.Second, true, 5, true, true},
 	}
 	for _, step := range steps {
-		now, down = now.Add(step.advance), step.down
+		if step.retry {
+			r.flight = refresher{}
+		}
+		if step.cached > 0 {
+			r.mu.Lock()
+			r.at = r.clock.Real().Add(-step.cached)
+			r.mu.Unlock()
+		}
+		down = step.down
 		err := r.Refresh(ctx)
 		if (err != nil) != step.failed || calls != step.calls {
 			t.Fatalf("%s: error %v, %d calls; want failed %v and %d calls", step.name, err, calls, step.failed, step.calls)
@@ -77,11 +84,50 @@ func TestRegistryRefreshServesStaleThenFailsClosed(t *testing.T) {
 	}
 }
 
+func TestRegistryAndRefreshWindows(t *testing.T) {
+	at := time.Date(2026, 11, 14, 10, 0, 0, 0, clock.Lagos)
+	for _, c := range []struct {
+		name     string
+		loaded   time.Time
+		age      time.Duration
+		fresh    bool
+		servable bool
+	}{
+		{"never loaded", time.Time{}, 0, false, false},
+		{"just loaded", at, 0, true, true},
+		{"a second before the TTL ends", at, registryTTL - time.Second, true, true},
+		{"at the TTL", at, registryTTL, false, true},
+		{"at the stale limit", at, registryStale, false, true},
+		{"a second past the stale limit", at, registryStale + time.Second, false, false},
+	} {
+		now := at.Add(c.age)
+		if got := registryFresh(c.loaded, now); got != c.fresh {
+			t.Errorf("%s: fresh %v, want %v", c.name, got, c.fresh)
+		}
+		if got := registryServable(c.loaded, now); got != c.servable {
+			t.Errorf("%s: servable %v, want %v", c.name, got, c.servable)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		age  time.Duration
+		want bool
+	}{
+		{"just failed", 0, true},
+		{"a second before fail fast ends", refreshFailFast - time.Second, true},
+		{"at the end of fail fast", refreshFailFast, false},
+		{"long after", time.Hour, false},
+	} {
+		if got := failedRecently(at, at.Add(c.age)); got != c.want {
+			t.Errorf("%s: failed recently %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestSlowRegistryFetchIsSharedAndHoldsNoLock(t *testing.T) {
-	now := time.Date(2026, 11, 14, 10, 0, 0, 0, clock.Lagos)
 	in, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
-	r := registryCache(&now, func(ctx context.Context) ([]*openbanking.RegistryClient, error) {
+	r := registryCache(func(ctx context.Context) ([]*openbanking.RegistryClient, error) {
 		calls.Add(1)
 		select {
 		case in <- struct{}{}:
@@ -179,8 +225,7 @@ func TestNIBSSClientRegistryAndConsents(t *testing.T) {
 }
 
 func TestDirectoryOffersOnlyBanksThatTakeTransfers(t *testing.T) {
-	now := time.Date(2026, 11, 14, 10, 0, 0, 0, clock.Lagos)
-	s := registryServer(&now, nil)
+	s := registryServer(nil)
 	for _, in := range []struct{ id, status string }{{"bank-a", "active"}, {"bank-b", "suspended"}, {"bank-c", "terminating"}, {"bank-d", "active"}} {
 		s.dirBanks = append(s.dirBanks, directoryBank(nip.Institution{ID: in.id, Name: in.id, Status: in.status}))
 	}

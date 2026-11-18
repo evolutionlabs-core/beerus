@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 const (
@@ -23,9 +25,13 @@ type refresher struct {
 	failed   error
 }
 
-func (r *refresher) do(ctx context.Context, now func() time.Time, fetch func(context.Context) error) error {
+func failedRecently(failedAt, now time.Time) bool {
+	return now.Sub(failedAt) < refreshFailFast
+}
+
+func (r *refresher) do(ctx context.Context, clk *clock.Clock, fetch func(context.Context) error) error {
 	r.mu.Lock()
-	if r.failed != nil && now().Sub(r.failedAt) < refreshFailFast {
+	if r.failed != nil && failedRecently(r.failedAt, clk.Real()) {
 		err := r.failed
 		r.mu.Unlock()
 		return err
@@ -49,7 +55,7 @@ func (r *refresher) do(ctx context.Context, now func() time.Time, fetch func(con
 	r.flight = nil
 	r.failed = flight.err
 	if flight.err != nil {
-		r.failedAt = now()
+		r.failedAt = clk.Real()
 	}
 	r.mu.Unlock()
 	close(flight.done)

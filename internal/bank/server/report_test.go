@@ -236,14 +236,16 @@ func TestBookingErrorStillRecordsTheCheck(t *testing.T) {
 	}
 	desk := &nibssDesk{reports: []SettlementReport{report("ky", 1, 0), report("kx", 2, 0)}}
 	cbn := cbnDesk{}.client()
-	now := cutoff.Add(3 * time.Hour)
+	clk := clock.New()
 	s := New(Config{
 		Bank:  config.Bank{ID: "bank-a", Name: "Bank A"},
 		Books: books,
 		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock: clock.New(func() time.Time { return now }),
+		Clock: clk,
 	})
+	before := clk.Real()
 	err := s.postAndCheck(ctx, desk.client(), cbn)
+	after := clk.Real()
 	if !errors.Is(err, ledger.ErrIdempotency) || !strings.HasPrefix(err.Error(), "post settlement kx: ") {
 		t.Errorf("the booking error: %v", err)
 	}
@@ -257,7 +259,7 @@ func TestBookingErrorStillRecordsTheCheck(t *testing.T) {
 		"session kz at bank-a: the bank posted -1, but the CBN moved 0",
 		"could not book session kx at bank-a: " + errors.Unwrap(err).Error(),
 	}
-	if !slices.Equal(s.settlementProblems, want) || s.settlementCheckedAt == nil || !s.settlementCheckedAt.Equal(now) {
-		t.Errorf("problems %q checked at %v, want %q at %v", s.settlementProblems, s.settlementCheckedAt, want, now)
+	if !slices.Equal(s.settlementProblems, want) || s.settlementCheckedAt == nil || s.settlementCheckedAt.Before(before) || s.settlementCheckedAt.After(after) {
+		t.Errorf("problems %q checked at %v, want %q between %v and %v", s.settlementProblems, s.settlementCheckedAt, want, before, after)
 	}
 }

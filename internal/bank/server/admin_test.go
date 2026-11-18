@@ -25,8 +25,9 @@ const (
 )
 
 var (
-	adminNow     = time.Date(2026, 11, 14, 10, 0, 0, 0, clock.Lagos)
+	adminNow     = clock.New().Now()
 	requestIDRef = regexp.MustCompile(`"request_id":"req_[a-z0-9]+"`)
+	payoutAtRef  = regexp.MustCompile(`("replayed":(?:true|false),)"posted_at":"[^"]*"`)
 )
 
 type adminBank struct {
@@ -97,7 +98,7 @@ func (a *adminBank) restart(phase string) {
 		Fees:  banktest.Fees(a.t),
 		Link:  Link{Token: adminToken},
 		Log:   slog.New(slog.NewTextHandler(a.logs, nil)),
-		Clock: clock.New(func() time.Time { return adminNow }),
+		Clock: clock.New(),
 		Phase: phase,
 	})
 }
@@ -118,7 +119,8 @@ func (a *adminBank) call(method, path, body, key string) adminReply {
 	}
 	w := httptest.NewRecorder()
 	a.srv.API().ServeHTTP(w, r)
-	return adminReply{w.Code, w.Header().Get("Idempotent-Replayed") == "true", requestIDRef.ReplaceAllString(strings.TrimSpace(w.Body.String()), `"request_id":"req_ID"`)}
+	reply := requestIDRef.ReplaceAllString(strings.TrimSpace(w.Body.String()), `"request_id":"req_ID"`)
+	return adminReply{w.Code, w.Header().Get("Idempotent-Replayed") == "true", payoutAtRef.ReplaceAllString(reply, `$1"posted_at":"AT"`)}
 }
 
 func apiError(code, message string) string {
@@ -135,7 +137,7 @@ func TestClosureRoutes(t *testing.T) {
 		return fmt.Sprintf(`{"account_number":%q,"amount_minor":%d}`, nuban, amount)
 	}
 	result := func(nuban string, amount, balance int64) string {
-		return fmt.Sprintf(`{"account_number":%q,"amount_minor":%d,"balance_minor":%d,"replayed":%t,"posted_at":"2026-11-14T10:00:00+01:00"}`, nuban, amount, balance, false)
+		return fmt.Sprintf(`{"account_number":%q,"amount_minor":%d,"balance_minor":%d,"replayed":%t,"posted_at":"AT"}`, nuban, amount, balance, false)
 	}
 	paid := func(rows ...string) string {
 		return `{"data":[` + strings.Join(rows, ",") + `]}`
@@ -232,10 +234,10 @@ func TestBookRoutes(t *testing.T) {
 		t.Fatalf("customers %v, %v", customers, err)
 	}
 	customer := func(c bank.Customer, username string) string {
-		return fmt.Sprintf(`{"id":%q,"name":%q,"phone":%q,"bvn":%q,"status":"active",%s"dob":%q,"created_at":"2026-11-14T09:00:00Z"}`, c.ID, c.Name, c.Phone, c.BVN, username, c.DOB.String())
+		return fmt.Sprintf(`{"id":%q,"name":%q,"phone":%q,"bvn":%q,"status":"active",%s"dob":%q,"created_at":%q}`, c.ID, c.Name, c.Phone, c.BVN, username, c.DOB.String(), adminNow.Format(time.RFC3339Nano))
 	}
 	entry := func(l bank.FeedLine, rest string) string {
-		return fmt.Sprintf(`{"id":%q,"account":%q,"seq":%d,"amount_minor":%d,"balance_after_minor":%d,"posted_at":"2026-11-14T10:00:00+01:00","value_date":"2026-11-14","narration":%q,%s"reference":%q%s}`, l.Key, l.NUBAN, l.Seq, l.Amount, l.BalanceAfter, l.Narration, rest, l.BankRef, "")
+		return fmt.Sprintf(`{"id":%q,"account":%q,"seq":%d,"amount_minor":%d,"balance_after_minor":%d,"posted_at":%q,"value_date":%q,"narration":%q,%s"reference":%q%s}`, l.Key, l.NUBAN, l.Seq, l.Amount, l.BalanceAfter, adminNow.Format(time.RFC3339Nano), clock.DateOf(adminNow).String(), l.Narration, rest, l.BankRef, "")
 	}
 	deposit, inward := lines[1], lines[0]
 	depositEntry := entry(deposit, `"channel":"branch",`)
@@ -288,7 +290,7 @@ func TestBookRoutes(t *testing.T) {
 	if strings.Contains(a.logs.String(), adminPassword) || strings.Contains(a.logs.String(), "wrong-password-here") {
 		t.Fatalf("a password reached the log: %s", a.logs)
 	}
-	a.srv = New(Config{Bank: config.Bank{ID: "bank-a", Name: "Bank A"}, Link: Link{Token: adminToken}, Log: slog.New(slog.NewTextHandler(a.logs, nil)), Clock: clock.New(func() time.Time { return adminNow }), Phase: config.PhaseProvisioning})
+	a.srv = New(Config{Bank: config.Bank{ID: "bank-a", Name: "Bank A"}, Link: Link{Token: adminToken}, Log: slog.New(slog.NewTextHandler(a.logs, nil)), Clock: clock.New(), Phase: config.PhaseProvisioning})
 	for _, path := range []string{"/v1/books/totals", "/v1/ledger/check", "/v1/accounts/" + a.ada, "/v1/customers", "/v1/closure-payouts", "/v1/nip/sends/open"} {
 		if got := a.call("GET", path, "", ""); got.status != 503 || got.body != notReady {
 			t.Fatalf("%s before the books open: got %d %s", path, got.status, got.body)
