@@ -52,6 +52,7 @@ func TestParticipantBankContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(a.Close)
+	a.Ensure(t.Context())
 	tok, err := config.ReadSecret(filepath.Join(config.BankDir(core.cfg.Dir, "bank-a"), config.BankTokenFile))
 	if err != nil {
 		t.Fatal(err)

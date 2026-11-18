@@ -255,7 +255,11 @@ func CheckBooks(ctx context.Context, n NIBSSClient, c CBNClient, books *bank.Ban
 }
 
 func (s *Server) postAndCheck(ctx context.Context, n NIBSSClient, c CBNClient) error {
-	check, err := CheckBooks(ctx, n, c, s.books, s.id, s.clock.Now())
+	books := s.books.Load()
+	if books == nil {
+		return nil
+	}
+	check, err := CheckBooks(ctx, n, c, books, s.id, s.clock.Now())
 	if err != nil {
 		return err
 	}

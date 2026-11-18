@@ -40,6 +40,16 @@ var operations = []struct{ id, method, path string }{
 	{"quoteTransfer", http.MethodPost, "/v1/transfers/quote"},
 	{"countOpenSends", http.MethodGet, "/v1/nip/sends/open"},
 	{"queryTransferStatus", http.MethodPost, "/v1/nip/sends/{session_id}/status-query"},
+	{"getAccount", http.MethodGet, "/v1/accounts/{nuban}"},
+	{"freezeAccount", http.MethodPost, "/v1/accounts/{nuban}/freeze"},
+	{"listClosurePayouts", http.MethodGet, "/v1/closure-payouts"},
+	{"createClosurePayout", http.MethodPost, "/v1/closure-payouts"},
+	{"checkLedger", http.MethodGet, "/v1/ledger/check"},
+	{"booksTotals", http.MethodGet, "/v1/books/totals"},
+	{"listBookEntries", http.MethodGet, "/v1/books/accounts/{nuban}/entries"},
+	{"getBookEntry", http.MethodGet, "/v1/books/accounts/{nuban}/entries/{entry_id}"},
+	{"listSessionEntries", http.MethodGet, "/v1/books/sessions/{session_id}"},
+	{"loginCustomer", http.MethodPost, "/v1/logins"},
 }
 
 type found struct {

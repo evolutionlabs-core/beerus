@@ -1,5 +1,7 @@
 package config
 
+import "fmt"
+
 const (
 	StepAllocate          = "allocate"
 	StepDirectory         = "directory"
@@ -36,4 +38,14 @@ func (b *Bank) RunningPhase() string {
 		return PhaseSuspended
 	}
 	return PhaseActive
+}
+
+func MigrationCount(n int) string {
+	switch n {
+	case 0:
+		return "no new migrations"
+	case 1:
+		return "1 migration"
+	}
+	return fmt.Sprintf("%d migrations", n)
 }

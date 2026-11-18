@@ -318,6 +318,7 @@ func clean(err error) string {
 func (s *Banking) Error(w http.ResponseWriter, r *http.Request, err error) {
 	var te *TransferError
 	var fe *bank.InsufficientFundsError
+	var pe *bank.PayoutTooLargeError
 	var de *bank.DailyLimitError
 	var ue *UnavailableError
 	switch {
@@ -328,6 +329,12 @@ func (s *Banking) Error(w http.ResponseWriter, r *http.Request, err error) {
 		s.noSuchBank(w, r)
 	case errors.Is(err, errBankNotActive):
 		web.WriteError(w, r, http.StatusConflict, "bank_not_active", web.Sentence(err.Error()))
+	case errors.Is(err, errBankNotClosing):
+		web.WriteError(w, r, http.StatusConflict, "bank_not_closing", web.Sentence(err.Error()))
+	case errors.Is(err, bank.ErrBadLogin):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_login", "The username or password is wrong.")
+	case errors.Is(err, bank.ErrUnknownLine):
+		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such entry.")
 	case errors.Is(err, bank.ErrUnknownCustomer):
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such customer.")
 	case errors.Is(err, ledger.ErrUnknownAccount):
@@ -351,6 +358,8 @@ func (s *Banking) Error(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.As(err, &ue):
 		s.Log.Warn("banking unavailable", "path", r.URL.Path, "err", ue.Err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", ue.Msg)
+	case errors.As(err, &pe):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", pe.Message())
 	case errors.As(err, &fe):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", fe.Message())
 	case errors.As(err, &de):
@@ -367,13 +376,32 @@ func (s *Banking) Error(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
+func (s *Banking) CustomersByBVN(ctx context.Context, bankID, bvn string, limit int, cursor string) ([]bank.Customer, string, error) {
+	bk, err := s.bankBook(bankID)
+	if err != nil {
+		return nil, "", err
+	}
+	return bk.Bank.CustomersByBVN(ctx, bvn, limit, cursor)
+}
+
 func (s *Banking) HandleCustomers(w http.ResponseWriter, r *http.Request) {
 	limit, cursor, err := ListParams(r)
 	if err != nil {
 		s.Error(w, r, err)
 		return
 	}
-	data, next, err := s.Customers(r.Context(), s.bankIDOf(r), limit, cursor)
+	bvn := r.URL.Query().Get("bvn")
+	if r.URL.Query().Has("bvn") && !bank.ValidBVN(bvn) {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("bvn must be %d digits.", bank.BVNLength))
+		return
+	}
+	var data []bank.Customer
+	var next string
+	if bvn != "" {
+		data, next, err = s.CustomersByBVN(r.Context(), s.bankIDOf(r), bvn, limit, cursor)
+	} else {
+		data, next, err = s.Customers(r.Context(), s.bankIDOf(r), limit, cursor)
+	}
 	if err != nil {
 		s.Error(w, r, err)
 		return

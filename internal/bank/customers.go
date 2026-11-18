@@ -32,6 +32,7 @@ const (
 
 const (
 	MaxPage        = 1000
+	BVNLength      = 11
 	MaxNUBANSerial = 999999999
 )
 
@@ -71,6 +72,10 @@ func HashPassword(password string) (string, error) {
 
 func digits(s string) bool {
 	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
+func ValidBVN(bvn string) bool {
+	return len(bvn) == BVNLength && digits(bvn)
 }
 
 func ValidUsername(u string) bool {
@@ -390,6 +395,14 @@ func checkLimit(limit int) error {
 }
 
 func (b *Bank) Customers(ctx context.Context, limit int, cursor string) ([]Customer, string, error) {
+	return b.listCustomers(ctx, "", limit, cursor)
+}
+
+func (b *Bank) CustomersByBVN(ctx context.Context, bvn string, limit int, cursor string) ([]Customer, string, error) {
+	return b.listCustomers(ctx, bvn, limit, cursor)
+}
+
+func (b *Bank) listCustomers(ctx context.Context, bvn string, limit int, cursor string) ([]Customer, string, error) {
 	if err := checkLimit(limit); err != nil {
 		return nil, "", err
 	}
@@ -404,7 +417,7 @@ func (b *Bank) Customers(ctx context.Context, limit int, cursor string) ([]Custo
 			return nil, "", fmt.Errorf("read cursor: %w", err)
 		}
 	}
-	rows, err := pool.Query(ctx, `SELECT `+customerCols+` FROM customers WHERE seq > $1 ORDER BY seq LIMIT $2`, after, limit+1)
+	rows, err := pool.Query(ctx, `SELECT `+customerCols+` FROM customers WHERE seq > $1 AND ($2 = '' OR bvn = $2) ORDER BY seq LIMIT $3`, after, bvn, limit+1)
 	if err != nil {
 		return nil, "", fmt.Errorf("list customers: %w", err)
 	}

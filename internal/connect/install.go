@@ -41,7 +41,7 @@ type InstallStep struct {
 }
 
 func InstallLabels() []string {
-	longest := " (" + migrationCount(0) + ")"
+	longest := " (" + config.MigrationCount(0) + ")"
 	return []string{stepNamePostgres, stepNameConfig + longest, stepNameCBNCreate, stepNameCBNMigrate + longest, stepNameCBNOpen, stepNameNIBSSMake, stepNameNIBSSMigr + longest}
 }
 
@@ -176,7 +176,7 @@ func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *ctl
 	}
 	err = in.ensure(ctl, st, setup.SystemCBN, steps[1], stepNameCBNMigrate, steps, func() (string, error) {
 		n, err := store.Migrate(ctx, cfg.DatabaseURL, name, ledger.Migrate)
-		return migrationCount(n), err
+		return config.MigrationCount(n), err
 	})
 	if err != nil {
 		return err
@@ -208,7 +208,7 @@ func installNIBSS(ctx context.Context, in *installer, cfg *config.Config, ctl *c
 	}
 	return in.ensure(ctl, st, setup.SystemNIBSS, steps[1], stepNameNIBSSMigr, steps, func() (string, error) {
 		n, err := nibss.Migrate(ctx, cfg.DatabaseURL, name)
-		return migrationCount(n), err
+		return config.MigrationCount(n), err
 	})
 }
 
@@ -238,7 +238,7 @@ func (in *installer) ensure(ctl *ctlStore, st setup.Status, system, step, name s
 
 func skippedDetail(step string) string {
 	if step == config.StepLedgerSchema || step == setup.StepSchema {
-		return migrationCount(0)
+		return config.MigrationCount(0)
 	}
 	return ""
 }
