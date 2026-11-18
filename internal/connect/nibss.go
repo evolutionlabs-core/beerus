@@ -401,6 +401,13 @@ func (a *App) finishStale(j staleJob, err error) {
 	if !current {
 		return
 	}
+	a.lifeMu.Lock()
+	st := a.status[j.b.ID]
+	activating := st != nil && (st.Phase == PhaseProvisioning || st.Phase == PhaseRepairing)
+	a.lifeMu.Unlock()
+	if activating {
+		return
+	}
 	phase := j.b.RunningPhase()
 	a.recordBank(j.b.ID, func(r *setup.Resource) bool {
 		if r.Phase == PhaseClosing || r.Phase == PhaseTerminating || r.Phase == PhaseClosed {

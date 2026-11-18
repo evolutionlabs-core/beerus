@@ -167,7 +167,7 @@ func (p *Participant) Serve(ctx context.Context) error {
 		case <-tick.C:
 			p.sender.Events(ctx)
 			p.sender.Ledger(ctx)
-			p.restartIfStale(ctx)
+			p.refreshIfStale()
 			p.srv.Sweep()
 		}
 	}

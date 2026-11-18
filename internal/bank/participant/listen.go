@@ -92,23 +92,18 @@ func (p *Participant) stop(ctx context.Context) {
 	l.wg.Wait()
 }
 
-func (p *Participant) restartIfStale(ctx context.Context) {
+func (p *Participant) refreshIfStale() {
 	if !p.srv.TakeStale() {
 		return
 	}
 	p.mu.Lock()
-	l := p.serving
-	p.serving = nil
+	open := p.open
 	p.mu.Unlock()
-	if l != nil {
-		_ = l.site.Close()
-		_ = l.api.Close()
-		l.wg.Wait()
-	}
-	if err := p.start(ctx); err != nil {
-		p.log.Error("bank site not restarted; retrying", "bank", p.id, "err", err)
+	if open == nil {
 		p.srv.MarkStale()
+		return
 	}
+	open.SetTerms(server.OpenTerms(p.srv.Bank()))
 }
 
 func closeAll(ls []net.Listener) {
