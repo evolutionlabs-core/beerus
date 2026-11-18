@@ -86,6 +86,13 @@ func TestSessionScheduleSkipsHolidays(t *testing.T) {
 		{"Christmas Day then the weekend", at("2026-12-24", 23), at("2026-12-25", 0)},
 		{"first session after Christmas Day", at("2026-12-25", 0), at("2026-12-28", 2)},
 		{"New Year's Day then the weekend", at("2027-01-01", 5), at("2027-01-04", 2)},
+		{"last session of the year", at("2026-12-31", 23), at("2027-01-01", 0)},
+		{"first session of the year is a holiday", at("2027-01-01", 0), at("2027-01-04", 2)},
+		{"month end before a weekend", at("2026-10-30", 23), at("2026-10-31", 0)},
+		{"month end on a Saturday", at("2026-10-31", 9), at("2026-11-02", 2)},
+		{"leap day", at("2028-02-29", 23), at("2028-03-01", 0)},
+		{"day after a leap day", at("2028-03-01", 0), at("2028-03-01", 2)},
+		{"month end on a Sunday", at("2027-02-28", 1), at("2027-03-01", 2)},
 	} {
 		if got := s.Next(c.booked); !got.Equal(c.want) {
 			t.Errorf("%s: next session after %s closes at %s, want %s", c.name, c.booked.Format(time.RFC3339), got.Format(time.RFC3339), c.want.Format(time.RFC3339))

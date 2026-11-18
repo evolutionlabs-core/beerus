@@ -7,7 +7,6 @@ import (
 	"maps"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -52,7 +51,7 @@ func finalizerApp(t *testing.T, r setup.Resource) *App {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return &App{ctl: s, clock: clock.New(func() time.Time { return time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC) }), log: slog.New(slog.DiscardHandler)}
+	return &App{ctl: s, clock: clock.New(), log: slog.New(slog.DiscardHandler)}
 }
 
 func TestOneFinalizerPerStep(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -262,8 +263,11 @@ func (c *specChecker) bankRules(p string, b Bank, byID map[string]Bank) {
 	for _, f := range []struct {
 		name string
 		v    int
-	}{{"consent_months", ob.ConsentMonths}, {"refresh_days", ob.RefreshDays}, {"dormant_days", ob.DormantDays}, {"assertion_seconds", ob.AssertionSeconds}} {
+	}{{"consent_months", ob.ConsentMonths}, {"refresh_days", ob.RefreshDays}, {"dormant_days", ob.DormantDays}, {"assertion_seconds", ob.AssertionSeconds}, {"access_seconds", ob.AccessSeconds}} {
 		c.positive(p+".open_banking."+f.name, int64(f.v), "Leave it out for the default")
+	}
+	if a := ob.AccessSeconds; a > 0 && (a < config.MinAccessSeconds || a > config.MaxAccessSeconds) {
+		c.add(p+".open_banking.access_seconds", "%s.open_banking.access_seconds %d is out of range. Use %d to %d, or leave it out for the default", p, a, config.MinAccessSeconds, config.MaxAccessSeconds)
 	}
 	if b.OnRemove != nil {
 		c.removal(p+".on_remove", b, byID)

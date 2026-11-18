@@ -82,7 +82,7 @@ func (r *RegistryCache) Refresh(ctx context.Context) error {
 	if r.fresh() {
 		return nil
 	}
-	err := r.flight.do(ctx, r.clock.Real, r.load)
+	err := r.flight.do(ctx, r.clock, r.load)
 	if err == nil {
 		return nil
 	}

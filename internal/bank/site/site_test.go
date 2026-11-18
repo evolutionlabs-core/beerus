@@ -99,7 +99,7 @@ func TestGuardOrder(t *testing.T) {
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
-			h := New(Config{Host: fakeHost{phase: r.phase, refreshErr: r.refresh}, Clock: clock.New(nil), Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+			h := New(Config{Host: fakeHost{phase: r.phase, refreshErr: r.refresh}, Clock: clock.New(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
 			ln, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)

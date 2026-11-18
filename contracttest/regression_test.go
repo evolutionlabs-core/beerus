@@ -43,12 +43,10 @@ func TestReconnectWithLaterStartKeepsBalanceInvariant(t *testing.T) {
 	s := newStack(t)
 	c1 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
 	s.spend(s.persona("adaeze"), 3)
-	s.advance("48h")
 	s.spend(s.persona("adaeze"), 2)
 	s.syncNow()
 	s.ctl("POST", "/connections/"+c1.ConnectionID+"/revoke", nil)
 	s.spend(s.persona("adaeze"), 2)
-	s.advance("48h")
 	start := s.today().AddDays(-1)
 	c2 := s.connect("adaeze", "bank-a", start)
 	id := fmt.Sprint(accountAt(t, c2, "current")["id"])
@@ -107,27 +105,24 @@ func TestReauthSendsSyncAvailable(t *testing.T) {
 	conn := s.connect("tunde", "bank-a", s.today().AddDays(-30))
 	id := fmt.Sprint(conn.Accounts[0]["id"])
 	st, _ := s.syncAll(id, "", 500)
-	s.advance("366d")
-	s.spend(s.persona("tunde"), 2)
-	s.advance("72h")
 	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", nil), 201)
 	res := s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), "", "tunde", nil)
 	mark := len(s.events())
 	s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 200)
+	s.spend(s.persona("tunde"), 2)
 	s.syncNow()
-	found := false
-	for _, e := range s.events()[mark:] {
-		if e["type"] == "sync.available" {
-			found = true
+	waitFor(t, waitLimit, "sync.available after the reauth", func() bool {
+		for _, e := range s.events()[mark:] {
+			if e["type"] == "sync.available" {
+				return true
+			}
 		}
-	}
+		return false
+	})
 	before := len(st.lines)
 	after, _ := s.syncMore(id, st, 500)
 	if len(after.lines) <= before {
 		t.Fatal("no new lines after two payments")
-	}
-	if !found {
-		t.Fatal("reauth brought new lines but sent no sync.available")
 	}
 }
 
@@ -138,7 +133,6 @@ func TestBankLedgerStaysConsistent(t *testing.T) {
 	s := newBankStack(t)
 	s.connect("adaeze", "bank-a", s.today().AddDays(-40))
 	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "20000")
-	s.advance("40d")
 	c, err := s.app.VerifyBank(context.Background())
 	if err != nil {
 		t.Fatal(err)

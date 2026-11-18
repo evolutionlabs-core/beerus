@@ -27,7 +27,6 @@ type stage struct {
 	dir           string
 	dbURL         string
 	token         string
-	now           *time.Time
 	port, apiPort int
 }
 
@@ -35,7 +34,7 @@ func newStage(t *testing.T) *stage {
 	t.Helper()
 	ctx := context.WithoutCancel(t.Context())
 	dbURL := cmp.Or(os.Getenv(config.DatabaseURLEnv), os.Getenv("BEERUS_TEST_DATABASE_URL"), "postgres:///postgres")
-	now := time.Date(2026, 11, 14, 10, 0, 0, 0, clock.Lagos)
+	now := clock.New().Now()
 	dir := filepath.Join(t.TempDir(), "stage")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -57,12 +56,12 @@ func newStage(t *testing.T) *stage {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &stage{dir, dbURL, token, &now, ports[0], ports[1]}
+	return &stage{dir, dbURL, token, ports[0], ports[1]}
 }
 
 func (s *stage) start(t *testing.T, url string) *Participant {
 	t.Helper()
-	p, err := New(t.Context(), s.dir, Options{Real: func() time.Time { return *s.now }, BankID: "bank-a", DatabaseURL: url, Bind: "127.0.0.1"})
+	p, err := New(t.Context(), s.dir, Options{BankID: "bank-a", DatabaseURL: url, Bind: "127.0.0.1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,13 +169,20 @@ func TestFailedStepRetriesWithBackoff(t *testing.T) {
 	if p.attempts != 1 {
 		t.Fatalf("a retry before the backoff ran: %d attempts", p.attempts)
 	}
-	*s.now = s.now.Add(clock.Backoff(1))
+	p.retryAt = p.clock.Real().Add(time.Second)
 	p.ensureDue(ctx)
-	if p.attempts != 2 || !p.retryAt.Equal(s.now.Add(clock.Backoff(2))) {
-		t.Fatalf("after the first backoff: %d attempts, next at %v", p.attempts, p.retryAt)
+	if p.attempts != 1 {
+		t.Fatalf("a retry a second before the backoff ends ran: %d attempts", p.attempts)
+	}
+	p.retryAt = p.clock.Real()
+	before := p.clock.Real()
+	p.ensureDue(ctx)
+	after := p.clock.Real()
+	if p.attempts != 2 || p.retryAt.Before(before.Add(clock.Backoff(2))) || p.retryAt.After(after.Add(clock.Backoff(2))) {
+		t.Fatalf("after the first backoff: %d attempts, next at %v, want %v after the attempt", p.attempts, p.retryAt, clock.Backoff(2))
 	}
 	p.cfg.DatabaseURL = s.dbURL
-	*s.now = s.now.Add(clock.Backoff(2))
+	p.retryAt = p.clock.Real()
 	p.ensureDue(ctx)
 	st = s.status(t, p)
 	if st.Phase != config.PhaseActive || st.Reason != "" || p.attempts != 0 || p.booksNow() == nil {
@@ -318,7 +324,7 @@ func TestLaterStepFailureRedoesTheDatabaseStep(t *testing.T) {
 	if st.Steps[2].Done || st.Steps[3].Done || st.Steps[3].Error == "" {
 		t.Fatalf("after the failed step: steps %+v", rows(st))
 	}
-	*s.now = s.now.Add(clock.Backoff(1))
+	p.retryAt = p.clock.Real()
 	p.ensureDue(ctx)
 	st = s.status(t, p)
 	if !st.Steps[2].Done || !st.Steps[3].Done || !st.Steps[4].Done || p.booksLost(ctx) {

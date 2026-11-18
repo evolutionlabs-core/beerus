@@ -90,7 +90,8 @@ func (f answer) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func TestEventsAreMarkedAfterTheAnswer(t *testing.T) {
-	now := time.Date(2026, 11, 14, 10, 0, 0, 0, clock.Lagos)
+	clk := clock.New()
+	now := clk.Real()
 	rows := []struct {
 		name     string
 		status   int
@@ -122,7 +123,7 @@ func TestEventsAreMarkedAfterTheAnswer(t *testing.T) {
 				t.Fatal(err)
 			}
 			store := cancelledStore{openbanking.NewMemStore()}
-			srv := openbanking.New(openbanking.Config{BankID: "bank-a", Store: store, Real: func() time.Time { return now }, Now: func() time.Time { return now }})
+			srv := openbanking.New(openbanking.Config{BankID: "bank-a", Store: store, Clock: clk})
 			if err := store.Enqueue(t.Context(), openbanking.ConsentEvent{ConsentID: "obc_1", Bank: "bank-a", Status: openbanking.Revoked, At: now}, now); err != nil {
 				t.Fatal(err)
 			}
@@ -131,7 +132,7 @@ func TestEventsAreMarkedAfterTheAnswer(t *testing.T) {
 			const widget = "https://widget.localhost"
 			s := &Sender{
 				Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-				Clock:     clock.New(func() time.Time { return now }),
+				Clock:     clk,
 				Dir:       dir,
 				WidgetURL: widget,
 				Servers:   func() map[string]*openbanking.Server { return map[string]*openbanking.Server{"bank-a": srv} },
@@ -144,11 +145,12 @@ func TestEventsAreMarkedAfterTheAnswer(t *testing.T) {
 				})}},
 			}
 			s.Events(ctx)
-			due, err := store.Due(t.Context(), now, 10)
+			done := clk.Real()
+			due, err := store.Due(t.Context(), done, 10)
 			if err != nil || len(due) != 0 {
 				t.Fatalf("due right after the send: %v, %v", due, err)
 			}
-			due, err = store.Due(t.Context(), now.Add(r.retryAt), 10)
+			due, err = store.Due(t.Context(), done.Add(r.retryAt), 10)
 			if err != nil {
 				t.Fatal(err)
 			}

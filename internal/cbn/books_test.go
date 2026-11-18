@@ -14,16 +14,22 @@ import (
 func TestBooksLedgerRules(t *testing.T) {
 	ctx := t.Context()
 	pool := banktest.Schema(t)
-	first := time.Date(2026, time.November, 12, 10, 30, 15, 0, clock.Lagos)
-	b, err := New(ctx, pool, clock.New(func() time.Time { return first }))
+	clk := clock.New()
+	b, err := New(ctx, pool, clk)
 	if err != nil {
 		t.Fatal(err)
 	}
+	opened, err := b.OpenAccount(ctx, "bank-a", 1000, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := opened.OpenedAt
 	cutoff := time.Date(2026, time.November, 12, 12, 0, 0, 0, clock.Lagos)
-	later, err := New(ctx, pool, clock.New(func() time.Time { return first.Add(48 * time.Hour) }))
+	later, err := New(ctx, pool, clk)
 	if err != nil {
 		t.Fatal(err)
 	}
+	waitPast(t, clk, first)
 	nets := func(a, c int64) []Net { return []Net{{"bank-a", a}, {"bank-b", c}} }
 	open := []struct {
 		name       string
@@ -36,15 +42,18 @@ func TestBooksLedgerRules(t *testing.T) {
 	}{
 		{"open a", b, "bank-a", 1000, 200, Account{"bank-a", 1000, 200, first}, ""},
 		{"open a again at another time", later, "bank-a", 1000, 200, Account{"bank-a", 1000, 200, first}, ""},
-		{"open b without vault cash", b, "bank-b", 1000, 0, Account{"bank-b", 1000, 0, first}, ""},
+		{"open b without vault cash", b, "bank-b", 1000, 0, Account{"bank-b", 1000, 0, time.Time{}}, ""},
 		{"open a with other amounts", b, "bank-a", 999, 200, Account{}, "bank-a opened with settlement_minor 1000 and vault_minor 200, and this request has settlement_minor 999. Send the amounts it opened with."},
 		{"open with nothing", b, "bank-c", 0, 0, Account{}, "Send a settlement_minor and a vault_minor of zero or more, with one of them above zero, that fit together."},
 		{"open too large", b, "bank-c", math.MaxInt64, 1, Account{}, "Send a settlement_minor and a vault_minor of zero or more, with one of them above zero, that fit together."},
 	}
 	for _, c := range open {
+		before := clk.Now()
 		got, err := c.books.OpenAccount(ctx, c.bank, c.settlement, c.vault)
+		after := clk.Now()
+		openedAtWrong := !c.want.OpenedAt.IsZero() && !got.OpenedAt.Equal(c.want.OpenedAt) || c.want.OpenedAt.IsZero() && (got.OpenedAt.Before(before) || got.OpenedAt.After(after))
 		switch {
-		case c.err == "" && (err != nil || got.BankID != c.want.BankID || got.Settlement != c.want.Settlement || got.Vault != c.want.Vault || !got.OpenedAt.Equal(c.want.OpenedAt)):
+		case c.err == "" && (err != nil || got.BankID != c.want.BankID || got.Settlement != c.want.Settlement || got.Vault != c.want.Vault || openedAtWrong):
 			t.Errorf("%s: %+v, %v, want %+v", c.name, got, err, c.want)
 		case c.err != "" && (err == nil || err.Error() != c.err):
 			t.Errorf("%s: %v, want %q", c.name, err, c.err)
@@ -78,6 +87,7 @@ func TestBooksLedgerRules(t *testing.T) {
 			t.Errorf("%s: %v, want %q", c.name, err, c.err)
 		}
 	}
+	posted := newestPosted(t, b)
 	if bal, err := b.Balance(ctx, "bank-a"); err != nil || bal != 800 {
 		t.Fatalf("balance of bank-a: %d, %v", bal, err)
 	}
@@ -85,11 +95,12 @@ func TestBooksLedgerRules(t *testing.T) {
 		t.Fatalf("balance of an unknown bank: %d, %v", bal, err)
 	}
 	list, next, err := b.Postings(ctx, "bank-a", 1, "")
-	want := Posting{Key: "session:s1", Kind: "session", SessionID: "s1", Narration: "NIP settlement session s1", PostedAt: first, Nets: nets(-200, 200)}
-	if err != nil || next != "session:s1" || len(list) != 1 || !list[0].PostedAt.Equal(first) || !reflect.DeepEqual(list[0].Nets, want.Nets) || list[0].Key != want.Key {
+	want := Posting{Key: "session:s1", Kind: "session", SessionID: "s1", Narration: "NIP settlement session s1", PostedAt: posted, Nets: nets(-200, 200)}
+	if err != nil || next != "session:s1" || len(list) != 1 || !list[0].PostedAt.Equal(posted) || !reflect.DeepEqual(list[0].Nets, want.Nets) || list[0].Key != want.Key {
 		t.Fatalf("first page: %+v %q %v", list, next, err)
 	}
-	if replay, replayed, err := later.Post(ctx, "s1", cutoff, nets(-200, 200)); err != nil || !replayed || !replay.PostedAt.Equal(first) {
+	waitPast(t, clk, posted)
+	if replay, replayed, err := later.Post(ctx, "s1", cutoff, nets(-200, 200)); err != nil || !replayed || !replay.PostedAt.Equal(posted) {
 		t.Fatalf("replay at a later time: %+v, %v, %v", replay, replayed, err)
 	}
 	rest, next, err := b.Postings(ctx, "bank-a", 5, next)
@@ -102,5 +113,24 @@ func TestBooksLedgerRules(t *testing.T) {
 	problems, err := b.Problems(ctx)
 	if err != nil || len(problems) != 0 {
 		t.Fatalf("problems of balanced books: %v, %v", problems, err)
+	}
+}
+
+func newestPosted(t *testing.T, b *Books) time.Time {
+	t.Helper()
+	list, _, err := b.Postings(t.Context(), "bank-a", 1, "")
+	if err != nil || len(list) != 1 {
+		t.Fatalf("first posting: %+v %v", list, err)
+	}
+	return list[0].PostedAt
+}
+
+func waitPast(t *testing.T, clk *clock.Clock, at time.Time) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for !clk.Now().After(at) {
+		if time.Now().After(deadline) {
+			t.Fatal("the clock did not move")
+		}
 	}
 }

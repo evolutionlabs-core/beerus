@@ -14,7 +14,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -74,9 +73,6 @@ type env struct {
 	ca    *pki.Authority
 	good  *http.Client
 	other *http.Client
-	now   time.Time
-	clk   time.Time
-	mu    sync.Mutex
 }
 
 func (e *env) lastLedger() ConsentEvent {
@@ -122,7 +118,7 @@ func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, store: NewMemStore(), key: key, ca: ca, now: time.Now(), clk: time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)}
+	e := &env{t: t, store: NewMemStore(), key: key, ca: ca}
 	var h http.Handler
 	e.ts = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
 	e.ts.TLS = &tls.Config{Certificates: []tls.Certificate{pair}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool}
@@ -132,8 +128,6 @@ func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	cfg := Config{
 		BankID: "bank-a", Terms: Terms{BankName: "Bank A"}, Issuer: e.ts.URL, AuthorizeURL: "http://bank-a.localhost/authorize", HistoryDays: 90,
 		Store: e.store, Registry: fakeRegistry{client}, Data: fakeData{},
-		Real: func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.now },
-		Now:  func() time.Time { e.mu.Lock(); defer e.mu.Unlock(); return e.clk },
 	}
 	for _, tweak := range tweaks {
 		tweak(&cfg)
@@ -145,16 +139,44 @@ func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	return e
 }
 
-func (e *env) advance(real, clk time.Duration) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.now = e.now.Add(real)
-	e.clk = e.clk.Add(clk)
+func (e *env) editConsent(id string, edit func(*Consent)) {
+	e.t.Helper()
+	c, err := e.store.Consent(context.Background(), id)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	edit(c)
+	if err := e.store.UpdateConsent(context.Background(), c); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func (e *env) editToken(raw string, edit func(*Token)) {
+	e.t.Helper()
+	e.store.mu.Lock()
+	defer e.store.mu.Unlock()
+	t, ok := e.store.tokens[Hash(raw)]
+	if !ok {
+		e.t.Fatal("token not stored")
+	}
+	edit(t)
+}
+
+func (e *env) ageRequests(par, code time.Duration) {
+	e.srv.mu.Lock()
+	defer e.srv.mu.Unlock()
+	now := time.Now()
+	for _, p := range e.srv.pars {
+		p.expires = now.Add(-par)
+	}
+	for _, c := range e.srv.codes {
+		c.expires = now.Add(-code)
+	}
 }
 
 func (e *env) assertion() string {
 	e.t.Helper()
-	jwt, err := Sign(e.key, "k1", map[string]any{"iss": "OBR-1", "sub": "OBR-1", "aud": e.ts.URL, "jti": random("j", 8), "exp": e.now.Add(time.Minute).Unix(), "iat": e.now.Unix()})
+	jwt, err := Sign(e.key, "k1", map[string]any{"iss": "OBR-1", "sub": "OBR-1", "aud": e.ts.URL, "jti": random("j", 8), "exp": time.Now().Add(time.Minute).Unix(), "iat": time.Now().Unix()})
 	if err != nil {
 		e.t.Fatal(err)
 	}
@@ -321,7 +343,7 @@ func TestPAR(t *testing.T) {
 		t.Errorf("replayed assertion: %d", status)
 	}
 	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	forged, _ := Sign(other, "k", map[string]any{"iss": "OBR-1", "sub": "OBR-1", "aud": e.ts.URL, "jti": "z", "exp": e.now.Add(time.Minute).Unix()})
+	forged, _ := Sign(other, "k", map[string]any{"iss": "OBR-1", "sub": "OBR-1", "aud": e.ts.URL, "jti": "z", "exp": time.Now().Add(time.Minute).Unix()})
 	if status, _ := e.post(e.good, "/par", url.Values{"client_assertion": {forged}, "client_assertion_type": {assertionType}}); status != http.StatusUnauthorized {
 		t.Errorf("assertion signed by another key: %d", status)
 	}
@@ -392,7 +414,7 @@ func TestCodeReuseRevokesTokens(t *testing.T) {
 func TestExpiredCode(t *testing.T) {
 	e := newEnv(t)
 	code, _ := e.code()
-	e.advance(61*time.Second, 0)
+	e.ageRequests(time.Second, time.Second)
 	if status, body := e.exchange(e.good, code, verifier); status != http.StatusBadRequest || !strings.Contains(body["error_description"].(string), "expired") {
 		t.Fatalf("expired code: %d %v", status, body)
 	}
@@ -437,7 +459,6 @@ func TestRefreshGrace(t *testing.T) {
 	if status != 200 || second["refresh_token"] == first {
 		t.Fatalf("refresh: %d %v", status, second)
 	}
-	e.advance(30*time.Second, 0)
 	status, third := refresh(first)
 	if status != 200 {
 		t.Fatalf("previous refresh token inside the grace period: %d %v", status, third)
@@ -445,7 +466,11 @@ func TestRefreshGrace(t *testing.T) {
 	if status, _ := e.get(e.good, "/accounts", second["access_token"].(string)); status != http.StatusUnauthorized {
 		t.Fatalf("the lost-response access token should be replaced: %d", status)
 	}
-	e.advance(2*time.Minute, 0)
+	e.editToken(first, func(t *Token) { t.RotatedAt = time.Now().Add(-50 * time.Second) })
+	if status, body := refresh(first); status != 200 {
+		t.Fatalf("previous refresh token inside the grace period, rotated 50 seconds ago: %d %v", status, body)
+	}
+	e.editToken(first, func(t *Token) { t.RotatedAt = time.Now().Add(-70 * time.Second) })
 	if status, body := refresh(first); status != http.StatusBadRequest || body["error"] != "invalid_grant" {
 		t.Fatalf("previous refresh token after the grace period: %d %v", status, body)
 	}
@@ -481,7 +506,7 @@ const day = 24 * time.Hour
 func TestConsentNeedsRenewalAfterAYear(t *testing.T) {
 	e := newEnv(t)
 	tok, id := e.tokens()
-	e.advance(0, 366*day)
+	e.editConsent(id, func(c *Consent) { c.ExpiresAt = time.Now().Add(-time.Second) })
 	if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != http.StatusForbidden || body["error"] != "consent_reconsent_required" {
 		t.Fatalf("after a year: %d %v", status, body)
 	}
@@ -501,8 +526,10 @@ func TestConsentLifetimeFollowsTheSetting(t *testing.T) {
 		t.Fatalf("expires %s, want %s", c.ExpiresAt, want)
 	}
 	uri, _ := e.pushed()
+	before := e.srv.cfg.Clock.Now()
 	req, err := e.srv.Request(context.Background(), uri, "OBR-1")
-	if err != nil || req.Months != 6 || !req.Until.Equal(addMonths(e.clk, 6)) {
+	after := e.srv.cfg.Clock.Now()
+	if err != nil || req.Months != 6 || req.Until.Before(addMonths(before, 6)) || req.Until.After(addMonths(after, 6)) {
 		t.Fatalf("request %+v %v", req, err)
 	}
 }
@@ -528,15 +555,22 @@ func TestDormantConsent(t *testing.T) {
 	e := newEnv(t, func(c *Config) { c.Terms.ConsentMonths = 24 })
 	tok, id := e.tokens()
 	access := tok["access_token"].(string)
-	e.advance(0, 179*day)
+	before := e.srv.cfg.Clock.Now()
 	if status, body := e.get(e.good, "/accounts", access); status != 200 {
-		t.Fatalf("used within 180 days: %d %v", status, body)
+		t.Fatalf("used today: %d %v", status, body)
 	}
-	e.advance(0, 179*day)
-	if status, body := e.get(e.good, "/accounts", access); status != 200 {
-		t.Fatalf("use should restart the 180 days: %d %v", status, body)
+	after := e.srv.cfg.Clock.Now()
+	used, err := e.store.Consent(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
 	}
-	e.advance(0, 181*day)
+	if used.LastUsedAt.Before(before) || used.LastUsedAt.After(after) {
+		t.Fatalf("last used %s, want between %s and %s", used.LastUsedAt, before, after)
+	}
+	e.editConsent(id, func(c *Consent) {
+		c.AuthorisedAt = time.Now().Add(-400 * day)
+		c.LastUsedAt = time.Now().Add(-181 * day)
+	})
 	if status, body := e.get(e.good, "/accounts", access); status != http.StatusForbidden || body["error"] != "consent_dormant" {
 		t.Fatalf("unused for 181 days: %d %v", status, body)
 	}
@@ -553,8 +587,8 @@ func TestDormantConsent(t *testing.T) {
 
 func TestDormancyFollowsTheSetting(t *testing.T) {
 	e := newEnv(t, func(c *Config) { c.Terms.DormantDays = 30 })
-	tok, _ := e.tokens()
-	e.advance(0, 31*day)
+	tok, id := e.tokens()
+	e.editConsent(id, func(c *Consent) { c.AuthorisedAt = time.Now().Add(-31 * day) })
 	if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != http.StatusForbidden || body["error"] != "consent_dormant" {
 		t.Fatalf("unused for 31 days with a 30 day setting: %d %v", status, body)
 	}
@@ -624,7 +658,7 @@ func TestTransactionsReportTheWindow(t *testing.T) {
 	e := newEnv(t)
 	tok, _ := e.tokens()
 	access := tok["access_token"].(string)
-	want := clock.DateOf(e.clk).AddDays(defaultLookaheadDays).String()
+	want := clock.DateOf(time.Now()).AddDays(defaultLookaheadDays).String()
 	if status, body := e.get(e.good, "/accounts/0123456789/transactions", access); status != 200 || body["to"] != want {
 		t.Errorf("default window: %d %v, want to %s", status, body, want)
 	}
@@ -648,7 +682,7 @@ func TestStaleRequestsAreDropped(t *testing.T) {
 	e := newEnv(t)
 	_, stale := e.pushed()
 	code, _ := e.code()
-	e.advance(11*time.Minute, 0)
+	e.ageRequests(11*time.Minute, 5*time.Minute)
 	e.pushed()
 	e.srv.mu.Lock()
 	pars, codes := len(e.srv.pars), len(e.srv.codes)
@@ -659,7 +693,7 @@ func TestStaleRequestsAreDropped(t *testing.T) {
 	if c, _ := e.store.Consent(context.Background(), stale); c.Status != Expired {
 		t.Fatalf("an abandoned request is %s", c.Status)
 	}
-	e.advance(11*time.Minute, 0)
+	e.ageRequests(0, 11*time.Minute)
 	if status, _ := e.post(e.good, "/token", url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {"https://connect.localhost/cb"}}); status != http.StatusBadRequest {
 		t.Fatalf("expired code: %d", status)
 	}
@@ -703,7 +737,7 @@ func TestAccessLogFailureFailsTheRequest(t *testing.T) {
 func TestAssertionRules(t *testing.T) {
 	e := newEnv(t, func(c *Config) { c.Terms.AssertionLife = time.Minute })
 	sign := func(aud string, life time.Duration) string {
-		jwt, err := Sign(e.key, "k1", map[string]any{"iss": "OBR-1", "sub": "OBR-1", "aud": aud, "jti": random("j", 8), "exp": e.now.Add(life).Unix()})
+		jwt, err := Sign(e.key, "k1", map[string]any{"iss": "OBR-1", "sub": "OBR-1", "aud": aud, "jti": random("j", 8), "exp": time.Now().Add(life).Unix()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -735,7 +769,7 @@ func TestLedgerOutboxKeepsOrderAndRetries(t *testing.T) {
 	if err != nil || len(due) != 2 || due[0].Status != Authorised || due[1].Status != Revoked || due[0].ID >= due[1].ID {
 		t.Fatalf("pending ledger events %+v: %v", due, err)
 	}
-	if err := e.srv.Retry(ctx, due[0], e.now.Add(time.Minute)); err != nil {
+	if err := e.srv.Retry(ctx, due[0], time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	if again, _ := e.srv.LedgerDue(ctx, 10); len(again) != 0 {
@@ -744,8 +778,7 @@ func TestLedgerOutboxKeepsOrderAndRetries(t *testing.T) {
 	if conn, _ := e.srv.Due(ctx, 10); len(conn) != 2 {
 		t.Fatalf("%d events due for Connect", len(conn))
 	}
-	e.advance(2*time.Minute, 0)
-	again, _ := e.srv.LedgerDue(ctx, 10)
+	again, _ := e.store.LedgerDue(ctx, time.Now().Add(2*time.Minute), 10)
 	if len(again) != 2 || again[0].ID != due[0].ID || again[0].Attempts != 1 {
 		t.Fatalf("after the wait: %+v", again)
 	}
@@ -781,21 +814,245 @@ func TestAddMonthsClampsToMonthEnd(t *testing.T) {
 	}
 }
 
-func TestConsentAuthorisedOnAMonthEndExpiresOnTheLastDay(t *testing.T) {
-	e := newEnv(t, func(c *Config) { c.Terms.ConsentMonths = 6; c.Terms.DormantDays = 400 })
+func TestExpiredTokensAreRefused(t *testing.T) {
+	e := newEnv(t)
+	tok, _ := e.tokens()
+	access, refresh := tok["access_token"].(string), tok["refresh_token"].(string)
+	past := time.Now().Add(-time.Second)
+	e.editToken(access, func(x *Token) { x.ExpiresAt = past })
+	if status, body := e.get(e.good, "/accounts", access); status != http.StatusUnauthorized || body["error"] != "invalid_token" {
+		t.Fatalf("expired access token: %d %v", status, body)
+	}
+	e.editToken(refresh, func(x *Token) { x.ExpiresAt = past })
+	if status, body := e.post(e.good, "/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}}); status != http.StatusBadRequest || body["error"] != "invalid_grant" {
+		t.Fatalf("expired refresh token: %d %v", status, body)
+	}
+}
+
+func TestIssuedTokenLifetimes(t *testing.T) {
+	e := newEnv(t, func(c *Config) { c.Terms.AccessLife = 3 * time.Minute; c.Terms.RefreshDays = 10 })
+	before := time.Now()
+	tok, _ := e.tokens()
+	after := time.Now()
+	for kind, raw := range map[string]string{"access": tok["access_token"].(string), "refresh": tok["refresh_token"].(string)} {
+		stored, err := e.store.Token(context.Background(), Hash(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		min, max := before.Add(3*time.Minute), after.Add(3*time.Minute)
+		if kind == "refresh" {
+			min, max = before.AddDate(0, 0, 10), after.AddDate(0, 0, 10)
+		}
+		if stored.ExpiresAt.Before(min) || stored.ExpiresAt.After(max) {
+			t.Errorf("%s token expires %s, want between %s and %s", kind, stored.ExpiresAt, min, max)
+		}
+	}
+	if tok["expires_in"] != float64(180) {
+		t.Errorf("expires_in %v", tok["expires_in"])
+	}
+}
+
+func TestSetTermsChangesNextAccessLifetime(t *testing.T) {
+	e := newEnv(t, func(c *Config) { c.Terms.AccessLife = 3 * time.Minute })
+	e.srv.SetTerms(Terms{BankName: "Bank A", AccessLife: 20 * time.Minute})
+	before := time.Now()
+	tok, _ := e.tokens()
+	after := time.Now()
+	stored, err := e.store.Token(context.Background(), Hash(tok["access_token"].(string)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ExpiresAt.Before(before.Add(20*time.Minute)) || stored.ExpiresAt.After(after.Add(20*time.Minute)) {
+		t.Errorf("access token expires %s, want 20 minutes from issue", stored.ExpiresAt)
+	}
+	if tok["expires_in"] != float64(1200) {
+		t.Errorf("expires_in %v, want 1200", tok["expires_in"])
+	}
+	e.srv.SetTerms(Terms{BankName: "Bank A"})
+	if tok, _ := e.tokens(); tok["expires_in"] != float64(600) {
+		t.Errorf("default expires_in %v, want 600", tok["expires_in"])
+	}
+}
+
+func TestLifetimeSettingsAreClamped(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		in   Config
+		want Config
+	}{
+		{"defaults", Config{}, Config{CodeLife: time.Minute, RequestLife: 10 * time.Minute, RefreshGrace: time.Minute}},
+		{"too long", Config{CodeLife: time.Hour, RequestLife: time.Hour}, Config{CodeLife: time.Minute, RequestLife: 10 * time.Minute, RefreshGrace: time.Minute}},
+		{"shorter is kept", Config{CodeLife: 20 * time.Second, RequestLife: 2 * time.Minute, RefreshGrace: 5 * time.Second}, Config{CodeLife: 20 * time.Second, RequestLife: 2 * time.Minute, RefreshGrace: 5 * time.Second}},
+	} {
+		got := New(c.in).cfg
+		if got.CodeLife != c.want.CodeLife || got.RequestLife != c.want.RequestLife || got.RefreshGrace != c.want.RefreshGrace {
+			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestLapsed(t *testing.T) {
+	at := time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name string
+		now  time.Time
+		want bool
+	}{
+		{"a second before", at.Add(-time.Second), false},
+		{"at the instant", at, false},
+		{"a nanosecond after", at.Add(time.Nanosecond), true},
+		{"a day after", at.Add(day), true},
+	} {
+		if got := lapsed(c.now, at); got != c.want {
+			t.Errorf("%s: lapsed %v, want %v", c.name, got, c.want)
+		}
+	}
+	issued := time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name string
+		life time.Duration
+		want time.Time
+	}{
+		{"auth code", time.Minute, time.Date(2026, time.March, 1, 9, 1, 0, 0, time.UTC)},
+		{"pushed request", 10 * time.Minute, time.Date(2026, time.March, 1, 9, 10, 0, 0, time.UTC)},
+		{"access token", 10 * time.Minute, time.Date(2026, time.March, 1, 9, 10, 0, 0, time.UTC)},
+	} {
+		if got := expiresAt(issued, c.life); !got.Equal(c.want) {
+			t.Errorf("%s expires %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestAssertionWindow(t *testing.T) {
+	now := time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)
+	life := time.Minute
+	for _, c := range []struct {
+		name string
+		exp  time.Time
+		want bool
+	}{
+		{"already expired", now.Add(-time.Second), false},
+		{"expires now", now, true},
+		{"inside the window", now.Add(30 * time.Second), true},
+		{"at the window edge", now.Add(life), true},
+		{"past the window", now.Add(life + time.Second), false},
+	} {
+		if got := assertionWindow(c.exp, now, life); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestConsentStatus(t *testing.T) {
+	authorised := time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)
+	at := func(days int) time.Time { return authorised.AddDate(0, 0, days) }
+	consent := func(status Status, expires time.Time, lastUsed time.Time) *Consent {
+		return &Consent{Status: status, AuthorisedAt: authorised, ExpiresAt: expires, LastUsedAt: lastUsed}
+	}
+	year := addMonths(authorised, 12)
+	for _, c := range []struct {
+		name    string
+		consent *Consent
+		now     time.Time
+		dormant int
+		want    Status
+	}{
+		{"fresh", consent(Authorised, year, time.Time{}), authorised, 180, Authorised},
+		{"day 179 unused", consent(Authorised, year, time.Time{}), at(179), 180, Authorised},
+		{"day 180 unused", consent(Authorised, year, time.Time{}), at(180), 180, Dormant},
+		{"day 181 unused", consent(Authorised, year, time.Time{}), at(181), 180, Dormant},
+		{"use restarts the 180 days", consent(Authorised, year, at(179)), at(358), 180, Authorised},
+		{"unused 180 days after the last use", consent(Authorised, year, at(179)), at(359), 180, Dormant},
+		{"dormancy follows the setting", consent(Authorised, year, time.Time{}), at(31), 30, Dormant},
+		{"just inside a 30 day setting", consent(Authorised, year, time.Time{}), at(29), 30, Authorised},
+		{"last use before authorisation is ignored", consent(Authorised, year, at(-10)), at(179), 180, Authorised},
+		{"day before the year ends", consent(Authorised, year, at(364)), at(364), 400, Authorised},
+		{"year ends first day", consent(Authorised, year, at(365)), at(365), 400, ReconsentRequired},
+		{"after a year", consent(Authorised, year, at(366)), at(366), 400, ReconsentRequired},
+		{"expiry beats dormancy", consent(Authorised, year, time.Time{}), at(366), 180, ReconsentRequired},
+		{"far future", consent(Authorised, year, time.Time{}), time.Date(2126, time.March, 1, 9, 0, 0, 0, time.UTC), 180, ReconsentRequired},
+		{"revoked stays revoked", consent(Revoked, year, time.Time{}), at(1), 180, Revoked},
+		{"awaiting stays awaiting", consent(AwaitingAuthorisation, time.Time{}, time.Time{}), at(400), 180, AwaitingAuthorisation},
+	} {
+		if got := consentStatus(c.consent, c.now, c.dormant); got != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestConsentOnAMonthEndExpiresOnTheLastDay(t *testing.T) {
 	start := time.Date(2026, time.August, 31, 9, 0, 0, 0, time.UTC)
-	e.now, e.clk = start, start
-	tok, id := e.tokens()
-	c, _ := e.store.Consent(context.Background(), id)
-	if want := time.Date(2027, time.February, 28, 9, 0, 0, 0, time.UTC); !c.ExpiresAt.Equal(want) {
-		t.Fatalf("expires %s, want %s", c.ExpiresAt, want)
+	expires := addMonths(start, 6)
+	if want := time.Date(2027, time.February, 28, 9, 0, 0, 0, time.UTC); !expires.Equal(want) {
+		t.Fatalf("expires %s, want %s", expires, want)
 	}
-	e.advance(0, 180*day)
-	if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != http.StatusOK {
-		t.Fatalf("before the last day: %d %v", status, body)
+	c := &Consent{Status: Authorised, AuthorisedAt: start, ExpiresAt: expires}
+	for _, tc := range []struct {
+		name string
+		now  time.Time
+		want Status
+	}{
+		{"180 days in", start.AddDate(0, 0, 180), Authorised},
+		{"a second before the last day ends", expires.Add(-time.Second), Authorised},
+		{"at the expiry", expires, ReconsentRequired},
+		{"182 days in", start.AddDate(0, 0, 182), ReconsentRequired},
+	} {
+		if got := consentStatus(c, tc.now, 400); got != tc.want {
+			t.Errorf("%s: %s, want %s", tc.name, got, tc.want)
+		}
 	}
-	e.advance(0, 2*day)
-	if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != http.StatusForbidden || body["error"] != "consent_reconsent_required" {
-		t.Fatalf("after the last day: %d %v", status, body)
+}
+
+func TestHistoryFloorAndAsOf(t *testing.T) {
+	today := clock.Date{Y: 2026, M: time.March, D: 1}
+	floor := clock.Date{Y: 2025, M: time.December, D: 1}
+	for _, c := range []struct {
+		name string
+		d    string
+		want bool
+	}{
+		{"yesterday", "2026-02-28", true},
+		{"today", "2026-03-01", false},
+		{"tomorrow", "2026-03-02", false},
+		{"the day before the floor", "2025-11-30", true},
+		{"two days before the floor", "2025-11-29", false},
+		{"the floor", "2025-12-01", true},
+	} {
+		d, err := clock.ParseDate(c.d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := asOfAllowed(d, today, floor); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestBalanceAsOfFollowsTheHistoryWindow(t *testing.T) {
+	for _, days := range []int{1, 90, 366} {
+		e := newEnv(t, func(c *Config) { c.HistoryDays = days })
+		tok, _ := e.tokens()
+		access := tok["access_token"].(string)
+		today := clock.DateOf(e.srv.cfg.Clock.Now())
+		floor := today.AddDays(-days)
+		if got := e.srv.HistoryFloor(); got != floor {
+			t.Fatalf("%d days: history floor %s, want %s", days, got, floor)
+		}
+		for _, c := range []struct {
+			name string
+			d    clock.Date
+			want int
+		}{
+			{"yesterday", today.AddDays(-1), http.StatusOK},
+			{"today", today, http.StatusBadRequest},
+			{"tomorrow", today.AddDays(1), http.StatusBadRequest},
+			{"the day before the floor", floor.AddDays(-1), http.StatusOK},
+			{"two days before the floor", floor.AddDays(-2), http.StatusBadRequest},
+		} {
+			status, body := e.get(e.good, "/accounts/0123456789/balances?as_of="+c.d.String(), access)
+			if status != c.want {
+				t.Errorf("%d days, %s: as_of %s gave %d %v, want %d", days, c.name, c.d, status, body, c.want)
+			}
+		}
 	}
 }

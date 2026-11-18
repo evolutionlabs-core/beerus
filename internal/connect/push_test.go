@@ -27,12 +27,12 @@ func stubReply(status int, body string) *http.Response {
 func bankDirConfig(t *testing.T, banks ...*config.Bank) *config.Config {
 	t.Helper()
 	cfg := &config.Config{Dir: t.TempDir(), Banks: banks, SetupKey: 1<<63 + 5, Connect: config.Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, ControlPort: 9002, BrandName: "Connect"}}
-	if err := config.Prepare(cfg, clock.New(nil).Real()); err != nil {
+	if err := config.Prepare(cfg, clock.New().Real()); err != nil {
 		t.Fatal(err)
 	}
 	for _, b := range banks {
 		b.Database = config.DatabaseName(cfg.Dir, b.ID)
-		if err := cfg.EnsureBankDir(b, clock.New(nil).Real()); err != nil {
+		if err := cfg.EnsureBankDir(b, clock.New().Real()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -109,7 +109,7 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 		ctl:      ctl,
 		st:       newState(),
 		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		clock:    clock.New(nil),
+		clock:    clock.New(),
 		link:     server.Link{Client: &http.Client{Transport: transport}},
 		pushWake: make(chan struct{}, 1),
 		status:   map[string]*BankStatus{"bank-a": {ID: "bank-a", Phase: PhaseActive}, "bank-b": {ID: "bank-b", Phase: PhaseSuspended, Reason: "Suspended."}},
@@ -144,25 +144,27 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 
 func TestEnsureBankDirRepairsOnATick(t *testing.T) {
 	cfg := bankDirConfig(t, &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1, APIPort: 2, Database: "db"})
-	now := clock.New(nil).Real()
-	at := now
-	a := &App{cfg: cfg, clock: clock.New(func() time.Time { return at })}
+	a := &App{cfg: cfg, clock: clock.New()}
 	path := config.BankDir(cfg.Dir, "bank-a") + "/" + config.BankCAFile
 	rows := []struct {
 		name    string
-		advance time.Duration
+		elapsed bool
 		damage  func() error
 		want    bool
 	}{
 		{name: "first ensure writes", want: true},
-		{name: "nothing changed", advance: time.Second, want: true},
-		{name: "deleted file inside the interval", advance: time.Second, damage: func() error { return os.Remove(path) }, want: false},
-		{name: "deleted file after the interval", advance: bankEnsureEvery, want: true},
-		{name: "corrupted file after the interval", advance: bankEnsureEvery, damage: func() error { return os.WriteFile(path, []byte("x"), 0o644) }, want: true},
+		{name: "nothing changed", want: true},
+		{name: "deleted file inside the interval", damage: func() error { return os.Remove(path) }, want: false},
+		{name: "deleted file after the interval", elapsed: true, want: true},
+		{name: "corrupted file after the interval", elapsed: true, damage: func() error { return os.WriteFile(path, []byte("x"), 0o644) }, want: true},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
-			at = at.Add(r.advance)
+			if r.elapsed {
+				last := a.bankEnsures["bank-a"]
+				last.at = last.at.Add(-bankEnsureEvery)
+				a.bankEnsures["bank-a"] = last
+			}
 			if r.damage != nil {
 				if err := r.damage(); err != nil {
 					t.Fatal(err)
@@ -180,5 +182,25 @@ func TestEnsureBankDirRepairsOnATick(t *testing.T) {
 				t.Fatalf("ca.crt intact is %v, want %v", ok, r.want)
 			}
 		})
+	}
+}
+
+func TestEnsuredRecently(t *testing.T) {
+	at := time.Date(2026, time.November, 14, 10, 0, 0, 0, clock.Lagos)
+	for _, c := range []struct {
+		name string
+		at   time.Time
+		now  time.Time
+		want bool
+	}{
+		{"never ensured", time.Time{}, at, false},
+		{"just ensured", at, at, true},
+		{"a second before the interval ends", at, at.Add(bankEnsureEvery - time.Second), true},
+		{"at the interval", at, at.Add(bankEnsureEvery), false},
+		{"long after", at, at.Add(24 * time.Hour), false},
+	} {
+		if got := ensuredRecently(c.at, c.now); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
 	}
 }

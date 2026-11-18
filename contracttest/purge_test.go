@@ -95,8 +95,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Abuja Digital", "id": "abuja-digital"}); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
 		t.Fatalf("re-adding a bank that is being removed: %v", err)
 	}
-	s.advance("24h")
-	s.advance("24h")
+	s.ctl("POST", "/nip/settle-now", nil)
 	s.waitBlocked("abuja-digital", setup.ReasonMoneyDecisionNeeded, "Abuja Digital holds ₦25,100.00 for 1 customer. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.")
 	if got := databases(); len(got) != 1 {
 		t.Fatalf("the purge dropped databases before the money was decided: %v", got)
@@ -172,7 +171,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if ck, err := s.app.VerifyBank(context.Background()); err != nil || !ck.OK() {
 		t.Fatalf("bank ledgers after the purge: %v %v", err, ck)
 	}
-	s.advance("72h")
+	s.syncNow()
 	checkSettled(t, s.app)
 	before := s.balances(home)
 	if err := s.app.Save(); err != nil {

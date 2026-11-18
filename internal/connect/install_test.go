@@ -222,7 +222,7 @@ func TestInstall(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		in := &installer{clock: clock.New(nil), report: func(InstallStep) {}}
+		in := &installer{clock: clock.New(), report: func(InstallStep) {}}
 		if err := installCBN(t.Context(), in, cfg, ctl, stored); err != nil {
 			t.Fatal(err)
 		}

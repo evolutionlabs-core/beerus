@@ -42,7 +42,7 @@ func TestInternalRevokeAnswers(t *testing.T) {
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
 			open := openbanking.New(openbanking.Config{Store: brokenStore{MemStore: openbanking.NewMemStore(), err: r.err}})
-			h := New(Config{Host: fakeHost{phase: config.PhaseActive}, Open: open, Link: server.NewLink(token, ""), Clock: clock.New(nil), Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+			h := New(Config{Host: fakeHost{phase: config.PhaseActive}, Open: open, Link: server.NewLink(token, ""), Clock: clock.New(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
 			req, err := http.NewRequest(http.MethodPost, "http://bank-a.localhost:7000/internal/revoke", strings.NewReader(`{"consent_id":"con_x"}`))
 			if err != nil {
 				t.Fatal(err)

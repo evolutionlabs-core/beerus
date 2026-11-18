@@ -86,7 +86,7 @@ func TestBankDirectoryComesFromNIBSS(t *testing.T) {
 		NIBSSPort: ln.Addr().(*net.TCPAddr).Port,
 		CoreURL:   "http://127.0.0.1:1",
 		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:     clock.New(nil),
+		Clock:     clock.New(),
 		Phase:     PhaseActive,
 	})
 	if err := srv.RefreshBanks(t.Context()); err != nil {

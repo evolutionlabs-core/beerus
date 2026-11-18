@@ -46,7 +46,7 @@ const (
 )
 
 var (
-	t0        = time.Date(2026, 11, 14, 10, 30, 0, 0, clock.Lagos)
+	t0        = clock.New().Now()
 	requestID = regexp.MustCompile(`"request_id":"req_[A-Za-z0-9]+"`)
 )
 
@@ -131,7 +131,7 @@ func newStack(t *testing.T) *stack {
 		t.Fatal(err)
 	}
 	srv := &http.Server{
-		Handler:           inbound.New(b, func() time.Time { return t0 }, inbound.Caller{CommonName: nibssCN, Role: nibssRole}, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		Handler:           inbound.New(b, clock.New(), inbound.Caller{CommonName: nibssCN, Role: nibssRole}, slog.New(slog.NewTextHandler(io.Discard, nil))),
 		ReadHeaderTimeout: clientLimit,
 		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{pair}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12},
 	}

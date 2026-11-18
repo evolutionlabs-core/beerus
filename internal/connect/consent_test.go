@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
@@ -32,6 +33,12 @@ func TestEventIDsAreTrackedOnceAndBounded(t *testing.T) {
 	}
 }
 
+func TestRefreshAheadIsShorterThanTheShortestAccessToken(t *testing.T) {
+	if floor := time.Duration(config.MinAccessSeconds) * time.Second; refreshAhead >= floor {
+		t.Fatalf("refreshAhead %s must be shorter than the %s minimum access token life", refreshAhead, floor)
+	}
+}
+
 type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -39,14 +46,13 @@ func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func TestFailedRevokesAreQueuedAndRetried(t *testing.T) {
-	now := time.Now()
 	up := false
 	calls := 0
 	a := &App{
 		cfg:   &config.Config{Banks: []*config.Bank{{ID: "bank-a", Port: 7001, APIPort: 7011}}},
 		st:    newState(),
 		log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		clock: clock.New(func() time.Time { return now }),
+		clock: clock.New(),
 		obHTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 			calls++
 			code := http.StatusServiceUnavailable
@@ -66,13 +72,23 @@ func TestFailedRevokesAreQueuedAndRetried(t *testing.T) {
 	if calls != before || len(a.st.Revokes) != 1 {
 		t.Fatalf("retried before it was due: %d calls, %+v", calls-before, a.st.Revokes)
 	}
-	now = now.Add(time.Hour)
+	a.st.Revokes[0].Next = a.clock.Real().Add(time.Second)
 	a.retryRevokes()
+	if calls != before || len(a.st.Revokes) != 1 || a.st.Revokes[0].Attempts != 1 {
+		t.Fatalf("retried a second before it was due: %d calls, %+v", calls-before, a.st.Revokes)
+	}
+	a.st.Revokes[0].Next = a.clock.Real()
+	started := a.clock.Real()
+	a.retryRevokes()
+	finished := a.clock.Real()
 	if len(a.st.Revokes) != 1 || a.st.Revokes[0].Attempts != 2 {
 		t.Fatalf("queue after a second failure: %+v", a.st.Revokes)
 	}
+	if next := a.st.Revokes[0].Next; next.Before(started.Add(consent.Backoff(2))) || next.After(finished.Add(consent.Backoff(2))) {
+		t.Fatalf("second retry scheduled for %v, want %v after the attempt", next, consent.Backoff(2))
+	}
 	up = true
-	now = now.Add(time.Hour)
+	a.st.Revokes[0].Next = a.clock.Real()
 	a.retryRevokes()
 	if len(a.st.Revokes) != 0 {
 		t.Fatalf("queue after the bank came back: %+v", a.st.Revokes)

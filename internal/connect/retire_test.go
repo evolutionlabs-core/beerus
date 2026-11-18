@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -17,8 +16,8 @@ import (
 
 func coreOf(t *testing.T) *App {
 	t.Helper()
-	fixed := Options{Real: func() time.Time { return participantNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	a, _ := newTestAppWithNIBSS(t, fixed)
+	opts := Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	a, _ := newTestAppWithNIBSS(t, opts)
 	return a
 }
 
@@ -58,7 +57,7 @@ func TestRetiringABankNeedsItsAcknowledgement(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	p, err := participant.New(ctx, a.cfg.Dir, participant.Options{Real: a.clock.Real, Logger: a.log, BankID: b.ID, CoreURL: startCore(t, a), Bind: "127.0.0.1", DatabaseURL: a.cfg.DatabaseURL})
+	p, err := participant.New(ctx, a.cfg.Dir, participant.Options{Logger: a.log, BankID: b.ID, CoreURL: startCore(t, a), Bind: "127.0.0.1", DatabaseURL: a.cfg.DatabaseURL})
 	if err != nil {
 		t.Fatal(err)
 	}

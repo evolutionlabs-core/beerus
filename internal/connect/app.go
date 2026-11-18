@@ -86,7 +86,6 @@ type App struct {
 }
 
 type Options struct {
-	Real     func() time.Time
 	Logger   *slog.Logger
 	Client   *http.Client
 	CoreURL  string
@@ -147,7 +146,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		}
 	}
 	a.st = st
-	a.clock = clock.New(o.Real)
+	a.clock = clock.New()
 	if err := cfg.EnsureCertificates(a.clock.Real()); err != nil {
 		return nil, err
 	}
@@ -384,25 +383,13 @@ func (a *App) runConnection(id string) {
 		a.mu.Unlock()
 		return
 	}
-	now := a.clock.Now()
-	real := a.clock.Real()
-	if c.Status == "syncing" && real.Before(c.SyncDueReal) {
-		a.mu.Unlock()
-		return
-	}
-	at := now
-	expired := !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt)
-	if expired {
-		at = c.ExpiresAt.Add(-time.Millisecond)
-	}
-	due := c.Status == "syncing" || c.Status == "institution_down" || expired ||
-		real.Sub(c.LastSyncedReal) >= a.cfg.SyncInterval()
+	p := planSync(c, a.cfg.SyncInterval(), a.clock.Now(), a.clock.Real())
 	a.mu.Unlock()
-	if !due {
+	if !p.due {
 		return
 	}
-	a.syncConnection(c, at)
-	if !expired {
+	a.syncConnection(c, p.at)
+	if !p.expired {
 		return
 	}
 	a.mu.Lock()

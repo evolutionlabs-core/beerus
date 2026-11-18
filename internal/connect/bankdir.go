@@ -14,6 +14,10 @@ type bankEnsured struct {
 	at     time.Time
 }
 
+func ensuredRecently(at, now time.Time) bool {
+	return !at.IsZero() && now.Sub(at) < bankEnsureEvery
+}
+
 func (a *App) ensureBankDir(id string, force bool) (string, error) {
 	a.bankFileMu.Lock()
 	defer a.bankFileMu.Unlock()
@@ -34,7 +38,7 @@ func (a *App) ensureBankDir(id string, force bool) (string, error) {
 	}
 	now := a.clock.Real()
 	last, ok := a.bankEnsures[id]
-	if !force && ok && last.digest == digest && now.Sub(last.at) < bankEnsureEvery {
+	if !force && ok && last.digest == digest && ensuredRecently(last.at, now) {
 		return digest, nil
 	}
 	if err := a.cfg.EnsureBankDir(snap, now); err != nil {

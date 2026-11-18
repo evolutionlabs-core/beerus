@@ -28,7 +28,6 @@ const (
 
 type Options struct {
 	Logger      *slog.Logger
-	Real        func() time.Time
 	Bind        string
 	DatabaseURL string
 }
@@ -73,7 +72,7 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Participant{dir: dir, file: f, log: o.Logger, clock: clock.New(o.Real), bind: o.Bind, token: token, tls: tc, banks: banks, cbn: cbn, settles: make(chan settleRequest)}
+	p := &Participant{dir: dir, file: f, log: o.Logger, clock: clock.New(), bind: o.Bind, token: token, tls: tc, banks: banks, cbn: cbn, settles: make(chan settleRequest)}
 	if p.log == nil {
 		p.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}

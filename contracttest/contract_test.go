@@ -190,7 +190,7 @@ func TestConnectAndSync(t *testing.T) {
 		hooks := s.sink.all()
 		seen := map[string]bool{}
 		for _, h := range hooks {
-			if err := verifyV1a(pub, h, s.realNow()); err != nil {
+			if err := verifyV1a(pub, h, time.Now()); err != nil {
 				t.Fatalf("webhook signature: %v", err)
 			}
 			var ev struct {
@@ -349,19 +349,10 @@ func TestRevokeAndReconnectKeepsIDs(t *testing.T) {
 	}
 }
 
-func TestConsentExpiryAndReauth(t *testing.T) {
+func TestReauthKeepsTheConnection(t *testing.T) {
 	s := newStack(t)
 	conn := s.connect("tunde", "bank-a", s.today().AddDays(-30))
 	id := fmt.Sprint(conn.Accounts[0]["id"])
-	s.advance("366d")
-	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
-	if c.JSON["status"] != "expired" {
-		t.Fatalf("status after a year: %v", c.JSON["status"])
-	}
-	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync", nil)
-	if r.Status != 409 || r.Code() != "reauth_required" {
-		t.Fatalf("sync after expiry: %d %s", r.Status, r.Body)
-	}
 	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", map[string]string{"state": "again"}), 201)
 	if ls.JSON["connection_id"] != conn.ConnectionID {
 		t.Fatalf("reauth session: %s", ls.Body)
@@ -375,7 +366,7 @@ func TestConsentExpiryAndReauth(t *testing.T) {
 		t.Fatal("reauth created a new connection")
 	}
 	s.syncNow()
-	c = s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
 	if c.JSON["status"] != "active" {
 		t.Fatalf("status after reauth: %v", c.JSON["status"])
 	}
@@ -409,7 +400,7 @@ func TestRefreshAndRateLimit(t *testing.T) {
 func TestBankOutage(t *testing.T) {
 	s := newStack(t)
 	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
-	s.ctl("POST", "/faults", map[string]any{"kind": "down", "bank": "bank-b", "for": "2h"})
+	s.ctl("POST", "/faults", map[string]any{"kind": "down", "bank": "bank-b"})
 	s.syncNow()
 	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
 	if c.JSON["status"] != "institution_down" {
@@ -434,7 +425,8 @@ func TestBankOutage(t *testing.T) {
 	if b.result == nil || b.result.Query().Get("error") != "institution_down" {
 		t.Fatalf("widget during outage: %v", b.result)
 	}
-	s.advance("3h")
+	s.ctl("DELETE", "/faults?bank=bank-b", nil)
+	s.syncNow()
 	c = s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
 	if c.JSON["status"] != "active" {
 		t.Fatalf("status after outage: %v", c.JSON["status"])

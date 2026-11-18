@@ -11,10 +11,10 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
@@ -34,7 +34,7 @@ type Caller struct {
 
 type server struct {
 	bank   *bank.Bank
-	now    func() time.Time
+	clock  *clock.Clock
 	caller Caller
 	log    *slog.Logger
 }
@@ -56,8 +56,8 @@ type creditResult struct {
 	ResponseCode string `json:"response_code"`
 }
 
-func New(b *bank.Bank, now func() time.Time, caller Caller, log *slog.Logger) http.Handler {
-	s := &server{bank: b, now: now, caller: caller, log: log}
+func New(b *bank.Bank, clk *clock.Clock, caller Caller, log *slog.Logger) http.Handler {
+	s := &server{bank: b, clock: clk, caller: caller, log: log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/nip/account-names/{account_number}", only(http.MethodGet, s.nameEnquiry))
 	mux.HandleFunc("/v1/nip/credits", only(http.MethodPost, s.credit))
@@ -252,7 +252,7 @@ func (s *server) credit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", msg)
 		return
 	}
-	ans, err := s.bank.Credit(r.Context(), c, s.now())
+	ans, err := s.bank.Credit(r.Context(), c, s.clock.Now())
 	var reused *bank.SessionReusedError
 	switch {
 	case errors.As(err, &reused):
@@ -273,7 +273,7 @@ func (s *server) creditStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("session_id must have %d digits.", sessionDigits))
 		return
 	}
-	code, err := s.bank.CreditStatus(r.Context(), sid, s.now())
+	code, err := s.bank.CreditStatus(r.Context(), sid, s.clock.Now())
 	if err != nil {
 		s.unavailable(w, r, err)
 		return

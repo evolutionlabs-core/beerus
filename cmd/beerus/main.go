@@ -63,7 +63,7 @@ func cmdInit(args []string) error {
 	for _, n := range connect.InstallLabels() {
 		width = max(width, len(n))
 	}
-	clk := clock.New(nil)
+	clk := clock.New()
 	start := clk.Real()
 	err = connect.Install(context.Background(), p.dir, p.spec, p.local, p.today, func(s connect.InstallStep) {
 		fmt.Println(stepLine(installLabel(s), width, s.Err == nil, s.Duration))
@@ -122,7 +122,7 @@ func parseInit(args []string) (initPlan, error) {
 			local.Connect.HealthPort = flagged.HealthPort
 		}
 	})
-	today := clock.New(nil).Today()
+	today := clock.New().Today()
 	spec := setup.DefaultSpec(defaultSetupName)
 	if *file != "" {
 		if spec, err = readSpec(*file); err != nil {
@@ -439,7 +439,7 @@ func cmdBankCreate(args []string) error {
 		}
 		return err
 	}
-	clk := clock.New(nil)
+	clk := clock.New()
 	start := clk.Real()
 	raw, err := c.send("POST", "/banks", map[string]any{"name": *name, "type": *typ, "id": *id, "settles_through": *via})
 	if err != nil {

@@ -103,7 +103,7 @@ func Install(ctx context.Context, dir string, spec setup.Spec, local setup.Local
 	if found && systemPhase(st, setup.SystemCBN) == config.PhaseActive && systemPhase(st, setup.SystemNIBSS) == config.PhaseActive {
 		return fmt.Errorf("%s is already set up. Run beerus up to start it.", dir)
 	}
-	in := &installer{clock: clock.New(nil), report: report}
+	in := &installer{clock: clock.New(), report: report}
 	url := local.DatabaseURL
 	if found {
 		if local, err = setup.LoadLocal(dir); err != nil {

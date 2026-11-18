@@ -50,7 +50,7 @@ func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
 	if err != nil {
 		return PlanReply{}, fmt.Errorf("load the country pack: %w", err)
 	}
-	plan := setup.Build(pack, desired, st, rows, clock.New(nil).Today())
+	plan := setup.Build(pack, desired, st, rows, clock.New().Today())
 	if len(plan.Errors) > 0 {
 		return PlanReply{}, planFailure(plan.Errors)
 	}

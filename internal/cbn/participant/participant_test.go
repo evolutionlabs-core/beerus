@@ -59,7 +59,7 @@ func TestCBNServesSettlement(t *testing.T) {
 	if url == "" || testing.Short() {
 		t.Skip("needs Postgres; set BEERUS_TEST_DATABASE_URL and run without -short")
 	}
-	now := clock.New(nil).Now()
+	now := clock.New().Now()
 	stage := t.TempDir()
 	cfg := &config.Config{Dir: stage, SetupKey: 9, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: freePort(t), NIBSSControlPort: freePort(t), CBNPort: freePort(t), CBNControlPort: freePort(t)}}
 	if err := config.Prepare(cfg, now); err != nil {

@@ -472,7 +472,7 @@ func runtimeBank(b setup.Bank, r setup.Resource) *config.Bank {
 		State:          state,
 		NetDebitCap:    b.NetDebitCap,
 		Collateral:     b.Collateral,
-		API:            config.BankAPI{ConsentMonths: ob.ConsentMonths, RefreshDays: ob.RefreshDays, DormantDays: ob.DormantDays, AssertionSeconds: ob.AssertionSeconds},
+		API:            config.BankAPI{ConsentMonths: ob.ConsentMonths, RefreshDays: ob.RefreshDays, DormantDays: ob.DormantDays, AssertionSeconds: ob.AssertionSeconds, AccessSeconds: ob.AccessSeconds},
 	}
 }
 

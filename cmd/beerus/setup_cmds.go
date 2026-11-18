@@ -1194,7 +1194,7 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(e.out, "Beerus is running. %s.\n\n", stamp(clock.New(nil).Now()))
+	fmt.Fprintf(e.out, "Beerus is running. %s.\n\n", stamp(clock.New().Now()))
 	if err := printInfo(c); err != nil {
 		return err
 	}

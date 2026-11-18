@@ -39,7 +39,7 @@ func TestNIPSettlement(t *testing.T) {
 		t.Fatalf("a new setup has %d settlement sessions", first.Sessions)
 	}
 	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "1500")
-	s.advance("72h")
+	s.ctl("POST", "/nip/settle-now", nil)
 	later := checkSettled(t, s.app)
 	if later.Sessions == 0 {
 		t.Fatalf("settlement did not move on: %+v then %+v", first, later)
@@ -55,7 +55,7 @@ func TestNIBSSPostsACutoffOnceAndTheCBNReplaysARetry(t *testing.T) {
 	}
 	s := newBankStack(t)
 	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "1500")
-	s.advance("72h")
+	s.ctl("POST", "/nip/settle-now", nil)
 	first := checkSettled(t, s.app)
 	if first.Sessions == 0 {
 		t.Fatalf("no cutoff was posted: %+v", first)
@@ -90,7 +90,7 @@ func TestNIPSessionsCannotChangeOnALiveSetup(t *testing.T) {
 	if _, err := connect.New(cfg, connect.Options{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := nibssparticipant.New(t.Context(), cfg.Dir, nibssparticipant.Options{Bind: nodeBind, DatabaseURL: cfg.DatabaseURL}); err == nil || !strings.Contains(err.Error(), "nip_sessions must stay 4") {
+	if _, err := nibssparticipant.New(t.Context(), cfg.Dir, nibssparticipant.Options{Bind: nodeBind, DatabaseURL: cfg.DatabaseURL}); err == nil || !strings.Contains(err.Error(), "nip_sessions must stay 1") {
 		t.Fatalf("starting with a different schedule: %v", err)
 	}
 }
@@ -106,7 +106,7 @@ func TestSettlementCheckDoesNotTrustTheBooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	at := clock.New(nil).Now()
+	at := clock.New().Now()
 	_, err = ledger.New(st.Pool, nil).Post(context.Background(), ledger.Entry{
 		Key: "tamper", Kind: "feed", PostingDate: clock.DateOf(at), PostedAt: at, Narration: "Tamper",
 		Lines: []ledger.Line{{Account: bank.Vault, Amount: 100}, {Account: bank.NIPInward, Amount: -100}},
@@ -129,10 +129,16 @@ func TestSettlementRunsAlongsideTheApp(t *testing.T) {
 	}
 	s := newBankStack(t)
 	checkSettled(t, s.app)
-	s.advance("96h")
+	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "1500")
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
-		wg.Add(2)
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			if _, err := s.ctlTry("POST", "/nip/settle-now", nil); err != nil {
+				t.Errorf("settle now: %v", err)
+			}
+		}()
 		go func() {
 			defer wg.Done()
 			s.app.Step(t.Context())

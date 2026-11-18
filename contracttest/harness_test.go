@@ -25,7 +25,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,7 +38,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
-	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -86,21 +84,7 @@ type Stack struct {
 	validator  validator.Validator
 	vmu        sync.Mutex
 	violations []string
-	skew       atomic.Int64
-	origin     time.Time
-	base       time.Time
 	people     map[string]persona
-}
-
-func (s *Stack) realNow() time.Time {
-	if s.external {
-		return time.Now()
-	}
-	return s.base.Add(time.Since(s.origin)).Add(time.Duration(s.skew.Load()))
-}
-
-func (s *Stack) skewReal(by time.Duration) {
-	s.skew.Add(int64(by))
 }
 
 func specPath() string {
@@ -120,6 +104,8 @@ func freePorts(t *testing.T, n int) []int {
 	}
 	return ports
 }
+
+const stackAccessSeconds = 130
 
 const (
 	stackPortLow  = 20000
@@ -171,35 +157,6 @@ func newBankStackWith(t *testing.T, edit func(*config.Config)) *Stack {
 	return startStack(t, edit)
 }
 
-const (
-	stackHour      = 9
-	stackFirstDay  = 3
-	stackLastDay   = 14
-	stackQuietDays = 14
-	stackWeekday   = time.Thursday
-)
-
-func stackBase(t *testing.T) time.Time {
-	t.Helper()
-	pack, err := countrypack.Nigeria()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cal := clock.NewCalendar(pack.Fixed.Days, nil, nil)
-	for d := clock.DateOf(time.Now()).AddDays(1); ; d = d.AddDays(1) {
-		if d.Weekday() != stackWeekday || d.D < stackFirstDay || d.D > stackLastDay {
-			continue
-		}
-		quiet := true
-		for i := 0; i <= stackQuietDays; i++ {
-			quiet = quiet && !cal.IsHoliday(d.AddDays(i))
-		}
-		if quiet {
-			return d.Start().Add(stackHour * time.Hour)
-		}
-	}
-}
-
 func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	t.Helper()
 	if testing.Short() {
@@ -211,8 +168,12 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 		local.DatabaseURL = u
 	}
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort, local.Connect.CBNPort = ports[0], ports[1], ports[2], ports[3], ports[4], ports[5]
-	today := clock.DateOf(stackBase(t))
+	today := clock.New().Today()
 	spec := banktest.Spec("contract")
+	spec.Spec.NIP.Sessions = 1
+	for i := range spec.Spec.Banks {
+		spec.Spec.Banks[i].OpenBanking.AccessSeconds = stackAccessSeconds
+	}
 	spec.Spec.Partners = []setup.Partner{{
 		ID:           "balance",
 		Name:         "Balance",
@@ -243,10 +204,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}
-	s := &Stack{t: t, people: map[string]persona{}, origin: time.Now(), base: stackBase(t)}
-	if opts.Real == nil {
-		opts.Real = s.realNow
-	}
+	s := &Stack{t: t, people: map[string]persona{}}
 	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
 		cfg, err := connect.LoadConfig(dir)
 		if err != nil {
@@ -598,29 +556,8 @@ func (s *Stack) syncNow() {
 	s.ctl("POST", "/sync", nil)
 }
 
-func (s *Stack) advance(by string) {
-	s.t.Helper()
-	if s.external {
-		s.t.Fatalf("advance %s needs an in-process stack; a running beerus cannot move its clock", by)
-	}
-	d, err := parseSpan(by)
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	s.skewReal(d)
-	s.syncNow()
-}
-
-func parseSpan(s string) (time.Duration, error) {
-	if days, ok := strings.CutSuffix(s, "d"); ok {
-		n, err := strconv.Atoi(days)
-		return time.Duration(n) * 24 * time.Hour, err
-	}
-	return time.ParseDuration(s)
-}
-
 func (s *Stack) today() clock.Date {
-	return clock.New(s.realNow).Today()
+	return clock.New().Today()
 }
 
 type persona struct {

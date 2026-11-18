@@ -83,7 +83,7 @@ type testBanks struct {
 func (b testBanks) Start(id string) (func(), <-chan struct{}) {
 	n := spawnTestNode(id, func(ctx context.Context) error {
 		for {
-			p, err := participant.New(ctx, b.a.cfg.Dir, participant.Options{Real: b.a.clock.Real, Logger: b.a.log, BankID: id, CoreURL: b.a.cfg.ControlURL(), Bind: testBind, DatabaseURL: b.a.cfg.DatabaseURL})
+			p, err := participant.New(ctx, b.a.cfg.Dir, participant.Options{Logger: b.a.log, BankID: id, CoreURL: b.a.cfg.ControlURL(), Bind: testBind, DatabaseURL: b.a.cfg.DatabaseURL})
 			if err == nil {
 				if err = p.Serve(ctx); err == nil {
 					return nil
@@ -110,14 +110,11 @@ func prepareTestCore(t *testing.T, o Options) (*App, *config.Config) {
 		o.Logger = slog.New(slog.DiscardHandler)
 	}
 	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
-	real := o.Real
-	if real == nil {
-		real = time.Now
-	}
-	if err := cfg.EnsureCertificates(real()); err != nil {
+	now := time.Now()
+	if err := cfg.EnsureCertificates(now); err != nil {
 		t.Fatal(err)
 	}
-	if err := PrepareCBN(cfg, real()); err != nil {
+	if err := PrepareCBN(cfg, now); err != nil {
 		t.Fatal(err)
 	}
 	a, err := New(cfg, o)
@@ -155,12 +152,12 @@ func startTestNodes(t *testing.T, o Options) (*App, *testNodes, error) {
 	conn.Close(context.Background())
 	t.Cleanup(func() { dropTestDatabases(t, cfg) })
 	ns := &testNodes{}
-	cbn, err := cbnparticipant.New(context.Background(), cfg.Dir, cbnparticipant.Options{Logger: a.log, Real: a.clock.Real, DatabaseURL: cfg.DatabaseURL})
+	cbn, err := cbnparticipant.New(context.Background(), cfg.Dir, cbnparticipant.Options{Logger: a.log, DatabaseURL: cfg.DatabaseURL})
 	if err != nil {
 		return nil, ns, err
 	}
 	ns.add("the CBN", cbn.Serve)
-	nibss, err := nibssparticipant.New(context.Background(), cfg.Dir, nibssparticipant.Options{Logger: a.log, Real: a.clock.Real, DatabaseURL: cfg.DatabaseURL})
+	nibss, err := nibssparticipant.New(context.Background(), cfg.Dir, nibssparticipant.Options{Logger: a.log, DatabaseURL: cfg.DatabaseURL})
 	if err != nil {
 		return nil, ns, errors.Join(err, ns.halt())
 	}
