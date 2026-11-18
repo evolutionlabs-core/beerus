@@ -96,7 +96,7 @@ func Install(ctx context.Context, dir string, spec setup.Spec, local setup.Local
 	if err != nil {
 		return err
 	}
-	err = in.run(ctx, stepNameCBN, func() (string, error) { return "", in.prepareCBN(ctl, cfg) })
+	err = in.run(ctx, stepNameCBN, func() (string, error) { return "", prepareCBN(ctl, cfg, in.clock.Real()) })
 	if err != nil {
 		return err
 	}
@@ -123,20 +123,24 @@ func checkPostgres(ctx context.Context, url string) error {
 	return c.Close(ctx)
 }
 
+func claimSystem(ctl *state.Store, cfg *config.Config, id string) error {
+	return ctl.Claim(setup.KindSystem, id, setup.Owned{Kind: state.OwnedDatabase, Name: config.DatabaseName(cfg.Dir, id)})
+}
+
 func claimSystems(ctl *state.Store, cfg *config.Config) error {
 	for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {
-		if err := ctl.Claim(setup.KindSystem, id, setup.Owned{Kind: state.OwnedDatabase, Name: config.DatabaseName(cfg.Dir, id)}); err != nil {
+		if err := claimSystem(ctl, cfg, id); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (i *installer) prepareCBN(ctl *state.Store, cfg *config.Config) error {
+func prepareCBN(ctl *state.Store, cfg *config.Config, now time.Time) error {
 	if err := state.EnsureCBNPorts(ctl, cfg); err != nil {
 		return err
 	}
-	if err := cfg.EnsureCBNDir(i.clock.Real()); err != nil {
+	if err := cfg.EnsureCBNDir(now); err != nil {
 		return fmt.Errorf("ensure the CBN directory: %w", err)
 	}
 	return nil

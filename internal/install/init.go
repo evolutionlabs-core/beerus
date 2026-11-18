@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -74,7 +73,7 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	if cfg, err = setup.BuildConfig(dir, st, local); err != nil {
 		return err
 	}
-	if err := config.Prepare(cfg, time.Now()); err != nil {
+	if err := config.Prepare(cfg, clock.New().Now()); err != nil {
 		return err
 	}
 	recordCertPrints(cfg, &st)

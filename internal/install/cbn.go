@@ -1,7 +1,6 @@
 package install
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -14,14 +13,8 @@ func PrepareCBN(cfg *config.Config, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	if err := ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: state.OwnedDatabase, Name: config.DatabaseName(cfg.Dir, setup.SystemCBN)}); err != nil {
+	if err := claimSystem(ctl, cfg, setup.SystemCBN); err != nil {
 		return err
 	}
-	if err := state.EnsureCBNPorts(ctl, cfg); err != nil {
-		return err
-	}
-	if err := cfg.EnsureCBNDir(now); err != nil {
-		return fmt.Errorf("ensure the CBN directory: %w", err)
-	}
-	return nil
+	return prepareCBN(ctl, cfg, now)
 }
