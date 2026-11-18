@@ -1,6 +1,7 @@
 package contracttest
 
 import (
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"cmp"
 	"context"
 	"fmt"
@@ -176,7 +177,7 @@ func startSoloBank(t *testing.T, state string) soloBank {
 	if err := store.Create(ctx, dbURL, other); err != nil {
 		t.Skipf("no Postgres for the solo bank test (%v); set BEERUS_TEST_DATABASE_URL", err)
 	}
-	t.Cleanup(func() { _ = store.DropDatabases(ctx, dbURL, []string{other}) })
+	t.Cleanup(func() { _ = postgres.DropDatabases(ctx, dbURL, []string{other}) })
 	books, account := seedSoloBank(t, ctx, dbURL, stage, own, now)
 
 	clientDir := t.TempDir()

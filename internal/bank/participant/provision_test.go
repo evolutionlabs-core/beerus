@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"io"
 	"net"
 	"net/http"
@@ -51,7 +52,9 @@ func newStage(t *testing.T) *stage {
 	if err := store.Create(ctx, dbURL, config.DatabaseName(dir, "probe")); err != nil {
 		t.Skipf("no Postgres for the provisioning test (%v); set BEERUS_TEST_DATABASE_URL", err)
 	}
-	t.Cleanup(func() { _ = store.DropDatabases(ctx, dbURL, []string{config.DatabaseName(dir, "probe"), own.Database}) })
+	t.Cleanup(func() {
+		_ = postgres.DropDatabases(ctx, dbURL, []string{config.DatabaseName(dir, "probe"), own.Database})
+	})
 	token, err := config.ReadSecret(filepath.Join(config.BankDir(dir, own.ID), config.BankTokenFile))
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +294,7 @@ func TestBankRebuildsADroppedDatabase(t *testing.T) {
 	if p.booksLost(ctx) {
 		t.Fatal("a healthy database was reported lost")
 	}
-	if err := store.DropDatabases(ctx, s.dbURL, []string{p.cfg.Banks[0].Database}); err != nil {
+	if err := postgres.DropDatabases(ctx, s.dbURL, []string{p.cfg.Banks[0].Database}); err != nil {
 		t.Fatal(err)
 	}
 	if !p.booksLost(ctx) {
@@ -316,7 +319,7 @@ func TestLaterStepFailureRedoesTheDatabaseStep(t *testing.T) {
 	p.Ensure(ctx)
 	p.forgetBooks()
 	p.steps[2].Done = true
-	if err := store.DropDatabases(ctx, s.dbURL, []string{p.cfg.Banks[0].Database}); err != nil {
+	if err := postgres.DropDatabases(ctx, s.dbURL, []string{p.cfg.Banks[0].Database}); err != nil {
 		t.Fatal(err)
 	}
 	p.ensureDue(ctx)
@@ -352,7 +355,7 @@ func TestClosedBankDoesNotRebuildItsDatabase(t *testing.T) {
 	ctx := t.Context()
 	p.Ensure(ctx)
 	name := p.cfg.Banks[0].Database
-	if err := store.DropDatabases(ctx, s.dbURL, []string{name}); err != nil {
+	if err := postgres.DropDatabases(ctx, s.dbURL, []string{name}); err != nil {
 		t.Fatal(err)
 	}
 	p.forgetBooks()
@@ -362,7 +365,7 @@ func TestClosedBankDoesNotRebuildItsDatabase(t *testing.T) {
 	if st.Steps[2].Done || st.Steps[3].Done || st.Steps[4].Done {
 		t.Fatalf("a closed bank rebuilt: %+v", rows(st))
 	}
-	if got, err := store.List(ctx, s.dbURL, name); err != nil || len(got) != 0 {
+	if got, err := postgres.List(ctx, s.dbURL, name); err != nil || len(got) != 0 {
 		t.Fatalf("databases of a closed bank: %v, %v", got, err)
 	}
 	if msg := st.Steps[2].Error; msg != "the bank is closed, so its database is left alone" {

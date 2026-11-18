@@ -1,6 +1,7 @@
 package contracttest
 
 import (
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -58,7 +59,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	}
 	s.ctl("POST", "/nip/sessions/"+fmt.Sprint(sent["session_id"])+"/status", nil)
 	databases := func() []string {
-		names, err := store.List(context.Background(), s.cfg.DatabaseURL, bank.Database)
+		names, err := postgres.List(context.Background(), s.cfg.DatabaseURL, bank.Database)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -27,8 +27,6 @@ import (
 
 const (
 	eventType        = "application/secevent+jwt"
-	eventBackoff     = 2 * time.Second
-	eventBackoffAt   = 10 * time.Minute
 	eventBatch       = 50
 	eventLife        = 5 * time.Minute
 	eventIdleTimeout = 90 * time.Second
@@ -52,13 +50,6 @@ type Sender struct {
 	clients map[string]*http.Client
 }
 
-func Backoff(attempts int) time.Duration {
-	if attempts >= 20 {
-		return eventBackoffAt
-	}
-	return min(eventBackoff<<attempts, eventBackoffAt)
-}
-
 func (s *Sender) Events(ctx context.Context) {
 	s.flushMu.Lock()
 	defer s.flushMu.Unlock()
@@ -75,7 +66,7 @@ func (s *Sender) Events(ctx context.Context) {
 		for _, e := range due {
 			if err := s.send(ctx, b, e); err != nil {
 				s.warnOnce(id+"/event", "consent event not delivered; will retry", id, err, "consent", e.ConsentID)
-				if err := srv.Retry(context.WithoutCancel(ctx), e, s.Clock.Real().Add(Backoff(e.Attempts))); err != nil {
+				if err := srv.Retry(context.WithoutCancel(ctx), e, s.Clock.Real().Add(openbanking.Backoff(e.Attempts))); err != nil {
 					s.Log.Error("consent event retry not saved", "bank", id, "consent", e.ConsentID, "err", err)
 				}
 				continue
@@ -131,7 +122,7 @@ func (s *Sender) flushLedger(ctx context.Context, id string, srv *openbanking.Se
 			continue
 		}
 		s.warnOnce(id+"/ledger", "consent ledger not updated; will retry", id, err, "consent", e.ConsentID)
-		if err := srv.Retry(save, e, s.Clock.Real().Add(Backoff(e.Attempts))); err != nil {
+		if err := srv.Retry(save, e, s.Clock.Real().Add(openbanking.Backoff(e.Attempts))); err != nil {
 			s.Log.Error("consent ledger retry not saved", "bank", id, "consent", e.ConsentID, "err", err)
 		}
 		break

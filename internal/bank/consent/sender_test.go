@@ -22,20 +22,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
-func TestEventBackoffGrowsAndStops(t *testing.T) {
-	last := time.Duration(0)
-	for n := 0; n < 40; n++ {
-		d := Backoff(n)
-		if d < last || d > eventBackoffAt {
-			t.Fatalf("attempt %d waits %s after %s", n, d, last)
-		}
-		last = d
-	}
-	if Backoff(0) != eventBackoff || last != eventBackoffAt {
-		t.Fatalf("backoff runs from %s to %s", Backoff(0), last)
-	}
-}
-
 func TestEventClientIsSharedPerDestination(t *testing.T) {
 	dir := t.TempDir()
 	authority, err := pki.NewAuthority("test", time.Hour)
@@ -101,9 +87,9 @@ func TestEventsAreMarkedAfterTheAnswer(t *testing.T) {
 		retryAt  time.Duration
 	}{
 		{name: "a 2xx answer marks the row delivered", status: http.StatusNoContent},
-		{name: "a 5xx answer schedules a retry", status: http.StatusServiceUnavailable, attempts: 1, pending: true, retryAt: Backoff(0)},
+		{name: "a 5xx answer schedules a retry", status: http.StatusServiceUnavailable, attempts: 1, pending: true, retryAt: openbanking.Backoff(0)},
 		{name: "a cancelled context still marks the row delivered", status: http.StatusNoContent, cancel: true},
-		{name: "a cancelled context still schedules the retry", status: http.StatusBadGateway, cancel: true, attempts: 1, pending: true, retryAt: Backoff(0)},
+		{name: "a cancelled context still schedules the retry", status: http.StatusBadGateway, cancel: true, attempts: 1, pending: true, retryAt: openbanking.Backoff(0)},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {

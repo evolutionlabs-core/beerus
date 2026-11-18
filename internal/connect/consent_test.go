@@ -1,13 +1,13 @@
 package connect
 
 import (
+	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"io"
 	"log/slog"
 	"net/http"
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
@@ -84,8 +84,8 @@ func TestFailedRevokesAreQueuedAndRetried(t *testing.T) {
 	if len(a.st.Revokes) != 1 || a.st.Revokes[0].Attempts != 2 {
 		t.Fatalf("queue after a second failure: %+v", a.st.Revokes)
 	}
-	if next := a.st.Revokes[0].Next; next.Before(started.Add(consent.Backoff(2))) || next.After(finished.Add(consent.Backoff(2))) {
-		t.Fatalf("second retry scheduled for %v, want %v after the attempt", next, consent.Backoff(2))
+	if next := a.st.Revokes[0].Next; next.Before(started.Add(openbanking.Backoff(2))) || next.After(finished.Add(openbanking.Backoff(2))) {
+		t.Fatalf("second retry scheduled for %v, want %v after the attempt", next, openbanking.Backoff(2))
 	}
 	up = true
 	a.st.Revokes[0].Next = a.clock.Real()

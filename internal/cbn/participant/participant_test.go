@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"io"
 	"math/rand/v2"
 	"net"
@@ -19,7 +20,6 @@ import (
 	"github.com/pb33f/libopenapi"
 	validator "github.com/pb33f/libopenapi-validator"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -78,7 +78,7 @@ func TestCBNServesSettlement(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() {
-		if err := store.DropDatabases(context.WithoutCancel(t.Context()), url, []string{config.DatabaseName(stage, config.CBNID)}); err != nil {
+		if err := postgres.DropDatabases(context.WithoutCancel(t.Context()), url, []string{config.DatabaseName(stage, config.CBNID)}); err != nil {
 			t.Errorf("drop the CBN database: %v", err)
 		}
 	})

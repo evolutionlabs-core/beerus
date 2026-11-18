@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
@@ -492,7 +491,7 @@ func (a *App) revokeOrQueue(b *config.Bank, consentID string) {
 	a.log.Warn("consent not revoked at the bank; will retry", "bank", b.ID, "consent", consentID, "err", err)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.st.Revokes = append(a.st.Revokes, PendingRevoke{Bank: b.ID, ConsentID: consentID, Attempts: 1, Next: a.clock.Real().Add(consent.Backoff(1))})
+	a.st.Revokes = append(a.st.Revokes, PendingRevoke{Bank: b.ID, ConsentID: consentID, Attempts: 1, Next: a.clock.Real().Add(openbanking.Backoff(1))})
 	a.dirty()
 }
 
@@ -534,7 +533,7 @@ func (a *App) settleRevokeLocked(p PendingRevoke, err error) {
 		return
 	}
 	a.st.Revokes[i].Attempts = p.Attempts + 1
-	a.st.Revokes[i].Next = a.clock.Real().Add(consent.Backoff(p.Attempts + 1))
+	a.st.Revokes[i].Next = a.clock.Real().Add(openbanking.Backoff(p.Attempts + 1))
 	a.log.Warn("consent still not revoked at the bank", "bank", p.Bank, "consent", p.ConsentID, "attempt", p.Attempts+1, "err", err)
 }
 

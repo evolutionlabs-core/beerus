@@ -1,6 +1,7 @@
 package contracttest
 
 import (
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"context"
 	"fmt"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
@@ -351,7 +351,7 @@ func TestStory(t *testing.T) {
 		t.Errorf("revoked webhooks after the removal: %v", revoked())
 	}
 	for _, b := range []config.Bank{bankB, bankC} {
-		names, err := store.List(context.Background(), s.cfg.DatabaseURL, b.Database)
+		names, err := postgres.List(context.Background(), s.cfg.DatabaseURL, b.Database)
 		if err != nil || len(names) != 0 {
 			t.Errorf("databases of %s after its removal: %v %v", b.ID, names, err)
 		}

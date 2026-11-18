@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"math/rand/v2"
 	"net"
@@ -20,7 +21,6 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/install"
@@ -566,7 +566,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 		t.Fatalf("reset: %+v %v", r, err)
 	}
 	prefix := strings.TrimSuffix(config.DatabaseName(dir, "x"), "x")
-	left, err := store.List(context.Background(), url, prefix)
+	left, err := postgres.List(context.Background(), url, prefix)
 	if err != nil || len(left) != 0 {
 		t.Fatalf("databases left after reset: %v %v", left, err)
 	}
