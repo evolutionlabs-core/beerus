@@ -41,9 +41,9 @@ func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
 	var down *nibssDownError
 	switch {
 	case errors.As(err, &down) || errors.Is(err, os.ErrNotExist):
-		rows = nil
+		rows = slices.Clone(st.Tombstones)
 	case err != nil:
-		rows = nil
+		rows = slices.Clone(st.Tombstones)
 		warning = fmt.Sprintf("NIBSS did not answer as expected (%v); the plan checks codes against this setup and the removed banks cached in %s only.", err, statusFile)
 	}
 	pack, err := countrypack.Nigeria()
