@@ -22,7 +22,6 @@ import (
 	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -54,9 +53,6 @@ type App struct {
 	partnerMu    sync.Mutex
 	swept        time.Time
 	ledgers      []*ledgerSource
-	nibss        *nibss.Store
-	nibssTried   time.Time
-	nibssOpening bool
 	nibssCtl     *nibssAdmin
 	nibssEnsured time.Time
 	cbnCtl       *cbnAdmin
@@ -197,7 +193,6 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 		}
 		a.addLedger(ls)
 	}
-	a.nibssStore()
 	if err := a.prepareNIBSS(); err != nil {
 		return nil, err
 	}
@@ -240,9 +235,6 @@ func (a *App) ledgerFor(institution string) *ledgerSource {
 func (a *App) closeLedgers() {
 	for _, l := range a.ledgers {
 		l.Close()
-	}
-	if a.nibss != nil {
-		a.nibss.Close()
 	}
 	if a.localCBN != nil {
 		a.localCBN.Close()
@@ -332,7 +324,6 @@ func (a *App) stepLocked(ctx context.Context) {
 		a.reconcileBanks(ctx)
 		a.recMu.Unlock()
 	}
-	a.nibssStore()
 	if err := a.ensureNIBSSDir(); err != nil {
 		a.log.Error("NIBSS directory not written", "err", err)
 	}

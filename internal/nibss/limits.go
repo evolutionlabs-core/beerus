@@ -24,10 +24,6 @@ func (p Position) NetDebit() int64 {
 	return max(p.Outward-p.Inward, 0)
 }
 
-func (s *Store) Position(ctx context.Context, code string) (Position, error) {
-	return position(ctx, s.pool, code)
-}
-
 func position(ctx context.Context, q querier, code string) (Position, error) {
 	var p Position
 	err := q.QueryRow(ctx, `

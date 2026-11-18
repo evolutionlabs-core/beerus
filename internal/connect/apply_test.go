@@ -13,7 +13,7 @@ import (
 func TestApplyRefusals(t *testing.T) {
 	a := &App{}
 	a.applyMu.Lock()
-	_, err := a.Apply(setup.Spec{}, ApplyOptions{})
+	_, err := a.Apply(t.Context(), setup.Spec{}, ApplyOptions{})
 	a.applyMu.Unlock()
 	check := func(err error, status int, code, message string) {
 		t.Helper()

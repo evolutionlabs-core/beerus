@@ -380,7 +380,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	if tr, err := sendByControl(t, cfg, "bank-a", "restart-1", map[string]string{"from": from, "to_bank": "bank-b", "to": to, "amount": "40000"}); err != nil || tr["status"] != "success" {
 		t.Fatalf("transfer: %+v %v", tr, err)
 	}
-	if _, err := r.app.PurgeBank("bank-b", false); err != nil {
+	if _, err := r.app.PurgeBank(t.Context(), "bank-b", false); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, waitLimit, "settle-inflight to wait", func() bool {
@@ -409,7 +409,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	})
 	spec := storedStatus(t, cfg.Dir).Applied
 	spec.Spec.Banks = slices.DeleteFunc(spec.Spec.Banks, func(b setup.Bank) bool { return b.ID == "bank-b" })
-	if _, err := r.app.Apply(spec, connect.ApplyOptions{Prune: true, Money: &setup.Removal{Money: setup.MoneyTransfer, To: "bank-a"}}); err != nil {
+	if _, err := r.app.Apply(t.Context(), spec, connect.ApplyOptions{Prune: true, Money: &setup.Removal{Money: setup.MoneyTransfer, To: "bank-a"}}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, waitLimit, "the moves to wait for settlement", func() bool {

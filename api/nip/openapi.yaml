@@ -521,7 +521,81 @@ paths:
                   code: unavailable
                   message: The settlement could not reach the CBN. Try again soon.
                   request_id: req_01JBC8A5T3ZK
+  /v1/control/banks:
+    get:
+      operationId: controlBanks
+      tags: [control]
+      summary: List the member register for the control plane
+      description: The control plane asks NIBSS for its member register. It lists every bank with any status, `removed` banks included, ordered by NIP code. The control plane never reads the NIBSS database. The `cursor` is the NIP code of the last bank of the page.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of the member register.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BankEntryPage'
+              example:
+                data:
+                  - id: bank-a
+                    name: Bank A
+                    nip_code: '000014'
+                    nuban_code: '014'
+                    type: commercial
+                    status: active
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/control/banks/{bank_id}:
+    get:
+      operationId: controlBank
+      tags: [control]
+      summary: Read one bank of the member register
+      description: The control plane asks NIBSS for one bank by its Beerus ID. It is the same entry as the register call returns, with any status. An unknown bank returns `404 not_found`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BankIDPath'
+      responses:
+        '200':
+          description: The register entry of the bank.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BankEntry'
+              example:
+                id: bank-a
+                name: Bank A
+                nip_code: '000014'
+                nuban_code: '014'
+                type: commercial
+                status: active
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          description: NIBSS has no bank with this ID. The code is `not_found`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_found
+                  message: Bank bank-z is not in the NIBSS directory. Register it first.
+                  request_id: req_01JBC8A5T3ZK
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '503':
+          $ref: '#/components/responses/Unavailable'
     put:
       operationId: registerBank
       tags: [control]
@@ -887,7 +961,7 @@ paths:
       operationId: controlOpenSessions
       tags: [control]
       summary: Count the transfers of a bank that are not settled yet
-      description: The control plane asks NIBSS what is still open for a bank. A transfer is open while it is pending, or while it succeeded and is not in a settlement session yet. `unposted_settlements` counts the settlement sessions that hold a transfer of the bank and are not posted to the CBN yet. An unknown bank returns `404 not_found`.
+      description: The control plane asks NIBSS what is still open for a bank. A transfer is open while it is pending, or while it succeeded and is not in a settlement session yet. `inward_minor` counts what the bank received in transfers that succeeded, and `pending_inward_minor` what it is still to receive in transfers that are pending. `unposted_settlements` counts the settlement sessions that hold a transfer of the bank and are not posted to the CBN yet. An unknown bank returns `404 not_found`.
       security:
         - bearerAuth: []
       parameters:
@@ -904,6 +978,7 @@ paths:
                 transfers: 2
                 outward_minor: 150000
                 inward_minor: 40000
+                pending_inward_minor: 25000
                 unposted_settlements: 0
         '401':
           $ref: '#/components/responses/Unauthenticated'
@@ -922,6 +997,100 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '500':
           $ref: '#/components/responses/ServerError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/control/banks/{bank_id}/closure-sessions:
+    get:
+      operationId: controlClosureSessions
+      tags: [control]
+      summary: List the closure transfers of a bank
+      description: The control plane asks NIBSS for the transfers that moved money out of a closing bank, with any status, ordered by the time the bank started them and then by session ID. A closure transfer is `pending`, `00` when it was credited, or another code when it failed. The `cursor` is the session ID of the last transfer of the page. An unknown bank returns `404 not_found`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/BankIDPath'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of closure transfers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClosureSessionPage'
+              example:
+                data:
+                  - session_id: '000014261114103000123456789012'
+                    from_account: '9010000011'
+                    to_bank_code: '000015'
+                    to_account: '9020000022'
+                    amount_minor: 150000
+                    status: '00'
+                    created_at: '2026-11-14T10:30:00+01:00'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          description: NIBSS has no bank with this ID. The code is `not_found`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_found
+                  message: Bank bank-z is not in the NIBSS directory. Register it first.
+                  request_id: req_01JBC8A5T3ZK
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/control/sessions/{session_id}:
+    get:
+      operationId: controlSession
+      tags: [control]
+      summary: Read one NIP session as NIBSS holds it
+      description: The control plane asks NIBSS for one NIP session by its session ID. An unknown session returns `404 not_found`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionIdPath'
+      responses:
+        '200':
+          description: The session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+              example:
+                session_id: '000014261114103000123456789012'
+                from_code: '000014'
+                to_code: '000015'
+                from_nuban: '9010000011'
+                to_nuban: '9020000022'
+                amount_minor: 150000
+                narration: rent
+                status: '00'
+                outcome: credited
+                tsq_attempts: 0
+                created_at: '2026-11-14T10:30:00+01:00'
+                resolved_at: '2026-11-14T10:30:02+01:00'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          description: NIBSS has no session with this ID. The code is `not_found`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: not_found
+                  message: Session 000014261114103000123456789012 is not in the NIBSS records.
+                  request_id: req_01JBC8A5T3ZK
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/control/registry/clients:
@@ -1424,6 +1593,58 @@ components:
           type: string
           description: The status in the directory.
           enum: [active, suspended, terminating, removed]
+    BankEntryPage:
+      type: object
+      description: One page of the member register.
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/BankEntry'
+        next_cursor:
+          type: string
+          description: Pass this as `cursor` to read the next page. It is absent on the last page.
+    ClosureSession:
+      type: object
+      description: One transfer that moved money out of a closing bank.
+      required: [session_id, from_account, to_bank_code, to_account, amount_minor, status, created_at]
+      properties:
+        session_id:
+          $ref: '#/components/schemas/SessionID'
+        from_account:
+          type: string
+          description: The account that was debited.
+        to_bank_code:
+          type: string
+          description: The NIP code of the destination bank.
+        to_account:
+          type: string
+          description: The account to credit.
+        amount_minor:
+          type: integer
+          format: int64
+          description: The amount in kobo.
+        status:
+          type: string
+          description: '`pending` while the session is open, then a two digit response code. `00` means credited. Any other code means the session failed.'
+          pattern: '^(pending|[0-9]{2})$'
+        created_at:
+          type: string
+          format: date-time
+          description: When the sending bank started the session.
+    ClosureSessionPage:
+      type: object
+      description: One page of closure transfers.
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClosureSession'
+        next_cursor:
+          type: string
+          description: Pass this as `cursor` to read the next page. It is absent on the last page.
     SetBankStatus:
       type: object
       description: The status the control plane wants for a bank.
@@ -1693,7 +1914,7 @@ components:
     OpenSessions:
       type: object
       description: The transfers of a bank that are not settled yet.
-      required: [bank_id, transfers, outward_minor, inward_minor, unposted_settlements]
+      required: [bank_id, transfers, outward_minor, inward_minor, pending_inward_minor, unposted_settlements]
       properties:
         bank_id:
           type: string
@@ -1713,6 +1934,11 @@ components:
           format: int64
           minimum: 0
           description: What the bank received in open transfers that succeeded, in kobo.
+        pending_inward_minor:
+          type: integer
+          format: int64
+          minimum: 0
+          description: What the bank is still to receive in open transfers that are pending, in kobo.
         unposted_settlements:
           type: integer
           format: int64

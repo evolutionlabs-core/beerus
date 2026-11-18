@@ -51,10 +51,11 @@ func TestBanksJoinTheNIBSSDirectory(t *testing.T) {
 		return ""
 	}
 	for _, b := range s.cfg.Banks {
-		in, err := dir.Institution(context.Background(), b.NIPCode)
+		m, err := dir.MemberAt(context.Background(), b.NIPCode)
 		if err != nil {
 			t.Fatal(err)
 		}
+		in := m.Institution
 		if in.ID != b.ID || in.NUBANCode != b.NUBANCode || in.Status != nip.StatusActive {
 			t.Errorf("directory entry for %s: %+v", b.ID, in)
 		}

@@ -163,13 +163,13 @@ func (a *App) postgresRoom(ctx context.Context) error {
 }
 
 func (a *App) removedBanks(ctx context.Context) ([]nip.Institution, error) {
-	s := a.nibssStore()
-	if s == nil {
+	all, err := a.nibssCtl.directory(ctx)
+	var down *nibssDownError
+	if errors.As(err, &down) {
 		return nil, errors.New("the NIBSS directory is not open yet, so the codes of removed banks cannot be checked; try again soon")
 	}
-	all, err := s.Directory(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read the NIBSS directory: %w", err)
 	}
 	out := []nip.Institution{}
 	for _, in := range all {
@@ -207,7 +207,7 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 	if r := findResource(&stored, setup.KindBank, id); r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
 		return BankStatus{}, applyFail(http.StatusConflict, codeBeingRemoved, "banks[%s] is being removed, and its id is never reused. Choose another id.", id)
 	}
-	err = a.applyEdit(func(sp *setup.Spec) error {
+	err = a.applyEdit(ctx, func(sp *setup.Spec) error {
 		if slug != "" {
 			taken := map[string]bool{}
 			for _, b := range sp.Spec.Banks {
@@ -249,7 +249,7 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 }
 
 func (a *App) SetBankSuspended(ctx context.Context, id string, suspended bool) error {
-	err := a.applyEdit(func(sp *setup.Spec) error {
+	err := a.applyEdit(ctx, func(sp *setup.Spec) error {
 		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
 		if i < 0 {
 			return errNotFound

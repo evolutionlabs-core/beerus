@@ -12,62 +12,18 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-const nibssRetry = 10 * time.Second
-
-var errMemberStoreClosed = errors.New("NIBSS is not open yet; try again soon")
-
-func openNIBSS(ctx context.Context, cfg *config.Config, ctl *ctlStore) (*nibss.Store, error) {
-	name := config.DatabaseName(cfg.Dir, setup.SystemNIBSS)
-	if err := ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
-		return nil, err
-	}
-	s, err := nibss.Open(ctx, cfg.DatabaseURL, name)
-	if err != nil {
-		return nil, fmt.Errorf("open the NIBSS directory: %w", err)
-	}
-	if err := markActive(ctl, setup.SystemNIBSS); err != nil {
-		s.Close()
-		return nil, err
-	}
-	return s, nil
-}
-
-func (a *App) nibssStore() *nibss.Store {
-	a.mu.Lock()
-	if a.nibss != nil || a.nibssOpening || a.clock.Real().Sub(a.nibssTried) < nibssRetry {
-		s := a.nibss
-		a.mu.Unlock()
-		return s
-	}
-	a.nibssTried, a.nibssOpening = a.clock.Real(), true
-	a.mu.Unlock()
-	s, err := openNIBSS(context.Background(), a.cfg, a.ctl)
-	a.mu.Lock()
-	a.nibssOpening = false
-	if err != nil {
-		a.mu.Unlock()
-		a.log.Error("NIBSS directory not ready; retrying", "err", err)
-		return nil
-	}
-	a.nibss = s
-	a.mu.Unlock()
-	return s
-}
-
 func (a *App) syncDirectoryDue(ctx context.Context) {
 	a.mu.Lock()
-	s := a.nibss
-	due := s != nil && !a.dirSynced && !a.clock.Real().Before(a.dirNext)
+	due := !a.dirSynced && !a.clock.Real().Before(a.dirNext)
 	a.mu.Unlock()
 	if !due {
 		return
 	}
-	err := a.syncDirectory(ctx, s)
+	err := a.syncDirectory(ctx)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err != nil {
@@ -88,8 +44,8 @@ func (a *App) logNIBSS(msg string, err error) {
 	a.log.Error(msg, "err", err)
 }
 
-func (a *App) syncDirectory(ctx context.Context, s *nibss.Store) error {
-	list, err := s.Directory(ctx)
+func (a *App) syncDirectory(ctx context.Context) error {
+	list, err := a.nibssCtl.directory(ctx)
 	if err != nil {
 		return fmt.Errorf("read the NIBSS directory: %w", err)
 	}
@@ -123,14 +79,6 @@ func (a *App) syncDirectory(ctx context.Context, s *nibss.Store) error {
 }
 
 func (a *App) dropNIBSS(ctx context.Context) error {
-	a.mu.Lock()
-	s := a.nibss
-	a.nibss = nil
-	a.mu.Unlock()
-	if s == nil {
-		return nil
-	}
-	s.Close()
 	name := config.DatabaseName(a.cfg.Dir, setup.SystemNIBSS)
 	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{name}); err != nil {
 		return fmt.Errorf("drop the NIBSS database: %w", err)
@@ -175,11 +123,7 @@ func (a *App) registerMember(ctx context.Context, b config.Bank) error {
 }
 
 func (a *App) stopRouting(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
-	sw := a.nibssStore()
-	if sw == nil {
-		return nil, errors.New("NIBSS is not open, so routing to the bank cannot be stopped; try again soon")
-	}
-	in, err := sw.Institution(ctx, r.Allocated.NIPCode)
+	in, err := a.nibssCtl.member(ctx, r.ID)
 	if err != nil {
 		return nil, fmt.Errorf("read back the NIBSS status of %s: %w", r.ID, err)
 	}
@@ -190,13 +134,7 @@ func (a *App) stopRouting(ctx context.Context, r setup.Resource) (*setup.Conditi
 }
 
 func (a *App) memberGone(ctx context.Context, id string) error {
-	a.mu.Lock()
-	s := a.nibss
-	a.mu.Unlock()
-	if s == nil {
-		return errMemberStoreClosed
-	}
-	cur, err := a.memberStatusAt(ctx, s, id)
+	cur, err := a.memberStatusAt(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -206,27 +144,19 @@ func (a *App) memberGone(ctx context.Context, id string) error {
 	return nil
 }
 
-func (a *App) memberStatusAt(ctx context.Context, s *nibss.Store, id string) (string, error) {
-	list, err := s.Directory(ctx)
+func (a *App) memberStatusAt(ctx context.Context, id string) (string, error) {
+	in, err := a.nibssCtl.member(ctx, id)
+	if errors.Is(err, nip.ErrUnknownInstitution) {
+		return "", nil
+	}
 	if err != nil {
 		return "", fmt.Errorf("read the NIBSS directory: %w", err)
 	}
-	for _, in := range list {
-		if in.ID == id {
-			return in.Status, nil
-		}
-	}
-	return "", nil
+	return in.Status, nil
 }
 
 func (a *App) driveMember(ctx context.Context, id string, path []string) error {
-	a.mu.Lock()
-	s := a.nibss
-	a.mu.Unlock()
-	if s == nil {
-		return errMemberStoreClosed
-	}
-	cur, err := a.memberStatusAt(ctx, s, id)
+	cur, err := a.memberStatusAt(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -277,11 +207,12 @@ func (a *App) markRemoved(ctx context.Context, lines []bank.FeedLine) error {
 	if !slices.ContainsFunc(lines, func(l bank.FeedLine) bool { return l.Counterparty != nil }) {
 		return nil
 	}
-	s := a.nibssStore()
-	if s == nil {
+	directory, err := a.nibssCtl.directory(ctx)
+	var down *nibssDownError
+	if errors.As(err, &down) {
+		a.logNIBSS("removed banks not marked", err)
 		return nil
 	}
-	directory, err := s.Directory(ctx)
 	if err != nil {
 		return fmt.Errorf("read the NIBSS directory: %w", err)
 	}

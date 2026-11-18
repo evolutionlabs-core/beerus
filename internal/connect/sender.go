@@ -103,11 +103,7 @@ func (a *App) transfer(ctx context.Context, req server.TransferRequest) (server.
 }
 
 func (a *App) Session(ctx context.Context, id string) (nibss.Session, error) {
-	sw := a.nibssStore()
-	if sw == nil {
-		return nibss.Session{}, errors.New("NIBSS is not available right now")
-	}
-	return sw.Session(ctx, strings.TrimSpace(id))
+	return a.nibssCtl.session(ctx, strings.TrimSpace(id))
 }
 
 func (a *App) QuerySession(ctx context.Context, id string) (server.NIPSession, error) {

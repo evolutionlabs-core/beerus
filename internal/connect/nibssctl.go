@@ -20,7 +20,10 @@ import (
 )
 
 const (
-	nibssBanksPath     = "/v1/control/banks/"
+	nibssDirectoryPath = "/v1/control/banks"
+	nibssBanksPath     = nibssDirectoryPath + "/"
+	nibssSessionsPath  = "/v1/control/sessions/"
+	nibssClosureSuffix = "/closure-sessions"
 	nibssEnquiriesPath = "/v1/control/name-enquiries"
 	nibssClientsPath   = "/v1/control/registry/clients"
 	nibssConsentsPath  = "/v1/control/consents"
@@ -113,15 +116,11 @@ func (n *nibssAdmin) ensureClient(ctx context.Context, c openbanking.RegistryCli
 
 func (n *nibssAdmin) clients(ctx context.Context) ([]openbanking.RegistryClient, error) {
 	return server.AllPages(ctx, func(ctx context.Context, cursor string) ([]openbanking.RegistryClient, string, error) {
-		q := url.Values{"limit": {strconv.Itoa(nibssPage)}}
-		if cursor != "" {
-			q.Set("cursor", cursor)
-		}
 		var page struct {
 			Data       []openbanking.RegistryClient `json:"data"`
 			NextCursor string                       `json:"next_cursor"`
 		}
-		err := n.call(ctx, http.MethodGet, nibssClientsPath+"?"+q.Encode(), nil, nil, &page)
+		err := n.call(ctx, http.MethodGet, nibssClientsPath+"?"+pageQuery(cursor), nil, nil, &page)
 		return page.Data, page.NextCursor, err
 	})
 }
@@ -161,10 +160,16 @@ func (n *nibssAdmin) status(ctx context.Context) (int, []string, error) {
 }
 
 type openSessions struct {
-	Transfers int   `json:"transfers"`
-	Outward   int64 `json:"outward_minor"`
-	Inward    int64 `json:"inward_minor"`
-	Unposted  int   `json:"unposted_settlements"`
+	Transfers     int   `json:"transfers"`
+	Outward       int64 `json:"outward_minor"`
+	Inward        int64 `json:"inward_minor"`
+	PendingInward int64 `json:"pending_inward_minor"`
+	Unposted      int   `json:"unposted_settlements"`
+}
+
+func (o openSessions) inwardAll() (int64, bool) {
+	sum := o.Inward + o.PendingInward
+	return sum, sum >= o.Inward
 }
 
 func (n *nibssAdmin) openSessions(ctx context.Context, id string) (openSessions, error) {
@@ -173,6 +178,56 @@ func (n *nibssAdmin) openSessions(ctx context.Context, id string) (openSessions,
 		return openSessions{}, fmt.Errorf("read the open sessions of %s at NIBSS: %w", id, err)
 	}
 	return out, nil
+}
+
+func (n *nibssAdmin) directory(ctx context.Context) ([]nip.Institution, error) {
+	return server.AllPages(ctx, func(ctx context.Context, cursor string) ([]nip.Institution, string, error) {
+		var page struct {
+			Data       []nip.Institution `json:"data"`
+			NextCursor string            `json:"next_cursor"`
+		}
+		err := n.call(ctx, http.MethodGet, nibssDirectoryPath+"?"+pageQuery(cursor), nil, nil, &page)
+		return page.Data, page.NextCursor, err
+	})
+}
+
+func (n *nibssAdmin) member(ctx context.Context, id string) (nip.Institution, error) {
+	var in nip.Institution
+	err := n.call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id), nil, nil, &in)
+	var peer *server.PeerError
+	if errors.As(err, &peer) && peer.Status == http.StatusNotFound {
+		return nip.Institution{}, fmt.Errorf("bank id %s is %w", id, nip.ErrUnknownInstitution)
+	}
+	return in, err
+}
+
+func (n *nibssAdmin) session(ctx context.Context, id string) (nibss.Session, error) {
+	var x nibss.Session
+	err := n.call(ctx, http.MethodGet, nibssSessionsPath+url.PathEscape(id), nil, nil, &x)
+	var peer *server.PeerError
+	if errors.As(err, &peer) && peer.Status == http.StatusNotFound {
+		return nibss.Session{}, fmt.Errorf("session %s: %w", id, nip.ErrNoRecord)
+	}
+	return x, err
+}
+
+func (n *nibssAdmin) closureSessions(ctx context.Context, id string) ([]nibss.ClosureSession, error) {
+	return server.AllPages(ctx, func(ctx context.Context, cursor string) ([]nibss.ClosureSession, string, error) {
+		var page struct {
+			Data       []nibss.ClosureSession `json:"data"`
+			NextCursor string                 `json:"next_cursor"`
+		}
+		err := n.call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id)+nibssClosureSuffix+"?"+pageQuery(cursor), nil, nil, &page)
+		return page.Data, page.NextCursor, err
+	})
+}
+
+func pageQuery(cursor string) string {
+	q := url.Values{"limit": {strconv.Itoa(nibssPage)}}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	return q.Encode()
 }
 
 func (n *nibssAdmin) call(ctx context.Context, method, path string, header http.Header, in, out any) error {

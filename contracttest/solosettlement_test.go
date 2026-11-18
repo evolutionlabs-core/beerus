@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"testing"
 	"time"
 
@@ -108,7 +109,7 @@ func TestSoloNIBSSServesSettlementReportsToTheirBank(t *testing.T) {
 		status int
 		want   string
 	}{
-		{"open sessions of bank a", fmt.Sprintf(open, "bank-a"), s.token, 200, `{"bank_id":"bank-a","transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":1}`},
+		{"open sessions of bank a", fmt.Sprintf(open, "bank-a"), s.token, 200, `{"bank_id":"bank-a","transfers":0,"outward_minor":0,"inward_minor":0,"pending_inward_minor":0,"unposted_settlements":1}`},
 		{"open sessions of an unknown bank", fmt.Sprintf(open, "bank-z"), s.token, 404, errBody("not_found", "Bank bank-z is not in the NIBSS directory. Register it first.")},
 		{"open sessions without a token", fmt.Sprintf(open, "bank-a"), "", 401, errBody("unauthenticated", "A valid control token is required.")},
 	}
@@ -137,5 +138,73 @@ func TestSoloNIBSSServesSettlementReportsToTheirBank(t *testing.T) {
 	status, got = s.call("nip", banks["bank-a"], http.MethodGet, url+"?limit=1&cursor="+page.NextCursor, "", "")
 	if want := `{"data":[` + evening + `]}`; status != 200 || got != want {
 		t.Errorf("second page: got %d %s, want 200 %s", status, got, want)
+	}
+	closureID := "000014261104100000123456789012"
+	if status, got := s.call("nip", s.plain, http.MethodPut, s.control+"/v1/control/banks/bank-a/status", s.token, `{"status":"terminating"}`); status != http.StatusOK {
+		t.Fatalf("terminate bank a: %d %s", status, got)
+	}
+	closure := nibss.Session{ID: closureID, FromCode: "000014", ToCode: "000015", FromNUBAN: world.NUBAN("014", 1), ToNUBAN: world.NUBAN("015", 1), Amount: 4000, Narration: "closure", CreatedAt: at(10), Closure: true}
+	if _, _, err := store.Begin(ctx, closure); err != nil {
+		t.Fatal(err)
+	}
+	banksURL := s.control + "/v1/control/banks"
+	closures := banksURL + "/bank-a/closure-sessions"
+	sessionURL := s.control + "/v1/control/sessions/" + closureID
+	wantClosure := fmt.Sprintf(`{"session_id":%q,"from_account":%q,"to_bank_code":"000015","to_account":%q,"amount_minor":4000,"status":"pending","created_at":"CREATED"}`, closureID, closure.FromNUBAN, closure.ToNUBAN)
+	wantSession := fmt.Sprintf(`{"session_id":%q,"from_code":"000014","to_code":"000015","from_nuban":%q,"to_nuban":%q,"amount_minor":4000,"narration":"closure","status":"pending","tsq_attempts":0,"created_at":"CREATED","closure":true}`, closureID, closure.FromNUBAN, closure.ToNUBAN)
+	entry := func(id, code, nuban, name, state string) string {
+		return fmt.Sprintf(`{"id":%q,"name":%q,"nip_code":%q,"nuban_code":%q,"type":"commercial","status":%q}`, id, name, code, nuban, state)
+	}
+	bankA, bankB := entry("bank-a", "000014", "014", "Bank A", "terminating"), entry("bank-b", "000015", "015", "Bank B", "active")
+	createdAt := regexp.MustCompile(`"created_at":"([^"]*)"`)
+	reads := []struct {
+		name   string
+		method string
+		url    string
+		token  string
+		status int
+		want   string
+	}{
+		{"the register", http.MethodGet, banksURL, s.token, 200, `{"data":[` + bankA + `,` + bankB + `]}`},
+		{"the first bank of the register", http.MethodGet, banksURL + "?limit=1", s.token, 200, `{"data":[` + bankA + `],"next_cursor":"000014"}`},
+		{"the next bank of the register", http.MethodGet, banksURL + "?limit=1&cursor=000014", s.token, 200, `{"data":[` + bankB + `]}`},
+		{"the register after the last bank", http.MethodGet, banksURL + "?cursor=000015", s.token, 200, `{"data":[]}`},
+		{"the register with a bad cursor", http.MethodGet, banksURL + "?cursor=nope", s.token, 400, errBody("invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")},
+		{"the register with a bad limit", http.MethodGet, banksURL + "?limit=501", s.token, 400, errBody("invalid_request", "limit must be a number from 1 to 500.")},
+		{"the register without a token", http.MethodGet, banksURL, "", 401, errBody("unauthenticated", "A valid control token is required.")},
+		{"the register with a post", http.MethodPost, banksURL, s.token, 405, errBody("method_not_allowed", "Use GET for this path.")},
+		{"one bank", http.MethodGet, banksURL + "/bank-a", s.token, 200, bankA},
+		{"an unknown bank", http.MethodGet, banksURL + "/bank-z", s.token, 404, errBody("not_found", "Bank bank-z is not in the NIBSS directory. Register it first.")},
+		{"one bank without a token", http.MethodGet, banksURL + "/bank-a", "", 401, errBody("unauthenticated", "A valid control token is required.")},
+		{"one bank with a delete", http.MethodDelete, banksURL + "/bank-a", s.token, 405, errBody("method_not_allowed", "Use GET or PUT for this path.")},
+		{"closure sessions of bank a", http.MethodGet, closures, s.token, 200, `{"data":[` + wantClosure + `]}`},
+		{"closure sessions of bank b", http.MethodGet, banksURL + "/bank-b/closure-sessions", s.token, 200, `{"data":[]}`},
+		{"closure sessions after the last", http.MethodGet, closures + "?cursor=" + closureID, s.token, 200, `{"data":[]}`},
+		{"closure sessions with a bad cursor", http.MethodGet, closures + "?cursor=nope", s.token, 400, errBody("invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")},
+		{"closure sessions with a bad limit", http.MethodGet, closures + "?limit=0", s.token, 400, errBody("invalid_request", "limit must be a number from 1 to 500.")},
+		{"closure sessions of an unknown bank", http.MethodGet, banksURL + "/bank-z/closure-sessions", s.token, 404, errBody("not_found", "Bank bank-z is not in the NIBSS directory. Register it first.")},
+		{"closure sessions without a token", http.MethodGet, closures, "", 401, errBody("unauthenticated", "A valid control token is required.")},
+		{"closure sessions with a post", http.MethodPost, closures, s.token, 405, errBody("method_not_allowed", "Use GET for this path.")},
+		{"one session", http.MethodGet, sessionURL, s.token, 200, wantSession},
+		{"an unknown session", http.MethodGet, s.control + "/v1/control/sessions/000014261104100000999999999999", s.token, 404, errBody("not_found", "Session 000014261104100000999999999999 is not in the NIBSS records.")},
+		{"one session without a token", http.MethodGet, sessionURL, "", 401, errBody("unauthenticated", "A valid control token is required.")},
+		{"one session with a put", http.MethodPut, sessionURL, s.token, 405, errBody("method_not_allowed", "Use GET for this path.")},
+		{"open sessions of bank b with a pending closure", http.MethodGet, fmt.Sprintf(open, "bank-b"), s.token, 200, `{"bank_id":"bank-b","transfers":1,"outward_minor":0,"inward_minor":0,"pending_inward_minor":4000,"unposted_settlements":1}`},
+	}
+	for _, r := range reads {
+		spec := "nip"
+		if r.status == http.StatusMethodNotAllowed {
+			spec = ""
+		}
+		status, got := s.call(spec, s.plain, r.method, r.url, r.token, "")
+		if m := createdAt.FindStringSubmatch(got); m != nil {
+			if when, err := time.Parse(time.RFC3339, m[1]); err != nil || !when.Equal(closure.CreatedAt) {
+				t.Errorf("%s: created_at %s, want %s: %v", r.name, m[1], closure.CreatedAt.Format(time.RFC3339), err)
+			}
+			got = createdAt.ReplaceAllString(got, `"created_at":"CREATED"`)
+		}
+		if status != r.status || got != r.want {
+			t.Errorf("%s: got %d %s, want %d %s", r.name, status, got, r.status, r.want)
+		}
 	}
 }

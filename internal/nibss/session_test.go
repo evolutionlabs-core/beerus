@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,11 +235,11 @@ func TestBeginCapReplayAndNoAnswer(t *testing.T) {
 			t.Fatalf("%s: %+v replayed %v, %v", r.id, got, replayed, err)
 		}
 	}
-	pos, err := s.Position(ctx, "999001")
+	pos, err := position(ctx, s.pool, "999001")
 	if err != nil || pos.Outward != 1_200_000 || pos.Inward != 0 {
 		t.Fatalf("position of the sender: %+v, %v", pos, err)
 	}
-	if pos, err = s.Position(ctx, "999002"); err != nil || pos.Inward != 1_200_000 || pos.NetDebit() != 0 {
+	if pos, err = position(ctx, s.pool, "999002"); err != nil || pos.Inward != 1_200_000 || pos.NetDebit() != 0 {
 		t.Fatalf("position of the receiver: %+v, %v", pos, err)
 	}
 	changed := transfer("c1", "999002", t0)
@@ -400,53 +401,68 @@ func TestResolveKeepsWithheldOutcome(t *testing.T) {
 	}
 }
 
-func TestClosureFailedCountsOnlyDefiniteFailures(t *testing.T) {
-	ctx := context.Background()
+func TestClosureSessionsListOnePageAtATime(t *testing.T) {
+	ctx := t.Context()
 	s := sessionStore(t)
 	setStatus(t, s, "bank-a", nip.StatusTerminating)
-	closure := func(id string, account uint64) Session {
-		x := transfer(id, "999002", t0)
-		x.FromNUBAN, x.Closure = world.NUBAN("901", account), true
+	closure := func(id, from string, account uint64, at time.Time) Session {
+		x := transfer(id, "999002", at)
+		x.FromCode, x.FromNUBAN, x.Closure = from, world.NUBAN("901", account), true
 		return x
 	}
+	for _, x := range []Session{closure("c2", "999001", 12, t0), closure("c1", "999001", 11, t0), closure("c3", "999001", 13, t0.Add(time.Minute))} {
+		if _, err := begin(ctx, s, x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Resolve(ctx, "c1", SessionOK, nip.OutcomeCredited, t0); err != nil {
+		t.Fatal(err)
+	}
+	setStatus(t, s, "bank-b", nip.StatusTerminating)
+	for _, x := range []Session{closure("c4", "999001", 13, t0.Add(2*time.Minute)), closure("x1", "999002", 21, t0)} {
+		if got, err := begin(ctx, s, x); err != nil || got.Status != "91" {
+			t.Fatalf("failed closure: %+v, %v", got, err)
+		}
+	}
+	if _, err := begin(ctx, s, transfer("n1", "999002", t0)); err != nil {
+		t.Fatal(err)
+	}
 	rows := []struct {
-		name    string
-		account uint64
-		steps   func()
-		want    int
+		name  string
+		code  string
+		limit int
+		after string
+		want  string
+		next  string
+		err   string
 	}{
-		{name: "no session", account: 10, steps: func() {}, want: 0},
-		{name: "pending session", account: 11, steps: func() {
-			if _, err := begin(ctx, s, closure("c1", 11)); err != nil {
-				t.Fatal(err)
-			}
-		}, want: 0},
-		{name: "credited session", account: 12, steps: func() {
-			if _, err := begin(ctx, s, closure("c2", 12)); err != nil {
-				t.Fatal(err)
-			}
-			if err := s.Resolve(ctx, "c2", SessionOK, nip.OutcomeCredited, t0); err != nil {
-				t.Fatal(err)
-			}
-		}, want: 0},
-		{name: "failed session", account: 13, steps: func() {
-			setStatus(t, s, "bank-b", nip.StatusTerminating)
-			if got, err := begin(ctx, s, closure("c3", 13)); err != nil || got.Status != "91" {
-				t.Fatalf("failed closure: %+v, %v", got, err)
-			}
-		}, want: 1},
-		{name: "failed twice", account: 13, steps: func() {
-			if got, err := begin(ctx, s, closure("c4", 13)); err != nil || got.Status != "91" {
-				t.Fatalf("failed closure: %+v, %v", got, err)
-			}
-		}, want: 2},
-		{name: "another account", account: 11, steps: func() {}, want: 0},
+		{"every session in order", "999001", 10, "", "c1 00|c2 pending|c3 pending|c4 91", "", ""},
+		{"first page", "999001", 2, "", "c1 00|c2 pending", "c2", ""},
+		{"second page", "999001", 2, "c2", "c3 pending|c4 91", "", ""},
+		{"page that ends exactly", "999001", 4, "", "c1 00|c2 pending|c3 pending|c4 91", "", ""},
+		{"after the last", "999001", 2, "c4", "", "", ""},
+		{"the other bank", "999002", 10, "", "x1 91", "", ""},
+		{"a bank without closures", "999003", 10, "", "", "", ""},
+		{"a cursor of another bank", "999001", 2, "x1", "", "", `cursor "x1" is not valid; use the next value from the last page`},
+		{"an unknown cursor", "999001", 2, "nope", "", "", `cursor "nope" is not valid; use the next value from the last page`},
 	}
 	for _, r := range rows {
-		r.steps()
-		got, err := s.ClosureFailed(ctx, "999001", world.NUBAN("901", r.account))
-		if err != nil || got != r.want {
-			t.Errorf("%s: %d, %v; want %d", r.name, got, err, r.want)
+		got, next, err := s.ClosureSessions(ctx, r.code, r.limit, r.after)
+		parts := []string{}
+		for _, x := range got {
+			parts = append(parts, x.ID+" "+x.Status)
 		}
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		if have := strings.Join(parts, "|"); have != r.want || next != r.next || msg != r.err {
+			t.Errorf("%s: %q, next %q, error %q; want %q, next %q, error %q", r.name, have, next, msg, r.want, r.next, r.err)
+		}
+	}
+	got, _, err := s.ClosureSessions(ctx, "999001", 1, "")
+	want := ClosureSession{ID: "c1", FromAccount: world.NUBAN("901", 11), ToBankCode: "999002", ToAccount: world.NUBAN("902", 2), Amount: 500000, Status: SessionOK, CreatedAt: t0}
+	if err != nil || len(got) != 1 || got[0].ID != want.ID || got[0].FromAccount != want.FromAccount || got[0].ToBankCode != want.ToBankCode || got[0].ToAccount != want.ToAccount || got[0].Amount != want.Amount || got[0].Status != want.Status || !got[0].CreatedAt.Equal(want.CreatedAt) {
+		t.Errorf("first closure session: %+v, %v; want %+v", got, err, want)
 	}
 }

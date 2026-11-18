@@ -30,7 +30,7 @@ func TestRegister(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := s.Institution(ctx, "999001")
+	got, err := institution(ctx, s.pool, "999001", "")
 	want := nip.Institution{ID: "bank-a", Name: "Member A", NIPCode: "999001", NUBANCode: "901", Type: "commercial", Status: nip.StatusActive}
 	if err != nil || got != want {
 		t.Fatalf("registered: %+v, %v", got, err)
@@ -43,7 +43,7 @@ func TestRegister(t *testing.T) {
 	if err := s.Register(ctx, rebrand); err != nil {
 		t.Fatal(err)
 	}
-	got, _ = s.Institution(ctx, "999001")
+	got, _ = institution(ctx, s.pool, "999001", "")
 	if got.Name != "Member A Plc" || got.Type != "digital" || got.Status != nip.StatusSuspended {
 		t.Fatalf("rebrand: %+v", got)
 	}

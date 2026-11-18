@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,12 +28,12 @@ type PartnerRequest struct {
 
 var errPartnerBusy = server.Invalid("another partner change is running; try again")
 
-func (a *App) AddPartner(req PartnerRequest) (string, error) {
+func (a *App) AddPartner(ctx context.Context, req PartnerRequest) (string, error) {
 	o := config.PartnerOptions{ID: req.ID, Name: req.Name, LegalName: req.LegalName, Purpose: req.Purpose, RedirectURIs: req.RedirectURIs, WebhookURL: req.WebhookURL}
 	if err := o.Check(); err != nil {
 		return "", server.Invalid("%s", err.Error())
 	}
-	err := a.applyEdit(func(sp *setup.Spec) error {
+	err := a.applyEdit(ctx, func(sp *setup.Spec) error {
 		if _, ok := partnerIn(*sp, o.ID); ok {
 			return server.Invalid("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
 		}
@@ -92,8 +93,8 @@ func (a *App) RotatePartner(id string) (key string, err error) {
 	return key, nil
 }
 
-func (a *App) RemovePartner(id string) (bool, error) {
-	err := a.applyEdit(func(sp *setup.Spec) error {
+func (a *App) RemovePartner(ctx context.Context, id string) (bool, error) {
+	err := a.applyEdit(ctx, func(sp *setup.Spec) error {
 		i := slices.IndexFunc(sp.Spec.Partners, func(p setup.Partner) bool { return p.ID == id })
 		if i < 0 {
 			return errNotFound
@@ -203,7 +204,7 @@ func (a *App) ctlAddPartner(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"id":"...","redirect_uris":["https://..."]}.`)
 		return
 	}
-	key, err := a.AddPartner(req)
+	key, err := a.AddPartner(r.Context(), req)
 	if err != nil {
 		a.partnerError(w, r, err)
 		return
@@ -221,7 +222,7 @@ func (a *App) ctlRotatePartner(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlRemovePartner(w http.ResponseWriter, r *http.Request) {
-	gone, err := a.RemovePartner(r.PathValue("id"))
+	gone, err := a.RemovePartner(r.Context(), r.PathValue("id"))
 	if err != nil {
 		a.partnerError(w, r, err)
 		return

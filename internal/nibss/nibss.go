@@ -1,12 +1,8 @@
 package nibss
 
 import (
-	"context"
 	"errors"
 	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
 const (
@@ -36,6 +32,16 @@ type Session struct {
 	Closure     bool       `json:"closure,omitempty"`
 }
 
+type ClosureSession struct {
+	ID          string    `json:"session_id"`
+	FromAccount string    `json:"from_account"`
+	ToBankCode  string    `json:"to_bank_code"`
+	ToAccount   string    `json:"to_account"`
+	Amount      int64     `json:"amount_minor"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type ConsentEvent struct {
 	Seq         int64     `json:"seq"`
 	Bank        string    `json:"bank"`
@@ -47,25 +53,4 @@ type ConsentEvent struct {
 	Via         string    `json:"via"`
 	ChangedAt   time.Time `json:"changed_at"`
 	SourceSeq   int64     `json:"source_seq"`
-}
-
-type Switch interface {
-	Directory(ctx context.Context) ([]nip.Institution, error)
-	Institution(ctx context.Context, code string) (nip.Institution, error)
-	Register(ctx context.Context, m Member) error
-	SetStatus(ctx context.Context, id, status string) error
-	EnrolBVN(ctx context.Context, name, phone string, dob clock.Date) (string, error)
-	Begin(ctx context.Context, s Session) (Session, bool, error)
-	Resolve(ctx context.Context, id, status, outcome string, at time.Time) error
-	TSQ(ctx context.Context, id string, next time.Time) (Session, error)
-	NoAnswer(ctx context.Context, id string, next time.Time) (Session, error)
-	Position(ctx context.Context, code string) (Position, error)
-	Session(ctx context.Context, id string) (Session, error)
-	Unsettled(ctx context.Context, upTo time.Time) ([]Session, error)
-	MarkSettled(ctx context.Context, ids []string, session string, cutoff time.Time) error
-	Unposted(ctx context.Context) ([]Settlement, error)
-	MarkPosted(ctx context.Context, session string, at time.Time) error
-	Open(ctx context.Context) ([]Session, error)
-	RecordConsent(ctx context.Context, e ConsentEvent) (ConsentEvent, bool, error)
-	ConsentLedger(ctx context.Context, bank string, limit int, cursor string) ([]ConsentEvent, string, error)
 }

@@ -692,7 +692,7 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(f.Get("confirm")) != id {
 			err = server.Invalid("type %s to confirm", id)
 		} else {
-			_, err = a.CloseBank(id, req)
+			_, err = a.CloseBank(r.Context(), id, req)
 		}
 		if err == nil {
 			http.Redirect(w, r, "/ui/banks/"+url.PathEscape(id), http.StatusSeeOther)
@@ -746,7 +746,7 @@ func (a *App) roomPurgeBank(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(r.PostForm.Get("confirm")) != id {
 			err = server.Invalid("type %s to confirm", id)
 		} else {
-			_, err = a.PurgeBank(id, false)
+			_, err = a.PurgeBank(r.Context(), id, false)
 		}
 		switch {
 		case err == nil:
