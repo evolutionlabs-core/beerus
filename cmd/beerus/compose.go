@@ -8,7 +8,7 @@ import (
 	"text/template"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 const composeFile = `name: beerus
@@ -140,7 +140,7 @@ func renderCompose(c *config.Config) ([]byte, error) {
 		}
 	}
 	if d.HealthPort <= 0 {
-		return nil, fmt.Errorf("%s has no connect.health_port; set it to the port the cbn container listens on", c.Path(connect.LocalFile))
+		return nil, fmt.Errorf("%s has no connect.health_port; set it to the port the cbn container listens on", c.Path(state.LocalFile))
 	}
 	var out bytes.Buffer
 	if err := template.Must(template.New("compose").Parse(composeFile)).Execute(&out, d); err != nil {
@@ -155,7 +155,7 @@ func cmdCompose(args []string) error {
 	if _, err := parseAfter("compose", fs, args, 0); err != nil {
 		return err
 	}
-	c, err := connect.LoadConfig(*dir)
+	c, err := state.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}

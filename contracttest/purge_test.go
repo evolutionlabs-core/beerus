@@ -21,6 +21,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func (s *Stack) applyWithout(id string, extra map[string]any) (map[string]any, error) {
@@ -333,7 +334,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	})
 	start := func() run {
 		t.Helper()
-		loaded, err := connect.LoadConfig(cfg.Dir)
+		loaded, err := state.LoadConfig(cfg.Dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -424,7 +425,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	if ck, err := r.app.VerifyBank(context.Background()); err != nil || !ck.OK() {
 		t.Fatalf("bank ledgers after the restarts: %v %v", err, ck)
 	}
-	final, err := connect.LoadConfig(cfg.Dir)
+	final, err := state.LoadConfig(cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}

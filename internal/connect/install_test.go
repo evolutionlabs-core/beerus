@@ -19,6 +19,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func countMigrations(t *testing.T, dir string) int {
@@ -168,7 +169,7 @@ func TestInstall(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {
-				if r := findResource(&st, setup.KindSystem, id); r == nil || r.Phase != config.PhaseActive {
+				if r := state.FindResource(&st, setup.KindSystem, id); r == nil || r.Phase != config.PhaseActive {
 					t.Errorf("%s after install: %+v", id, r)
 				}
 			}
@@ -213,15 +214,15 @@ func TestInstall(t *testing.T) {
 		if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
 			t.Fatal(err)
 		}
-		cfg, err := LoadConfig(dir)
+		cfg, err := state.LoadConfig(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctl, err := openStore(dir)
+		ctl, err := state.Open(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		stored, err := ctl.status()
+		stored, err := ctl.Status()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -229,7 +230,7 @@ func TestInstall(t *testing.T) {
 		if err := installCBN(t.Context(), in, cfg, ctl, stored); err != nil {
 			t.Fatal(err)
 		}
-		st, err := ctl.status()
+		st, err := ctl.Status()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -253,11 +254,11 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 	if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := LoadConfig(dir)
+	cfg, err := state.LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctl, err := openStore(dir)
+	ctl, err := state.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

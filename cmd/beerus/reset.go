@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func cmdReset(args []string, out io.Writer) error {
@@ -54,6 +55,6 @@ func cmdReset(args []string, out io.Writer) error {
 			fmt.Fprintln(out, "  "+d)
 		}
 	}
-	fmt.Fprintf(out, "Cleared %s (kept %s). Run beerus init to start again.\n", t.Dir, connect.LocalFile)
+	fmt.Fprintf(out, "Cleared %s (kept %s). Run beerus init to start again.\n", t.Dir, state.LocalFile)
 	return nil
 }

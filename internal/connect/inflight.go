@@ -113,7 +113,7 @@ func (a *App) openSends(ctx context.Context, b *config.Bank) (int, error) {
 }
 
 func (a *App) sendsDue(ctx context.Context) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return

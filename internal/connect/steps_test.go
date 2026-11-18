@@ -11,6 +11,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func TestStepIndexKeepsTheDatabaseThird(t *testing.T) {
@@ -45,7 +46,7 @@ func TestDriftRules(t *testing.T) {
 func finalizerApp(t *testing.T, r setup.Resource) *App {
 	t.Helper()
 	s := testStore(t)
-	if err := s.update(func(st *setup.Status) (bool, error) {
+	if err := s.Update(func(st *setup.Status) (bool, error) {
 		st.Resources = append(st.Resources, r)
 		return true, nil
 	}); err != nil {
@@ -70,11 +71,11 @@ func TestOneFinalizerPerStep(t *testing.T) {
 	if !slices.Equal(ran, []string{"one", "two"}) {
 		t.Fatalf("ran %v", ran)
 	}
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := findResource(&st, setup.KindBank, "bank-b"); !slices.Equal(r.Done, []string{"one", "two", "three"}) || r.Phase != config.PhaseClosed || r.ObservedGeneration != r.Generation {
+	if r := state.FindResource(&st, setup.KindBank, "bank-b"); !slices.Equal(r.Done, []string{"one", "two", "three"}) || r.Phase != config.PhaseClosed || r.ObservedGeneration != r.Generation {
 		t.Fatalf("a finalizer without a run did not finish at once, or the close did not complete: %+v", r)
 	}
 }
@@ -91,19 +92,19 @@ func TestFinalizerFailureBacksOff(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("ran %d times inside the backoff", calls)
 	}
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := findResource(&st, setup.KindBank, "bank-b")
+	r := state.FindResource(&st, setup.KindBank, "bank-b")
 	if r.Attempts != 1 || r.NextAttemptAt == nil || len(r.Done) != 0 || len(r.Conditions) != 1 || r.Conditions[0].Reason != setup.ReasonStepFailed {
 		t.Fatalf("after a failure: %+v", r)
 	}
 }
 
 func TestEveryBankTypeHasAHistory(t *testing.T) {
-	if !slices.Equal(slices.Sorted(maps.Keys(typeHistoryDays)), setup.BankTypes) {
-		t.Fatalf("history days for %v, bank types %v", slices.Sorted(maps.Keys(typeHistoryDays)), setup.BankTypes)
+	if !slices.Equal(slices.Sorted(maps.Keys(state.TypeHistoryDays)), setup.BankTypes) {
+		t.Fatalf("history days for %v, bank types %v", slices.Sorted(maps.Keys(state.TypeHistoryDays)), setup.BankTypes)
 	}
 }
 
@@ -111,11 +112,11 @@ func TestRecordPhaseNeverReopensALeavingBank(t *testing.T) {
 	for _, phase := range []string{PhaseClosing, PhaseTerminating, PhaseClosed} {
 		a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: phase, Generation: 3, ObservedGeneration: 2})
 		a.recordPhase("bank-b", PhaseActive, 3)
-		st, err := a.ctl.status()
+		st, err := a.ctl.Status()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r := findResource(&st, setup.KindBank, "bank-b"); r.Phase != phase || r.Generation != 3 || r.ObservedGeneration != 2 {
+		if r := state.FindResource(&st, setup.KindBank, "bank-b"); r.Phase != phase || r.Generation != 3 || r.ObservedGeneration != 2 {
 			t.Errorf("%s: resource became %s, generation %d, observed %d", phase, r.Phase, r.Generation, r.ObservedGeneration)
 		}
 	}
@@ -125,11 +126,11 @@ func TestRecordPhaseDoesNotObserveALaterGeneration(t *testing.T) {
 	for _, c := range []struct{ gen, want int64 }{{1, 1}, {2, 2}, {3, 3}} {
 		a := finalizerApp(t, setup.Resource{Kind: setup.KindBank, ID: "bank-b", Phase: PhaseRepairing, Generation: 3, ObservedGeneration: 1})
 		a.recordPhase("bank-b", PhaseActive, c.gen)
-		st, err := a.ctl.status()
+		st, err := a.ctl.Status()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r := findResource(&st, setup.KindBank, "bank-b"); r.Phase != PhaseActive || r.ObservedGeneration != c.want {
+		if r := state.FindResource(&st, setup.KindBank, "bank-b"); r.Phase != PhaseActive || r.ObservedGeneration != c.want {
 			t.Errorf("recorded at generation %d: phase %s, observed %d, want %d", c.gen, r.Phase, r.ObservedGeneration, c.want)
 		}
 	}

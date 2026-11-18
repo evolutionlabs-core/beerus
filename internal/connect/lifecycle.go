@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +20,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -37,8 +38,7 @@ const (
 )
 
 var (
-	typeHistoryDays = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
-	slugRe          = regexp.MustCompile(`[^a-z0-9]+`)
+	slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 )
 
 type BankStep struct {
@@ -129,20 +129,6 @@ type BankRequest struct {
 	SettlesThrough string `json:"settles_through"`
 }
 
-func portFree(p int) bool {
-	for _, host := range []string{"127.0.0.1", "::1"} {
-		l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(p)))
-		if err != nil {
-			if host == "::1" {
-				continue
-			}
-			return false
-		}
-		l.Close()
-	}
-	return true
-}
-
 func (a *App) postgresRoom(ctx context.Context) error {
 	if len(a.bankList()) == 0 {
 		return nil
@@ -203,11 +189,11 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 			return BankStatus{}, err
 		}
 	}
-	stored, err := a.ctl.status()
+	stored, err := a.ctl.Status()
 	if err != nil {
 		return BankStatus{}, fmt.Errorf("read control.json: %w", err)
 	}
-	if r := findResource(&stored, setup.KindBank, id); r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
+	if r := state.FindResource(&stored, setup.KindBank, id); r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
 		return BankStatus{}, applyFail(http.StatusConflict, codeBeingRemoved, "banks[%s] is being removed, and its id is never reused. Choose another id.", id)
 	}
 	err = a.applyEdit(ctx, func(sp *setup.Spec) error {
@@ -232,7 +218,7 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 				id = fmt.Sprintf("%s-%d", slug, n)
 			}
 		}
-		nb := setup.Bank{ID: id, Name: name, Type: orDefault(req.Type, "commercial"), SettlesThrough: req.SettlesThrough}
+		nb := setup.Bank{ID: id, Name: name, Type: cmp.Or(req.Type, "commercial"), SettlesThrough: req.SettlesThrough}
 		if nb.SettlesThrough == "" && nb.Type == "microfinance" {
 			for _, b := range sp.Spec.Banks {
 				if b.Type == "commercial" && b.State != setup.StateClosed {
@@ -406,7 +392,7 @@ func CheckPorts(c *config.Config) error {
 	_, err := os.Stat(c.Path("running"))
 	running := err == nil
 	for _, p := range ports {
-		if portFree(p) {
+		if config.PortFree(p) {
 			continue
 		}
 		if running {

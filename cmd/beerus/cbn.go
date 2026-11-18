@@ -16,12 +16,13 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 const healthShutdown = 5 * time.Second
 
 func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
-	ok, err := connect.Initialized(dir)
+	ok, err := state.Initialized(dir)
 	if err != nil {
 		return err
 	}
@@ -30,7 +31,7 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 			return err
 		}
 	}
-	c, err := connect.LoadConfig(dir)
+	c, err := state.LoadConfig(dir)
 	if err != nil {
 		return err
 	}
@@ -45,7 +46,7 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 		return err
 	}
 	if c.Connect.HealthPort <= 0 {
-		return fmt.Errorf("%s has no connect.health_port; set it to the port the cbn container listens on", c.Path(connect.LocalFile))
+		return fmt.Errorf("%s has no connect.health_port; set it to the port the cbn container listens on", c.Path(state.LocalFile))
 	}
 	p, err := cbnparticipant.New(ctx, dir, cbnparticipant.Options{Logger: log, Bind: bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
 	if err != nil {

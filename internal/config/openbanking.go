@@ -1,6 +1,12 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+)
 
 const (
 	DefaultAPIPortOffset = 10
@@ -51,6 +57,34 @@ func (c *Config) AllocatePort(start int, used map[int]bool, free func(int) bool)
 		}
 	}
 	return 0, fmt.Errorf("no free port from %d to %d; free one or widen ports.window in local.yaml", start, end-1)
+}
+
+func PortFree(p int) bool {
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(p)))
+		if err != nil {
+			if host == "::1" {
+				continue
+			}
+			return false
+		}
+		l.Close()
+	}
+	return true
+}
+
+func WriteAPIKey(dir, id string) (string, error) {
+	key, err := NewAPIKey()
+	if err != nil {
+		return "", fmt.Errorf("make API key for %s: %w", id, err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "partners", id), 0o700); err != nil {
+		return "", fmt.Errorf("create partners/%s: %w", id, err)
+	}
+	if err := WriteSecret(filepath.Join(dir, "partners", id, "api-key"), key+"\n"); err != nil {
+		return "", fmt.Errorf("write API key for %s: %w", id, err)
+	}
+	return key, nil
 }
 
 func (c *Config) validatePorts() error {

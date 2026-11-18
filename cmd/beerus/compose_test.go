@@ -10,6 +10,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func newSetup(t *testing.T, local setup.Local) *config.Config {
@@ -19,7 +20,7 @@ func newSetup(t *testing.T, local setup.Local) *config.Config {
 	if err := connect.Init(dir, setup.DefaultSpec(defaultSetupName), local, today); err != nil {
 		t.Fatal(err)
 	}
-	c, err := connect.LoadConfig(dir)
+	c, err := state.LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

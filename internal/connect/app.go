@@ -25,6 +25,7 @@ import (
 	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -36,7 +37,7 @@ type App struct {
 	cfg          *config.Config
 	clock        *clock.Clock
 	st           *State
-	ctl          *ctlStore
+	ctl          *state.Store
 	setupKey     uint64
 	key          config.SigningKey
 	log          *slog.Logger
@@ -146,10 +147,10 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 	if a.client == nil {
 		a.client = &http.Client{Timeout: 15 * time.Second}
 	}
-	if a.ctl, err = openStore(cfg.Dir); err != nil {
+	if a.ctl, err = state.Open(cfg.Dir); err != nil {
 		return nil, err
 	}
-	a.setupKey = a.ctl.setupKey()
+	a.setupKey = a.ctl.SetupKey()
 	st, err := loadState(a.statePath)
 	if err != nil {
 		return nil, fmt.Errorf("stub state: %w", err)

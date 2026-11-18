@@ -16,6 +16,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 const offlineTimeout = 5 * time.Second
@@ -23,7 +24,7 @@ const offlineTimeout = 5 * time.Second
 type PlanReply = planBody
 
 func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
-	cfg, err := LoadConfig(dir)
+	cfg, err := state.LoadConfig(dir)
 	if err != nil {
 		return PlanReply{}, err
 	}
@@ -44,7 +45,7 @@ func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
 		rows = slices.Clone(st.Tombstones)
 	case err != nil:
 		rows = slices.Clone(st.Tombstones)
-		warning = fmt.Sprintf("NIBSS did not answer as expected (%v); the plan checks codes against this setup and the removed banks cached in %s only.", err, statusFile)
+		warning = fmt.Sprintf("NIBSS did not answer as expected (%v); the plan checks codes against this setup and the removed banks cached in %s only.", err, state.StatusFile)
 	}
 	pack, err := countrypack.Nigeria()
 	if err != nil {

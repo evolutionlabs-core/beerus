@@ -9,6 +9,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func (a *App) ensureNIBSSDir() error {
@@ -27,10 +28,10 @@ func (a *App) ensureNIBSSDir() error {
 }
 
 func (a *App) prepareNIBSS() error {
-	if err := a.ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: ownedDatabase, Name: config.DatabaseName(a.cfg.Dir, setup.SystemNIBSS)}); err != nil {
+	if err := a.ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: state.OwnedDatabase, Name: config.DatabaseName(a.cfg.Dir, setup.SystemNIBSS)}); err != nil {
 		return err
 	}
-	if err := markActive(a.ctl, setup.SystemNIBSS); err != nil {
+	if err := state.MarkActive(a.ctl, setup.SystemNIBSS); err != nil {
 		return err
 	}
 	if err := a.ensureNIBSSPort(); err != nil {

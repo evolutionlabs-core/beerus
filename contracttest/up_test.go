@@ -14,6 +14,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -143,7 +144,7 @@ func TestActiveBankServesCustomersAtOnce(t *testing.T) {
 	}
 	c := newCLIAt(t, dir)
 	startUp(t, c, "")
-	cfg, err := connect.LoadConfig(dir)
+	cfg, err := state.LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

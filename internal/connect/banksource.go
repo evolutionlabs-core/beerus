@@ -14,20 +14,21 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 const snapshotInfix = "_snap_"
 
 type ledgerSource struct {
 	*store.Books
-	ctl *ctlStore
+	ctl *state.Store
 }
 
 func profileOf(b *config.Bank) bank.Profile {
 	return bank.Profile{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode}
 }
 
-func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *ctlStore, clk *clock.Clock, b *config.Bank) (*ledgerSource, error) {
+func openLedgerSource(ctx context.Context, cfg *config.Config, ctl *state.Store, clk *clock.Clock, b *config.Bank) (*ledgerSource, error) {
 	books, err := store.OpenBooks(ctx, cfg.DatabaseURL, b.Database, profileOf(b), cfg.Fees(), clk.Now(), openbanking.Migrate)
 	if err != nil {
 		return nil, err
@@ -40,7 +41,7 @@ func (s *ledgerSource) Drop(ctx context.Context) error {
 	if err := s.Books.Drop(ctx); err != nil {
 		return err
 	}
-	return s.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
+	return s.ctl.Release(setup.Owned{Kind: state.OwnedDatabase, Name: name})
 }
 
 func (a *App) dropBankDatabase(ctx context.Context, name string) error {
@@ -52,7 +53,7 @@ func (a *App) dropBankDatabase(ctx context.Context, name string) error {
 	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, owned); err != nil {
 		return fmt.Errorf("drop database %s: %w", name, err)
 	}
-	return a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
+	return a.ctl.Release(setup.Owned{Kind: state.OwnedDatabase, Name: name})
 }
 
 func (a *App) DropBankDatabases(ctx context.Context) error {

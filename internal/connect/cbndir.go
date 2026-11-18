@@ -11,17 +11,18 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func PrepareCBN(cfg *config.Config, now time.Time) error {
-	ctl, err := openStore(cfg.Dir)
+	ctl, err := state.Open(cfg.Dir)
 	if err != nil {
 		return err
 	}
-	if err := ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: ownedDatabase, Name: config.DatabaseName(cfg.Dir, setup.SystemCBN)}); err != nil {
+	if err := ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: state.OwnedDatabase, Name: config.DatabaseName(cfg.Dir, setup.SystemCBN)}); err != nil {
 		return err
 	}
-	if err := ensureCBNPorts(ctl, cfg); err != nil {
+	if err := state.EnsureCBNPorts(ctl, cfg); err != nil {
 		return err
 	}
 	if err := cfg.EnsureCBNDir(now); err != nil {
@@ -46,10 +47,10 @@ func (a *App) ensureCBNDir() error {
 }
 
 func (a *App) prepareCBN() error {
-	if err := a.ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: ownedDatabase, Name: config.DatabaseName(a.cfg.Dir, setup.SystemCBN)}); err != nil {
+	if err := a.ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: state.OwnedDatabase, Name: config.DatabaseName(a.cfg.Dir, setup.SystemCBN)}); err != nil {
 		return err
 	}
-	if err := ensureCBNPorts(a.ctl, a.cfg); err != nil {
+	if err := state.EnsureCBNPorts(a.ctl, a.cfg); err != nil {
 		return err
 	}
 	if err := a.ensureCBNDir(); err != nil {

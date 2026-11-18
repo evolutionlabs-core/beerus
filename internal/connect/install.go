@@ -19,6 +19,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 const postgresTimeout = 5 * time.Second
@@ -60,7 +61,7 @@ func CheckStart(dir string) error {
 }
 
 func loadSetup(dir string) (setup.Status, bool, error) {
-	ok, err := Initialized(dir)
+	ok, err := state.Initialized(dir)
 	if err != nil || !ok {
 		return setup.Status{}, false, err
 	}
@@ -72,15 +73,15 @@ func loadSetup(dir string) (setup.Status, bool, error) {
 }
 
 func systemPhase(st setup.Status, id string) string {
-	if r := findResource(&st, setup.KindSystem, id); r != nil {
+	if r := state.FindResource(&st, setup.KindSystem, id); r != nil {
 		return r.Phase
 	}
 	return ""
 }
 
 func stepRecorded(st setup.Status, system, step string) bool {
-	r := findResource(&st, setup.KindSystem, system)
-	return r != nil && r.Steps[step] == stepDone
+	r := state.FindResource(&st, setup.KindSystem, system)
+	return r != nil && r.Steps[step] == state.StepDone
 }
 
 type installer struct {
@@ -125,15 +126,15 @@ func Install(ctx context.Context, dir string, spec setup.Spec, local setup.Local
 	if err != nil {
 		return err
 	}
-	cfg, err := LoadConfig(dir)
+	cfg, err := state.LoadConfig(dir)
 	if err != nil {
 		return err
 	}
-	ctl, err := openStore(dir)
+	ctl, err := state.Open(dir)
 	if err != nil {
 		return err
 	}
-	if st, err = ctl.status(); err != nil {
+	if st, err = ctl.Status(); err != nil {
 		return err
 	}
 	if err := installCBN(ctx, in, cfg, ctl, st); err != nil {
@@ -162,11 +163,11 @@ func checkPostgres(ctx context.Context, url string) error {
 	return c.Close(ctx)
 }
 
-func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *ctlStore, st setup.Status) error {
+func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *state.Store, st setup.Status) error {
 	name := config.DatabaseName(cfg.Dir, setup.SystemCBN)
 	steps := []string{config.StepDatabase, config.StepLedgerSchema, setup.StepSettlement}
 	err := in.ensure(ctl, st, setup.SystemCBN, steps[0], stepNameCBNCreate, steps, func() (string, error) {
-		if err := ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
+		if err := ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: state.OwnedDatabase, Name: name}); err != nil {
 			return "", err
 		}
 		return "", store.Create(ctx, cfg.DatabaseURL, name)
@@ -187,18 +188,18 @@ func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *ctl
 			return "", err
 		}
 		open.Close()
-		if err := ensureCBNPorts(ctl, cfg); err != nil {
+		if err := state.EnsureCBNPorts(ctl, cfg); err != nil {
 			return "", err
 		}
 		return "", cfg.EnsureCBNDir(in.clock.Real())
 	})
 }
 
-func installNIBSS(ctx context.Context, in *installer, cfg *config.Config, ctl *ctlStore, st setup.Status) error {
+func installNIBSS(ctx context.Context, in *installer, cfg *config.Config, ctl *state.Store, st setup.Status) error {
 	name := config.DatabaseName(cfg.Dir, setup.SystemNIBSS)
 	steps := []string{config.StepDatabase, setup.StepSchema}
 	err := in.ensure(ctl, st, setup.SystemNIBSS, steps[0], stepNameNIBSSMake, steps, func() (string, error) {
-		if err := ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
+		if err := ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: state.OwnedDatabase, Name: name}); err != nil {
 			return "", err
 		}
 		return "", nibss.Create(ctx, cfg.DatabaseURL, name)
@@ -212,7 +213,7 @@ func installNIBSS(ctx context.Context, in *installer, cfg *config.Config, ctl *c
 	})
 }
 
-func (in *installer) ensure(ctl *ctlStore, st setup.Status, system, step, name string, all []string, fn func() (string, error)) error {
+func (in *installer) ensure(ctl *state.Store, st setup.Status, system, step, name string, all []string, fn func() (string, error)) error {
 	return in.run(name, func() (string, error) {
 		if stepRecorded(st, system, step) {
 			return skippedDetail(step), nil
@@ -221,13 +222,13 @@ func (in *installer) ensure(ctl *ctlStore, st setup.Status, system, step, name s
 		if err != nil {
 			return "", err
 		}
-		return detail, ctl.update(func(s *setup.Status) (bool, error) {
-			r := ensureResource(s, setup.KindSystem, system)
+		return detail, ctl.Update(func(s *setup.Status) (bool, error) {
+			r := state.EnsureResource(s, setup.KindSystem, system)
 			if r.Steps == nil {
 				r.Steps = map[string]string{}
 			}
-			r.Steps[step] = stepDone
-			if slices.ContainsFunc(all, func(id string) bool { return r.Steps[id] != stepDone }) {
+			r.Steps[step] = state.StepDone
+			if slices.ContainsFunc(all, func(id string) bool { return r.Steps[id] != state.StepDone }) {
 				return true, nil
 			}
 			r.Phase = config.PhaseActive

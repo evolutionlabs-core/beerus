@@ -39,6 +39,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 type hook struct {
@@ -186,7 +187,7 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 	if err := connect.Init(dir, spec, local, today); err != nil {
 		return nil, err
 	}
-	return connect.LoadConfig(dir)
+	return state.LoadConfig(dir)
 }
 
 func newBankStack(t *testing.T) *Stack {
@@ -206,7 +207,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 	}
 	s := &Stack{t: t, people: map[string]persona{}}
 	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
-		cfg, err := connect.LoadConfig(dir)
+		cfg, err := state.LoadConfig(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -290,7 +291,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 
 func (s *Stack) loadConfig() *config.Config {
 	s.t.Helper()
-	cfg, err := connect.LoadConfig(s.cfg.Dir)
+	cfg, err := state.LoadConfig(s.cfg.Dir)
 	if err != nil {
 		s.t.Fatal(err)
 	}

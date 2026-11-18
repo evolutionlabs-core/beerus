@@ -29,6 +29,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 const (
@@ -97,7 +98,7 @@ func (e *cli) flagset(name string) (*flag.FlagSet, *string, *bool) {
 }
 
 func (e *cli) client(dir string) (*ctl, error) {
-	c, err := connect.LoadConfig(dir)
+	c, err := state.LoadConfig(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +255,7 @@ func (m moneyFlags) removal() (*setup.Removal, error) {
 func specRequest(dir, file string) (applyRequest, error) {
 	path := file
 	if path == "" {
-		path = filepath.Join(dir, connect.SpecFile)
+		path = filepath.Join(dir, state.SpecFile)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -739,7 +740,7 @@ func cmdDiff(e *cli, args []string) error {
 }
 
 func loadApplied(dir string) (setup.Status, error) {
-	ok, err := connect.Initialized(dir)
+	ok, err := state.Initialized(dir)
 	if err != nil {
 		return setup.Status{}, err
 	}
@@ -1102,7 +1103,7 @@ func cmdBankEnd(e *cli, args []string) error {
 	if err != nil {
 		return err
 	}
-	req := applyRequest{File: filepath.Join(*dir, connect.SpecFile), Spec: string(raw), ApplyOptions: connect.ApplyOptions{Prune: verb == "purge" && *yes, Money: rm, SettleNow: *settle}}
+	req := applyRequest{File: filepath.Join(*dir, state.SpecFile), Spec: string(raw), ApplyOptions: connect.ApplyOptions{Prune: verb == "purge" && *yes, Money: rm, SettleNow: *settle}}
 	if !*yes {
 		if err := e.confirm(c, &req, *asJSON, op); err != nil {
 			return err
@@ -1180,7 +1181,7 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 	if err := connect.CheckStart(*dir); err != nil {
 		return err
 	}
-	c, err := connect.LoadConfig(*dir)
+	c, err := state.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}

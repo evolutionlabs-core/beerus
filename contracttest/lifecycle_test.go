@@ -17,6 +17,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func (s *Stack) waitBank(id string) map[string]any {
@@ -136,7 +137,7 @@ func TestCreateBank(t *testing.T) {
 			t.Fatalf("step has no real time: %v", step)
 		}
 	}
-	cfg, err := connect.LoadConfig(s.cfg.Dir)
+	cfg, err := state.LoadConfig(s.cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +219,7 @@ func TestSuspendBank(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("online banking while suspended: %d", resp.StatusCode)
 	}
-	cfg, err := connect.LoadConfig(s.cfg.Dir)
+	cfg, err := state.LoadConfig(s.cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}

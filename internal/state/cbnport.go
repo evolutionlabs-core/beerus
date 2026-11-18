@@ -1,4 +1,4 @@
-package connect
+package state
 
 import (
 	"fmt"
@@ -9,10 +9,10 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-func ensureCBNPorts(ctl *ctlStore, cfg *config.Config) error {
+func EnsureCBNPorts(ctl *Store, cfg *config.Config) error {
 	control := 0
-	err := ctl.update(func(st *setup.Status) (bool, error) {
-		r := ensureResource(st, setup.KindSystem, setup.SystemCBN)
+	err := ctl.Update(func(st *setup.Status) (bool, error) {
+		r := EnsureResource(st, setup.KindSystem, setup.SystemCBN)
 		if r.Allocated.Port != 0 && r.Allocated.APIPort == cfg.Connect.CBNPort {
 			control = r.Allocated.Port
 			return false, nil
@@ -23,18 +23,18 @@ func ensureCBNPorts(ctl *ctlStore, cfg *config.Config) error {
 			for _, x := range st.Resources {
 				used[x.Allocated.Port], used[x.Allocated.APIPort] = true, true
 			}
-			p, err := cfg.AllocatePort(c.CBNPort+1, used, portFree)
+			p, err := cfg.AllocatePort(c.CBNPort+1, used, config.PortFree)
 			if err != nil {
 				return false, fmt.Errorf("CBN control port: %w", err)
 			}
 			r.Allocated.Port = p
-			r.Owned = append(r.Owned, setup.Owned{Kind: ownedPort, Name: strconv.Itoa(p)})
+			r.Owned = append(r.Owned, setup.Owned{Kind: OwnedPort, Name: strconv.Itoa(p)})
 		}
 		if r.Allocated.APIPort != cfg.Connect.CBNPort {
-			old := setup.Owned{Kind: ownedPort, Name: strconv.Itoa(r.Allocated.APIPort)}
+			old := setup.Owned{Kind: OwnedPort, Name: strconv.Itoa(r.Allocated.APIPort)}
 			r.Owned = slices.DeleteFunc(r.Owned, func(x setup.Owned) bool { return x == old })
 			r.Allocated.APIPort = cfg.Connect.CBNPort
-			r.Owned = append(r.Owned, setup.Owned{Kind: ownedPort, Name: strconv.Itoa(cfg.Connect.CBNPort)})
+			r.Owned = append(r.Owned, setup.Owned{Kind: OwnedPort, Name: strconv.Itoa(cfg.Connect.CBNPort)})
 		}
 		control = r.Allocated.Port
 		return true, nil

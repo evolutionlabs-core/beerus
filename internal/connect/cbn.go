@@ -8,6 +8,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func (a *App) cbnDue(ctx context.Context) {
@@ -40,8 +41,8 @@ func (a *App) dropCBN(ctx context.Context) error {
 	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{name}); err != nil {
 		return fmt.Errorf("drop the CBN database: %w", err)
 	}
-	if err := a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name}); err != nil {
+	if err := a.ctl.Release(setup.Owned{Kind: state.OwnedDatabase, Name: name}); err != nil {
 		return err
 	}
-	return a.ctl.releasePorts(setup.KindSystem, setup.SystemCBN)
+	return a.ctl.ReleasePorts(setup.KindSystem, setup.SystemCBN)
 }

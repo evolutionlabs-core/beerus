@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func partnerClient(t *testing.T, s *Stack, id string) *http.Client {
@@ -72,7 +72,7 @@ func TestPartnerLifecycle(t *testing.T) {
 	}
 
 	s.ctl("DELETE", "/partners/ledgerly", nil)
-	saved, err := connect.LoadConfig(s.cfg.Dir)
+	saved, err := state.LoadConfig(s.cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package connect
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -84,7 +86,7 @@ type admission struct {
 }
 
 func (a *App) Plan(ctx context.Context, desired setup.Spec) (setup.Plan, error) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		return setup.Plan{}, err
 	}
@@ -106,7 +108,7 @@ func (a *App) applyEdit(ctx context.Context, edit func(*setup.Spec) error, opt A
 	}
 	defer a.applyMu.Unlock()
 	_, err := a.applyLocked(ctx, func(st setup.Status) (setup.Spec, error) {
-		cp, err := cloneStatus(st)
+		cp, err := state.CloneStatus(st)
 		if err != nil {
 			return setup.Spec{}, err
 		}
@@ -117,7 +119,7 @@ func (a *App) applyEdit(ctx context.Context, edit func(*setup.Spec) error, opt A
 }
 
 func (a *App) applyLocked(ctx context.Context, next func(setup.Status) (setup.Spec, error), opt ApplyOptions) (setup.Plan, error) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		return setup.Plan{}, err
 	}
@@ -161,11 +163,11 @@ func (a *App) admitPlan(ad *admission) error {
 		a.stepMu.Lock()
 		defer a.stepMu.Unlock()
 	}
-	return a.ctl.update(func(st *setup.Status) (bool, error) { return admit(st, ad) })
+	return a.ctl.Update(func(st *setup.Status) (bool, error) { return admit(st, ad) })
 }
 
 func (a *App) syncSetupFile(desired setup.Spec) error {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		return err
 	}
@@ -180,18 +182,18 @@ func (a *App) syncSetupFile(desired setup.Spec) error {
 	})
 	raw, err := setup.Export(spec)
 	if err != nil {
-		return fmt.Errorf("encode %s: %w", SpecFile, err)
+		return fmt.Errorf("encode %s: %w", state.SpecFile, err)
 	}
-	path := a.cfg.Path(SpecFile)
+	path := a.cfg.Path(state.SpecFile)
 	if cur, err := os.ReadFile(path); err == nil {
-		if parsed, errs := setup.Parse(SpecFile, cur); len(errs) == 0 {
+		if parsed, errs := setup.Parse(state.SpecFile, cur); len(errs) == 0 {
 			if same, err := setup.Export(parsed); err == nil && bytes.Equal(same, raw) {
 				return nil
 			}
 		}
 	}
 	if err := config.WriteSecret(path, string(raw)); err != nil {
-		return fmt.Errorf("the plan was applied, but %s could not be updated: %w", SpecFile, err)
+		return fmt.Errorf("the plan was applied, but %s could not be updated: %w", state.SpecFile, err)
 	}
 	return nil
 }
@@ -276,7 +278,7 @@ func andList(xs []string) string {
 }
 
 func moneyOpen(st *setup.Status, id string) bool {
-	r := findResource(st, setup.KindBank, id)
+	r := state.FindResource(st, setup.KindBank, id)
 	return r == nil || (r.Phase != config.PhaseClosed && !slices.Contains(r.Done, setup.FinalizerDecideMoney))
 }
 
@@ -537,12 +539,12 @@ func (a *App) allocatePorts(ctx context.Context, ad *admission) error {
 		}
 	}
 	for _, id := range creates {
-		port, err := a.cfg.AllocatePort(top+1, used, portFree)
+		port, err := a.cfg.AllocatePort(top+1, used, config.PortFree)
 		if err != nil {
 			return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s: online banking: %v", id, err)
 		}
 		used[port] = true
-		api, err := a.cfg.AllocatePort(port+a.cfg.APIPortOffset(), used, portFree)
+		api, err := a.cfg.AllocatePort(port+a.cfg.APIPortOffset(), used, config.PortFree)
 		if err != nil {
 			return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s: bank API: %v", id, err)
 		}
@@ -555,11 +557,11 @@ func (a *App) allocatePorts(ctx context.Context, ad *admission) error {
 
 func (a *App) makePartner(desired setup.Spec, id string) (*config.Partner, error) {
 	sp, _ := partnerIn(desired, id)
-	key, err := writeAPIKey(a.cfg.Dir, id)
+	key, err := config.WriteAPIKey(a.cfg.Dir, id)
 	if err != nil {
 		return nil, err
 	}
-	p := runtimePartner(sp, setup.PartnerKeys{CertCN: id, APIKeySHA256: config.HashKey(key)}, setup.PartnerLocal{})
+	p := state.RuntimePartner(sp, setup.PartnerKeys{CertCN: id, APIKeySHA256: config.HashKey(key)}, setup.PartnerLocal{})
 	if err := a.issuePartnerCert(p); err != nil {
 		return nil, err
 	}
@@ -578,10 +580,10 @@ func (a *App) discardPartners(ad *admission) error {
 
 func pinnedCodes(st *setup.Status, old setup.Bank, id string, created map[string]string) (string, string) {
 	nip, nuban := old.NIPCode, old.NUBANCode
-	if r := findResource(st, setup.KindBank, id); r != nil {
-		nip, nuban = orDefault(nip, r.Allocated.NIPCode), orDefault(nuban, r.Allocated.NUBANCode)
+	if r := state.FindResource(st, setup.KindBank, id); r != nil {
+		nip, nuban = cmp.Or(nip, r.Allocated.NIPCode), cmp.Or(nuban, r.Allocated.NUBANCode)
 	}
-	return orDefault(nip, created[fieldNIPCode]), orDefault(nuban, created[fieldNUBANCode])
+	return cmp.Or(nip, created[fieldNIPCode]), cmp.Or(nuban, created[fieldNUBANCode])
 }
 
 func createdFields(p setup.Plan) map[string]map[string]string {
@@ -658,13 +660,13 @@ func admit(st *setup.Status, ad *admission) (bool, error) {
 		}
 	}
 	for id := range ad.retarget {
-		if r := findResource(st, setup.KindBank, id); r != nil {
+		if r := state.FindResource(st, setup.KindBank, id); r != nil {
 			r.Money = ad.money
 			r.Attempts, r.NextAttemptAt = 0, nil
 			clearMoneyConditions(r)
 		}
 	}
-	sum, err := specSum(st.Applied)
+	sum, err := state.SpecSum(st.Applied)
 	if err != nil {
 		return false, err
 	}
@@ -689,7 +691,7 @@ func admitBank(st *setup.Status, act setup.Action, ad *admission, fields map[str
 	switch act.Op {
 	case setup.OpCreate:
 		st.Closures = slices.DeleteFunc(st.Closures, func(c setup.Closure) bool { return c.Bank == act.ID })
-		r := ensureResource(st, setup.KindBank, act.ID)
+		r := state.EnsureResource(st, setup.KindBank, act.ID)
 		gen := r.Generation + 1
 		ports := ad.ports[act.ID]
 		*r = setup.Resource{
@@ -704,19 +706,19 @@ func admitBank(st *setup.Status, act setup.Action, ad *admission, fields map[str
 				Port:      ports[0],
 				APIPort:   ports[1],
 			},
-			Steps: map[string]string{config.StepAllocate: stepDone},
+			Steps: map[string]string{config.StepAllocate: state.StepDone},
 		}
 	case setup.OpUpdate:
-		if r := findResource(st, setup.KindBank, act.ID); r != nil {
+		if r := state.FindResource(st, setup.KindBank, act.ID); r != nil {
 			r.Generation++
 		}
 	case setup.OpClose:
-		if r := findResource(st, setup.KindBank, act.ID); r != nil {
+		if r := state.FindResource(st, setup.KindBank, act.ID); r != nil {
 			d, _ := bankIn(ad.pl.desired, act.ID)
 			leaving(r, config.PhaseClosing, finalizerNames(bankFinalizers)[:len(bankFinalizers)-1], d.OnRemove, ad.now)
 		}
 	case setup.OpRemove:
-		if r := findResource(st, setup.KindBank, act.ID); r != nil {
+		if r := state.FindResource(st, setup.KindBank, act.ID); r != nil {
 			b, _ := bankIn(ad.pl.st.Applied, act.ID)
 			leaving(r, config.PhaseTerminating, finalizerNames(bankFinalizers), b.OnRemove, ad.now)
 		}
@@ -727,7 +729,7 @@ func admitPartner(st *setup.Status, act setup.Action, ad *admission) {
 	switch act.Op {
 	case setup.OpCreate:
 		p := ad.partners[act.ID]
-		r := ensureResource(st, setup.KindPartner, act.ID)
+		r := state.EnsureResource(st, setup.KindPartner, act.ID)
 		gen := r.Generation + 1
 		*r = setup.Resource{
 			Kind:               setup.KindPartner,
@@ -736,34 +738,34 @@ func admitPartner(st *setup.Status, act setup.Action, ad *admission) {
 			ObservedGeneration: gen,
 			Phase:              config.PhaseActive,
 			Partner:            &setup.PartnerKeys{CertCN: p.CertCN, APIKeySHA256: p.APIKeySHA256, CertSHA256: p.CertSHA256},
-			Owned:              []setup.Owned{{Kind: ownedDir, Name: "partners/" + act.ID}},
+			Owned:              []setup.Owned{{Kind: state.OwnedDir, Name: "partners/" + act.ID}},
 		}
 	case setup.OpUpdate:
-		if r := findResource(st, setup.KindPartner, act.ID); r != nil {
+		if r := state.FindResource(st, setup.KindPartner, act.ID); r != nil {
 			r.Generation++
 		}
 	case setup.OpRemove:
-		if r := findResource(st, setup.KindPartner, act.ID); r != nil {
+		if r := state.FindResource(st, setup.KindPartner, act.ID); r != nil {
 			leaving(r, config.PhaseTerminating, finalizerNames(partnerFinalizers), nil, ad.now)
 		}
 	}
 }
 
 func (a *App) startAdmitted(ad *admission) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return
 	}
 	for _, act := range ad.pl.plan.Actions {
-		r := findResource(&st, act.Kind, act.ID)
+		r := state.FindResource(&st, act.Kind, act.ID)
 		if r == nil {
 			continue
 		}
 		switch {
 		case act.Kind == setup.KindBank && act.Op == setup.OpCreate:
 			sb, _ := bankIn(st.Applied, act.ID)
-			b := runtimeBank(sb, *r)
+			b := state.RuntimeBank(sb, *r)
 			a.lifeMu.Lock()
 			a.mu.Lock()
 			a.cfg.Banks = append(slices.Clone(a.cfg.Banks), b)
@@ -791,7 +793,7 @@ func (a *App) startAdmitted(ad *admission) {
 }
 
 func (a *App) Resource(kind, id string) (setup.Resource, error) {
-	st, err := a.ctl.durableStatus()
+	st, err := a.ctl.DurableStatus()
 	if err != nil {
 		return setup.Resource{}, err
 	}
@@ -804,7 +806,7 @@ func (a *App) Resource(kind, id string) (setup.Resource, error) {
 }
 
 func (a *App) resources(kind string, limit int, cursor string) ([]setup.Resource, string, error) {
-	st, err := a.ctl.durableStatus()
+	st, err := a.ctl.DurableStatus()
 	if err != nil {
 		return nil, "", err
 	}
@@ -886,7 +888,7 @@ func (a *App) parseRequest(w http.ResponseWriter, r *http.Request) (setup.Spec, 
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"file":"setup.yaml","spec":"<the file's text>"}.`)
 		return setup.Spec{}, ApplyOptions{}, false
 	}
-	spec, errs := setup.Parse(orDefault(req.File, SpecFile), []byte(req.Spec))
+	spec, errs := setup.Parse(cmp.Or(req.File, state.SpecFile), []byte(req.Spec))
 	if len(errs) > 0 {
 		a.writeApplyError(w, r, planFailure(errs))
 		return setup.Spec{}, ApplyOptions{}, false
@@ -899,7 +901,7 @@ func (a *App) ctlPlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err == nil {
 		var pl planned
 		if pl, err = a.buildPlan(r.Context(), spec, st, opt); err == nil {

@@ -9,7 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 type multi []string
@@ -60,7 +60,7 @@ func cmdPartner(args []string) error {
 	if positional == 1 {
 		id = pos[0]
 	}
-	c, err := connect.LoadConfig(*dir)
+	c, err := state.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func cmdPartner(args []string) error {
 }
 
 func printCredentials(dir, id, key string) error {
-	c, err := connect.LoadConfig(dir)
+	c, err := state.LoadConfig(dir)
 	if err != nil {
 		return err
 	}
