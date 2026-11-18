@@ -225,7 +225,12 @@ func TestExportRoundTrip(t *testing.T) {
 			if len(errs) > 0 {
 				t.Fatalf("%v\n%s", errStrings(errs), out)
 			}
-			if !reflect.DeepEqual(clearPos(first), clearPos(second)) {
+			want := clearPos(first)
+			want.Spec.Banks = slices.Clone(want.Spec.Banks)
+			for i := range want.Spec.Banks {
+				want.Spec.Banks[i].NIPCode, want.Spec.Banks[i].NUBANCode = "", ""
+			}
+			if !reflect.DeepEqual(want, clearPos(second)) {
 				t.Fatalf("round trip changed the spec:\n%+v\n%+v", first, second)
 			}
 			again, err := Export(second)
@@ -239,14 +244,15 @@ func TestExportRoundTrip(t *testing.T) {
 	}
 }
 
-func TestExportQuotesCodes(t *testing.T) {
+func TestExportLeavesOutCodes(t *testing.T) {
 	out, err := Export(parseFixture(t, "three.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range []string{`      nip_code: "999001"`, `      nuban_code: "901"`, `      - "2026-12-28"`} {
-		if !strings.Contains(string(out), line+"\n") {
-			t.Errorf("export has no line %q:\n%s", line, out)
-		}
+	if strings.Contains(string(out), "nip_code") || strings.Contains(string(out), "nuban_code") {
+		t.Errorf("export has bank codes:\n%s", out)
+	}
+	if line := `      - "2026-12-28"`; !strings.Contains(string(out), line+"\n") {
+		t.Errorf("export has no line %q:\n%s", line, out)
 	}
 }
