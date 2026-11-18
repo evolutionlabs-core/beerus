@@ -89,7 +89,7 @@ func (s *Server) resource(scope string, next func(http.ResponseWriter, *http.Req
 			fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
 			return
 		}
-		if tok.Revoked || lapsed(s.clock.Real(), tok.ExpiresAt) {
+		if tok.Revoked || lapsed(s.cfg.Clock.Real(), tok.ExpiresAt) {
 			fail(w, http.StatusUnauthorized, "invalid_token", "The access token is not valid.")
 			return
 		}
@@ -102,7 +102,7 @@ func (s *Server) resource(scope string, next func(http.ResponseWriter, *http.Req
 }
 
 func (s *Server) touch(w http.ResponseWriter, r *http.Request, c *Consent, accounts ...string) bool {
-	now := s.clock.Now()
+	now := s.cfg.Clock.Now()
 	err := s.cfg.Store.MarkUsed(r.Context(), c.ID, now)
 	for _, a := range accounts {
 		if err == nil {
@@ -165,7 +165,7 @@ func (s *Server) getBalances(w http.ResponseWriter, r *http.Request, g granted) 
 	}
 	if v := r.URL.Query().Get("as_of"); v != "" {
 		d, err := clock.ParseDate(v)
-		today := clock.DateOf(s.clock.Now())
+		today := clock.DateOf(s.cfg.Clock.Now())
 		if err != nil || !asOfAllowed(d, today, s.HistoryFloor()) {
 			fail(w, http.StatusBadRequest, "invalid_request", "as_of must be a past date inside the bank's history, in YYYY-MM-DD form.")
 			return
@@ -191,7 +191,7 @@ func (s *Server) getBalances(w http.ResponseWriter, r *http.Request, g granted) 
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account_id":        info.ID,
-		"as_of":             s.clock.Now().UTC().Format(time.RFC3339),
+		"as_of":             s.cfg.Clock.Now().UTC().Format(time.RFC3339),
 		"ledger_balance":    money(b.Ledger, b.Currency),
 		"available_balance": money(b.Available, b.Currency),
 	})
@@ -233,7 +233,7 @@ func (s *Server) getTransactions(w http.ResponseWriter, r *http.Request, g grant
 		return
 	}
 	q := r.URL.Query()
-	today := clock.DateOf(s.clock.Now())
+	today := clock.DateOf(s.cfg.Clock.Now())
 	from, to := g.consent.TransactionFrom, today.AddDays(defaultLookaheadDays)
 	bad := func(msg string) {
 		fail(w, http.StatusBadRequest, "invalid_request", msg)

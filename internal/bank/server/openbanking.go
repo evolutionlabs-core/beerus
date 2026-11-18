@@ -52,7 +52,6 @@ func NewOpenBanking(c OpenConfig) (*openbanking.Server, error) {
 		Data:       bankData{books: c.Books, clock: c.Clock},
 		Clock:      c.Clock,
 		Terms:      OpenTerms(b),
-		AccessLife: time.Duration(b.API.AccessSeconds) * time.Second,
 	}), nil
 }
 
@@ -63,6 +62,7 @@ func OpenTerms(b config.Bank) openbanking.Terms {
 		RefreshDays:   b.API.RefreshDays,
 		DormantDays:   b.API.DormantDays,
 		AssertionLife: time.Duration(b.API.AssertionSeconds) * time.Second,
+		AccessLife:    time.Duration(b.API.AccessSeconds) * time.Second,
 	}
 }
 

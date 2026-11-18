@@ -522,9 +522,9 @@ func TestConsentLifetimeFollowsTheSetting(t *testing.T) {
 		t.Fatalf("expires %s, want %s", c.ExpiresAt, want)
 	}
 	uri, _ := e.pushed()
-	before := e.srv.clock.Now()
+	before := e.srv.cfg.Clock.Now()
 	req, err := e.srv.Request(context.Background(), uri, "OBR-1")
-	after := e.srv.clock.Now()
+	after := e.srv.cfg.Clock.Now()
 	if err != nil || req.Months != 6 || req.Until.Before(addMonths(before, 6)) || req.Until.After(addMonths(after, 6)) {
 		t.Fatalf("request %+v %v", req, err)
 	}
@@ -551,8 +551,17 @@ func TestDormantConsent(t *testing.T) {
 	e := newEnv(t, func(c *Config) { c.Terms.ConsentMonths = 24 })
 	tok, id := e.tokens()
 	access := tok["access_token"].(string)
+	before := e.srv.cfg.Clock.Now()
 	if status, body := e.get(e.good, "/accounts", access); status != 200 {
 		t.Fatalf("used today: %d %v", status, body)
+	}
+	after := e.srv.cfg.Clock.Now()
+	used, err := e.store.Consent(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used.LastUsedAt.Before(before) || used.LastUsedAt.After(after) {
+		t.Fatalf("last used %s, want between %s and %s", used.LastUsedAt, before, after)
 	}
 	e.editConsent(id, func(c *Consent) {
 		c.AuthorisedAt = time.Now().Add(-400 * day)
@@ -817,7 +826,7 @@ func TestExpiredTokensAreRefused(t *testing.T) {
 }
 
 func TestIssuedTokenLifetimes(t *testing.T) {
-	e := newEnv(t, func(c *Config) { c.AccessLife = 3 * time.Minute; c.Terms.RefreshDays = 10 })
+	e := newEnv(t, func(c *Config) { c.Terms.AccessLife = 3 * time.Minute; c.Terms.RefreshDays = 10 })
 	before := time.Now()
 	tok, _ := e.tokens()
 	after := time.Now()
@@ -839,18 +848,40 @@ func TestIssuedTokenLifetimes(t *testing.T) {
 	}
 }
 
+func TestSetTermsChangesNextAccessLifetime(t *testing.T) {
+	e := newEnv(t, func(c *Config) { c.Terms.AccessLife = 3 * time.Minute })
+	e.srv.SetTerms(Terms{BankName: "Bank A", AccessLife: 20 * time.Minute})
+	before := time.Now()
+	tok, _ := e.tokens()
+	after := time.Now()
+	stored, err := e.store.Token(context.Background(), Hash(tok["access_token"].(string)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.ExpiresAt.Before(before.Add(20*time.Minute)) || stored.ExpiresAt.After(after.Add(20*time.Minute)) {
+		t.Errorf("access token expires %s, want 20 minutes from issue", stored.ExpiresAt)
+	}
+	if tok["expires_in"] != float64(1200) {
+		t.Errorf("expires_in %v, want 1200", tok["expires_in"])
+	}
+	e.srv.SetTerms(Terms{BankName: "Bank A"})
+	if tok, _ := e.tokens(); tok["expires_in"] != float64(600) {
+		t.Errorf("default expires_in %v, want 600", tok["expires_in"])
+	}
+}
+
 func TestLifetimeSettingsAreClamped(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		in   Config
 		want Config
 	}{
-		{"defaults", Config{}, Config{CodeLife: time.Minute, RequestLife: 10 * time.Minute, AccessLife: 10 * time.Minute, RefreshGrace: time.Minute}},
-		{"too long", Config{CodeLife: time.Hour, RequestLife: time.Hour}, Config{CodeLife: time.Minute, RequestLife: 10 * time.Minute, AccessLife: 10 * time.Minute, RefreshGrace: time.Minute}},
-		{"shorter is kept", Config{CodeLife: 20 * time.Second, RequestLife: 2 * time.Minute, AccessLife: time.Hour, RefreshGrace: 5 * time.Second}, Config{CodeLife: 20 * time.Second, RequestLife: 2 * time.Minute, AccessLife: time.Hour, RefreshGrace: 5 * time.Second}},
+		{"defaults", Config{}, Config{CodeLife: time.Minute, RequestLife: 10 * time.Minute, RefreshGrace: time.Minute}},
+		{"too long", Config{CodeLife: time.Hour, RequestLife: time.Hour}, Config{CodeLife: time.Minute, RequestLife: 10 * time.Minute, RefreshGrace: time.Minute}},
+		{"shorter is kept", Config{CodeLife: 20 * time.Second, RequestLife: 2 * time.Minute, RefreshGrace: 5 * time.Second}, Config{CodeLife: 20 * time.Second, RequestLife: 2 * time.Minute, RefreshGrace: 5 * time.Second}},
 	} {
 		got := New(c.in).cfg
-		if got.CodeLife != c.want.CodeLife || got.RequestLife != c.want.RequestLife || got.AccessLife != c.want.AccessLife || got.RefreshGrace != c.want.RefreshGrace {
+		if got.CodeLife != c.want.CodeLife || got.RequestLife != c.want.RequestLife || got.RefreshGrace != c.want.RefreshGrace {
 			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
 		}
 	}
