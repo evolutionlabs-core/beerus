@@ -207,14 +207,14 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 		if err != nil {
 			return err
 		}
-		a.nameStep(st, config.StepLedgerSchema, migrationCount(n))
+		a.nameStep(st, config.StepLedgerSchema, config.MigrationCount(n))
 		return nil
 	}) && a.step(st, config.StepOpenBankingSchema, func() error {
 		n, err := store.Migrate(ctx, a.cfg.DatabaseURL, b.Database, openbanking.Migrate)
 		if err != nil {
 			return err
 		}
-		a.nameStep(st, config.StepOpenBankingSchema, migrationCount(n))
+		a.nameStep(st, config.StepOpenBankingSchema, config.MigrationCount(n))
 		return a.openLedger(b)
 	}) && a.step(st, config.StepCerts, func() error {
 		return a.bankCerts(b)
@@ -268,16 +268,6 @@ func (a *App) nameStep(st *BankStatus, id, detail string) {
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
 	st.Steps[i].Name = config.BankSteps()[i].Name + " (" + detail + ")"
-}
-
-func migrationCount(n int) string {
-	switch n {
-	case 0:
-		return "no new migrations"
-	case 1:
-		return "1 migration"
-	}
-	return fmt.Sprintf("%d migrations", n)
 }
 
 func (a *App) openLedger(b *config.Bank) error {

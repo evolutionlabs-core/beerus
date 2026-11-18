@@ -16,7 +16,7 @@ info:
 
     ## Idempotency
 
-    Provisioning is a list of steps. Each step is an idempotent ensure: running it twice gives the same result. The key of a step is the participant ID, the step ID and the generation. Faults take an `Idempotency-Key` header, because a repeat would add a second fault. So does every write of a bank: creating a customer, opening an account, a deposit, a withdrawal and a close. A repeat with the same key and body returns the first answer with an `Idempotent-Replayed: true` header, and the same key with a different body returns `422 idempotency_key_reused`. Stop is safe to repeat. Close is safe to repeat with the same body and returns the current status. A close with a different body while a close is running returns `409 close_in_progress`.
+    Provisioning is a list of steps. Each step is an idempotent ensure: running it twice gives the same result. The key of a step is the participant ID, the step ID and the generation. Faults take an `Idempotency-Key` header, because a repeat would add a second fault. So does every write of a bank: creating a customer, opening an account, a deposit, a withdrawal, an insured payout, a freeze and a close. A repeat with the same key and body returns the first answer with an `Idempotent-Replayed: true` header, and the same key with a different body returns `422 idempotency_key_reused`. Stop is safe to repeat. Close is safe to repeat with the same body and returns the current status. A close with a different body while a close is running returns `409 close_in_progress`.
 
     ## Time
 
@@ -41,6 +41,10 @@ tags:
     description: Make a participant fail on purpose, for testing.
   - name: bank
     description: The customers, accounts and cash of a bank. Only a bank serves these.
+  - name: closure
+    description: What the liquidator of a failed bank does on the bank's own books while it is closing. Only a bank serves these.
+  - name: books
+    description: Read-only views of a bank's own ledger, for the control room and for checks. Only a bank serves these.
 security:
   - bearerAuth: []
 paths:
@@ -68,7 +72,7 @@ paths:
       operationId: participantStatus
       tags: [lifecycle]
       summary: Get the phase of the participant
-      description: Returns the phase, the generation, the reason and the provisioning steps. The control plane polls it to watch a participant.
+      description: Returns the phase, the generation, the reason and the provisioning steps. The control plane polls it to watch a participant. A bank provisions its own database. When it starts, it makes the steps `database`, `ledger_schema` and `openbanking_schema` true by itself. It creates the database if it is missing and migrates the ledger and the open banking tables. Each step is an idempotent ensure, so a second start does nothing new and the step names say `no new migrations`. If a step fails, the bank keeps running, stays in the `provisioning` phase, shows the `error` on the step, and tries again with backoff of 1 second doubling up to 5 minutes. Until the database is ready, every call that needs the books returns `503 unavailable`. The other steps are done by the control plane and show as done.
       responses:
         '200':
           description: The participant's status.
@@ -320,8 +324,9 @@ paths:
       operationId: listCustomers
       tags: [bank]
       summary: List the bank's customers
-      description: Lists the customers of this bank, oldest first. A list is never null. Use `next_cursor` as `cursor` to read the next page. A page is never cut short without a `next_cursor`.
+      description: Lists the customers of this bank, oldest first. `bvn` limits the list to the customers with that BVN, which is how a bank finds a customer it already has when another bank moves that customer's money to it. A list is never null. Use `next_cursor` as `cursor` to read the next page. A page is never cut short without a `next_cursor`.
       parameters:
+        - $ref: '#/components/parameters/BVNFilter'
         - $ref: '#/components/parameters/ListLimit'
         - $ref: '#/components/parameters/Cursor'
       responses:
@@ -829,6 +834,335 @@ paths:
           $ref: '#/components/responses/BankUnprocessable'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/accounts/{nuban}:
+    get:
+      operationId: getAccount
+      tags: [bank]
+      summary: Read one account
+      description: Returns one customer account with its balance now. `customer` is the ID of the customer who owns the account, so this is how an aggregator or the control plane finds the owner of an account number. An account number that is not a customer account of this bank returns `404 not_found`.
+      parameters:
+        - $ref: '#/components/parameters/NUBANPath'
+      responses:
+        '200':
+          description: The account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+              example:
+                nuban: '0123456789'
+                name: Ada Obi
+                customer: cus_01JBC8A5T3ZK
+                type: savings
+                status: active
+                currency: NGN
+                balance_minor: 500000
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/accounts/{nuban}/freeze:
+    post:
+      operationId: freezeAccount
+      tags: [closure]
+      summary: Freeze an account of a closing bank
+      description: Stops debits on an account. The liquidator freezes what is left after the insured payout, so the money stays on the books of the failed bank until the claim is settled. Only a bank in the `closing` phase freezes accounts. Any other phase returns `409 bank_not_closing`. A closed account cannot be frozen and returns `422 account_restricted`. It is safe to repeat. An account that is already frozen returns the same answer. It takes the `Idempotency-Key`, and a repeat returns the first answer.
+      parameters:
+        - $ref: '#/components/parameters/NUBANPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The account is frozen.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+              example:
+                nuban: '0123456789'
+                name: Ada Obi
+                customer: cus_01JBC8A5T3ZK
+                type: savings
+                status: frozen
+                currency: NGN
+                balance_minor: 500000
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '409':
+          $ref: '#/components/responses/BankConflict'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/closure-payouts:
+    get:
+      operationId: listClosurePayouts
+      tags: [closure]
+      summary: List what has been paid out per account
+      description: Lists the accounts that have received an insured payout, with the total paid to each in kobo, ordered by account number. An account that has had no payout is not listed. The liquidator reads it to see how much of the insured limit each customer has used. It works in every phase. A list is never null. Use `next_cursor` as `cursor` to read the next page.
+      parameters:
+        - $ref: '#/components/parameters/ListLimit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of payout totals.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClosurePaidPage'
+              example:
+                data:
+                  - account_number: '0123456789'
+                    paid_minor: 500000
+                next_cursor: '0123456789'
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    post:
+      operationId: createClosurePayout
+      tags: [closure]
+      summary: Pay out insured deposits from an account
+      description: When the CBN revokes a bank's licence, the NDIC pays each depositor up to the insured limit. This call makes the failed bank pay cash out of one account on its own books. It debits the account and the bank's vault. Only a bank in the `closing` phase pays out. Any other phase returns `409 bank_not_closing`. The amount must be above zero and at most the balance of the account. An amount above the balance returns `422 insufficient_funds`, and the message gives both figures. The bank checks the balance in the same transaction as the posting, so two payouts cannot together take more than the account holds. The insured limit is not checked here, because the caller works out the amount. It takes the `Idempotency-Key`. A repeat with the same key and body returns the first answer with an `Idempotent-Replayed` header, and the same key with a different amount returns `422 idempotency_key_reused`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClosurePayoutRequest'
+            example:
+              account_number: '0123456789'
+              amount_minor: 500000
+      responses:
+        '201':
+          description: The payout was posted, or this is a replay of the first answer.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClosurePayout'
+              example:
+                account_number: '0123456789'
+                amount_minor: 500000
+                balance_minor: 0
+                replayed: false
+                posted_at: '2026-11-14T10:00:00+01:00'
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '409':
+          $ref: '#/components/responses/BankConflict'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/ledger/check:
+    get:
+      operationId: checkLedger
+      tags: [books]
+      summary: Check that the books balance
+      description: The bank checks its own ledger and reports what it found. The trial balance is the sum of every posting and must be zero. A balance mismatch is a customer account whose stored balance differs from its postings. An event mismatch is a customer account whose statement lines do not add up to its balance. An unbalanced entry is a posting that does not net to zero or has fewer than two lines. `ok` is true when all of them are clean. The lists hold account codes and entry IDs, and are never null. It works in every phase. The control plane calls it to verify a bank.
+      responses:
+        '200':
+          description: What the check found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerCheck'
+              example:
+                ok: true
+                trial_balance_minor: 0
+                balance_mismatches: []
+                event_mismatches: []
+                unbalanced_entries: []
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/books/totals:
+    get:
+      operationId: booksTotals
+      tags: [books]
+      summary: Count the customers, accounts and deposits
+      description: Returns how many active customers and open customer accounts the bank has, and the sum of all customer balances in kobo. The control room shows it on its overview. It works in every phase.
+      responses:
+        '200':
+          description: The totals.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookTotals'
+              example:
+                customers: 12
+                accounts: 15
+                deposits_minor: 7500000000
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/books/accounts/{nuban}/entries:
+    get:
+      operationId: listBookEntries
+      tags: [books]
+      summary: List the entries on an account, newest first
+      description: Lists the lines the bank has posted on a customer account, newest first, with the counterparty and the channel. It is the view the control room shows for an account. `GET /v1/accounts/{nuban}/statement` lists the same postings oldest first for a customer. Use `next_cursor` as `cursor` to read the next page. A list is never null. An account number that is not a customer account of this bank returns `404 not_found`.
+      parameters:
+        - $ref: '#/components/parameters/NUBANPath'
+        - $ref: '#/components/parameters/ListLimit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: One page of entries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookEntryPage'
+              example:
+                data:
+                  - id: '41'
+                    account: '0123456789'
+                    seq: 2
+                    amount_minor: -120000
+                    balance_after_minor: 380000
+                    posted_at: '2026-11-14T10:30:00+01:00'
+                    value_date: '2026-11-14'
+                    narration: CASH WITHDRAWAL
+                    channel: branch
+                    reference: '0010000000041'
+                next_cursor: '2'
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/books/accounts/{nuban}/entries/{entry_id}:
+    get:
+      operationId: getBookEntry
+      tags: [books]
+      summary: Read one entry of an account
+      description: Returns one line the bank has posted on a customer account. An account or entry that does not exist returns `404 not_found`.
+      parameters:
+        - $ref: '#/components/parameters/NUBANPath'
+        - $ref: '#/components/parameters/EntryIDPath'
+      responses:
+        '200':
+          description: The entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookEntry'
+              example:
+                id: '41'
+                account: '0123456789'
+                seq: 2
+                amount_minor: -120000
+                balance_after_minor: 380000
+                posted_at: '2026-11-14T10:30:00+01:00'
+                value_date: '2026-11-14'
+                narration: CASH WITHDRAWAL
+                channel: branch
+                reference: '0010000000041'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/BankNotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/books/sessions/{session_id}:
+    get:
+      operationId: listSessionEntries
+      tags: [books]
+      summary: List the entries this bank posted for a NIP session
+      description: Lists every line on customer accounts of this bank that belongs to the NIP session, oldest first. It holds the debit, the credit and the charges of a transfer that touched this bank. The list is empty when the bank posted nothing for the session. It is never paged, because one session has a handful of lines. A session that has more than 1000 lines returns an error instead of a cut list. A `session_id` that is not 30 digits gets `400 invalid_request`.
+      parameters:
+        - $ref: '#/components/parameters/SessionIDPath'
+      responses:
+        '200':
+          description: The entries of the session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookSessionEntries'
+              example:
+                data:
+                  - id: '43'
+                    account: '9010000014'
+                    seq: 4
+                    amount_minor: -2500000
+                    balance_after_minor: 7500000
+                    posted_at: '2026-11-14T10:30:00+01:00'
+                    value_date: '2026-11-14'
+                    narration: TRF TO ADA OBI/9020000011
+                    channel: nip
+                    session_id: '000014261114103000123456789012'
+                    reference: '0140000000043'
+                    counterparty:
+                      name: ADA OBI
+                      account_number: '9020000011'
+                      bank_code: '000015'
+                      bank_name: Bank B
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/logins:
+    post:
+      operationId: loginCustomer
+      tags: [bank]
+      summary: Check a customer's online banking login
+      description: Checks the username and password of a customer against this bank and returns the customer ID. An aggregator uses it when a customer signs in to see their connections. A wrong username, a wrong password and a closed customer all return the same `422 invalid_login`, so the answer does not say which one it was. The bank never logs the password and never returns it. This call is not a write and takes no `Idempotency-Key`. It does not count failed tries.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              username: ada
+              password: a-long-passphrase
+      responses:
+        '200':
+          description: The login is right.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Login'
+              example:
+                customer_id: cus_01JBC8A5T3ZK
+        '400':
+          $ref: '#/components/responses/BankBadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '422':
+          $ref: '#/components/responses/BankUnprocessable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
 components:
   securitySchemes:
     bearerAuth:
@@ -880,6 +1214,23 @@ components:
         maximum: 1000
         default: 100
       example: 100
+    BVNFilter:
+      name: bvn
+      in: query
+      required: false
+      description: Only the customers with this BVN, which is exactly 11 digits. It matches the BVN exactly, whatever the status of the customer. A BVN that is not 11 digits returns `400 invalid_request`.
+      schema:
+        type: string
+        pattern: '^[0-9]{11}$'
+      example: '22212345678'
+    EntryIDPath:
+      name: entry_id
+      in: path
+      required: true
+      description: The ID of the entry, as `id` in the entry list.
+      schema:
+        type: string
+      example: '41'
     CustomerFilter:
       name: customer
       in: query
@@ -1552,6 +1903,216 @@ components:
           type: string
           format: date-time
           description: When the bank posted it.
+    ClosurePayoutRequest:
+      type: object
+      description: An insured payout to make from one account.
+      required: [account_number, amount_minor]
+      properties:
+        account_number:
+          type: string
+          description: The 10-digit account number to pay out from.
+        amount_minor:
+          type: integer
+          format: int64
+          description: The amount in kobo. It must be above zero and at most the balance of the account.
+          minimum: 1
+    ClosurePayout:
+      type: object
+      description: What a payout did.
+      required: [account_number, amount_minor, balance_minor, replayed, posted_at]
+      properties:
+        account_number:
+          type: string
+          description: The account that was paid out from.
+        amount_minor:
+          type: integer
+          format: int64
+          description: The amount paid in kobo.
+        balance_minor:
+          type: integer
+          format: int64
+          description: The balance of the account in kobo after the payout.
+        replayed:
+          type: boolean
+          description: True when the bank had already posted this key and returned the earlier posting.
+        posted_at:
+          type: string
+          format: date-time
+          description: When the bank posted it.
+    ClosurePaid:
+      type: object
+      description: The total paid out from one account.
+      required: [account_number, paid_minor]
+      properties:
+        account_number:
+          type: string
+          description: The account number.
+        paid_minor:
+          type: integer
+          format: int64
+          description: The total paid out from the account in kobo.
+    ClosurePaidPage:
+      type: object
+      description: One page of payout totals.
+      required: [data]
+      properties:
+        data:
+          type: array
+          description: The accounts on this page.
+          items:
+            $ref: '#/components/schemas/ClosurePaid'
+        next_cursor:
+          type: string
+          description: Pass this as `cursor` to read the next page. It is absent on the last page.
+    LedgerCheck:
+      type: object
+      description: What the ledger check found.
+      required: [ok, trial_balance_minor, balance_mismatches, event_mismatches, unbalanced_entries]
+      properties:
+        ok:
+          type: boolean
+          description: True when the trial balance is zero and every list is empty.
+        trial_balance_minor:
+          type: integer
+          format: int64
+          description: The sum of every posting in kobo. It must be zero.
+        balance_mismatches:
+          type: array
+          description: The codes of customer accounts whose stored balance differs from their postings.
+          items:
+            type: string
+        event_mismatches:
+          type: array
+          description: The codes of customer accounts whose statement lines do not add up to their balance.
+          items:
+            type: string
+        unbalanced_entries:
+          type: array
+          description: The IDs of postings that do not net to zero or have fewer than two lines.
+          items:
+            type: integer
+            format: int64
+    BookTotals:
+      type: object
+      description: The size of a bank's books.
+      required: [customers, accounts, deposits_minor]
+      properties:
+        customers:
+          type: integer
+          minimum: 0
+          description: The number of active customers.
+        accounts:
+          type: integer
+          minimum: 0
+          description: The number of customer accounts that are not closed.
+        deposits_minor:
+          type: integer
+          format: int64
+          description: The sum of every customer balance in kobo.
+    BookCounterparty:
+      type: object
+      description: The other side of a posting.
+      required: [name, account_number, bank_code, bank_name]
+      properties:
+        name:
+          type: string
+          description: The name of the other party.
+        account_number:
+          type: string
+          description: The account number of the other party.
+        bank_code:
+          type: string
+          description: The NIP code of the other party's bank.
+        bank_name:
+          type: string
+          description: The name of the other party's bank.
+    BookEntry:
+      type: object
+      description: One line the bank posted on a customer account.
+      required: [id, account, seq, amount_minor, balance_after_minor, posted_at, value_date, narration, reference]
+      properties:
+        id:
+          type: string
+          description: The ID of the line. Use it to read the entry again.
+        account:
+          type: string
+          description: The 10-digit account number.
+        seq:
+          type: integer
+          format: int64
+          description: The position of the line on the account. It only goes up.
+        amount_minor:
+          type: integer
+          format: int64
+          description: The amount in kobo. A credit is positive and a debit is negative.
+        balance_after_minor:
+          type: integer
+          format: int64
+          description: The balance in kobo after this line.
+        posted_at:
+          type: string
+          format: date-time
+          description: When the bank posted it.
+        value_date:
+          type: string
+          format: date
+          description: The day the line counts for.
+        narration:
+          type: string
+          description: The text on the statement.
+        channel:
+          type: string
+          description: How the line came in, such as `branch`, `nip`, `internal` or `charge`. It is absent when the posting has no channel.
+        session_id:
+          type: string
+          description: The NIP session that caused the line. It is absent for cash and other postings.
+        reference:
+          type: string
+          description: The bank's own reference for the posting.
+        counterparty:
+          $ref: '#/components/schemas/BookCounterparty'
+    BookEntryPage:
+      type: object
+      description: One page of entries.
+      required: [data]
+      properties:
+        data:
+          type: array
+          description: The entries on this page, newest first.
+          items:
+            $ref: '#/components/schemas/BookEntry'
+        next_cursor:
+          type: string
+          description: Pass this as `cursor` to read the next page. It is absent on the last page.
+    BookSessionEntries:
+      type: object
+      description: The entries of one NIP session.
+      required: [data]
+      properties:
+        data:
+          type: array
+          description: The entries, oldest first.
+          items:
+            $ref: '#/components/schemas/BookEntry'
+    LoginRequest:
+      type: object
+      description: A customer's online banking login.
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          description: The online banking username.
+        password:
+          type: string
+          description: The online banking password. The bank never logs or returns it.
+    Login:
+      type: object
+      description: The customer who signed in.
+      required: [customer_id]
+      properties:
+        customer_id:
+          type: string
+          description: The ID of the customer.
     Error:
       type: object
       description: The body of every error.
@@ -1680,6 +2241,13 @@ components:
                   code: invalid_request
                   message: An Idempotency-Key header of 1 to 255 characters is required on writes.
                   request_id: req_01JBC8A5T3ZK
+            invalid_bvn:
+              summary: The BVN filter is not 11 digits.
+              value:
+                error:
+                  code: invalid_request
+                  message: bvn must be 11 digits.
+                  request_id: req_01JBC8A5T3ZK
             invalid_cursor:
               summary: The cursor is not from a page this call gave.
               value:
@@ -1708,8 +2276,15 @@ components:
                   code: not_found
                   message: No such account.
                   request_id: req_01JBC8A5T3ZK
+            entry:
+              summary: No such entry on the account.
+              value:
+                error:
+                  code: not_found
+                  message: No such entry.
+                  request_id: req_01JBC8A5T3ZK
     BankConflict:
-      description: The bank cannot do this now. The code is `bank_not_active` when the bank is not in the `active` phase, or `username_taken` when another customer has the username.
+      description: The bank cannot do this now. The code is `bank_not_active` when the bank is not in the `active` phase, `bank_not_closing` when an insured payout or a freeze is asked of a bank that is not in the `closing` phase, or `username_taken` when another customer has the username.
       content:
         application/json:
           schema:
@@ -1721,6 +2296,13 @@ components:
                 error:
                   code: bank_not_active
                   message: Bank A is suspended, so it cannot do this now.
+                  request_id: req_01JBC8A5T3ZK
+            bank_not_closing:
+              summary: A payout or a freeze at a bank that is not closing.
+              value:
+                error:
+                  code: bank_not_closing
+                  message: Bank A is active, so it cannot pay out or freeze accounts; that happens only while a bank is closing.
                   request_id: req_01JBC8A5T3ZK
             username_taken:
               summary: The username belongs to another customer.
@@ -1756,6 +2338,27 @@ components:
                 error:
                   code: insufficient_funds
                   message: 'Account 0123456789 holds ₦3,800.00 and ₦100,000.00 was asked for; withdraw ₦3,800.00 or less.'
+                  request_id: req_01JBC8A5T3ZK
+            payout_above_balance:
+              summary: An insured payout above the balance.
+              value:
+                error:
+                  code: insufficient_funds
+                  message: 'Account 0123456789 holds ₦3,800.00 and a payout of ₦100,000.00 was asked for; pay out ₦3,800.00 or less.'
+                  request_id: req_01JBC8A5T3ZK
+            payout_not_positive:
+              summary: An insured payout of zero.
+              value:
+                error:
+                  code: invalid_request
+                  message: The amount must be above zero, got 0.
+                  request_id: req_01JBC8A5T3ZK
+            invalid_login:
+              summary: The username or password is wrong.
+              value:
+                error:
+                  code: invalid_login
+                  message: The username or password is wrong.
                   request_id: req_01JBC8A5T3ZK
             daily_limit:
               summary: A withdrawal above the daily limit.

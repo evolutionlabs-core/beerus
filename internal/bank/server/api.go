@@ -14,6 +14,7 @@ import (
 )
 
 const (
+	booksNotReady    = "The bank database is not ready yet. Try again soon."
 	participantKind  = "bank"
 	faultPageDefault = 50
 	FaultPageMax     = 500
@@ -95,6 +96,28 @@ func (s *Server) API() http.Handler {
 	idempotent := func(next http.HandlerFunc) http.HandlerFunc {
 		return s.idem.Wrap(replayStore{s}, owner, s.log, next)
 	}
+	booked := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if s.books.Load() == nil {
+				web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", booksNotReady)
+				return
+			}
+			next(w, r)
+		}
+	}
+	write := func(next http.HandlerFunc) http.HandlerFunc {
+		return idempotent(booked(next))
+	}
+	b := s.banking
+	closing := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if _, err := b.closingBook(s.id); err != nil {
+				b.Error(w, r, err)
+				return
+			}
+			next(w, r)
+		}
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", s.health)
 	mux.HandleFunc("GET /v1/status", s.status)
@@ -102,19 +125,29 @@ func (s *Server) API() http.Handler {
 	mux.HandleFunc("GET /v1/faults", s.listFaults)
 	mux.HandleFunc("POST /v1/faults", idempotent(s.setFault))
 	mux.HandleFunc("DELETE /v1/faults", s.clearFaults)
-	mux.HandleFunc("GET /v1/customers", s.banking.HandleCustomers)
-	mux.HandleFunc("POST /v1/customers", idempotent(s.banking.HandleCreateCustomer))
-	mux.HandleFunc("POST /v1/customers/{customer_id}/close", idempotent(s.banking.HandleCloseCustomer))
-	mux.HandleFunc("GET /v1/accounts", s.banking.HandleAccounts)
-	mux.HandleFunc("POST /v1/accounts", idempotent(s.banking.HandleOpenAccount))
-	mux.HandleFunc("POST /v1/accounts/{nuban}/close", idempotent(s.banking.HandleCloseAccount))
-	mux.HandleFunc("GET /v1/accounts/{nuban}/statement", s.banking.HandleStatement)
-	mux.HandleFunc("POST /v1/transfers", idempotent(s.banking.HandleTransfer))
-	mux.HandleFunc("POST /v1/transfers/quote", s.banking.HandleQuote)
+	mux.HandleFunc("GET /v1/customers", booked(b.HandleCustomers))
+	mux.HandleFunc("POST /v1/customers", write(b.HandleCreateCustomer))
+	mux.HandleFunc("POST /v1/customers/{customer_id}/close", write(b.HandleCloseCustomer))
+	mux.HandleFunc("GET /v1/accounts", booked(b.HandleAccounts))
+	mux.HandleFunc("POST /v1/accounts", write(b.HandleOpenAccount))
+	mux.HandleFunc("GET /v1/accounts/{nuban}", booked(b.HandleAccount))
+	mux.HandleFunc("POST /v1/accounts/{nuban}/close", write(b.HandleCloseAccount))
+	mux.HandleFunc("POST /v1/accounts/{nuban}/freeze", booked(closing(write(b.HandleFreeze))))
+	mux.HandleFunc("GET /v1/accounts/{nuban}/statement", booked(b.HandleStatement))
+	mux.HandleFunc("POST /v1/transfers", write(b.HandleTransfer))
+	mux.HandleFunc("POST /v1/transfers/quote", booked(b.HandleQuote))
 	mux.HandleFunc("GET /v1/nip/sends/open", s.openSends)
-	mux.HandleFunc("POST /v1/nip/sends/{session_id}/status-query", s.banking.HandleStatusQuery)
-	mux.HandleFunc("POST /v1/deposits", idempotent(s.banking.HandleCash("deposit")))
-	mux.HandleFunc("POST /v1/withdrawals", idempotent(s.banking.HandleCash("withdrawal")))
+	mux.HandleFunc("POST /v1/nip/sends/{session_id}/status-query", booked(b.HandleStatusQuery))
+	mux.HandleFunc("POST /v1/deposits", write(b.HandleCash("deposit")))
+	mux.HandleFunc("POST /v1/withdrawals", write(b.HandleCash("withdrawal")))
+	mux.HandleFunc("GET /v1/closure-payouts", booked(b.HandleClosurePayouts))
+	mux.HandleFunc("POST /v1/closure-payouts", booked(closing(write(b.HandleClosurePayout))))
+	mux.HandleFunc("GET /v1/ledger/check", booked(b.HandleLedgerCheck))
+	mux.HandleFunc("GET /v1/books/totals", booked(b.HandleTotals))
+	mux.HandleFunc("GET /v1/books/accounts/{nuban}/entries", booked(b.HandleEntries))
+	mux.HandleFunc("GET /v1/books/accounts/{nuban}/entries/{entry_id}", booked(b.HandleEntry))
+	mux.HandleFunc("GET /v1/books/sessions/{session_id}", booked(b.HandleSessionEntries))
+	mux.HandleFunc("POST /v1/logins", booked(b.HandleLogin))
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "A bank does not serve this control call yet.")
 	})
@@ -164,11 +197,12 @@ type OpenSends struct {
 }
 
 func (s *Server) openSends(w http.ResponseWriter, r *http.Request) {
-	if s.books == nil {
-		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "The bank books are not open yet. Try again soon.")
+	b := s.books.Load()
+	if b == nil {
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", booksNotReady)
 		return
 	}
-	n, err := s.books.OpenSends(r.Context())
+	n, err := b.OpenSends(r.Context())
 	if err != nil {
 		s.log.Error("count open sends", "err", err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "The bank could not count its open transfers. Try again soon.")

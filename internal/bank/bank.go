@@ -129,15 +129,36 @@ func (b *Bank) CashWithdrawal(ctx context.Context, key, nuban string, amount int
 	return b.L.Post(ctx, e)
 }
 
-func (b *Bank) ClosurePayout(ctx context.Context, key, nuban string, amount int64, at time.Time) (ledger.Posted, error) {
-	if err := positive(amount); err != nil {
-		return ledger.Posted{}, err
-	}
+func closurePayoutEntry(key, nuban string, amount int64, at time.Time) ledger.Entry {
 	e := entry(clientKey("closure_payout", key), "closure_payout", at, "NDIC PAYOUT",
 		via(dr(CustomerAccount(nuban), amount, "NDIC PAYOUT"), "branch", nil),
 		cr(Vault, amount, "NDIC payout in cash"))
 	e.AllowOverdraft = true
-	return b.L.Post(ctx, e)
+	return e
+}
+
+func (b *Bank) ClosurePayout(ctx context.Context, key, nuban string, amount int64, at time.Time) (ledger.Posted, error) {
+	if err := positive(amount); err != nil {
+		return ledger.Posted{}, err
+	}
+	return b.L.Post(ctx, closurePayoutEntry(key, nuban, amount, at))
+}
+
+func (b *Bank) ClosurePayoutWithin(ctx context.Context, key, nuban string, amount int64, at time.Time) (ledger.Posted, error) {
+	if err := positive(amount); err != nil {
+		return ledger.Posted{}, err
+	}
+	return b.L.PostThen(ctx, closurePayoutEntry(key, nuban, amount, at), func(tx pgx.Tx) error {
+		var after int64
+		err := tx.QueryRow(ctx, `SELECT b.ledger FROM balances b JOIN gl_accounts a ON a.id = b.account_id WHERE a.code = $1`, CustomerAccount(nuban)).Scan(&after)
+		if err != nil {
+			return fmt.Errorf("read balance of %s: %w", nuban, err)
+		}
+		if after < 0 {
+			return &PayoutTooLargeError{Account: nuban, Balance: after + amount, Amount: amount}
+		}
+		return nil
+	})
 }
 
 func (b *Bank) ClosurePayouts(ctx context.Context) (map[string]int64, error) {

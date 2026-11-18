@@ -2,10 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
+
+var errBooksNotOpen = errors.New("the bank database is not ready yet")
 
 type Host interface {
 	Bank() config.Bank
@@ -22,7 +25,11 @@ type Host interface {
 }
 
 func (s *Server) Books() (*bank.Bank, error) {
-	return s.books, nil
+	b := s.books.Load()
+	if b == nil {
+		return nil, errBooksNotOpen
+	}
+	return b, nil
 }
 
 var _ Host = (*Server)(nil)

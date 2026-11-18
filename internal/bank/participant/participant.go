@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/consent"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
@@ -23,6 +22,7 @@ const (
 	flushEvery   = 500 * time.Millisecond
 	settleEvery  = 2 * time.Second
 	shutdownWait = 5 * time.Second
+	ensureLimit  = 30 * time.Second
 )
 
 type Options struct {
@@ -41,11 +41,15 @@ type Participant struct {
 	log    *slog.Logger
 	clock  *clock.Clock
 	link   server.Link
-	books  *store.Books
 	srv    *server.Server
 	sender *consent.Sender
 
+	steps    []server.Step
+	attempts int
+	retryAt  time.Time
+
 	mu      sync.Mutex
+	books   *store.Books
 	open    *openbanking.Server
 	serving *listeners
 }
@@ -71,16 +75,11 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 	if p.log == nil {
 		p.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
-	inst := bank.Profile{ID: b.ID, Name: b.Name, NIPCode: b.NIPCode, NUBANCode: b.NUBANCode}
-	if p.books, err = store.OpenBooks(context.WithoutCancel(ctx), cfg.DatabaseURL, b.Database, inst, cfg.Fees(), p.clock.Now(), openbanking.Migrate); err != nil {
-		return nil, err
-	}
 	coreURL := cmp.Or(o.CoreURL, f.CoreURL)
-	phase, steps := provisioned(b)
+	p.steps = initialSteps(b)
 	p.srv = server.New(server.Config{
 		Dir:       dir,
 		Bank:      *b,
-		Books:     p.books.Bank(),
 		Fees:      cfg.Fees(),
 		NIBSSPort: cfg.Connect.NIBSSPort,
 		CBNPort:   cfg.Connect.CBNPort,
@@ -89,8 +88,8 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 		Log:       p.log,
 		Clock:     p.clock,
 		SetupKey:  cfg.SetupKey,
-		Phase:     phase,
-		Steps:     steps,
+		Phase:     config.PhaseProvisioning,
+		Steps:     p.steps,
 	})
 	p.sender = &consent.Sender{
 		Log:       p.log,
@@ -126,7 +125,12 @@ func (p *Participant) Server() *server.Server {
 }
 
 func (p *Participant) Close() {
-	p.books.Close()
+	p.mu.Lock()
+	books := p.books
+	p.mu.Unlock()
+	if books != nil {
+		books.Close()
+	}
 }
 
 func (p *Participant) bank(id string) *config.Bank {
@@ -161,11 +165,17 @@ func (p *Participant) Serve(ctx context.Context) error {
 		defer close(checks)
 		p.checkSettlements(ctx)
 	}()
+	provisioned := make(chan struct{})
+	go func() {
+		defer close(provisioned)
+		p.provision(ctx)
+	}()
 	tick := time.NewTicker(flushEvery)
 	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			<-provisioned
 			shut, stop := context.WithTimeout(context.WithoutCancel(ctx), shutdownWait)
 			p.stop(shut)
 			stop()

@@ -11,7 +11,6 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/site"
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 )
@@ -21,6 +20,7 @@ const (
 	apiReadLimit  = 30 * time.Second
 	apiWriteLimit = 60 * time.Second
 	apiIdle       = 2 * time.Minute
+	promoteDrain  = 3 * time.Second
 )
 
 type listeners struct {
@@ -42,10 +42,54 @@ func (p *Participant) handler(ob *openbanking.Server) http.Handler {
 }
 
 func (p *Participant) openBanking() (*openbanking.Server, error) {
-	return server.NewOpenBanking(server.OpenConfig{Bank: p.srv.Bank(), Books: func() *store.Books { return p.books }, Registry: p.srv, Clock: p.clock})
+	return server.NewOpenBanking(server.OpenConfig{Bank: p.srv.Bank(), Books: p.booksNow, Registry: p.srv, Clock: p.clock})
+}
+
+func (p *Participant) startProvisioning() error {
+	b := p.srv.Bank()
+	siteLn, err := p.link.Listen(b.Port)
+	if err != nil {
+		return err
+	}
+	l := &listeners{site: &http.Server{Handler: p.provisioningHandler(), ReadHeaderTimeout: headerTimeout}}
+	l.serve(l.site, siteLn, nil)
+	p.mu.Lock()
+	p.serving = l
+	p.mu.Unlock()
+	return nil
+}
+
+func (p *Participant) promote(ctx context.Context) bool {
+	p.mu.Lock()
+	waiting := p.books != nil && p.open == nil
+	l := p.serving
+	if waiting {
+		p.serving = nil
+	}
+	p.mu.Unlock()
+	if !waiting {
+		return true
+	}
+	if l != nil {
+		drain, stop := context.WithTimeout(context.WithoutCancel(ctx), promoteDrain)
+		_ = l.site.Shutdown(drain)
+		stop()
+		l.wg.Wait()
+	}
+	if err := p.start(ctx); err != nil {
+		p.log.Error("bank site not started; retrying", "bank", p.id, "err", err)
+		if err := p.startProvisioning(); err != nil {
+			p.log.Error("bank setup page not restarted", "bank", p.id, "err", err)
+		}
+		return false
+	}
+	return true
 }
 
 func (p *Participant) start(ctx context.Context) error {
+	if p.booksNow() == nil {
+		return p.startProvisioning()
+	}
 	ob, err := p.openBanking()
 	if err != nil {
 		return err
@@ -88,7 +132,9 @@ func (p *Participant) stop(ctx context.Context) {
 		return
 	}
 	_ = l.site.Shutdown(ctx)
-	_ = l.api.Shutdown(ctx)
+	if l.api != nil {
+		_ = l.api.Shutdown(ctx)
+	}
 	l.wg.Wait()
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,7 +37,7 @@ type Server struct {
 	log       *slog.Logger
 	clock     *clock.Clock
 	fees      *charges.Schedule
-	books     *bank.Bank
+	books     atomic.Pointer[bank.Bank]
 	banking   *Banking
 	sender    *Sender
 	idem      web.Idempotency
@@ -95,18 +96,20 @@ func New(c Config) *Server {
 		log:       c.Log,
 		clock:     c.Clock,
 		fees:      c.Fees,
-		books:     c.Books,
 		phase:     c.Phase,
-		steps:     c.Steps,
+		steps:     slices.Clone(c.Steps),
 		bank:      c.Bank,
 		worldID:   web.NewID("wld"),
 		replays:   map[string]*web.Record{},
+	}
+	if c.Books != nil {
+		s.books.Store(c.Books)
 	}
 	s.reg = NewRegistryCache(s.id, c.Clock, c.Log, s.fetchRegistry)
 	s.banking = &Banking{Src: s, Clock: c.Clock, Log: c.Log, ID: s.id}
 	s.sender = NewSender(SenderConfig{
 		Own:      s.Bank,
-		Books:    func() *bank.Bank { return s.books },
+		Books:    s.books.Load,
 		Fees:     c.Fees,
 		Clock:    c.Clock,
 		Log:      c.Log,
@@ -129,6 +132,24 @@ func (s *Server) Banking() *Banking {
 
 func (s *Server) Sender() *Sender {
 	return s.sender
+}
+
+func (s *Server) SetBooks(b *bank.Bank) {
+	s.books.Store(b)
+}
+
+func (s *Server) Provision(steps []Step, running, reason string) {
+	s.lifeMu.Lock()
+	defer s.lifeMu.Unlock()
+	s.steps = slices.Clone(steps)
+	if s.phase != config.PhaseProvisioning {
+		return
+	}
+	if slices.ContainsFunc(steps, func(st Step) bool { return !st.Done }) {
+		s.reason = reason
+		return
+	}
+	s.phase, s.reason = running, ""
 }
 
 func (s *Server) Bank() config.Bank {
@@ -200,7 +221,7 @@ func (s *Server) Book(id string) (Book, error) {
 		return Book{}, ErrBankNotFound
 	}
 	phase, _ := s.Phase()
-	return Book{Name: s.Bank().Name, Phase: phase, Bank: s.books, Enrol: s.Enrol, Send: s.sender}, nil
+	return Book{Name: s.Bank().Name, Phase: phase, Bank: s.books.Load(), Enrol: s.Enrol, Send: s.sender}, nil
 }
 
 func (s *Server) Empty() bool {

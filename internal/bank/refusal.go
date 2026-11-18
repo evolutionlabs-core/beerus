@@ -54,6 +54,24 @@ func (e *InsufficientFundsError) Message() string {
 	return fmt.Sprintf("Account %s holds %s and %s was asked for; withdraw %s or less.", e.Account, FormatNaira(e.Balance), FormatNaira(e.Amount), FormatNaira(max(e.Balance, 0)))
 }
 
+type PayoutTooLargeError struct {
+	Account string
+	Balance int64
+	Amount  int64
+}
+
+func (e *PayoutTooLargeError) Error() string {
+	return ledger.ErrInsufficientFunds.Error()
+}
+
+func (e *PayoutTooLargeError) Unwrap() error {
+	return ledger.ErrInsufficientFunds
+}
+
+func (e *PayoutTooLargeError) Message() string {
+	return fmt.Sprintf("Account %s holds %s and a payout of %s was asked for; pay out %s or less.", e.Account, FormatNaira(e.Balance), FormatNaira(e.Amount), FormatNaira(max(e.Balance, 0)))
+}
+
 type DailyLimitError struct {
 	Account string
 	Limit   int64
