@@ -188,7 +188,7 @@ func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
 }
 
 func participantsAnswer(ctx context.Context, a *App) bool {
-	return answers(ctx, a.nibssCtl.link, a.nibssCtl.base) && answers(ctx, a.cbnCtl.link, a.cbnCtl.base)
+	return answers(ctx, a.nibssCtl.Link, a.nibssCtl.Base) && answers(ctx, a.cbnCtl.link, a.cbnCtl.base)
 }
 
 func answers(ctx context.Context, link server.Link, base string) bool {

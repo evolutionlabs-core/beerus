@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"slices"
 	"strings"
 	"time"
@@ -37,7 +38,7 @@ func (a *App) syncDirectoryDue(ctx context.Context) {
 }
 
 func (a *App) logNIBSS(msg string, err error) {
-	var down *nibssDownError
+	var down *server.NIBSSDownError
 	if errors.As(err, &down) {
 		a.log.Warn(msg, "err", err)
 		return
@@ -46,7 +47,7 @@ func (a *App) logNIBSS(msg string, err error) {
 }
 
 func (a *App) syncDirectory(ctx context.Context) error {
-	list, err := a.nibssCtl.directory(ctx)
+	list, err := a.nibssCtl.Directory(ctx)
 	if err != nil {
 		return fmt.Errorf("read the NIBSS directory: %w", err)
 	}
@@ -208,8 +209,8 @@ func (a *App) markRemoved(ctx context.Context, lines []bank.FeedLine) error {
 	if !slices.ContainsFunc(lines, func(l bank.FeedLine) bool { return l.Counterparty != nil }) {
 		return nil
 	}
-	directory, err := a.nibssCtl.directory(ctx)
-	var down *nibssDownError
+	directory, err := a.nibssCtl.Directory(ctx)
+	var down *server.NIBSSDownError
 	if errors.As(err, &down) {
 		a.logNIBSS("removed banks not marked", err)
 		return nil

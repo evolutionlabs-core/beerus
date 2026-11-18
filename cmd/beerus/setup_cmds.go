@@ -685,12 +685,12 @@ func (e *cli) livePlan(dir string, req applyRequest) ([]byte, planReply, error) 
 	return e.plan(c, req)
 }
 
-func offlinePlan(dir string, req applyRequest) ([]byte, planReply, error) {
+func offlinePlan(ctx context.Context, dir string, req applyRequest) ([]byte, planReply, error) {
 	spec, errs := setup.Parse(req.File, []byte(req.Spec))
 	if len(errs) > 0 {
 		return nil, planReply{}, errors.Join(errs...)
 	}
-	reply, err := install.PlanOffline(dir, spec)
+	reply, err := install.PlanOffline(ctx, dir, spec)
 	if err != nil {
 		return nil, planReply{}, err
 	}
@@ -715,9 +715,11 @@ func cmdDiff(e *cli, args []string) error {
 	if err != nil {
 		return err
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	raw, p, err := e.livePlan(*dir, req)
 	if errors.Is(err, errNotRunning) {
-		raw, p, err = offlinePlan(*dir, req)
+		raw, p, err = offlinePlan(ctx, *dir, req)
 	}
 	if err != nil {
 		return err

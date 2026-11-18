@@ -48,7 +48,7 @@ func controlAt(t *testing.T, routes map[string]string) *nibssAdmin {
 		<-done
 	})
 	port := l.Addr().(*net.TCPAddr).Port
-	return &nibssAdmin{link: server.NewLink("", ""), base: "http://127.0.0.1:" + strconv.Itoa(port), port: port}
+	return &nibssAdmin{server.NewNIBSSControl(server.NewLink("", ""), port)}
 }
 
 func TestNIBSSStatusNeedsTheCountOfPostedSessions(t *testing.T) {

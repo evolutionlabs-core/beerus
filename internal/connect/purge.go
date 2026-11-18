@@ -287,7 +287,7 @@ func (a *App) retireBank(ctx context.Context, b *config.Bank) error {
 		return fmt.Errorf("retire %s: the retirement was not saved", b.ID)
 	}
 	err := a.closeAtBank(ctx, b)
-	if err != nil && unreachable(err) && !a.mustRetireLive(b.ID) {
+	if err != nil && server.Unreachable(err) && !a.mustRetireLive(b.ID) {
 		return nil
 	}
 	if err != nil {

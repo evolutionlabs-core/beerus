@@ -211,7 +211,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatalf("the sender holds %d after the failed credit was reversed, want %d: %v", bal, capped.BalanceAfter, err)
 	}
 
-	liveBase := a.nibssCtl.base
+	liveBase := a.nibssCtl.Base
 	outages := []struct {
 		changes []bool
 		status  string
@@ -221,7 +221,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 		{[]bool{false, true, false}, nip.StatusActive, PhaseActive},
 	}
 	for _, o := range outages {
-		a.nibssCtl.base = "http://127.0.0.1:1"
+		a.nibssCtl.Base = "http://127.0.0.1:1"
 		for _, suspended := range o.changes {
 			if err := a.SetBankSuspended(t.Context(), "bank-b", suspended); err != nil {
 				t.Fatal(err)
@@ -232,7 +232,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 		if err != nil || waiting.ObservedGeneration >= waiting.Generation || !degraded {
 			t.Fatalf("%v with NIBSS down was observed: generation %d/%d, degraded %v, %v", o.changes, waiting.ObservedGeneration, waiting.Generation, degraded, err)
 		}
-		a.nibssCtl.base = liveBase
+		a.nibssCtl.Base = liveBase
 		pollCtx, stop := context.WithTimeout(t.Context(), testProvisionLimit)
 		tick := time.NewTicker(testProvisionPoll)
 		for settled := false; !settled; {

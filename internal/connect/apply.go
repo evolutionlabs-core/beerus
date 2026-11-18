@@ -406,8 +406,8 @@ func (a *App) planDirectory(ctx context.Context, desired setup.Spec, st setup.St
 	if !adds {
 		return nil, nil
 	}
-	dir, err := a.nibssCtl.directory(ctx)
-	var down *nibssDownError
+	dir, err := a.nibssCtl.Directory(ctx)
+	var down *server.NIBSSDownError
 	if errors.As(err, &down) {
 		return nil, applyFail(http.StatusServiceUnavailable, codeNotReady, "The NIBSS directory is not open yet, so removed banks cannot be checked. Try again soon.")
 	}
@@ -476,7 +476,7 @@ func (a *App) bankImpact(ctx context.Context, act *setup.Action) error {
 func (a *App) openTransfers(ctx context.Context, id string) (int, int64, error) {
 	open, err := a.nibssCtl.openSessions(ctx, id)
 	var peer *server.PeerError
-	var down *nibssDownError
+	var down *server.NIBSSDownError
 	switch {
 	case errors.As(err, &peer) && peer.Status == http.StatusNotFound:
 		return 0, 0, nil

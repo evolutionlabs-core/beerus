@@ -4,14 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
@@ -22,14 +17,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-const (
-	offlineTimeout    = 5 * time.Second
-	directoryPath     = "/v1/control/banks"
-	directoryPageSize = 500
-	nibssHost         = "127.0.0.1"
-)
-
-var errNIBSSDown = errors.New("NIBSS is not answering")
+const offlineTimeout = 5 * time.Second
 
 type PlanReply struct {
 	setup.Plan
@@ -38,7 +26,7 @@ type PlanReply struct {
 	Warning string `json:"warning,omitempty"`
 }
 
-func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
+func PlanOffline(ctx context.Context, dir string, desired setup.Spec) (PlanReply, error) {
 	cfg, err := setup.LoadConfig(dir)
 	if err != nil {
 		return PlanReply{}, err
@@ -51,11 +39,12 @@ func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
 		return PlanReply{}, errors.Join(errs...)
 	}
 	warning := ""
-	ctx, cancel := context.WithTimeout(context.Background(), offlineTimeout)
+	ctx, cancel := context.WithTimeout(ctx, offlineTimeout)
 	defer cancel()
 	rows, err := offlineDirectory(ctx, cfg)
+	var down *server.NIBSSDownError
 	switch {
-	case errors.Is(err, errNIBSSDown) || errors.Is(err, os.ErrNotExist):
+	case errors.As(err, &down) || errors.Is(err, os.ErrNotExist):
 		rows = slices.Clone(st.Tombstones)
 	case err != nil:
 		rows = slices.Clone(st.Tombstones)
@@ -77,36 +66,5 @@ func offlineDirectory(ctx context.Context, cfg *config.Config) ([]nip.Institutio
 	if err != nil {
 		return nil, fmt.Errorf("NIBSS control token: %w", err)
 	}
-	port := cfg.Connect.NIBSSControlPort
-	link := server.NewLink(token, "")
-	base := "http://" + nibssHost + ":" + strconv.Itoa(port)
-	return server.AllPages(ctx, func(ctx context.Context, cursor string) ([]nip.Institution, string, error) {
-		var page struct {
-			Data       []nip.Institution `json:"data"`
-			NextCursor string            `json:"next_cursor"`
-		}
-		q := url.Values{"limit": {strconv.Itoa(directoryPageSize)}}
-		if cursor != "" {
-			q.Set("cursor", cursor)
-		}
-		_, err := link.Request(ctx, base, http.MethodGet, directoryPath+"?"+q.Encode(), nil, nil, &page)
-		return page.Data, page.NextCursor, directoryError(ctx, err, port)
-	})
-}
-
-func directoryError(ctx context.Context, err error, port int) error {
-	var peer *server.PeerError
-	if err == nil || errors.As(err, &peer) || ctx.Err() != nil {
-		return err
-	}
-	if unreachable(err) {
-		return fmt.Errorf("%w on port %d: %v", errNIBSSDown, port, err)
-	}
-	return fmt.Errorf("call NIBSS on port %d: %w", port, err)
-}
-
-func unreachable(err error) bool {
-	var op *net.OpError
-	var timeout net.Error
-	return errors.Is(err, syscall.ECONNREFUSED) || (errors.As(err, &op) && op.Op == "dial") || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout())
+	return server.NewNIBSSControl(server.NewLink(token, ""), cfg.Connect.NIBSSControlPort).Directory(ctx)
 }

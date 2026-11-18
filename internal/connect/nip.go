@@ -45,8 +45,8 @@ func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
-	list, err := a.nibssCtl.directory(r.Context())
-	var away *nibssDownError
+	list, err := a.nibssCtl.Directory(r.Context())
+	var away *server.NIBSSDownError
 	if errors.As(err, &away) {
 		a.log.Warn("NIBSS directory", "err", err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS is not available right now.")
@@ -125,7 +125,7 @@ func (a *App) ctlNIPSettlement(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) settlementFailed(w http.ResponseWriter, r *http.Request, msg string, err error) {
 	var cbnDown *cbnDownError
-	var nibssDown *nibssDownError
+	var nibssDown *server.NIBSSDownError
 	var peer *server.PeerError
 	var unchecked *uncheckedError
 	var away *server.UnavailableError

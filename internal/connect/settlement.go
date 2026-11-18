@@ -173,7 +173,7 @@ func (a *App) freshBankProblems(ctx context.Context, b *config.Bank) ([]string, 
 	for {
 		var state server.State
 		if _, err := a.link.Do(ctx, b.URL(), http.MethodGet, "/v1/status", nil, &state); err != nil {
-			if unreachable(err) {
+			if server.Unreachable(err) {
 				return nil, &uncheckedError{Name: b.Name, Why: "is not answering, so its books were not checked", Err: err}
 			}
 			return nil, fmt.Errorf("read the status of %s: %w", b.ID, err)

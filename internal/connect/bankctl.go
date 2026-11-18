@@ -96,7 +96,7 @@ func (c *bankAdmin) call(ctx context.Context, method, path string, key string, i
 	if err == nil || errors.As(err, &peer) || ctx.Err() != nil {
 		return err
 	}
-	if unreachable(err) {
+	if server.Unreachable(err) {
 		return &bankDownError{ID: c.id, Name: c.name, Err: err}
 	}
 	return fmt.Errorf("call %s: %w", c.id, err)

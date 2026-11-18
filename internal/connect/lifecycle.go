@@ -150,8 +150,8 @@ func (a *App) postgresRoom(ctx context.Context) error {
 }
 
 func (a *App) removedBanks(ctx context.Context) ([]nip.Institution, error) {
-	all, err := a.nibssCtl.directory(ctx)
-	var down *nibssDownError
+	all, err := a.nibssCtl.Directory(ctx)
+	var down *server.NIBSSDownError
 	if errors.As(err, &down) {
 		return nil, errors.New("the NIBSS directory is not open yet, so the codes of removed banks cannot be checked; try again soon")
 	}

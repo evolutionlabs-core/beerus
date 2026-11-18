@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strconv"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -45,7 +44,7 @@ func (a *App) prepareNIBSS() error {
 		return fmt.Errorf("NIBSS control token: %w", err)
 	}
 	port := a.cfg.Connect.NIBSSControlPort
-	a.nibssCtl = &nibssAdmin{link: server.NewLink(token, ""), base: "http://127.0.0.1:" + strconv.Itoa(port), port: port}
+	a.nibssCtl = &nibssAdmin{server.NewNIBSSControl(server.NewLink(token, ""), port)}
 	return nil
 }
 

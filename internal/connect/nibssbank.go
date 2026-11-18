@@ -35,5 +35,5 @@ func (a *App) bankNIBSS(id string) (server.NIBSSClient, error) {
 		hc = a.nibssBanks[id]
 		a.mu.Unlock()
 	}
-	return server.NIBSSClient{HTTP: hc, Base: "https://" + net.JoinHostPort(nibssHost, strconv.Itoa(port)), Away: name + " cannot reach NIBSS right now. Try again in a minute."}, nil
+	return server.NIBSSClient{HTTP: hc, Base: "https://" + net.JoinHostPort(server.NIBSSHost, strconv.Itoa(port)), Away: name + " cannot reach NIBSS right now. Try again in a minute."}, nil
 }
