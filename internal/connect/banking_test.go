@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -102,6 +104,18 @@ func confirmLimits(t *testing.T, a *App, id string) {
 		case <-tick.C:
 		}
 		a.reconcileNow(ctx)
+	}
+}
+
+func refuseInwardCredits(t *testing.T, a *App, bankID string) {
+	t.Helper()
+	st, err := store.Open(t.Context(), a.cfg.DatabaseURL, a.cfg.Bank(bankID).Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := ledger.New(st.Pool, nil).SetStatus(t.Context(), bank.NIPInward, "frozen"); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -218,9 +232,10 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatalf("a transfer past the cap with a pending session: %+v, %v; the held transfer left %d", capped, err, held.BalanceAfter)
 	}
 
-	if _, err := a.AddFault(t.Context(), server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeFailed}); err != nil {
+	if _, err := a.AddFault(t.Context(), server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeCredited}); err != nil {
 		t.Fatal(err)
 	}
+	refuseInwardCredits(t, a, "bank-b")
 	if err := a.SetNetDebitCap(context.Background(), "bank-a", 0, 0); err != nil {
 		t.Fatal(err)
 	}

@@ -273,5 +273,5 @@ func answers(ctx context.Context, link server.Link, base string) bool {
 }
 
 func provisioning(a *App) bool {
-	return slices.ContainsFunc(a.BankStatuses(), func(st BankStatus) bool { return st.Phase != PhaseActive })
+	return slices.ContainsFunc(a.BankStatuses(), func(st BankStatus) bool { return st.Phase == PhaseProvisioning || st.Phase == PhaseRepairing })
 }

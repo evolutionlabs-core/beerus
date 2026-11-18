@@ -22,10 +22,11 @@ var participantPackages = []string{
 }
 
 var limitedImports = map[string][]string{
-	modulePath + "/internal/bank/store":  {"Create", "DropDatabases", "List", "Migrate", "Open"},
-	modulePath + "/internal/bank/ledger": {"Check", "ErrUnknownAccount", "Migrate"},
-	modulePath + "/internal/nibss":       {"ClosureSession", "ConsentEvent", "Create", "Migrate", "Position", "Schedule", "Session", "SessionOK", "SessionPending"},
-	modulePath + "/internal/bank":        {"AddMinor", "Customer", "CustomerActive", "ErrBadCursor", "ErrBadLogin", "ErrUnknownCustomer", "ErrUnknownLine", "FeedLine", "GenesisSettlement", "GenesisVault", "MaxPage", "Naira", "Normalise", "ParseNaira", "Totals"},
+	modulePath + "/internal/bank/consent": {"Backoff"},
+	modulePath + "/internal/bank/store":   {"Create", "DropDatabases", "List", "Migrate", "Open"},
+	modulePath + "/internal/bank/ledger":  {"Check", "ErrUnknownAccount", "Migrate"},
+	modulePath + "/internal/nibss":        {"ClosureSession", "ConsentEvent", "Create", "Migrate", "Position", "Schedule", "Session", "SessionOK", "SessionPending"},
+	modulePath + "/internal/bank":         {"AddMinor", "Customer", "CustomerActive", "ErrBadCursor", "ErrBadLogin", "ErrUnknownCustomer", "ErrUnknownLine", "FeedLine", "GenesisSettlement", "GenesisVault", "MaxPage", "Naira", "Normalise", "ParseNaira", "Totals"},
 	modulePath + "/internal/bank/server": {
 		"AccountJSON", "AccountRequest", "AllPages", "ClosurePaid", "ClosurePayoutRequest", "CustomerRequest", "Entry", "ErrInvalid", "ErrNoSend", "ErrorLog",
 		"Fault", "FaultDown", "FaultID", "FaultPageMax", "FaultRequest", "FaultTimeout", "FaultView", "Invalid", "LedgerCheck", "Link", "ListParams", "LoginRequest",
@@ -76,8 +77,11 @@ func TestCoreUsesBankAndNIBSSOnlyThroughTheirClients(t *testing.T) {
 			if im.Name != nil {
 				base = im.Name.Name
 			}
+			if base == "." {
+				t.Errorf("%s dot-imports %s", name, path)
+			}
 			local[base] = path
-			if _, ok := limitedImports[path]; !ok && path != modulePath+"/internal/bank/consent" {
+			if _, ok := limitedImports[path]; !ok {
 				t.Errorf("%s imports %s", name, path)
 			}
 		}
