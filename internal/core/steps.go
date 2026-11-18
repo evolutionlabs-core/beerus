@@ -397,6 +397,20 @@ func (a *App) probeBank(ctx context.Context, b *config.Bank) string {
 		if i < 0 || !state.Steps[i].Done {
 			return "its database is not ready"
 		}
+		if a.rebuiltSince(b.ID, id, state.Steps[i].CompletedAt) {
+			return "its database was rebuilt"
+		}
 	}
 	return ""
+}
+
+func (a *App) rebuiltSince(bankID, step string, completed *time.Time) bool {
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	st := a.status[bankID]
+	if st == nil || completed == nil {
+		return false
+	}
+	seen := st.Steps[stepIndex(step)].At
+	return seen != nil && completed.After(*seen)
 }
