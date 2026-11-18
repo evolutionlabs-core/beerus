@@ -233,7 +233,7 @@ const templates = `
 <span class="flex-1"><span class="block text-[14px]">Anonymised analytics</span><span class="block text-[12.5px] text-muted">Optional. You can connect without it.</span></span>
 </label>
 </div>
-<p class="mt-5 text-[12.5px] leading-relaxed text-muted">You can withdraw access at any time from Connected apps at {{$.Bank.Name}}, or from {{.Client.Name}}'s customer page. When you do, {{.Client.Name}} stops collecting data and deletes what it holds within 30 days. {{.Partner}} keeps records already in your books under its own privacy notice.</p>
+<p class="mt-5 text-[12.5px] leading-relaxed text-muted">You can withdraw access at any time from Connected apps at {{$.Bank.Name}}. When you do, {{.Client.Name}} stops collecting data and deletes what it holds within 30 days. {{.Partner}} keeps records already in your books under its own privacy notice.</p>
 <div class="mt-6 grid grid-cols-2 gap-2">
 <button type="submit" name="action" value="decline" class="btn btn-secondary w-full">Decline</button>
 <button type="submit" name="action" value="approve" class="btn btn-primary w-full">Approve</button>
