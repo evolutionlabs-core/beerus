@@ -145,6 +145,9 @@ func (f BankFile) check(dir, id string) error {
 	case f.State != stateActive && f.State != "suspended" && f.State != "closed":
 		return fmt.Errorf("state %q is not active, suspended or closed", f.State)
 	}
+	if err := accessSecondsError(f.API.AccessSeconds); err != nil {
+		return fmt.Errorf("open_banking.%w", err)
+	}
 	return nil
 }
 

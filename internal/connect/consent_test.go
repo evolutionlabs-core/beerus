@@ -33,6 +33,12 @@ func TestEventIDsAreTrackedOnceAndBounded(t *testing.T) {
 	}
 }
 
+func TestRefreshAheadIsShorterThanTheShortestAccessToken(t *testing.T) {
+	if floor := time.Duration(config.MinAccessSeconds) * time.Second; refreshAhead >= floor {
+		t.Fatalf("refreshAhead %s must be shorter than the %s minimum access token life", refreshAhead, floor)
+	}
+}
+
 type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) {

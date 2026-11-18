@@ -57,6 +57,13 @@ func TestBankFileEnsureAndLoad(t *testing.T) {
 		{name: "no such bank", id: "nosuch", err: "no bank config at " + BankFilePath(c.Dir, "nosuch") + "; create the bank with beerus bank create first"},
 		{name: "path in the ID", id: "../x", err: `"../x" is not a bank ID`},
 		{name: "empty ID", id: "", err: `"" is not a bank ID`},
+		{name: "access seconds too low", edit: func(b *Bank) { b.API.AccessSeconds = 129 }, id: "bank-a", err: BankFilePath(c.Dir, "bank-a") + ": open_banking.access_seconds 129 is out of range. Use 130 to 3600, or leave it out for the default"},
+		{name: "access seconds too high", edit: func(b *Bank) { b.API.AccessSeconds = 3601 }, id: "bank-a", err: BankFilePath(c.Dir, "bank-a") + ": open_banking.access_seconds 3601 is out of range. Use 130 to 3600, or leave it out for the default"},
+		{name: "access seconds at the floor", edit: func(b *Bank) { b.API.AccessSeconds = MinAccessSeconds }, id: "bank-a", check: func(t *testing.T, f BankFile) {
+			if f.API.AccessSeconds != 130 {
+				t.Fatalf("loaded %+v", f.API)
+			}
+		}},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {

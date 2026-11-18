@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
 
@@ -29,8 +30,6 @@ const (
 	specMaxBankName  = 40
 	specIDRule       = "Use 2 to 31 lowercase letters, digits or hyphens, starting with a letter"
 	specMinutesInDay = int(24 * time.Hour / time.Minute)
-	minAccessSeconds = 130
-	maxAccessSeconds = 3600
 )
 
 func Validate(s Spec) []error {
@@ -267,8 +266,8 @@ func (c *specChecker) bankRules(p string, b Bank, byID map[string]Bank) {
 	}{{"consent_months", ob.ConsentMonths}, {"refresh_days", ob.RefreshDays}, {"dormant_days", ob.DormantDays}, {"assertion_seconds", ob.AssertionSeconds}, {"access_seconds", ob.AccessSeconds}} {
 		c.positive(p+".open_banking."+f.name, int64(f.v), "Leave it out for the default")
 	}
-	if a := ob.AccessSeconds; a > 0 && (a < minAccessSeconds || a > maxAccessSeconds) {
-		c.add(p+".open_banking.access_seconds", "%s.open_banking.access_seconds %d is out of range. Use %d to %d, or leave it out for the default", p, a, minAccessSeconds, maxAccessSeconds)
+	if a := ob.AccessSeconds; a > 0 && (a < config.MinAccessSeconds || a > config.MaxAccessSeconds) {
+		c.add(p+".open_banking.access_seconds", "%s.open_banking.access_seconds %d is out of range. Use %d to %d, or leave it out for the default", p, a, config.MinAccessSeconds, config.MaxAccessSeconds)
 	}
 	if b.OnRemove != nil {
 		c.removal(p+".on_remove", b, byID)

@@ -5,6 +5,8 @@ import "fmt"
 const (
 	DefaultAPIPortOffset = 10
 	DefaultPortWindow    = 200
+	MinAccessSeconds     = 130
+	MaxAccessSeconds     = 3600
 )
 
 type Ports struct {
@@ -18,6 +20,13 @@ type BankAPI struct {
 	DormantDays      int `yaml:"dormant_days,omitempty"`
 	AssertionSeconds int `yaml:"assertion_seconds,omitempty"`
 	AccessSeconds    int `yaml:"access_seconds,omitempty"`
+}
+
+func accessSecondsError(seconds int) error {
+	if seconds == 0 || (seconds >= MinAccessSeconds && seconds <= MaxAccessSeconds) {
+		return nil
+	}
+	return fmt.Errorf("access_seconds %d is out of range. Use %d to %d, or leave it out for the default", seconds, MinAccessSeconds, MaxAccessSeconds)
 }
 
 func (c *Config) APIPortOffset() int {
@@ -53,6 +62,9 @@ func (c *Config) validatePorts() error {
 			if v < 0 {
 				return fmt.Errorf("bank %s open_banking.%s cannot be negative", b.ID, name)
 			}
+		}
+		if err := accessSecondsError(b.API.AccessSeconds); err != nil {
+			return fmt.Errorf("bank %s open_banking.%w", b.ID, err)
 		}
 	}
 	return nil
