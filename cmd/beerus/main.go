@@ -306,10 +306,7 @@ func cmdWebhooks(args []string) error {
 	}
 	switch args[0] {
 	case "list":
-		if _, err := noFlags("webhooks list", args, 1); err != nil {
-			return err
-		}
-		return printControl("GET", "/webhooks/deliveries?limit=20")
+		return cmdWebhooksList(args[1:])
 	case "replay":
 		pos, err := noFlags("webhooks replay", args, 2)
 		if err != nil {
