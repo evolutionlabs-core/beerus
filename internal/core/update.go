@@ -81,7 +81,7 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 func (a *App) updateWaiting(id string) {
 	now := a.clock.Real()
 	a.recordBank(id, func(r *setup.Resource) bool {
-		return setCondition(r, setup.Condition{Type: setup.ConditionProgressing, Status: "True", Reason: reasonRetrying, Message: "waiting for NIBSS to take the change", ChangedAt: now})
+		return setCondition(r, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: reasonRetrying, Message: "waiting for NIBSS to take the change", ChangedAt: now})
 	})
 }
 

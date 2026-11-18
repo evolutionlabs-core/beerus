@@ -104,7 +104,6 @@ func (a *App) recordPhase(id, phase string, gen int64) {
 			changed = changed || r.ObservedGeneration != seen || r.Attempts != 0 || r.NextAttemptAt != nil
 			r.ObservedGeneration, r.Attempts, r.NextAttemptAt = seen, 0, nil
 			changed = clearCondition(r, setup.ConditionDegraded) || changed
-			changed = clearRetrying(r) || changed
 		}
 		return changed
 	})

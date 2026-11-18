@@ -91,20 +91,10 @@ func setCondition(r *setup.Resource, c setup.Condition) bool {
 
 func noteRetry(r *setup.Resource, step string, err error, now time.Time) {
 	if r.Attempts > quietAttempts {
-		clearRetrying(r)
 		setCondition(r, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: setup.ReasonStepFailed, Message: fmt.Sprintf("%s: %v", step, err), ChangedAt: now})
 		return
 	}
-	clearCondition(r, setup.ConditionDegraded)
-	setCondition(r, setup.Condition{Type: setup.ConditionProgressing, Status: "True", Reason: reasonRetrying, Message: fmt.Sprintf("%s is not done yet; trying again (attempt %d)", step, r.Attempts), ChangedAt: now})
-}
-
-func clearRetrying(r *setup.Resource) bool {
-	n := len(r.Conditions)
-	r.Conditions = slices.DeleteFunc(r.Conditions, func(c setup.Condition) bool {
-		return c.Type == setup.ConditionProgressing && c.Reason == reasonRetrying
-	})
-	return len(r.Conditions) != n
+	setCondition(r, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: reasonRetrying, Message: fmt.Sprintf("%s is not done yet; trying again (attempt %d)", step, r.Attempts), ChangedAt: now})
 }
 
 func clearCondition(r *setup.Resource, kind string) bool {
@@ -155,13 +145,11 @@ func (a *App) advanceFinalizers(ctx context.Context, lists map[string][]finalize
 				changed := cur.Attempts != 0 || cur.NextAttemptAt != nil
 				cur.Attempts, cur.NextAttemptAt = 0, nil
 				cleared := clearCondition(cur, setup.ConditionDegraded)
-				cleared = clearRetrying(cur) || cleared
 				return setCondition(cur, *cond) || changed || cleared, nil
 			default:
 				cur.Done = append(cur.Done, name)
 				cur.Attempts, cur.NextAttemptAt = 0, nil
 				clearCondition(cur, setup.ConditionDegraded)
-				clearRetrying(cur)
 				clearCondition(cur, setup.ConditionBlocked)
 				if cur.Phase == config.PhaseClosing && nextFinalizer(*cur) == "" {
 					cur.Phase = config.PhaseClosed

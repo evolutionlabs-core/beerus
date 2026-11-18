@@ -95,7 +95,7 @@ func TestFinalizerFailureBacksOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := setup.FindResource(&st, setup.KindBank, "bank-b")
-	if r.Attempts != 1 || r.NextAttemptAt == nil || len(r.Done) != 0 || len(r.Conditions) != 1 || r.Conditions[0].Reason != reasonRetrying || r.Conditions[0].Type != setup.ConditionProgressing {
+	if r.Attempts != 1 || r.NextAttemptAt == nil || len(r.Done) != 0 || len(r.Conditions) != 1 || r.Conditions[0].Reason != reasonRetrying || r.Conditions[0].Type != setup.ConditionDegraded {
 		t.Fatalf("after a failure: %+v", r)
 	}
 	for range quietAttempts {
