@@ -1,13 +1,13 @@
 package contracttest
 
 import (
-	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"bytes"
 	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"io"
 	"net/http"
 	"os"

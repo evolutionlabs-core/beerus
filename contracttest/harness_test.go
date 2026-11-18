@@ -1,7 +1,6 @@
 package contracttest
 
 import (
-	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"bytes"
 	"context"
 	"crypto/ed25519"
@@ -12,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"io"
 	mrand "math/rand/v2"

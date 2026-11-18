@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -60,7 +59,7 @@ func TestBankAdminAgainstABankServer(t *testing.T) {
 	c := bankAdminOnServer(t, true)
 	ctx := t.Context()
 	body := control.CustomerRequest{Name: "Ada Obi", Phone: "08031234567", DOB: "1990-04-21", Username: "ada", Password: "correct horse battery"}
-	var made bank.Customer
+	var made Customer
 	if err := c.call(ctx, http.MethodPost, bankCustomers, "cus-ada", body, &made); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +75,7 @@ func TestBankAdminAgainstABankServer(t *testing.T) {
 	if err != nil || len(line) != 1 {
 		t.Fatalf("recent: %v, %v", line, err)
 	}
-	bola := bank.Customer{Name: "Bola Ade", Phone: "08039876543", DOB: made.DOB}
+	bola := Customer{Name: "Bola Ade", Phone: "08039876543", DOB: made.DOB}
 	var bolaID string
 	rows := []struct {
 		name string
@@ -106,7 +105,7 @@ func TestBankAdminAgainstABankServer(t *testing.T) {
 			return fmt.Sprint(v.ID == bolaID), err
 		}, "true"},
 		{"create another customer with the same key", func() (string, error) {
-			_, err := c.createCustomer(ctx, "cus-bola", bank.Customer{Name: "Chi Eze", Phone: "08030000002", DOB: made.DOB})
+			_, err := c.createCustomer(ctx, "cus-bola", Customer{Name: "Chi Eze", Phone: "08030000002", DOB: made.DOB})
 			return "", err
 		}, "This Idempotency-Key was used with a different request."},
 		{"account", func() (string, error) {
@@ -153,7 +152,7 @@ func TestBankAdminAgainstABankServer(t *testing.T) {
 func TestBankAdminClosurePayoutsReplay(t *testing.T) {
 	c := bankAdminOnServer(t, true)
 	ctx := t.Context()
-	var made bank.Customer
+	var made Customer
 	body := control.CustomerRequest{Name: "Ada Obi", Phone: "08031234567", DOB: "1990-04-21"}
 	if err := c.call(ctx, http.MethodPost, bankCustomers, "cus-ada", body, &made); err != nil {
 		t.Fatal(err)
@@ -226,7 +225,7 @@ func TestBankAdminTreatsABankWithoutBooksAsAway(t *testing.T) {
 }
 
 func TestHolderOfNeedsTheCustomer(t *testing.T) {
-	holders := map[string]bank.Customer{"cus_1": {ID: "cus_1", Name: "Ada Obi"}}
+	holders := map[string]Customer{"cus_1": {ID: "cus_1", Name: "Ada Obi"}}
 	rows := []struct {
 		name, owner, want string
 	}{

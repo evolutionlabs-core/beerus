@@ -1,9 +1,9 @@
 package contracttest
 
 import (
-	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"context"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"os"
 	"os/exec"
 	"path/filepath"

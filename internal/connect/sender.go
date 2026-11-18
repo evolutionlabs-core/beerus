@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
@@ -33,7 +32,7 @@ func (a *App) transfer(ctx context.Context, req control.TransferRequest) (contro
 	return out, err
 }
 
-func (a *App) Session(ctx context.Context, id string) (nibss.Session, error) {
+func (a *App) Session(ctx context.Context, id string) (control.NIPSession, error) {
 	return a.nibssCtl.session(ctx, strings.TrimSpace(id))
 }
 

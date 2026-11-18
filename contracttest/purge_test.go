@@ -1,12 +1,12 @@
 package contracttest
 
 import (
-	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"maps"
 	"net/http"
 	"os"
@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
@@ -239,8 +238,8 @@ func TestPurgeRules(t *testing.T) {
 	if fresh.Allocated.NIPCode == oldCode {
 		t.Fatalf("the recreated bank reused the code %s", oldCode)
 	}
-	if got := cbnBalance(t, s.cfg, "acme-bank-2"); got != bank.GenesisSettlement {
-		t.Fatalf("the recreated bank has %d at the CBN, want %d", got, bank.GenesisSettlement)
+	if got := cbnBalance(t, s.cfg, "acme-bank-2"); got != control.GenesisSettlement {
+		t.Fatalf("the recreated bank has %d at the CBN, want %d", got, control.GenesisSettlement)
 	}
 	if got := cbnBalance(t, s.cfg, "acme-bank"); got != oldBalance {
 		t.Fatalf("the purged bank's CBN account holds %d, want %d", got, oldBalance)

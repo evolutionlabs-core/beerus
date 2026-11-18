@@ -1,9 +1,9 @@
 package contracttest
 
 import (
-	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"context"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"os"
 	"slices"
 	"strings"

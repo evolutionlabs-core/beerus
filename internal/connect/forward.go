@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -42,10 +41,6 @@ func (a *App) atBankSyncing(w http.ResponseWriter, r *http.Request) {
 	a.forwardToBank(w, r, true)
 }
 
-func (a *App) bankingError(w http.ResponseWriter, r *http.Request, err error) {
-	server.WriteBankingError(w, r, a.log, a.noBanks, err)
-}
-
 func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 	id := r.PathValue("id")
 	b := findBank(a.bankList(), id)
@@ -65,7 +60,7 @@ func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 	write := r.Method != http.MethodGet
 	if write {
 		if phase != PhaseActive {
-			a.bankingError(w, r, control.NotActiveError{Name: b.Name, Phase: phase})
+			web.WriteError(w, r, http.StatusConflict, "bank_not_active", web.Sentence(control.NotActiveError{Name: b.Name, Phase: phase}.Error()))
 			return
 		}
 	}

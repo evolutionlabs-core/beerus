@@ -14,10 +14,10 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -935,9 +935,9 @@ func (a *App) applyFailed(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func (a *App) ctlResources(w http.ResponseWriter, r *http.Request) {
-	limit, cursor, err := server.ListParams(r)
+	limit, cursor, err := listParams(r)
 	if err != nil {
-		a.bankingError(w, r, err)
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", web.Sentence(err.Error()))
 		return
 	}
 	kind := r.URL.Query().Get("kind")
@@ -960,4 +960,18 @@ func (a *App) ctlResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, res)
+}
+
+const listDefault = 100
+
+func listParams(r *http.Request) (int, string, error) {
+	limit := listDefault
+	if s := r.URL.Query().Get("limit"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 || n > control.MaxPage {
+			return 0, "", fmt.Errorf("limit must be a number from 1 to %d", control.MaxPage)
+		}
+		limit = n
+	}
+	return limit, r.URL.Query().Get("cursor"), nil
 }

@@ -12,10 +12,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/view"
@@ -156,7 +154,7 @@ func accountsByOwner(ctx context.Context, books bankBooks) (map[string][]control
 	out := map[string][]control.AccountJSON{}
 	cursor := ""
 	for {
-		page, next, err := books.accounts(ctx, "", bank.MaxPage, cursor)
+		page, next, err := books.accounts(ctx, "", control.MaxPage, cursor)
 		if err != nil {
 			return nil, err
 		}
@@ -174,7 +172,7 @@ func accountsOf(ctx context.Context, books bankBooks, customer string) ([]contro
 	out := []control.AccountJSON{}
 	cursor := ""
 	for {
-		page, next, err := books.accounts(ctx, customer, bank.MaxPage, cursor)
+		page, next, err := books.accounts(ctx, customer, control.MaxPage, cursor)
 		if err != nil {
 			return nil, err
 		}
@@ -523,7 +521,7 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 	for _, acc := range imp.Accounts {
 		paid[acc.Owner] += payouts[acc.NUBAN]
 	}
-	holders := map[string]bank.Customer{}
+	holders := map[string]Customer{}
 	if to != "" {
 		all, err := from.customers(ctx)
 		if err != nil {
@@ -595,10 +593,10 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 	return a.closeOutcome(ctx, id, imp, choice, from)
 }
 
-func holderOf(holders map[string]bank.Customer, owner string) (bank.Customer, error) {
+func holderOf(holders map[string]Customer, owner string) (Customer, error) {
 	c, ok := holders[owner]
 	if !ok {
-		return bank.Customer{}, fmt.Errorf("read customer %s: %w", owner, bank.ErrUnknownCustomer)
+		return Customer{}, fmt.Errorf("read customer %s: %w", owner, errUnknownCustomer)
 	}
 	return c, nil
 }
@@ -610,7 +608,7 @@ func (a *App) closureKey(ctx context.Context, id, nuban, key string) (string, er
 	}
 	failed := 0
 	for _, x := range all {
-		if x.FromAccount == nuban && x.Status != nibss.SessionOK && x.Status != nibss.SessionPending {
+		if x.FromAccount == nuban && x.Status != control.SessionOK && x.Status != control.SessionPending {
 			failed++
 		}
 	}
@@ -625,8 +623,8 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 	if err != nil {
 		return CloseResult{}, fmt.Errorf("read back closure moves: %w", err)
 	}
-	sent := slices.DeleteFunc(all, func(x nibss.ClosureSession) bool {
-		return x.Status != nibss.SessionOK && x.Status != nibss.SessionPending
+	sent := slices.DeleteFunc(all, func(x ClosureSession) bool {
+		return x.Status != control.SessionOK && x.Status != control.SessionPending
 	})
 	payouts, err := from.payouts(ctx)
 	if err != nil {
@@ -652,8 +650,8 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 		if _, ok := owner[x.FromAccount]; !ok {
 			continue
 		}
-		if x.Status != nibss.SessionOK {
-			return CloseResult{}, fmt.Errorf("closure session %s from %s is %s, not %s", x.ID, x.FromAccount, x.Status, nibss.SessionOK)
+		if x.Status != control.SessionOK {
+			return CloseResult{}, fmt.Errorf("closure session %s from %s is %s, not %s", x.ID, x.FromAccount, x.Status, control.SessionOK)
 		}
 		dest := targets[x.ToBankCode]
 		if dest == nil {
@@ -709,13 +707,13 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 	return res, nil
 }
 
-func (a *App) closureAccount(ctx context.Context, fromID string, dest bankBooks, to *config.Bank, cust bank.Customer, acc ImpactAccount) (string, error) {
+func (a *App) closureAccount(ctx context.Context, fromID string, dest bankBooks, to *config.Bank, cust Customer, acc ImpactAccount) (string, error) {
 	found, err := dest.customersByBVN(ctx, cust.BVN)
 	if err != nil {
 		return "", fmt.Errorf("find %s at %s: %w", cust.Name, to.Name, err)
 	}
 	holder := ""
-	if i := slices.IndexFunc(found, func(c bank.Customer) bool { return c.Status == bank.CustomerActive }); i >= 0 {
+	if i := slices.IndexFunc(found, func(c Customer) bool { return c.Status == customerActive }); i >= 0 {
 		holder = found[i].ID
 	} else {
 		created, err := dest.createCustomer(ctx, "close:"+fromID+":"+cust.ID, cust)

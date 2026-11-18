@@ -70,7 +70,7 @@ func funded(t *testing.T, a *App, bankID, name, naira string) string {
 		t.Fatalf("the books of %s are not open", bankID)
 	}
 	dob := clock.Date{Y: 1990, M: 4, D: 21}
-	c, err := books.createCustomer(t.Context(), "cus-"+name, bank.Customer{Name: name, Phone: "08031234567", DOB: dob})
+	c, err := books.createCustomer(t.Context(), "cus-"+name, Customer{Name: name, Phone: "08031234567", DOB: dob})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,15 +135,15 @@ func TestBankingThroughTheApp(t *testing.T) {
 	to := funded(t, a, "bank-b", "Ada Obi", "")
 	booksA, booksB := a.booksOf("bank-a"), a.booksOf("bank-b")
 	dob := clock.Date{Y: 1990, M: 4, D: 21}
-	ca, err := booksA.createCustomer(t.Context(), "cus-twin-a", bank.Customer{Name: "Ada Obi", Phone: "08031234567", DOB: dob})
+	ca, err := booksA.createCustomer(t.Context(), "cus-twin-a", Customer{Name: "Ada Obi", Phone: "08031234567", DOB: dob})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cb, err := booksB.createCustomer(t.Context(), "cus-twin-b", bank.Customer{Name: "Ada Obi", Phone: "+2348031234567", DOB: dob})
+	cb, err := booksB.createCustomer(t.Context(), "cus-twin-b", Customer{Name: "Ada Obi", Phone: "+2348031234567", DOB: dob})
 	if err != nil || ca.BVN == "" || ca.BVN != cb.BVN {
 		t.Fatalf("one person got BVNs %q and %q: %v", ca.BVN, cb.BVN, err)
 	}
-	if cs, err := booksA.createCustomer(t.Context(), "cus-twin-spaced", bank.Customer{Name: "Ada Obi", Phone: "0803 123 4567", DOB: dob}); err != nil || cs.BVN != ca.BVN {
+	if cs, err := booksA.createCustomer(t.Context(), "cus-twin-spaced", Customer{Name: "Ada Obi", Phone: "0803 123 4567", DOB: dob}); err != nil || cs.BVN != ca.BVN {
 		t.Fatalf("a spaced phone gave BVN %q, want %q: %v", cs.BVN, ca.BVN, err)
 	}
 	badDOB := controlCall(t, a, http.MethodPost, "/banks/bank-a/customers", "cus-date", `{"name":"Ada Obi","phone":"08031234567","dob":"21/04/1990"}`)

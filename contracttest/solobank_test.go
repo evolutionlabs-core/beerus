@@ -1,10 +1,11 @@
 package contracttest
 
 import (
-	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"cmp"
 	"context"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"io"
 	"io/fs"
 	"net/http"
@@ -103,7 +104,7 @@ func seedSoloBank(t *testing.T, ctx context.Context, dbURL, stage string, own *c
 	if err := books.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := books.Genesis(ctx, bank.GenesisSettlement, bank.GenesisVault, now); err != nil {
+	if err := books.Genesis(ctx, control.GenesisSettlement, control.GenesisVault, now); err != nil {
 		t.Fatal(err)
 	}
 	hash, err := bank.HashPassword(soloPassword)

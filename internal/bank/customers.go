@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,7 +32,7 @@ const (
 )
 
 const (
-	MaxPage        = 1000
+	MaxPage        = control.MaxPage
 	BVNLength      = 11
 	MaxNUBANSerial = 999999999
 )

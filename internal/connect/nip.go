@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -82,7 +81,7 @@ func (a *App) position(ctx context.Context, b *config.Bank, next time.Time) (map
 	if !ok {
 		return nil, fmt.Errorf("the open sessions of %s add up to more than 64 bits", b.ID)
 	}
-	open := nibss.Position{Outward: sessions.Outward, Inward: inward}
+	open := position{Outward: sessions.Outward, Inward: inward}
 	pos := open.NetDebit()
 	source := "configured"
 	if b.CapIsDefault() {

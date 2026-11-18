@@ -14,8 +14,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
-	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -164,13 +162,13 @@ func (bk book) acctView(acc control.AccountJSON) acctView {
 }
 
 type lineView struct {
-	bank.FeedLine
+	FeedLine
 	Bank        *config.Bank
 	Description string
 	Href        string
 }
 
-func newLineView(b *config.Bank, l bank.FeedLine) lineView {
+func newLineView(b *config.Bank, l FeedLine) lineView {
 	return lineView{FeedLine: l, Bank: b, Description: view.Normalise(l.Narration), Href: "/ui/accounts/" + url.PathEscape(acctKey(b.ID, l.NUBAN)) + "/lines/" + url.PathEscape(l.Key)}
 }
 
@@ -189,7 +187,7 @@ func (a *App) roomFail(w http.ResponseWriter, r *http.Request, err error) {
 func (a *App) roomOverview(w http.ResponseWriter, r *http.Request) {
 	type bankSum struct {
 		*config.Bank
-		bank.Totals
+		Totals
 	}
 	sums := []bankSum{}
 	var total int64
@@ -246,7 +244,7 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 	}
 	cursor := r.URL.Query().Get("cursor")
 	page, next, err := bk.books.accounts(ctx, "", pageSize, cursor)
-	if errors.Is(err, bank.ErrBadCursor) {
+	if errors.Is(err, errBankCursor) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		a.roomNotFound(w, r)
@@ -275,7 +273,7 @@ func (a *App) roomAccountOf(w http.ResponseWriter, r *http.Request) (book, contr
 		acc, err = bk.books.account(r.Context(), nuban)
 		ok = err == nil
 	}
-	if !ok && err != nil && !errors.Is(err, ledger.ErrUnknownAccount) {
+	if !ok && err != nil && !errors.Is(err, errUnknownAccount) {
 		a.roomFail(w, r, err)
 		return book{}, acc, false
 	}
@@ -296,7 +294,7 @@ func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 	v := bk.acctView(acc)
 	cursor := r.URL.Query().Get("cursor")
 	ls, next, err := bk.books.recent(ctx, acc.NUBAN, pageSize, cursor)
-	if errors.Is(err, bank.ErrBadCursor) {
+	if errors.Is(err, errBankCursor) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		a.roomNotFound(w, r)
@@ -350,7 +348,7 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	l, err := bk.books.line(ctx, acc.NUBAN, r.PathValue("line"))
-	if errors.Is(err, bank.ErrUnknownLine) {
+	if errors.Is(err, errUnknownLine) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		a.roomNotFound(w, r)
@@ -361,7 +359,7 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := bk.acctView(acc)
-	if err := a.markRemoved(ctx, []bank.FeedLine{l}); err != nil {
+	if err := a.markRemoved(ctx, []FeedLine{l}); err != nil {
 		a.roomFail(w, r, err)
 		return
 	}
@@ -604,7 +602,7 @@ func (a *App) roomBanks(w http.ResponseWriter, r *http.Request) {
 	for _, st := range a.BankStatuses() {
 		statuses[st.ID] = st
 	}
-	totals := map[string]bank.Totals{}
+	totals := map[string]Totals{}
 	for _, bk := range a.books() {
 		if statuses[bk.bank.ID].Phase == PhaseClosed {
 			continue

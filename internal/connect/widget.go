@@ -11,7 +11,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -321,7 +320,7 @@ func (a *App) customerLogin(w http.ResponseWriter, r *http.Request) {
 	login := func() (string, error) {
 		books := a.booksOf(bankID)
 		if books == nil {
-			return "", bank.ErrBadLogin
+			return "", errBadLogin
 		}
 		return books.login(r.Context(), r.PostForm.Get("username"), r.PostForm.Get("password"))
 	}
@@ -329,7 +328,7 @@ func (a *App) customerLogin(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if err != nil {
-		if !errors.Is(err, bank.ErrBadLogin) {
+		if !errors.Is(err, errBadLogin) {
 			a.log.Error("customer sign-in", "bank", bankID, "err", err)
 		}
 		a.render(w, "customer_login", http.StatusUnauthorized, page{"Title": "Your connections", "Banks": a.openInstitutions(), "Error": "The bank, username or password is wrong."})

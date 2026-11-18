@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -193,8 +192,8 @@ func (a *App) closingCallsDue(ctx context.Context) {
 
 const removedSuffix = " (removed)"
 
-func (a *App) markRemoved(ctx context.Context, lines []bank.FeedLine) error {
-	if !slices.ContainsFunc(lines, func(l bank.FeedLine) bool { return l.Counterparty != nil }) {
+func (a *App) markRemoved(ctx context.Context, lines []FeedLine) error {
+	if !slices.ContainsFunc(lines, func(l FeedLine) bool { return l.Counterparty != nil }) {
 		return nil
 	}
 	directory, err := a.nibssCtl.Directory(ctx)
