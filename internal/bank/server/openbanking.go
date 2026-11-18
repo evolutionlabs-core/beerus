@@ -50,8 +50,7 @@ func NewOpenBanking(c OpenConfig) (*openbanking.Server, error) {
 		}},
 		Registry: registryView{c.Registry},
 		Data:     bankData{books: c.Books, clock: c.Clock},
-		Real:     c.Clock.Real,
-		Now:      c.Clock.Now,
+		Clock:    c.Clock,
 		Terms:    OpenTerms(b),
 	}), nil
 }
