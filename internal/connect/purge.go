@@ -90,6 +90,9 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	a.dropBankState(id)
 	var ls *ledgerSource
 	if b != nil {
+		if err := a.retireBank(ctx, b); err != nil {
+			return nil, fmt.Errorf("purge %s: %w", id, err)
+		}
 		a.detach(b, config.StepSite)
 		if a.role != RoleCore {
 			a.mu.Lock()
@@ -129,6 +132,7 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	a.cfg.Banks = slices.DeleteFunc(slices.Clone(a.cfg.Banks), func(x *config.Bank) bool { return x.ID == id })
 	a.mu.Unlock()
 	delete(a.status, id)
+	delete(a.retired, id)
 	delete(a.confirms, id)
 	a.lifeMu.Unlock()
 	a.poke()
@@ -248,4 +252,30 @@ func (a *App) ctlPurgeBank(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	web.WriteJSON(w, http.StatusAccepted, res)
+}
+
+func (a *App) bankRetired(id string) bool {
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	return a.retired[id]
+}
+
+func (a *App) retireBank(ctx context.Context, b *config.Bank) error {
+	if a.role != RoleCore {
+		return nil
+	}
+	a.lifeMu.Lock()
+	if a.retired == nil {
+		a.retired = map[string]bool{}
+	}
+	a.retired[b.ID] = true
+	a.lifeMu.Unlock()
+	w, err := a.wishFor(b.ID)
+	if err == nil {
+		err = a.syncBank(ctx, b.ID, b.URL(), wishGeneration(a.WorldID(), w), w)
+	}
+	if err != nil && !unreachable(err) {
+		return fmt.Errorf("retire %s: %w", b.ID, err)
+	}
+	return nil
 }

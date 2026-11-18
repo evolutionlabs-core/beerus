@@ -485,14 +485,7 @@ func (a *App) probe(b *config.Bank) (string, []string) {
 
 func (a *App) probeBooks(ctx context.Context, b *config.Bank) string {
 	if a.role == RoleCore {
-		admin, err := a.adminOf(b.ID)
-		if err == nil {
-			_, err = admin.state(ctx)
-		}
-		if err != nil {
-			return "its database cannot be reached: " + err.Error()
-		}
-		return ""
+		return a.probeBank(ctx, b)
 	}
 	a.mu.Lock()
 	ls := a.ledgerFor(b.ID)
@@ -504,6 +497,38 @@ func (a *App) probeBooks(ctx context.Context, b *config.Bank) string {
 		return "its database cannot be reached: " + err.Error()
 	}
 	return ""
+}
+
+func (a *App) probeBank(ctx context.Context, b *config.Bank) string {
+	admin, err := a.adminOf(b.ID)
+	if err != nil {
+		return "it is not in the setup"
+	}
+	state, err := admin.state(ctx)
+	if err != nil {
+		return "its database cannot be reached: " + err.Error()
+	}
+	for _, id := range ensuredSteps() {
+		i := slices.IndexFunc(state.Steps, func(s server.Step) bool { return s.ID == id })
+		if i < 0 || !state.Steps[i].Done {
+			return "its database is not ready"
+		}
+		if a.rebuiltSince(b.ID, id, state.Steps[i].CompletedAt) {
+			return "its database was rebuilt"
+		}
+	}
+	return ""
+}
+
+func (a *App) rebuiltSince(bankID, step string, completed *time.Time) bool {
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	st := a.status[bankID]
+	if st == nil || completed == nil {
+		return false
+	}
+	seen := st.Steps[stepIndex(step)].At
+	return seen != nil && completed.After(*seen)
 }
 
 func (a *App) detach(b *config.Bank, from string) {

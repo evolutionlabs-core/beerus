@@ -83,6 +83,67 @@ func (p *Participant) provision(ctx context.Context) {
 	}
 }
 
+func (p *Participant) heal(ctx context.Context) {
+	tick := time.NewTicker(healEvery)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		if !p.booksLost(ctx) {
+			continue
+		}
+		p.log.Warn("bank database lost; rebuilding", "bank", p.id)
+		p.forgetBooks()
+		p.Ensure(ctx)
+	}
+}
+
+func (p *Participant) booksLost(ctx context.Context) bool {
+	if !p.ready() {
+		return false
+	}
+	switch phase, _ := p.srv.Phase(); phase {
+	case config.PhaseActive, config.PhaseSuspended, config.PhaseRepairing, config.PhaseClosing, config.PhaseTerminating:
+	default:
+		return false
+	}
+	books := p.booksNow()
+	if books == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, pingLimit)
+	defer cancel()
+	return books.Ping(ctx) != nil && ctx.Err() == nil
+}
+
+func (p *Participant) redoBefore(i int) {
+	for j := range p.steps[:i] {
+		if ensured(p.steps[j].ID) {
+			p.steps[j].Done, p.steps[j].CompletedAt = false, nil
+		}
+	}
+}
+
+func (p *Participant) forgetBooks() {
+	p.mu.Lock()
+	books := p.books
+	p.books = nil
+	p.mu.Unlock()
+	if books != nil {
+		books.Close()
+	}
+	for i := range p.steps {
+		if ensured(p.steps[i].ID) {
+			p.steps[i].Done, p.steps[i].Error, p.steps[i].CompletedAt = false, "", nil
+		}
+	}
+	p.attempts, p.retryAt = 0, time.Time{}
+	p.srv.Provision(p.steps, runningPhase(p.cfg.Banks[0]), "")
+}
+
 func (p *Participant) pause(ctx context.Context, wait time.Duration) bool {
 	timer := time.NewTimer(max(wait, time.Millisecond))
 	defer timer.Stop()
@@ -107,6 +168,7 @@ func (p *Participant) ensureDue(ctx context.Context) {
 			continue
 		}
 		if !p.ensureStep(ctx, i, e) {
+			p.redoBefore(i)
 			p.srv.Provision(p.steps, runningPhase(b), fmt.Sprintf("Step %s failed. Trying again.", e.id))
 			return
 		}

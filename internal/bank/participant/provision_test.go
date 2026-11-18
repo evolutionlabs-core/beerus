@@ -276,3 +276,52 @@ func TestStatusCanBeReadWhileTheBankProvisions(t *testing.T) {
 		}
 	}
 }
+
+func TestBankRebuildsADroppedDatabase(t *testing.T) {
+	s := newStage(t)
+	p := s.start(t, s.dbURL)
+	ctx := t.Context()
+	p.Ensure(ctx)
+	if p.booksLost(ctx) {
+		t.Fatal("a healthy database was reported lost")
+	}
+	if err := store.DropDatabases(ctx, s.dbURL, []string{p.cfg.Banks[0].Database}); err != nil {
+		t.Fatal(err)
+	}
+	if !p.booksLost(ctx) {
+		t.Fatal("a dropped database was not reported lost")
+	}
+	p.forgetBooks()
+	st := s.status(t, p)
+	if st.Phase != config.PhaseActive || st.Steps[2].Done || st.Steps[3].Done || st.Steps[4].Done || st.Steps[2].CompletedAt != nil {
+		t.Fatalf("after the loss: phase %s, steps %+v", st.Phase, rows(st))
+	}
+	p.Ensure(ctx)
+	st = s.status(t, p)
+	if st.Phase != config.PhaseActive || !st.Steps[2].Done || !st.Steps[3].Done || !st.Steps[4].Done || st.Steps[2].CompletedAt == nil || p.booksLost(ctx) {
+		t.Fatalf("after the rebuild: phase %s, steps %+v", st.Phase, rows(st))
+	}
+}
+
+func TestLaterStepFailureRedoesTheDatabaseStep(t *testing.T) {
+	s := newStage(t)
+	p := s.start(t, s.dbURL)
+	ctx := t.Context()
+	p.Ensure(ctx)
+	p.forgetBooks()
+	p.steps[2].Done = true
+	if err := store.DropDatabases(ctx, s.dbURL, []string{p.cfg.Banks[0].Database}); err != nil {
+		t.Fatal(err)
+	}
+	p.ensureDue(ctx)
+	st := s.status(t, p)
+	if st.Steps[2].Done || st.Steps[3].Done || st.Steps[3].Error == "" {
+		t.Fatalf("after the failed step: steps %+v", rows(st))
+	}
+	*s.now = s.now.Add(clock.Backoff(1))
+	p.ensureDue(ctx)
+	st = s.status(t, p)
+	if !st.Steps[2].Done || !st.Steps[3].Done || !st.Steps[4].Done || p.booksLost(ctx) {
+		t.Fatalf("after the retry: steps %+v", rows(st))
+	}
+}
