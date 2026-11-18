@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
@@ -14,6 +15,8 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
+
+const snapshotInfix = "_snap_"
 
 type ledgerSource struct {
 	*store.Books
@@ -40,8 +43,25 @@ func (s *ledgerSource) Drop(ctx context.Context) error {
 	return s.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
 }
 
+func (a *App) dropBankDatabase(ctx context.Context, name string) error {
+	all, err := store.List(ctx, a.cfg.DatabaseURL, name)
+	if err != nil {
+		return fmt.Errorf("list the databases of %s: %w", name, err)
+	}
+	owned := slices.DeleteFunc(all, func(n string) bool { return n != name && !strings.HasPrefix(n, name+snapshotInfix) })
+	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, owned); err != nil {
+		return fmt.Errorf("drop database %s: %w", name, err)
+	}
+	return a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
+}
+
 func (a *App) DropBankDatabases(ctx context.Context) error {
 	var errs []error
+	if a.role == RoleCore {
+		for _, b := range a.bankList() {
+			errs = append(errs, a.dropBankDatabase(ctx, b.Database))
+		}
+	}
 	for _, l := range a.ledgers {
 		if err := l.Drop(ctx); err != nil {
 			errs = append(errs, err)
@@ -52,14 +72,18 @@ func (a *App) DropBankDatabases(ctx context.Context) error {
 }
 
 func (a *App) VerifyBank(ctx context.Context) (ledger.Check, error) {
-	a.mu.Lock()
-	ledgers := slices.Clone(a.ledgers)
-	a.mu.Unlock()
 	var out ledger.Check
-	for _, l := range ledgers {
-		c, err := l.Bank().L.Verify(ctx)
+	for _, b := range a.bankList() {
+		books := a.booksOf(b.ID)
+		if books == nil {
+			if a.role == RoleCore && a.bankPhase(b.ID) != PhaseClosed && !a.bankRetired(b.ID) {
+				return out, &bankNotReadyError{Name: b.Name}
+			}
+			continue
+		}
+		c, err := books.check(ctx)
 		if err != nil {
-			return out, fmt.Errorf("verify the books of %s: %w", l.Inst.ID, err)
+			return out, fmt.Errorf("verify the books of %s: %w", b.ID, err)
 		}
 		out.TrialBalance += c.TrialBalance
 		out.BalanceMismatch = append(out.BalanceMismatch, c.BalanceMismatch...)

@@ -186,6 +186,9 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*App, error) {
 		if err := a.claimBank(b); err != nil {
 			return nil, err
 		}
+		if a.role == RoleCore {
+			continue
+		}
 		ls, err := openLedgerSource(ctx, cfg, a.ctl, a.clock, b)
 		if err != nil {
 			a.log.Error("bank ledger not ready; retrying in the background", "bank", b.ID, "err", err)

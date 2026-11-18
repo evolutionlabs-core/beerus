@@ -118,7 +118,7 @@ func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 			return
 		}
 		a.log.Warn("bank not reachable", "bank", id, "err", err)
-		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", fmt.Sprintf("%s is not running or cannot be reached. Run beerus get banks to see its state, then try again.", b.Name))
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", fmt.Sprintf(bankAway, b.Name))
 		return
 	}
 	for _, name := range []string{"Content-Type", "Idempotent-Replayed"} {

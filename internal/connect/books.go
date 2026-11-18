@@ -17,7 +17,10 @@ func (s bookSource) Book(id string) (server.Book, error) {
 	var name string
 	var ls *ledgerSource
 	if b != nil {
-		name, ls = b.Name, s.a.ledgerFor(id)
+		name = b.Name
+		if s.a.role != RoleCore {
+			ls = s.a.ledgerFor(id)
+		}
 	}
 	s.a.mu.Unlock()
 	if b == nil {

@@ -55,6 +55,9 @@ func (a *App) wishFor(id string) (bankWish, error) {
 		return w, err
 	}
 	w.phase, w.reason = a.bankPhaseReason(id)
+	if a.bankRetired(id) {
+		w.phase, w.reason = PhaseClosed, ""
+	}
 	for _, f := range a.downFaults(id) {
 		w.downs = append(w.downs, f)
 	}
