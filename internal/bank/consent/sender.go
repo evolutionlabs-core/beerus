@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
@@ -156,7 +156,7 @@ func (s *Sender) report(ctx context.Context, id string, srv *openbanking.Server)
 }
 
 func refused(err error) (string, bool) {
-	var peer *server.PeerError
+	var peer *control.PeerError
 	if errors.As(err, &peer) && (peer.Status == http.StatusBadRequest || peer.Status == http.StatusUnprocessableEntity) {
 		return peer.Message, true
 	}

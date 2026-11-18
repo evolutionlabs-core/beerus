@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"net/http"
 	"os"
 	"slices"
 	"strings"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -145,7 +145,7 @@ func (a *App) dropBankRows(id string) {
 		}
 	}
 	a.st.Revokes = slices.DeleteFunc(a.st.Revokes, func(p PendingRevoke) bool { return p.Bank == id })
-	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *server.Fault) bool { return f.Bank == id })
+	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *control.Fault) bool { return f.Bank == id })
 	a.dirty()
 }
 
@@ -283,7 +283,7 @@ func (a *App) retireBank(ctx context.Context, b *config.Bank) error {
 		return fmt.Errorf("retire %s: the retirement was not saved", b.ID)
 	}
 	err := a.closeAtBank(ctx, b)
-	if err != nil && server.Unreachable(err) && !a.mustRetireLive(b.ID) {
+	if err != nil && control.Unreachable(err) && !a.mustRetireLive(b.ID) {
 		return nil
 	}
 	if err != nil {

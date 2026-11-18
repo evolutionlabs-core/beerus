@@ -1,4 +1,4 @@
-package server
+package control
 
 import (
 	"bytes"
@@ -17,6 +17,9 @@ import (
 )
 
 const (
+	DialTimeout     = time.Second
+	LocalhostHost   = ".localhost"
+	Loopback        = "127.0.0.1"
 	MaxPeerBody     = 16 << 20
 	peerTimeout     = 30 * time.Second
 	peerIdleTimeout = 90 * time.Second
@@ -46,10 +49,10 @@ func NewLink(token, bind string) Link {
 
 func (l Link) dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
-	if err == nil && !l.Remote() && strings.HasSuffix(host, localhostHost) {
-		addr = net.JoinHostPort(loopback, port)
+	if err == nil && !l.Remote() && strings.HasSuffix(host, LocalhostHost) {
+		addr = net.JoinHostPort(Loopback, port)
 	}
-	return (&net.Dialer{Timeout: cbnDialTimeout}).DialContext(ctx, network, addr)
+	return (&net.Dialer{Timeout: DialTimeout}).DialContext(ctx, network, addr)
 }
 
 func (l Link) Multi() bool {

@@ -4,10 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 	"net/url"
-
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 )
 
 const (
@@ -17,7 +16,7 @@ const (
 )
 
 type cbnAdmin struct {
-	link server.Link
+	link control.Link
 	base string
 	port int
 }
@@ -45,7 +44,7 @@ func (c *cbnAdmin) openAccount(ctx context.Context, id string, settlement, vault
 }
 
 func (c *cbnAdmin) problems(ctx context.Context) ([]string, error) {
-	var out server.State
+	var out control.State
 	if err := c.call(ctx, http.MethodGet, cbnStatusPath, nil, &out); err != nil {
 		return nil, fmt.Errorf("read the status of the CBN: %w", err)
 	}
@@ -54,11 +53,11 @@ func (c *cbnAdmin) problems(ctx context.Context) ([]string, error) {
 
 func (c *cbnAdmin) call(ctx context.Context, method, path string, in, out any) error {
 	_, err := c.link.Do(ctx, c.base, method, path, in, out)
-	var peer *server.PeerError
+	var peer *control.PeerError
 	if err == nil || errors.As(err, &peer) || ctx.Err() != nil {
 		return err
 	}
-	if server.Unreachable(err) {
+	if control.Unreachable(err) {
 		return &cbnDownError{Port: c.port, Err: err}
 	}
 	return fmt.Errorf("call the CBN on port %d: %w", c.port, err)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"github.com/evolutionlabs-core/beerus/internal/money"
 	"io"
 	"net/url"
@@ -233,7 +234,7 @@ func cmdAccount(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			a, err := decodeMap[server.AccountJSON](out)
+			a, err := decodeMap[control.AccountJSON](out)
 			if err != nil {
 				return err
 			}
@@ -334,7 +335,7 @@ func printCustomers(out map[string]any) error {
 }
 
 func printAccounts(out map[string]any) error {
-	rows, err := decodeList[server.AccountJSON](out)
+	rows, err := decodeList[control.AccountJSON](out)
 	if err != nil {
 		return err
 	}
@@ -444,7 +445,7 @@ func cmdTransfer(args []string) error {
 		return err
 	}
 	return f.show(out, func() error {
-		r, err := decodeMap[server.TransferResult](out)
+		r, err := decodeMap[control.TransferResult](out)
 		if err != nil {
 			return err
 		}
@@ -455,7 +456,7 @@ func cmdTransfer(args []string) error {
 	})
 }
 
-func chargeSentence(r server.TransferResult) string {
+func chargeSentence(r control.TransferResult) string {
 	parts := []string{}
 	for _, c := range []struct {
 		name   string
@@ -474,7 +475,7 @@ func chargeSentence(r server.TransferResult) string {
 	return "Charges: " + strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1] + "."
 }
 
-func printQuote(c *ctl, r server.TransferResult) error {
+func printQuote(c *ctl, r control.TransferResult) error {
 	if r.Kind == "internal" {
 		fmt.Printf("Moving %s from %s to %s, %s, costs no charges. Balance after %s.\n", money.FormatNaira(r.Amount), r.From, r.To, r.ToName, money.FormatNaira(r.BalanceAfter))
 	} else {
@@ -489,7 +490,7 @@ func printQuote(c *ctl, r server.TransferResult) error {
 	return nil
 }
 
-func printTransfer(c *ctl, r server.TransferResult) error {
+func printTransfer(c *ctl, r control.TransferResult) error {
 	at := stamp(r.At)
 	if r.Kind == "internal" {
 		fmt.Printf("Moved %s from %s to %s, %s, at %s. Balance %s.\n", money.FormatNaira(r.Amount), r.From, r.To, r.ToName, at, money.FormatNaira(r.BalanceAfter))
@@ -518,14 +519,14 @@ func printTransfer(c *ctl, r server.TransferResult) error {
 	return nil
 }
 
-func describeFault(f server.Fault) string {
+func describeFault(f control.Fault) string {
 	switch f.Kind {
-	case server.FaultDown:
+	case control.FaultDown:
 		if f.Until == nil {
 			return "down until cleared"
 		}
 		return "down until " + stamp(*f.Until)
-	case server.FaultTimeout:
+	case control.FaultTimeout:
 		if f.Left == 1 {
 			return fmt.Sprintf("the next transfer times out (outcome %s)", f.Outcome)
 		}
@@ -567,7 +568,7 @@ func cmdFault(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			fl, err := decodeMap[server.Fault](out)
+			fl, err := decodeMap[control.Fault](out)
 			if err != nil {
 				return err
 			}
@@ -587,7 +588,7 @@ func cmdFault(args []string) error {
 			return err
 		}
 		return f.show(out, func() error {
-			rows, err := decodeList[server.Fault](out)
+			rows, err := decodeList[control.Fault](out)
 			if err != nil {
 				return err
 			}

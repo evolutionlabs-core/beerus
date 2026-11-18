@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"maps"
 	"net/http"
 	"os"
@@ -355,8 +356,8 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		return true
 	})
 	open := func(bank, name, phone, dob, username, naira string) string {
-		c := postControl(t, cfg, "/banks/"+bank+"/customers", bank+"-customer-"+username, server.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
-		acc := postControl(t, cfg, "/banks/"+bank+"/accounts", bank+"-account-"+username, server.AccountRequest{Customer: c["id"].(string), Type: "current"})
+		c := postControl(t, cfg, "/banks/"+bank+"/customers", bank+"-customer-"+username, control.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
+		acc := postControl(t, cfg, "/banks/"+bank+"/accounts", bank+"-account-"+username, control.AccountRequest{Customer: c["id"].(string), Type: "current"})
 		nuban := acc["nuban"].(string)
 		postControl(t, cfg, "/banks/"+bank+"/deposits", bank+"-deposit-"+username, server.CashRequest{Account: nuban, Amount: naira})
 		r.app.SyncAll(t.Context())

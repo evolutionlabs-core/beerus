@@ -3,6 +3,7 @@ package connect
 import (
 	"context"
 	"crypto/tls"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"log/slog"
 	"net"
@@ -61,7 +62,7 @@ func TestBankDirectoryComesFromNIBSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got []string
-	for _, b := range server.OpenBanks(srv.Directory()) {
+	for _, b := range control.OpenBanks(srv.Directory()) {
 		got = append(got, b.ID)
 	}
 	if len(got) != 3 || got[0] != "bank-a" || got[1] != "bank-b" || got[2] != "bank-d" {

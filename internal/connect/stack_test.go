@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -14,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
@@ -255,7 +255,7 @@ func participantsAnswer(ctx context.Context, a *App) bool {
 	return answers(ctx, a.nibssCtl.Link, a.nibssCtl.Base) && answers(ctx, a.cbnCtl.link, a.cbnCtl.base)
 }
 
-func answers(ctx context.Context, link server.Link, base string) bool {
+func answers(ctx context.Context, link control.Link, base string) bool {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/health", nil)
 	if err != nil {
 		return false

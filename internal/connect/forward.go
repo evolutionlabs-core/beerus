@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"net/http"
 	"strings"
@@ -64,7 +65,7 @@ func (a *App) forwardToBank(w http.ResponseWriter, r *http.Request, sync bool) {
 	write := r.Method != http.MethodGet
 	if write {
 		if phase != PhaseActive {
-			a.bankingError(w, r, server.NotActiveError{Name: b.Name, Phase: phase})
+			a.bankingError(w, r, control.NotActiveError{Name: b.Name, Phase: phase})
 			return
 		}
 	}
@@ -130,12 +131,12 @@ func (a *App) callBank(ctx context.Context, b *config.Bank, r *http.Request, key
 		return 0, nil, nil, fmt.Errorf("call %s: %w", b.ID, err)
 	}
 	defer resp.Body.Close()
-	out, err := io.ReadAll(io.LimitReader(resp.Body, server.MaxPeerBody+1))
+	out, err := io.ReadAll(io.LimitReader(resp.Body, control.MaxPeerBody+1))
 	if err != nil {
 		return 0, nil, nil, &badAnswerError{bank: b.ID, err: fmt.Errorf("read failed: %w", err)}
 	}
-	if len(out) > server.MaxPeerBody {
-		return 0, nil, nil, &badAnswerError{bank: b.ID, err: fmt.Errorf("answer is larger than %d MiB", server.MaxPeerBody>>20)}
+	if len(out) > control.MaxPeerBody {
+		return 0, nil, nil, &badAnswerError{bank: b.ID, err: fmt.Errorf("answer is larger than %d MiB", control.MaxPeerBody>>20)}
 	}
 	return resp.StatusCode, resp.Header, out, nil
 }

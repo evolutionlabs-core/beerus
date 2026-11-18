@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 	"slices"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -81,7 +81,7 @@ func (p *Participant) openBooks(ctx context.Context, b *config.Bank) error {
 }
 
 func (p *Participant) ready() bool {
-	return !slices.ContainsFunc(p.steps, func(s server.Step) bool { return !s.Done })
+	return !slices.ContainsFunc(p.steps, func(s control.Step) bool { return !s.Done })
 }
 
 func (p *Participant) Ensure(ctx context.Context) {
@@ -183,7 +183,7 @@ func (p *Participant) ensureDue(ctx context.Context) {
 	defer cancel()
 	b := p.cfg.Banks[0]
 	for _, e := range p.ensureSteps(b) {
-		i := slices.IndexFunc(p.steps, func(s server.Step) bool { return s.ID == e.id })
+		i := slices.IndexFunc(p.steps, func(s control.Step) bool { return s.ID == e.id })
 		if p.steps[i].Done {
 			continue
 		}

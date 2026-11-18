@@ -8,11 +8,11 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
@@ -96,7 +96,7 @@ func (a *App) registryDue(ctx context.Context) {
 		a.mu.Unlock()
 		return
 	}
-	var peer *server.PeerError
+	var peer *control.PeerError
 	refused := errors.As(err, &peer) && peer.Status == http.StatusUnprocessableEntity
 	changed := refused && a.regProblem != err.Error()
 	if refused {
@@ -153,7 +153,7 @@ func (a *App) registered(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (a *App) nibssFailed(w http.ResponseWriter, r *http.Request, err error) {
-	var peer *server.PeerError
+	var peer *control.PeerError
 	if errors.As(err, &peer) && peer.Status != http.StatusServiceUnavailable {
 		web.WriteError(w, r, peer.Status, peer.Code, peer.Message)
 		return

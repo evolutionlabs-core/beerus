@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -19,8 +20,8 @@ type Host interface {
 	RefreshBanks(ctx context.Context) error
 	Directory() []*config.Bank
 	Lookup(id string) *config.Bank
-	Quote(ctx context.Context, req TransferRequest) (TransferResult, error)
-	Transfer(ctx context.Context, req TransferRequest) (TransferResult, error)
+	Quote(ctx context.Context, req control.TransferRequest) (control.TransferResult, error)
+	Transfer(ctx context.Context, req control.TransferRequest) (control.TransferResult, error)
 	Banking() *Banking
 }
 

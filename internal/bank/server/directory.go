@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net"
 	"net/http"
 	"net/url"
@@ -33,16 +34,6 @@ func (s *Server) Directory() []*config.Bank {
 	s.dirMu.Lock()
 	defer s.dirMu.Unlock()
 	return s.dirBanks
-}
-
-func OpenBanks(all []*config.Bank) []*config.Bank {
-	out := []*config.Bank{}
-	for _, b := range all {
-		if !b.Closed() {
-			out = append(out, b)
-		}
-	}
-	return out
 }
 
 func (s *Server) directoryClient() (*http.Client, error) {
@@ -133,7 +124,7 @@ func (s *Server) fetchDirectory(ctx context.Context) error {
 		return err
 	}
 	banks, err := s.directoryPages(ctx, c)
-	var bad *PeerError
+	var bad *control.PeerError
 	if errors.As(err, &bad) && bad.Code == "invalid_cursor" {
 		banks, err = s.directoryPages(ctx, c)
 	}

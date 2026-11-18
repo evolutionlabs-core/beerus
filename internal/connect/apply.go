@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"maps"
 	"net/http"
 	"os"
@@ -407,7 +408,7 @@ func (a *App) planDirectory(ctx context.Context, desired setup.Spec, st setup.St
 		return nil, nil
 	}
 	dir, err := a.nibssCtl.Directory(ctx)
-	var down *server.NIBSSDownError
+	var down *control.NIBSSDownError
 	if errors.As(err, &down) {
 		return nil, applyFail(http.StatusServiceUnavailable, codeNotReady, "The NIBSS directory is not open yet, so removed banks cannot be checked. Try again soon.")
 	}
@@ -475,8 +476,8 @@ func (a *App) bankImpact(ctx context.Context, act *setup.Action) error {
 
 func (a *App) openTransfers(ctx context.Context, id string) (int, int64, error) {
 	open, err := a.nibssCtl.openSessions(ctx, id)
-	var peer *server.PeerError
-	var down *server.NIBSSDownError
+	var peer *control.PeerError
+	var down *control.NIBSSDownError
 	switch {
 	case errors.As(err, &peer) && peer.Status == http.StatusNotFound:
 		return 0, 0, nil
@@ -521,7 +522,7 @@ func (a *App) allocatePorts(ctx context.Context, ad *admission) error {
 		return nil
 	}
 	if err := a.postgresRoom(ctx); err != nil {
-		return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
+		return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s", strings.TrimPrefix(err.Error(), control.ErrInvalid.Error()+": "))
 	}
 	c := a.cfg.Connect
 	used := map[int]bool{c.PartnerPort: true, c.WidgetPort: true, c.ControlPort: true, c.HealthPort: true, c.NIBSSPort: true, c.NIBSSControlPort: true, c.CBNControlPort: true, c.CBNPort: true}
@@ -846,8 +847,8 @@ func (a *App) writeApplyError(w http.ResponseWriter, r *http.Request, err error)
 	switch {
 	case errors.As(err, &ae):
 		web.WriteError(w, r, ae.status, ae.code, ae.message)
-	case errors.Is(err, server.ErrInvalid):
-		web.WriteError(w, r, http.StatusUnprocessableEntity, codeInvalidSpec, strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
+	case errors.Is(err, control.ErrInvalid):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, codeInvalidSpec, strings.TrimPrefix(err.Error(), control.ErrInvalid.Error()+": "))
 	default:
 		return false
 	}

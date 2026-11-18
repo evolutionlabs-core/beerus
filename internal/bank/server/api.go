@@ -2,11 +2,11 @@ package server
 
 import (
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -17,7 +17,6 @@ const (
 	booksNotReady    = "The bank database is not ready yet. Try again soon."
 	participantKind  = "bank"
 	faultPageDefault = 50
-	FaultPageMax     = 500
 )
 
 func validPhase(p string) bool {
@@ -26,35 +25,6 @@ func validPhase(p string) bool {
 		return true
 	}
 	return false
-}
-
-type State struct {
-	ParticipantID       string     `json:"participant_id"`
-	Kind                string     `json:"kind"`
-	Phase               string     `json:"phase"`
-	Reason              string     `json:"reason,omitempty"`
-	Generation          int64      `json:"generation"`
-	ObservedGeneration  int64      `json:"observed_generation"`
-	Steps               []Step     `json:"steps"`
-	Problems            []string   `json:"problems,omitempty"`
-	SettlementProblems  []string   `json:"settlement_problems,omitempty"`
-	SettlementCheckedAt *time.Time `json:"settlement_checked_at,omitempty"`
-}
-
-type PhaseRequest struct {
-	Phase      string `json:"phase"`
-	Reason     string `json:"reason"`
-	Generation int64  `json:"generation"`
-	WorldID    string `json:"world_id"`
-}
-
-type FaultView struct {
-	ID        string     `json:"id"`
-	Kind      string     `json:"kind"`
-	Outcome   string     `json:"outcome,omitempty"`
-	Left      int        `json:"left,omitempty"`
-	UntilAt   *time.Time `json:"until_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
 }
 
 type replayStore struct {
@@ -82,8 +52,8 @@ func (r replayStore) Commit(scope string, rec *web.Record) error {
 	return nil
 }
 
-func viewFault(f Fault) FaultView {
-	v := FaultView{ID: f.ID, Kind: f.Kind, Outcome: f.Outcome, Left: f.Left, CreatedAt: f.At.In(clock.Lagos)}
+func viewFault(f control.Fault) control.FaultView {
+	v := control.FaultView{ID: f.ID, Kind: f.Kind, Outcome: f.Outcome, Left: f.Left, CreatedAt: f.At.In(clock.Lagos)}
 	if f.Until != nil {
 		until := f.Until.In(clock.Lagos)
 		v.UntilAt = &until
@@ -176,8 +146,8 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	web.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "participant_id": s.id, "world_id": s.WorldID()})
 }
 
-func (s *Server) state() State {
-	out := State{ParticipantID: s.id, Kind: participantKind, Steps: []Step{}}
+func (s *Server) state() control.State {
+	out := control.State{ParticipantID: s.id, Kind: participantKind, Steps: []control.Step{}}
 	s.lifeMu.Lock()
 	out.Phase, out.Reason = s.phase, s.reason
 	out.Steps = append(out.Steps, s.steps...)
@@ -192,10 +162,6 @@ func (s *Server) state() State {
 	return out
 }
 
-type OpenSends struct {
-	Open int `json:"open_sends"`
-}
-
 func (s *Server) openSends(w http.ResponseWriter, r *http.Request) {
 	b := s.books.Load()
 	if b == nil {
@@ -208,7 +174,7 @@ func (s *Server) openSends(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "The bank could not count its open transfers. Try again soon.")
 		return
 	}
-	web.WriteJSON(w, http.StatusOK, OpenSends{Open: n})
+	web.WriteJSON(w, http.StatusOK, control.OpenSends{Open: n})
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +200,7 @@ func (s *Server) reload() error {
 }
 
 func (s *Server) setPhase(w http.ResponseWriter, r *http.Request) {
-	var req PhaseRequest
+	var req control.PhaseRequest
 	if err := web.DecodeBody(r, &req); err != nil || !validPhase(req.Phase) || req.Generation < 0 || req.WorldID == "" {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"phase":"active","generation":1,"world_id":"wld_..."} with a phase, a generation and a world ID.`)
 		return
@@ -258,7 +224,7 @@ func faultPage(r *http.Request) (limit int, cursor string, ok bool) {
 	limit = faultPageDefault
 	if v := r.URL.Query().Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
-		if err != nil || n < 1 || n > FaultPageMax {
+		if err != nil || n < 1 || n > control.FaultPageMax {
 			return 0, "", false
 		}
 		limit = n
@@ -269,13 +235,13 @@ func faultPage(r *http.Request) (limit int, cursor string, ok bool) {
 func (s *Server) listFaults(w http.ResponseWriter, r *http.Request) {
 	limit, cursor, ok := faultPage(r)
 	if !ok {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("limit must be a number from 1 to %d.", FaultPageMax))
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", fmt.Sprintf("limit must be a number from 1 to %d.", control.FaultPageMax))
 		return
 	}
 	live := s.faults.Live(s.clock.Now())
 	start := 0
 	if cursor != "" {
-		i := slices.IndexFunc(live, func(f Fault) bool { return f.ID == cursor })
+		i := slices.IndexFunc(live, func(f control.Fault) bool { return f.ID == cursor })
 		if i < 0 {
 			web.WriteError(w, r, http.StatusBadRequest, "invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")
 			return
@@ -283,7 +249,7 @@ func (s *Server) listFaults(w http.ResponseWriter, r *http.Request) {
 		start = i + 1
 	}
 	end := min(start+limit, len(live))
-	data := make([]FaultView, 0, end-start)
+	data := make([]control.FaultView, 0, end-start)
 	for _, f := range live[start:end] {
 		data = append(data, viewFault(f))
 	}
@@ -295,18 +261,18 @@ func (s *Server) listFaults(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setFault(w http.ResponseWriter, r *http.Request) {
-	var req FaultRequest
+	var req control.FaultRequest
 	if err := web.DecodeBody(r, &req); err != nil || req.Bank != "" {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"kind":"down","for":"1h"} or {"kind":"timeout","outcome":"credited"}.`)
 		return
 	}
 	now := s.clock.Now()
-	f, err := NewFault(req, now)
+	f, err := control.NewFault(req, now)
 	if err != nil {
-		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "))
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), control.ErrInvalid.Error()+": "))
 		return
 	}
-	f.ID, f.Bank = FaultID(r.Header.Get("Idempotency-Key")), s.id
+	f.ID, f.Bank = control.FaultID(r.Header.Get("Idempotency-Key")), s.id
 	s.faults.Add(f, now)
 	web.WriteJSON(w, http.StatusCreated, viewFault(f))
 }

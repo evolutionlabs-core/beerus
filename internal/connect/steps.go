@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -244,7 +244,7 @@ func (a *App) bankBooksReady(ctx context.Context, b *config.Bank, st *BankStatus
 		return false
 	}
 	for _, id := range ensuredSteps() {
-		i := slices.IndexFunc(state.Steps, func(s server.Step) bool { return s.ID == id })
+		i := slices.IndexFunc(state.Steps, func(s control.Step) bool { return s.ID == id })
 		if i < 0 {
 			return false
 		}
@@ -392,7 +392,7 @@ func (a *App) probeBank(ctx context.Context, b *config.Bank) string {
 		return "its database cannot be reached: " + err.Error()
 	}
 	for _, id := range ensuredSteps() {
-		i := slices.IndexFunc(state.Steps, func(s server.Step) bool { return s.ID == id })
+		i := slices.IndexFunc(state.Steps, func(s control.Step) bool { return s.ID == id })
 		if i < 0 || !state.Steps[i].Done {
 			return "its database is not ready"
 		}

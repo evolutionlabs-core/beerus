@@ -3,11 +3,11 @@ package connect
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -184,7 +184,7 @@ type State struct {
 	SettleNow      []string                  `json:"settle_now,omitempty"`
 	Access         []AccessEvent             `json:"access"`
 	WorldID        string                    `json:"world_id"`
-	Faults         []*server.Fault           `json:"faults"`
+	Faults         []*control.Fault          `json:"faults"`
 	LinkSessions   map[string]*LinkSession   `json:"link_sessions"`
 	WidgetSessions map[string]*WidgetSession `json:"widget_sessions"`
 	Connections    map[string]*Connection    `json:"connections"`

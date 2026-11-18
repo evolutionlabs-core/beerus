@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -41,10 +41,10 @@ func bankDirConfig(t *testing.T, banks ...*config.Bank) *config.Config {
 }
 
 func TestWishGeneration(t *testing.T) {
-	down := func(ids ...string) []server.Fault {
-		out := []server.Fault{}
+	down := func(ids ...string) []control.Fault {
+		out := []control.Fault{}
 		for _, id := range ids {
-			out = append(out, server.Fault{ID: id, Kind: server.FaultDown})
+			out = append(out, control.Fault{ID: id, Kind: control.FaultDown})
 		}
 		return out
 	}
@@ -79,7 +79,7 @@ func TestWishGeneration(t *testing.T) {
 }
 
 func TestHungBankDoesNotDelayAnother(t *testing.T) {
-	phases := make(chan server.PhaseRequest, 4)
+	phases := make(chan control.PhaseRequest, 4)
 	transport := roundTrip(func(r *http.Request) (*http.Response, error) {
 		if strings.HasPrefix(r.URL.Host, "bank-a.") {
 			<-r.Context().Done()
@@ -91,7 +91,7 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 		case "GET /v1/faults":
 			return stubReply(200, `{"data":[]}`), nil
 		case "PUT /v1/phase":
-			var body server.PhaseRequest
+			var body control.PhaseRequest
 			raw, _ := io.ReadAll(r.Body)
 			if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&body); err != nil {
 				return nil, err
@@ -111,7 +111,7 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 		st:       newState(),
 		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		clock:    clock.New(),
-		link:     server.Link{Client: &http.Client{Transport: transport}},
+		link:     control.Link{Client: &http.Client{Transport: transport}},
 		pushWake: make(chan struct{}, 1),
 		status:   map[string]*BankStatus{"bank-a": {ID: "bank-a", Phase: PhaseActive}, "bank-b": {ID: "bank-b", Phase: PhaseSuspended, Reason: "Suspended."}},
 	}
@@ -123,7 +123,7 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 	}()
 	select {
 	case got := <-phases:
-		want := server.PhaseRequest{Phase: PhaseSuspended, Reason: "Suspended.", WorldID: a.WorldID()}
+		want := control.PhaseRequest{Phase: PhaseSuspended, Reason: "Suspended.", WorldID: a.WorldID()}
 		digest, err := a.cfg.BankFileDigest(a.cfg.Bank("bank-b"))
 		if err != nil {
 			t.Fatal(err)

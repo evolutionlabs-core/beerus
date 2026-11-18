@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -44,11 +45,11 @@ type Participant struct {
 	fees   *charges.Schedule
 	log    *slog.Logger
 	clock  *clock.Clock
-	link   server.Link
+	link   control.Link
 	srv    *server.Server
 	sender *consent.Sender
 
-	steps    []server.Step
+	steps    []control.Step
 	attempts int
 	retryAt  time.Time
 
@@ -76,7 +77,7 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 		return nil, fmt.Errorf("control token: %w", err)
 	}
 	b := cfg.Banks[0]
-	p := &Participant{id: b.ID, dir: dir, cfg: cfg, fees: charges.New(pack.Fees), log: o.Logger, clock: clock.New(), link: server.NewLink(token, o.Bind)}
+	p := &Participant{id: b.ID, dir: dir, cfg: cfg, fees: charges.New(pack.Fees), log: o.Logger, clock: clock.New(), link: control.NewLink(token, o.Bind)}
 	if p.log == nil {
 		p.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}

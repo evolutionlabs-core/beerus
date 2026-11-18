@@ -4,11 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net"
 	"net/http"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
@@ -71,7 +71,7 @@ func (a *App) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		servers = append(servers, srv{s: &http.Server{Handler: sp.h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: server.ErrorLog(a.log)}, tls: sp.tls, ls: ls})
+		servers = append(servers, srv{s: &http.Server{Handler: sp.h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: control.ErrorLog(a.log)}, tls: sp.tls, ls: ls})
 	}
 	a.setServing(true)
 	for _, s := range servers {

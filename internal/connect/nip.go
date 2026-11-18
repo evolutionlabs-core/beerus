@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"github.com/evolutionlabs-core/beerus/internal/money"
 	"net/http"
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -20,7 +20,7 @@ import (
 
 func (a *App) NameEnquiry(ctx context.Context, code, nuban string) (nip.NameEnquiry, error) {
 	if a.nibssCtl == nil {
-		return nip.NameEnquiry{}, &server.UnavailableError{Msg: nibssAway}
+		return nip.NameEnquiry{}, &control.UnavailableError{Msg: nibssAway}
 	}
 	return a.nibssCtl.enquire(ctx, code, nuban)
 }
@@ -32,7 +32,7 @@ func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := a.NameEnquiry(r.Context(), code, nuban)
-	var refused *server.PeerError
+	var refused *control.PeerError
 	if errors.As(err, &refused) && refused.Status == http.StatusBadRequest {
 		web.WriteError(w, r, http.StatusBadRequest, refused.Code, refused.Message)
 		return
@@ -47,7 +47,7 @@ func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
 	list, err := a.nibssCtl.Directory(r.Context())
-	var away *server.NIBSSDownError
+	var away *control.NIBSSDownError
 	if errors.As(err, &away) {
 		a.log.Warn("NIBSS directory", "err", err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS is not available right now.")
@@ -130,10 +130,10 @@ func (a *App) ctlNIPSettlement(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) settlementFailed(w http.ResponseWriter, r *http.Request, msg string, err error) {
 	var cbnDown *cbnDownError
-	var nibssDown *server.NIBSSDownError
-	var peer *server.PeerError
+	var nibssDown *control.NIBSSDownError
+	var peer *control.PeerError
 	var unchecked *uncheckedError
-	var away *server.UnavailableError
+	var away *control.UnavailableError
 	switch {
 	case errors.As(err, &unchecked):
 		a.log.Warn(msg, "err", err)

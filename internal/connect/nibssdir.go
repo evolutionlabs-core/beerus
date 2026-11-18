@@ -2,9 +2,9 @@ package connect
 
 import (
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"path/filepath"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
@@ -43,6 +43,6 @@ func (a *App) prepareNIBSS() error {
 		return fmt.Errorf("NIBSS control token: %w", err)
 	}
 	port := a.cfg.Connect.NIBSSControlPort
-	a.nibssCtl = &nibssAdmin{server.NewNIBSSControl(server.NewLink(token, ""), port)}
+	a.nibssCtl = &nibssAdmin{control.NewNIBSSControl(control.NewLink(token, ""), port)}
 	return nil
 }

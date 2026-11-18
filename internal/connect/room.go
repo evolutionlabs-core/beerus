@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"github.com/evolutionlabs-core/beerus/internal/money"
 	"html/template"
 	"net"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -151,7 +151,7 @@ func (a *App) bookOf(id string) (book, bool) {
 }
 
 type acctView struct {
-	server.AccountJSON
+	control.AccountJSON
 	Key       string
 	Bank      *config.Bank
 	Holder    string
@@ -159,7 +159,7 @@ type acctView struct {
 	Available int64
 }
 
-func (bk book) acctView(acc server.AccountJSON) acctView {
+func (bk book) acctView(acc control.AccountJSON) acctView {
 	return acctView{AccountJSON: acc, Key: acctKey(bk.bank.ID, acc.NUBAN), Bank: bk.bank, Holder: acc.Name, Ledger: acc.Balance, Available: acc.Balance}
 }
 
@@ -266,10 +266,10 @@ func (a *App) roomBank(w http.ResponseWriter, r *http.Request) {
 	a.roomRender(w, r, "bank", http.StatusOK, "banks", roomPage{"Title": bk.bank.Name, "Bank": bk.bank, "Accounts": accts, "Totals": t, "Down": down, "Managed": managed, "Status": status, "Next": next, "First": cursor != ""})
 }
 
-func (a *App) roomAccountOf(w http.ResponseWriter, r *http.Request) (book, server.AccountJSON, bool) {
+func (a *App) roomAccountOf(w http.ResponseWriter, r *http.Request) (book, control.AccountJSON, bool) {
 	id, nuban := splitKey(r.PathValue("key"))
 	bk, ok := a.bookOf(id)
-	var acc server.AccountJSON
+	var acc control.AccountJSON
 	var err error
 	if ok {
 		acc, err = bk.books.account(r.Context(), nuban)
@@ -441,13 +441,13 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f := r.PostForm
-	req := server.TransferRequest{FromBank: f.Get("from_bank"), From: strings.TrimSpace(f.Get("from")), ToBank: f.Get("to_bank"), To: strings.TrimSpace(f.Get("to")), Narration: strings.TrimSpace(f.Get("narration")), Key: f.Get("key")}
+	req := control.TransferRequest{FromBank: f.Get("from_bank"), From: strings.TrimSpace(f.Get("from")), ToBank: f.Get("to_bank"), To: strings.TrimSpace(f.Get("to")), Narration: strings.TrimSpace(f.Get("narration")), Key: f.Get("key")}
 	amount, err := money.ParseNaira(f.Get("amount"))
 	if err != nil {
 		err = view.ErrBadAmount
 	} else {
 		req.Amount = amount
-		var res server.TransferResult
+		var res control.TransferResult
 		res, err = a.transfer(r.Context(), req)
 		if err == nil {
 			a.SyncAll(r.Context())
@@ -455,7 +455,7 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var te *server.TransferError
+	var te *control.TransferError
 	refused := errors.Is(err, view.ErrBadAmount) || (errors.As(err, &te) && te.Status < http.StatusInternalServerError)
 	status, key, message := http.StatusUnprocessableEntity, web.NewID("idk"), web.Sentence(err.Error())
 	if !refused {
@@ -565,8 +565,8 @@ func (a *App) roomCreateBank(w http.ResponseWriter, r *http.Request) {
 	b, err := a.CreateBank(r.Context(), BankRequest{Name: f.Get("name"), Type: f.Get("type"), SettlesThrough: f.Get("settles_through")})
 	if err != nil {
 		msg := err.Error()
-		if errors.Is(err, server.ErrInvalid) {
-			msg = strings.TrimPrefix(msg, server.ErrInvalid.Error()+": ")
+		if errors.Is(err, control.ErrInvalid) {
+			msg = strings.TrimPrefix(msg, control.ErrInvalid.Error()+": ")
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -673,7 +673,7 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 		}
 		var err error
 		if strings.TrimSpace(f.Get("confirm")) != id {
-			err = server.Invalid("type %s to confirm", id)
+			err = control.Invalid("type %s to confirm", id)
 		} else {
 			_, err = a.CloseBank(r.Context(), id, req)
 		}
@@ -682,7 +682,7 @@ func (a *App) roomCloseBank(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !errors.Is(err, errNotFound) {
-			status, msg = http.StatusUnprocessableEntity, strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": ")
+			status, msg = http.StatusUnprocessableEntity, strings.TrimPrefix(err.Error(), control.ErrInvalid.Error()+": ")
 			msg = strings.ToUpper(msg[:1]) + msg[1:] + "."
 		}
 	}
@@ -727,7 +727,7 @@ func (a *App) roomPurgeBank(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		var err error
 		if strings.TrimSpace(r.PostForm.Get("confirm")) != id {
-			err = server.Invalid("type %s to confirm", id)
+			err = control.Invalid("type %s to confirm", id)
 		} else {
 			_, err = a.PurgeBank(r.Context(), id, false)
 		}
@@ -739,7 +739,7 @@ func (a *App) roomPurgeBank(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/ui/banks?state=closed", http.StatusSeeOther)
 			return
 		case !errors.Is(err, errNotFound):
-			status, msg = http.StatusUnprocessableEntity, strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": ")
+			status, msg = http.StatusUnprocessableEntity, strings.TrimPrefix(err.Error(), control.ErrInvalid.Error()+": ")
 			msg = strings.ToUpper(msg[:1]) + msg[1:] + "."
 		}
 	}

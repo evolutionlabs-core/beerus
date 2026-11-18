@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 	"regexp"
 	"slices"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -133,14 +133,14 @@ func (a *App) postgresRoom(ctx context.Context) error {
 		return err
 	}
 	if used+connectionsPerBank+5 > max {
-		return server.Invalid("Postgres has %d of %s in use; another bank needs up to %s", used, view.Plural(max, "connection", "connections"), view.Plural(connectionsPerBank, "connection", "connections"))
+		return control.Invalid("Postgres has %d of %s in use; another bank needs up to %s", used, view.Plural(max, "connection", "connections"), view.Plural(connectionsPerBank, "connection", "connections"))
 	}
 	return nil
 }
 
 func (a *App) removedBanks(ctx context.Context) ([]nip.Institution, error) {
 	all, err := a.nibssCtl.Directory(ctx)
-	var down *server.NIBSSDownError
+	var down *control.NIBSSDownError
 	if errors.As(err, &down) {
 		return nil, errors.New("the NIBSS directory is not open yet, so the codes of removed banks cannot be checked; try again soon")
 	}
@@ -158,10 +158,10 @@ func (a *App) removedBanks(ctx context.Context) ([]nip.Institution, error) {
 
 func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, error) {
 	if req.NIPCode != "" || req.NUBANCode != "" {
-		return BankStatus{}, server.Invalid("nip_code and nuban_code are assigned by Beerus; leave them out")
+		return BankStatus{}, control.Invalid("nip_code and nuban_code are assigned by Beerus; leave them out")
 	}
 	if req.HistoryDays != 0 {
-		return BankStatus{}, server.Invalid("history_days can no longer be set; it follows the bank type")
+		return BankStatus{}, control.Invalid("history_days can no longer be set; it follows the bank type")
 	}
 	name := strings.TrimSpace(req.Name)
 	id := strings.TrimSpace(req.ID)
@@ -232,7 +232,7 @@ func (a *App) SetBankSuspended(ctx context.Context, id string, suspended bool) e
 		}
 		b := &sp.Spec.Banks[i]
 		if b.State == setup.StateClosed {
-			return server.Invalid("%s is closed; a closed bank cannot be suspended or resumed", b.Name)
+			return control.Invalid("%s is closed; a closed bank cannot be suspended or resumed", b.Name)
 		}
 		b.State = ""
 		if suspended {
@@ -254,7 +254,7 @@ func (a *App) noBanks() bool {
 
 func (a *App) noSuchBank(w http.ResponseWriter, r *http.Request) {
 	if a.noBanks() {
-		web.WriteError(w, r, http.StatusNotFound, "not_found", server.NoBanksMessage)
+		web.WriteError(w, r, http.StatusNotFound, "not_found", control.NoBanksMessage)
 		return
 	}
 	web.WriteError(w, r, http.StatusNotFound, "not_found", "No such bank.")
@@ -273,8 +273,8 @@ func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
 		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", unchecked.message())
 	case errors.As(err, &notReady):
 		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", notReady.Error())
-	case errors.Is(err, server.ErrInvalid):
-		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
+	case errors.Is(err, control.ErrInvalid):
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), control.ErrInvalid.Error()+": "))
 	case errors.Is(err, errNotFound):
 		a.noSuchBank(w, r)
 	case errors.As(err, &down):

@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"os"
 	"path/filepath"
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
@@ -42,7 +42,7 @@ func PlanOffline(ctx context.Context, dir string, desired setup.Spec) (PlanReply
 	ctx, cancel := context.WithTimeout(ctx, offlineTimeout)
 	defer cancel()
 	rows, err := offlineDirectory(ctx, cfg)
-	var down *server.NIBSSDownError
+	var down *control.NIBSSDownError
 	switch {
 	case errors.As(err, &down) || errors.Is(err, os.ErrNotExist):
 		rows = slices.Clone(st.Tombstones)
@@ -66,5 +66,5 @@ func offlineDirectory(ctx context.Context, cfg *config.Config) ([]nip.Institutio
 	if err != nil {
 		return nil, fmt.Errorf("NIBSS control token: %w", err)
 	}
-	return server.NewNIBSSControl(server.NewLink(token, ""), cfg.Connect.NIBSSControlPort).Directory(ctx)
+	return control.NewNIBSSControl(control.NewLink(token, ""), cfg.Connect.NIBSSControlPort).Directory(ctx)
 }

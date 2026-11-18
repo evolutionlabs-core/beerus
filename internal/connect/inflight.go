@@ -3,13 +3,13 @@ package connect
 import (
 	"context"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"github.com/evolutionlabs-core/beerus/internal/money"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -96,7 +96,7 @@ func (a *App) openSends(ctx context.Context, b *config.Bank) (int, error) {
 	if b.Closed() || !pushable(a.bankPhase(b.ID)) {
 		return 0, nil
 	}
-	var out server.OpenSends
+	var out control.OpenSends
 	if _, err := a.link.Request(ctx, b.URL(), http.MethodGet, "/v1/nip/sends/open", nil, nil, &out); err != nil {
 		return 0, fmt.Errorf("count open sends of %s: %w", b.ID, err)
 	}
@@ -199,7 +199,7 @@ func (a *App) inflightWith(ctx context.Context, id string, sends int) (string, e
 		return fmt.Sprintf("%s has %s still being sent. Wait for %s to finish.", name, view.Plural(sends, "transfer", "transfers"), finish), nil
 	}
 	if a.nibssCtl == nil {
-		return "", &server.UnavailableError{Msg: nibssAway}
+		return "", &control.UnavailableError{Msg: nibssAway}
 	}
 	open, err := a.nibssCtl.openSessions(ctx, id)
 	if err != nil {

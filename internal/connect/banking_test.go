@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"net/http"
 	"slices"
@@ -158,7 +159,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 	}
 
 	body := `{"from":"` + from + `","to_bank":"bank-b","to":"` + to + `","amount":"10000"}`
-	var q server.TransferResult
+	var q control.TransferResult
 	quoted := controlCall(t, a, http.MethodPost, "/banks/bank-a/transfers/quote", "", body)
 	if err := json.Unmarshal(quoted.raw, &q); err != nil || quoted.status != http.StatusOK {
 		t.Fatalf("quote %d %s: %v", quoted.status, quoted.raw, err)
@@ -186,13 +187,13 @@ func TestBankingThroughTheApp(t *testing.T) {
 
 	for key, c := range map[string][2]string{"bad-narration-long": {strings.Repeat("x", 101), "Narration has 101 characters; the limit is 100."}, "bad-narration-control": {"a\nb", "Narration must not contain control characters."}} {
 		narration, want := c[0], c[1]
-		_, err := a.transfer(t.Context(), server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 100, Narration: narration, Key: key})
-		var te *server.TransferError
+		_, err := a.transfer(t.Context(), control.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 100, Narration: narration, Key: key})
+		var te *control.TransferError
 		if !errors.As(err, &te) || te.Status != http.StatusUnprocessableEntity || te.Err.Error() != want {
 			t.Fatalf("narration %q: got %v, want 422 %q", narration, err, want)
 		}
 	}
-	direct := server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 100_000, Key: "direct-1"}
+	direct := control.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 100_000, Key: "direct-1"}
 	first, err := a.transfer(t.Context(), direct)
 	if err != nil {
 		t.Fatal(err)
@@ -209,10 +210,10 @@ func TestBankingThroughTheApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.AddFault(t.Context(), server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeCredited}); err != nil {
+	if _, err := a.AddFault(t.Context(), control.FaultRequest{Kind: control.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeCredited}); err != nil {
 		t.Fatal(err)
 	}
-	held, err := a.transfer(t.Context(), server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 200_000, Key: "held-1"})
+	held, err := a.transfer(t.Context(), control.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 200_000, Key: "held-1"})
 	if err != nil || held.Status != "pending" {
 		t.Fatalf("a held transfer: %+v, %v", held, err)
 	}
@@ -227,12 +228,12 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	confirmLimits(t, a, "bank-a")
-	capped, err := a.transfer(t.Context(), server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 1, Key: "capped-1"})
+	capped, err := a.transfer(t.Context(), control.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 1, Key: "capped-1"})
 	if err != nil || capped.Status != "reversed" || capped.ResponseCode != "61" || capped.BalanceAfter != held.BalanceAfter {
 		t.Fatalf("a transfer past the cap with a pending session: %+v, %v; the held transfer left %d", capped, err, held.BalanceAfter)
 	}
 
-	if _, err := a.AddFault(t.Context(), server.FaultRequest{Kind: server.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeCredited}); err != nil {
+	if _, err := a.AddFault(t.Context(), control.FaultRequest{Kind: control.FaultTimeout, Bank: "bank-b", Outcome: nip.OutcomeCredited}); err != nil {
 		t.Fatal(err)
 	}
 	refuseInwardCredits(t, a, "bank-b")
@@ -240,7 +241,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatal(err)
 	}
 	confirmLimits(t, a, "bank-a")
-	lost, err := a.transfer(t.Context(), server.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 300_000, Key: "lost-1"})
+	lost, err := a.transfer(t.Context(), control.TransferRequest{FromBank: "bank-a", From: from, ToBank: "bank-b", To: to, Amount: 300_000, Key: "lost-1"})
 	if err != nil || lost.Status != "pending" {
 		t.Fatalf("a held credit that failed: %+v, %v", lost, err)
 	}

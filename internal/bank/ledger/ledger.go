@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io/fs"
 	"math"
 	"sort"
@@ -73,12 +74,7 @@ type Account struct {
 	OverdraftLimit int64
 }
 
-type Counterparty struct {
-	Name          string `json:"name"`
-	AccountNumber string `json:"account_number"`
-	BankCode      string `json:"bank_code"`
-	BankName      string `json:"bank_name"`
-}
+type Counterparty = control.Counterparty
 
 type Line struct {
 	Account      string        `json:"account"`

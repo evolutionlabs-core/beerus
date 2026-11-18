@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"github.com/evolutionlabs-core/beerus/internal/money"
 	"maps"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
@@ -152,8 +152,8 @@ func sortedImpact(out CloseImpact, partners map[string]bool) CloseImpact {
 	return out
 }
 
-func accountsByOwner(ctx context.Context, books bankBooks) (map[string][]server.AccountJSON, error) {
-	out := map[string][]server.AccountJSON{}
+func accountsByOwner(ctx context.Context, books bankBooks) (map[string][]control.AccountJSON, error) {
+	out := map[string][]control.AccountJSON{}
 	cursor := ""
 	for {
 		page, next, err := books.accounts(ctx, "", bank.MaxPage, cursor)
@@ -170,8 +170,8 @@ func accountsByOwner(ctx context.Context, books bankBooks) (map[string][]server.
 	}
 }
 
-func accountsOf(ctx context.Context, books bankBooks, customer string) ([]server.AccountJSON, error) {
-	out := []server.AccountJSON{}
+func accountsOf(ctx context.Context, books bankBooks, customer string) ([]control.AccountJSON, error) {
+	out := []control.AccountJSON{}
 	cursor := ""
 	for {
 		page, next, err := books.accounts(ctx, customer, bank.MaxPage, cursor)
@@ -228,7 +228,7 @@ func (a *App) bankLocked(id string) *config.Bank {
 }
 
 func (a *App) openInstitutions() []*config.Bank {
-	return server.OpenBanks(a.banksLocked())
+	return control.OpenBanks(a.banksLocked())
 }
 
 type CloseRequest struct {
@@ -266,7 +266,7 @@ func (a *App) CloseBank(ctx context.Context, id string, req CloseRequest) (setup
 		}
 		b := &sp.Spec.Banks[i]
 		if b.State == setup.StateClosed {
-			return server.Invalid("%s is already closed", b.Name)
+			return control.Invalid("%s is already closed", b.Name)
 		}
 		b.State = setup.StateClosed
 		if req.Money != "" || req.To != "" || len(req.Customers) > 0 {
@@ -570,7 +570,7 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		if err != nil {
 			return CloseResult{}, err
 		}
-		tr, err := a.transfer(ctx, server.TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: moveKey, Closure: true})
+		tr, err := a.transfer(ctx, control.TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: moveKey, Closure: true})
 		if err != nil {
 			return CloseResult{}, fmt.Errorf("move %s from %s: %w", money.Naira(bal), acc.NUBAN, err)
 		}

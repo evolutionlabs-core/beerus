@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -32,27 +33,8 @@ const (
 )
 
 var (
-	ErrNoSend      = errors.New("no such send")
 	ErrSendRefused = errors.New("NIBSS refused the send")
 )
-
-type NIPSession struct {
-	ID          string     `json:"session_id"`
-	FromCode    string     `json:"from_code"`
-	ToCode      string     `json:"to_code"`
-	FromNUBAN   string     `json:"from_nuban"`
-	ToNUBAN     string     `json:"to_nuban"`
-	Amount      int64      `json:"amount_minor"`
-	Narration   string     `json:"narration"`
-	Status      string     `json:"status"`
-	Outcome     string     `json:"outcome,omitempty"`
-	TSQAttempts int        `json:"tsq_attempts"`
-	NextTSQAt   *time.Time `json:"next_tsq_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ResolvedAt  *time.Time `json:"resolved_at,omitempty"`
-	Settlement  string     `json:"settlement_session,omitempty"`
-	Closure     bool       `json:"closure,omitempty"`
-}
 
 type nibssTransfer struct {
 	SessionID string `json:"session_id"`
@@ -88,7 +70,7 @@ func NewSender(c SenderConfig) *Sender {
 	return &Sender{SenderConfig: c}
 }
 
-func (s *Sender) route(ctx context.Context, req TransferRequest) (Route, error) {
+func (s *Sender) route(ctx context.Context, req control.TransferRequest) (Route, error) {
 	if s.Refresh != nil {
 		if err := s.Refresh(ctx); err != nil {
 			return Route{}, err
@@ -107,32 +89,32 @@ func (s *Sender) route(ctx context.Context, req TransferRequest) (Route, error) 
 		return Route{}, err
 	}
 	if rt.FromBank != s.Own().ID || s.Books() == nil {
-		return Route{}, Refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("the books of %s are not open yet", rt.FromName))
+		return Route{}, control.Refused(http.StatusServiceUnavailable, nip.Unavailable, "bank_unavailable", fmt.Errorf("the books of %s are not open yet", rt.FromName))
 	}
 	return rt, nil
 }
 
-func (s *Sender) Transfer(ctx context.Context, req TransferRequest) (TransferResult, error) {
+func (s *Sender) Transfer(ctx context.Context, req control.TransferRequest) (control.TransferResult, error) {
 	if err := CheckRequest(req); err != nil {
-		return TransferResult{}, err
+		return control.TransferResult{}, err
 	}
 	if req.ToBank == "" {
 		req.ToBank = req.FromBank
 	}
 	rt, err := s.route(ctx, req)
 	if err != nil {
-		return TransferResult{}, err
+		return control.TransferResult{}, err
 	}
-	res := TransferResult{FromBank: rt.FromBank, From: req.From, ToBank: rt.ToBank, To: req.To, Amount: req.Amount, At: s.Clock.Now()}
+	res := control.TransferResult{FromBank: rt.FromBank, From: req.From, ToBank: rt.ToBank, To: req.To, Amount: req.Amount, At: s.Clock.Now()}
 	if rt.FromBank == rt.ToBank {
 		return s.internal(ctx, rt, req, res)
 	}
 	return s.external(ctx, rt, req, res)
 }
 
-func (s *Sender) internal(ctx context.Context, rt Route, req TransferRequest, res TransferResult) (TransferResult, error) {
+func (s *Sender) internal(ctx context.Context, rt Route, req control.TransferRequest, res control.TransferResult) (control.TransferResult, error) {
 	if req.From == req.To {
-		return res, Refused(http.StatusUnprocessableEntity, nip.SystemError, "invalid_request", ErrSameAccount)
+		return res, control.Refused(http.StatusUnprocessableEntity, nip.SystemError, "invalid_request", ErrSameAccount)
 	}
 	b := s.Books()
 	to, err := b.L.Account(ctx, bank.CustomerAccount(req.To))
@@ -155,7 +137,7 @@ func (s *Sender) internal(ctx context.Context, rt Route, req TransferRequest, re
 	return res, err
 }
 
-func (s *Sender) external(ctx context.Context, rt Route, req TransferRequest, res TransferResult) (TransferResult, error) {
+func (s *Sender) external(ctx context.Context, rt Route, req control.TransferRequest, res control.TransferResult) (control.TransferResult, error) {
 	b := s.Books()
 	sender, err := b.L.Account(ctx, bank.CustomerAccount(req.From))
 	if err != nil {
@@ -237,20 +219,20 @@ func (s *Sender) sessionID(ctx context.Context, b *bank.Bank, code, key string, 
 	return nip.SessionID(int64(s.SetupKey), code, at, seq), nil
 }
 
-func (s *Sender) submit(ctx context.Context, rt Route, sid string, body nibssTransfer, res *TransferResult) error {
+func (s *Sender) submit(ctx context.Context, rt Route, sid string, body nibssTransfer, res *control.TransferResult) error {
 	b := s.Books()
-	var sess NIPSession
+	var sess control.NIPSession
 	c, err := s.NIBSS()
 	if err == nil {
 		_, err = c.Do(ctx, http.MethodPost, transfersPath, nil, body, &sess)
 	}
-	var refused *PeerError
+	var refused *control.PeerError
 	switch {
 	case errors.As(err, &refused) && refused.Status < http.StatusInternalServerError:
 		if rerr := s.undo(ctx, b, sid); rerr != nil {
 			return errors.Join(err, rerr)
 		}
-		return Refused(refused.Status, nip.SystemError, refused.Code, fmt.Errorf("%s. Nothing was debited", strings.TrimSuffix(refused.Message, ".")))
+		return control.Refused(refused.Status, nip.SystemError, refused.Code, fmt.Errorf("%s. Nothing was debited", strings.TrimSuffix(refused.Message, ".")))
 	case err != nil:
 		s.Log.Warn("NIBSS gave no answer to a transfer; it will be checked", "bank", rt.FromBank, "session", sid, "err", err)
 		return s.later(ctx, b, sid, s.Clock.Real().Add(clock.Backoff(1)), res)
@@ -258,7 +240,7 @@ func (s *Sender) submit(ctx context.Context, rt Route, sid string, body nibssTra
 	return s.conclude(ctx, b, sid, sess, 0, res)
 }
 
-func (s *Sender) later(ctx context.Context, b *bank.Bank, sid string, next time.Time, res *TransferResult) error {
+func (s *Sender) later(ctx context.Context, b *bank.Bank, sid string, next time.Time, res *control.TransferResult) error {
 	if err := b.RescheduleSend(ctx, sid, next); err != nil {
 		return err
 	}
@@ -267,7 +249,7 @@ func (s *Sender) later(ctx context.Context, b *bank.Bank, sid string, next time.
 	return nil
 }
 
-func (s *Sender) conclude(ctx context.Context, b *bank.Bank, sid string, sess NIPSession, attempts int, res *TransferResult) error {
+func (s *Sender) conclude(ctx context.Context, b *bank.Bank, sid string, sess control.NIPSession, attempts int, res *control.TransferResult) error {
 	switch sess.Status {
 	case sessionOK:
 		res.Status, res.ResponseCode = nip.Success, nip.OK

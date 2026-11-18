@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"github.com/evolutionlabs-core/beerus/internal/money"
 	"log/slog"
 	"net/http"
@@ -45,21 +46,6 @@ type Banking struct {
 
 var ErrBankNotFound = errors.New("no such bank")
 
-const NoBanksMessage = "there are no banks yet. Add one first with beerus bank create --name NAME"
-
-type UnavailableError struct {
-	Msg string
-	Err error
-}
-
-func (e *UnavailableError) Error() string {
-	return e.Msg
-}
-
-func (e *UnavailableError) Unwrap() error {
-	return e.Err
-}
-
 func (s *Banking) bankBook(id string) (Book, error) {
 	bk, err := s.Src.Book(id)
 	if err != nil {
@@ -77,14 +63,14 @@ func (s *Banking) activeBook(id string) (Book, error) {
 		return bk, err
 	}
 	if bk.Phase != config.PhaseActive {
-		return bk, NotActiveError{bk.Name, bk.Phase}
+		return bk, control.NotActiveError{Name: bk.Name, Phase: bk.Phase}
 	}
 	return bk, nil
 }
 
 func noSuchBank(w http.ResponseWriter, r *http.Request, empty func() bool) {
 	if empty() {
-		web.WriteError(w, r, http.StatusNotFound, "not_found", NoBanksMessage)
+		web.WriteError(w, r, http.StatusNotFound, "not_found", control.NoBanksMessage)
 		return
 	}
 	web.WriteError(w, r, http.StatusNotFound, "not_found", "No such bank.")
@@ -102,35 +88,10 @@ const (
 	holdLimit   = 30 * time.Second
 )
 
-type CustomerRequest struct {
-	Name     string `json:"name"`
-	Phone    string `json:"phone"`
-	DOB      string `json:"dob"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Key      string `json:"-"`
-}
-
-type AccountRequest struct {
-	Customer string `json:"customer"`
-	Type     string `json:"type"`
-	Key      string `json:"-"`
-}
-
 type CashRequest struct {
 	Account string `json:"account"`
 	Amount  string `json:"amount"`
 	Key     string `json:"-"`
-}
-
-type AccountJSON struct {
-	NUBAN    string `json:"nuban"`
-	Name     string `json:"name"`
-	Customer string `json:"customer"`
-	Type     string `json:"type"`
-	Status   string `json:"status"`
-	Currency string `json:"currency"`
-	Balance  int64  `json:"balance_minor"`
 }
 
 type StatementLine struct {
@@ -159,7 +120,7 @@ func writeKey(key, op string) string {
 	return "api:" + key
 }
 
-func (s *Banking) CreateCustomer(ctx context.Context, bankID string, req CustomerRequest) (bank.Customer, error) {
+func (s *Banking) CreateCustomer(ctx context.Context, bankID string, req control.CustomerRequest) (bank.Customer, error) {
 	bk, err := s.activeBook(bankID)
 	if err != nil {
 		return bank.Customer{}, err
@@ -200,23 +161,23 @@ func (s *Banking) Customers(ctx context.Context, bankID string, limit int, curso
 	return bk.Bank.Customers(ctx, limit, cursor)
 }
 
-func accountJSON(ctx context.Context, b *bank.Bank, acc ledger.Account) (AccountJSON, error) {
+func accountJSON(ctx context.Context, b *bank.Bank, acc ledger.Account) (control.AccountJSON, error) {
 	bal, err := b.L.Balance(ctx, acc.Code)
 	if err != nil {
-		return AccountJSON{}, fmt.Errorf("read balance of %s: %w", acc.NUBAN, err)
+		return control.AccountJSON{}, fmt.Errorf("read balance of %s: %w", acc.NUBAN, err)
 	}
-	return AccountJSON{NUBAN: acc.NUBAN, Name: acc.Name, Customer: acc.Owner, Type: acc.Product, Status: acc.Status, Currency: acc.Currency, Balance: bal}, nil
+	return control.AccountJSON{NUBAN: acc.NUBAN, Name: acc.Name, Customer: acc.Owner, Type: acc.Product, Status: acc.Status, Currency: acc.Currency, Balance: bal}, nil
 }
 
-func (s *Banking) OpenAccount(ctx context.Context, bankID string, req AccountRequest) (AccountJSON, error) {
+func (s *Banking) OpenAccount(ctx context.Context, bankID string, req control.AccountRequest) (control.AccountJSON, error) {
 	bk, err := s.activeBook(bankID)
 	if err != nil {
-		return AccountJSON{}, err
+		return control.AccountJSON{}, err
 	}
 	b := bk.Bank
 	acc, err := b.OpenAccount(ctx, writeKey(req.Key, "acc"), req.Customer, req.Type, s.Clock.Now())
 	if err != nil {
-		return AccountJSON{}, err
+		return control.AccountJSON{}, err
 	}
 	return accountJSON(ctx, b, acc)
 }
@@ -229,7 +190,7 @@ func (s *Banking) CloseAccount(ctx context.Context, bankID, nuban string) error 
 	return bk.Bank.CloseAccount(ctx, nuban, s.Clock.Now())
 }
 
-func (s *Banking) Accounts(ctx context.Context, bankID, customer string, limit int, cursor string) ([]AccountJSON, string, error) {
+func (s *Banking) Accounts(ctx context.Context, bankID, customer string, limit int, cursor string) ([]control.AccountJSON, string, error) {
 	bk, err := s.bankBook(bankID)
 	if err != nil {
 		return nil, "", err
@@ -239,7 +200,7 @@ func (s *Banking) Accounts(ctx context.Context, bankID, customer string, limit i
 	if err != nil {
 		return nil, "", err
 	}
-	data := make([]AccountJSON, 0, len(accts))
+	data := make([]control.AccountJSON, 0, len(accts))
 	for _, acc := range accts {
 		j, err := accountJSON(ctx, b, acc)
 		if err != nil {
@@ -321,18 +282,18 @@ func (s *Banking) Error(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func WriteBankingError(w http.ResponseWriter, r *http.Request, log *slog.Logger, noBanks func() bool, err error) {
-	var te *TransferError
+	var te *control.TransferError
 	var fe *bank.InsufficientFundsError
 	var pe *bank.PayoutTooLargeError
 	var de *bank.DailyLimitError
-	var ue *UnavailableError
+	var ue *control.UnavailableError
 	switch {
 	case errors.Is(err, context.Canceled):
 	case errors.As(err, &te):
 		web.WriteError(w, r, te.Status, te.ErrCode, web.Sentence(te.Error()))
 	case errors.Is(err, ErrBankNotFound):
 		noSuchBank(w, r, noBanks)
-	case errors.Is(err, errBankNotActive):
+	case errors.Is(err, control.ErrBankNotActive):
 		web.WriteError(w, r, http.StatusConflict, "bank_not_active", web.Sentence(err.Error()))
 	case errors.Is(err, errBankNotClosing):
 		web.WriteError(w, r, http.StatusConflict, "bank_not_closing", web.Sentence(err.Error()))
@@ -419,7 +380,7 @@ func (s *Banking) HandleCreateCustomer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req CustomerRequest
+	var req control.CustomerRequest
 	if err := web.DecodeBody(r, &req); err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"name":"Ada Obi","phone":"08031234567","dob":"1990-04-21"}, with optional username and password.`)
 		return
@@ -461,7 +422,7 @@ func (s *Banking) HandleOpenAccount(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req AccountRequest
+	var req control.AccountRequest
 	if err := web.DecodeBody(r, &req); err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"customer":"cus_...","type":"current"}.`)
 		return

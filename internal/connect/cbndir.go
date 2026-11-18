@@ -2,9 +2,9 @@ package connect
 
 import (
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"path/filepath"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
@@ -22,6 +22,6 @@ func (a *App) prepareCBN() error {
 		return fmt.Errorf("CBN control token: %w", err)
 	}
 	port := a.cfg.Connect.CBNControlPort
-	a.cbnCtl = &cbnAdmin{link: server.NewLink(token, a.link.Bind), base: a.cfg.CBNURL(), port: port}
+	a.cbnCtl = &cbnAdmin{link: control.NewLink(token, a.link.Bind), base: a.cfg.CBNURL(), port: port}
 	return nil
 }

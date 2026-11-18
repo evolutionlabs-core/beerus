@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"net"
 	"net/http"
@@ -15,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -69,14 +69,14 @@ func (s *stage) start(t *testing.T, url string) *Participant {
 	return p
 }
 
-func (s *stage) status(t *testing.T, p *Participant) server.State {
+func (s *stage) status(t *testing.T, p *Participant) control.State {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
 	r.RemoteAddr = "127.0.0.1:1"
 	r.Header.Set("Authorization", "Bearer "+s.token)
 	w := httptest.NewRecorder()
 	p.Server().API().ServeHTTP(w, r)
-	var st server.State
+	var st control.State
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &st) != nil {
 		t.Fatalf("status answered %d %s", w.Code, w.Body)
 	}
@@ -89,7 +89,7 @@ type stepRow struct {
 	failed   bool
 }
 
-func rows(st server.State) []stepRow {
+func rows(st control.State) []stepRow {
 	out := []stepRow{}
 	for _, s := range st.Steps {
 		out = append(out, stepRow{s.ID, s.Name, s.Done, s.Error != ""})

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"log/slog"
 	"net/http/httptest"
 	"regexp"
@@ -96,7 +97,7 @@ func (a *adminBank) restart(phase string) {
 		Bank:  config.Bank{ID: "bank-a", Name: "Bank A", NIPCode: "000014", NUBANCode: "014"},
 		Books: a.books,
 		Fees:  banktest.Fees(a.t),
-		Link:  Link{Token: adminToken},
+		Link:  control.Link{Token: adminToken},
 		Log:   slog.New(slog.NewTextHandler(a.logs, nil)),
 		Clock: clock.New(),
 		Phase: phase,
@@ -290,7 +291,7 @@ func TestBookRoutes(t *testing.T) {
 	if strings.Contains(a.logs.String(), adminPassword) || strings.Contains(a.logs.String(), "wrong-password-here") {
 		t.Fatalf("a password reached the log: %s", a.logs)
 	}
-	a.srv = New(Config{Bank: config.Bank{ID: "bank-a", Name: "Bank A"}, Link: Link{Token: adminToken}, Log: slog.New(slog.NewTextHandler(a.logs, nil)), Clock: clock.New(), Phase: config.PhaseProvisioning})
+	a.srv = New(Config{Bank: config.Bank{ID: "bank-a", Name: "Bank A"}, Link: control.Link{Token: adminToken}, Log: slog.New(slog.NewTextHandler(a.logs, nil)), Clock: clock.New(), Phase: config.PhaseProvisioning})
 	for _, path := range []string{"/v1/books/totals", "/v1/ledger/check", "/v1/accounts/" + a.ada, "/v1/customers", "/v1/closure-payouts", "/v1/nip/sends/open"} {
 		if got := a.call("GET", path, "", ""); got.status != 503 || got.body != notReady {
 			t.Fatalf("%s before the books open: got %d %s", path, got.status, got.body)
