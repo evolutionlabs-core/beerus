@@ -328,7 +328,7 @@ func dispatch(args []string) error {
 		return helpFor(rest)
 	}
 	c, ok := lookup(name)
-	if !ok {
+	if !ok || c.run == nil {
 		return unknownCommand(name)
 	}
 	if len(subcommands(name)) > 0 && len(rest) > 0 && helpRequested(rest[:1]) {
