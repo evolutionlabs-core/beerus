@@ -275,11 +275,10 @@ func TestBankRepairsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close(context.Background())
-	dropped := s.realNow()
+	dropped := time.Now()
 	if _, err := db.Exec(context.Background(), "DROP DATABASE "+s.cfg.Bank("bank-b").Database+" WITH (FORCE)"); err != nil {
 		t.Fatal(err)
 	}
-	s.advance("24h")
 	timeout := time.NewTimer(30 * time.Second)
 	defer timeout.Stop()
 	tick := time.NewTicker(200 * time.Millisecond)
@@ -312,7 +311,7 @@ func TestBankRepairsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.waitBlocked("bank-b", setup.ReasonMoneyDecisionNeeded, "cus_nobody is not a customer of Bank B")
-	dropped = s.realNow()
+	dropped = time.Now()
 	if _, err := db.Exec(context.Background(), "DROP DATABASE "+s.cfg.Bank("bank-b").Database+" WITH (FORCE)"); err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +494,7 @@ func TestCloseBank(t *testing.T) {
 	if got := balance(home["adaeze"]); got != before+2_500_000 {
 		t.Fatalf("adaeze at bank-a has %d, want %d", got, before+2_500_000)
 	}
-	s.advance("72h")
+	s.syncNow()
 	if got := s.closedBalances(opened["adaeze"])[opened["adaeze"].Accounts[0]]; got != 0 {
 		t.Fatalf("closed account keeps %d", got)
 	}
@@ -600,7 +599,7 @@ func TestClosePaysInsuredDeposits(t *testing.T) {
 	if got := total(s.balances, from); got != before {
 		t.Fatalf("a cash payout moved %d to bank-a", got-before)
 	}
-	s.advance("72h")
+	s.syncNow()
 	if got := total(s.closedBalances, who); got != 50_000_000 {
 		t.Fatalf("claims left at the closed bank: %d", got)
 	}

@@ -93,24 +93,33 @@ func TestRealAggregator(t *testing.T) {
 		t.Fatalf("vault master key: %v %v", info, err)
 	}
 
-	var before int
-	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM ob_tokens WHERE kind = 'refresh'`).Scan(&before); err != nil {
-		t.Fatal(err)
+	refreshRows := func() (total, rotated int) {
+		t.Helper()
+		if err := db.QueryRow(context.Background(), `SELECT count(*), count(*) FILTER (WHERE rotated_at IS NOT NULL) FROM ob_tokens WHERE kind = 'refresh'`).Scan(&total, &rotated); err != nil {
+			t.Fatal(err)
+		}
+		return total, rotated
 	}
-	s.skewReal(15 * time.Minute)
-	s.syncNow()
-	var after int
-	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM ob_tokens WHERE kind = 'refresh'`).Scan(&after); err != nil {
-		t.Fatal(err)
+	before, rotatedBefore := refreshRows()
+	waitFor(t, waitLimit, "Connect to refresh the access token", func() bool {
+		s.syncNow()
+		total, _ := refreshRows()
+		return total > before
+	})
+	if _, rotated := refreshRows(); rotated <= rotatedBefore {
+		t.Fatalf("the bank did not rotate the previous refresh token: %d rotated before, %d after", rotatedBefore, rotated)
 	}
-	if after != before+1 {
-		t.Fatalf("expired access token was not refreshed: %d refresh tokens before, %d after", before, after)
-	}
+	s.spend(s.persona("adaeze"), 1)
+	waitFor(t, waitLimit, "the refreshed access token to fetch the new transfer", func() bool {
+		s.syncNow()
+		st, _ := s.syncAll(id, "", 500)
+		return len(st.lines) == 17
+	})
 	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "active" {
 		t.Fatalf("status after refresh: %v", got.JSON["status"])
 	}
 
-	forged, err := openbanking.Sign(mustSigningKey(t, s), "bank-a", map[string]any{"iss": s.cfg.Bank("bank-a").APIURL(), "aud": s.cfg.WidgetURL(), "jti": "x", "exp": s.realNow().Add(time.Minute).Unix(), "consent_id": consentID, "status": "Revoked"})
+	forged, err := openbanking.Sign(mustSigningKey(t, s), "bank-a", map[string]any{"iss": s.cfg.Bank("bank-a").APIURL(), "aud": s.cfg.WidgetURL(), "jti": "x", "exp": time.Now().Add(time.Minute).Unix(), "consent_id": consentID, "status": "Revoked"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +234,7 @@ func TestConsentEventsAreSignedWithTheEventKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	forged, err := openbanking.Sign(k.(*ecdsa.PrivateKey), "bank-a", map[string]any{"iss": s.cfg.Bank("bank-a").APIURL(), "aud": s.cfg.WidgetURL(), "jti": "tls-key", "exp": s.realNow().Add(time.Minute).Unix(), "consent_id": consentID, "status": "Revoked"})
+	forged, err := openbanking.Sign(k.(*ecdsa.PrivateKey), "bank-a", map[string]any{"iss": s.cfg.Bank("bank-a").APIURL(), "aud": s.cfg.WidgetURL(), "jti": "tls-key", "exp": time.Now().Add(time.Minute).Unix(), "consent_id": consentID, "status": "Revoked"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +275,6 @@ func TestConsentEventsAreKeptAndRetried(t *testing.T) {
 	if err := os.Rename(cert+".off", cert); err != nil {
 		t.Fatal(err)
 	}
-	s.skewReal(time.Hour)
 	var left, delivered int
 	var err error
 	waitFor(t, waitLimit, "the revoke event to be delivered again", func() bool {
