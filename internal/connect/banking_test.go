@@ -252,7 +252,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 		if err != nil || done.ObservedGeneration != done.Generation || degraded || done.Phase != o.phase {
 			t.Fatalf("%v after NIBSS answered: phase %s, generation %d/%d, degraded %v, %v", o.changes, done.Phase, done.ObservedGeneration, done.Generation, degraded, err)
 		}
-		if in, err := a.nibssStore().Institution(t.Context(), done.Allocated.NIPCode); err != nil || in.Status != o.status {
+		if in, err := a.nibssCtl.member(t.Context(), "bank-b"); err != nil || in.Status != o.status {
 			t.Fatalf("NIBSS shows bank-b as %+v after %v, want %s: %v", in, o.changes, o.status, err)
 		}
 	}

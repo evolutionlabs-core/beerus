@@ -58,8 +58,8 @@ func (a *App) PurgeImpact(ctx context.Context, id string) (PurgeImpact, error) {
 	return out, nil
 }
 
-func (a *App) PurgeBank(id string, settleNow bool) (setup.Resource, error) {
-	err := a.applyEdit(func(sp *setup.Spec) error {
+func (a *App) PurgeBank(ctx context.Context, id string, settleNow bool) (setup.Resource, error) {
+	err := a.applyEdit(ctx, func(sp *setup.Spec) error {
 		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
 		if i < 0 {
 			return errNotFound
@@ -165,11 +165,7 @@ func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nip.Institut
 	if _, err := os.Stat(a.cfg.Path("banks", id)); !os.IsNotExist(err) {
 		return nip.Institution{}, fmt.Errorf("banks/%s still exists after the purge", id)
 	}
-	sw := a.nibssStore()
-	if sw == nil {
-		return nip.Institution{}, errors.New("NIBSS is not open, so its tombstone for the bank cannot be read back; try again soon")
-	}
-	in, err := sw.Institution(ctx, r.Allocated.NIPCode)
+	in, err := a.nibssCtl.member(ctx, id)
 	if err != nil {
 		return nip.Institution{}, fmt.Errorf("read back the NIBSS status of %s: %w", id, err)
 	}
@@ -244,7 +240,7 @@ func (a *App) ctlPurgeBank(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send nothing or {"settle_now":true}.`)
 		return
 	}
-	res, err := a.PurgeBank(r.PathValue("id"), req.SettleNow)
+	res, err := a.PurgeBank(r.Context(), r.PathValue("id"), req.SettleNow)
 	if err != nil {
 		a.bankError(w, r, err)
 		return

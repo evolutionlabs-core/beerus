@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -43,12 +45,13 @@ func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
-	sw := a.nibssStore()
-	if sw == nil {
+	list, err := a.nibssCtl.directory(r.Context())
+	var away *nibssDownError
+	if errors.As(err, &away) {
+		a.log.Warn("NIBSS directory", "err", err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS is not available right now.")
 		return
 	}
-	list, err := sw.Directory(r.Context())
 	if err != nil {
 		a.log.Error("NIBSS directory", "err", err)
 		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The NIBSS directory could not be read.")
@@ -70,14 +73,15 @@ func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) position(ctx context.Context, b *config.Bank) (map[string]any, error) {
-	sw := a.nibssStore()
-	if sw == nil {
-		return nil, errors.New("NIBSS is not available right now")
-	}
-	open, err := sw.Position(ctx, b.NIPCode)
+	sessions, err := a.nibssCtl.openSessions(ctx, b.ID)
 	if err != nil {
 		return nil, err
 	}
+	inward, ok := sessions.inwardAll()
+	if !ok {
+		return nil, fmt.Errorf("the open sessions of %s add up to more than 64 bits", b.ID)
+	}
+	open := nibss.Position{Outward: sessions.Outward, Inward: inward}
 	pos := open.NetDebit()
 	source := "configured"
 	if b.CapIsDefault() {
@@ -181,7 +185,7 @@ func (a *App) writeNIPSession(w http.ResponseWriter, r *http.Request, x any, err
 }
 
 func (a *App) SetNetDebitCap(ctx context.Context, id string, cap, collateral int64) error {
-	err := a.applyEdit(func(sp *setup.Spec) error {
+	err := a.applyEdit(ctx, func(sp *setup.Spec) error {
 		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
 		if i < 0 {
 			return errNotFound

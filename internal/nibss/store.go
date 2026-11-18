@@ -45,8 +45,6 @@ type Store struct {
 	phone countrypack.Phone
 }
 
-var _ Switch = (*Store)(nil)
-
 func Open(ctx context.Context, url, name string) (*Store, error) {
 	if !validName.MatchString(name) {
 		return nil, fmt.Errorf("database name %q must look like beerus_something", name)
@@ -225,8 +223,31 @@ func (s *Store) Directory(ctx context.Context) ([]nip.Institution, error) {
 	return out, nil
 }
 
-func (s *Store) Institution(ctx context.Context, code string) (nip.Institution, error) {
-	return institution(ctx, s.pool, code, "")
+func (s *Store) Institutions(ctx context.Context, limit int, after string) ([]nip.Institution, string, error) {
+	if after != "" && !nipCodeRe.MatchString(after) {
+		return nil, "", &CursorError{Cursor: after}
+	}
+	rows, err := s.pool.Query(ctx, `SELECT `+institutionCols+` FROM institutions WHERE nip_code > $1 ORDER BY nip_code LIMIT $2`, after, limit+1)
+	if err != nil {
+		return nil, "", fmt.Errorf("list institutions: %w", err)
+	}
+	defer rows.Close()
+	out := []nip.Institution{}
+	for rows.Next() {
+		in, err := scanInstitution(rows)
+		if err != nil {
+			return nil, "", fmt.Errorf("read institution: %w", err)
+		}
+		out = append(out, in)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("list institutions: %w", err)
+	}
+	if len(out) <= limit {
+		return out, "", nil
+	}
+	out = out[:limit]
+	return out, out[limit-1].NIPCode, nil
 }
 
 func institution(ctx context.Context, q querier, code, lock string) (nip.Institution, error) {

@@ -108,8 +108,8 @@ func TestOpenSessionsCountsWhatIsNotSettled(t *testing.T) {
 		want OpenSessions
 		err  string
 	}{
-		{"bank a", "bank-a", OpenSessions{BankID: "bank-a", Transfers: 3, Outward: 111, Inward: 0, Unposted: 2}, ""},
-		{"bank b", "bank-b", OpenSessions{BankID: "bank-b", Transfers: 3, Outward: 20, Inward: 11, Unposted: 2}, ""},
+		{"bank a", "bank-a", OpenSessions{BankID: "bank-a", Transfers: 3, Outward: 111, Inward: 0, PendingInward: 20, Unposted: 2}, ""},
+		{"bank b", "bank-b", OpenSessions{BankID: "bank-b", Transfers: 3, Outward: 20, Inward: 11, PendingInward: 100, Unposted: 2}, ""},
 		{"bank c", "bank-c", OpenSessions{BankID: "bank-c"}, ""},
 		{"an unknown bank", "bank-z", OpenSessions{}, "bank id bank-z is not in the NIBSS directory"},
 	}

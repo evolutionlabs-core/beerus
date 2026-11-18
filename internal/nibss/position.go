@@ -20,11 +20,12 @@ type SettlementPosition struct {
 }
 
 type OpenSessions struct {
-	BankID    string `json:"bank_id"`
-	Transfers int    `json:"transfers"`
-	Outward   int64  `json:"outward_minor"`
-	Inward    int64  `json:"inward_minor"`
-	Unposted  int    `json:"unposted_settlements"`
+	BankID        string `json:"bank_id"`
+	Transfers     int    `json:"transfers"`
+	Outward       int64  `json:"outward_minor"`
+	Inward        int64  `json:"inward_minor"`
+	PendingInward int64  `json:"pending_inward_minor"`
+	Unposted      int    `json:"unposted_settlements"`
 }
 
 const openRows = `(status = 'pending' OR (status = '00' AND settlement_session = '')) AND (from_code = $1 OR to_code = $1)`
@@ -49,6 +50,7 @@ const positionSQL = `WITH after_boundary AS (
 const openSessionsSQL = `SELECT
 		coalesce(sum(amount_minor) FILTER (WHERE from_code = $1), 0),
 		coalesce(sum(amount_minor) FILTER (WHERE to_code = $1 AND status = '00'), 0),
+		coalesce(sum(amount_minor) FILTER (WHERE to_code = $1 AND status = 'pending'), 0),
 		count(*),
 		(SELECT count(*) FROM settlement_sessions g WHERE g.posted_at IS NULL AND EXISTS (
 			SELECT 1 FROM nip_sessions n WHERE n.settlement_session = g.session_key AND (n.from_code = $1 OR n.to_code = $1)))
@@ -101,14 +103,15 @@ func (s *Store) OpenSessions(ctx context.Context, id string) (OpenSessions, erro
 		return OpenSessions{}, err
 	}
 	o := OpenSessions{BankID: id}
-	var outward, inward pgtype.Numeric
-	if err := s.pool.QueryRow(ctx, openSessionsSQL, m.NIPCode).Scan(&outward, &inward, &o.Transfers, &o.Unposted); err != nil {
+	var outward, inward, pending pgtype.Numeric
+	if err := s.pool.QueryRow(ctx, openSessionsSQL, m.NIPCode).Scan(&outward, &inward, &pending, &o.Transfers, &o.Unposted); err != nil {
 		return OpenSessions{}, fmt.Errorf("read open sessions of %s: %w", id, err)
 	}
-	var ok [2]bool
+	var ok [3]bool
 	o.Outward, ok[0] = minor(outward)
 	o.Inward, ok[1] = minor(inward)
-	if !ok[0] || !ok[1] {
+	o.PendingInward, ok[2] = minor(pending)
+	if !ok[0] || !ok[1] || !ok[2] {
 		return OpenSessions{}, &SumError{Msg: fmt.Sprintf("the open sessions of %s add up to more than 64 bits", id)}
 	}
 	return o, nil

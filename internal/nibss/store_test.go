@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -143,8 +144,47 @@ func TestDirectory(t *testing.T) {
 	}
 }
 
+func TestInstitutionsListOnePageAtATime(t *testing.T) {
+	ctx := t.Context()
+	s := testStore(t)
+	register(t, s, "bank-c", "Bank C", "999003", "903")
+	register(t, s, "bank-a", "Bank A", "999001", "901")
+	register(t, s, "bank-b", "Bank B", "999002", "902")
+	setStatus(t, s, "bank-b", nip.StatusTerminating)
+	setStatus(t, s, "bank-b", nip.StatusRemoved)
+	rows := []struct {
+		name  string
+		limit int
+		after string
+		want  string
+		next  string
+		err   string
+	}{
+		{"every bank in code order", 10, "", "bank-a active|bank-b removed|bank-c active", "", ""},
+		{"first page", 2, "", "bank-a active|bank-b removed", "999002", ""},
+		{"second page", 2, "999002", "bank-c active", "", ""},
+		{"page that ends exactly", 3, "", "bank-a active|bank-b removed|bank-c active", "", ""},
+		{"after the last", 2, "999003", "", "", ""},
+		{"a bad cursor", 2, "nope", "", "", `cursor "nope" is not valid; use the next value from the last page`},
+	}
+	for _, r := range rows {
+		got, next, err := s.Institutions(ctx, r.limit, r.after)
+		parts := []string{}
+		for _, in := range got {
+			parts = append(parts, in.ID+" "+in.Status)
+		}
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		if have := strings.Join(parts, "|"); have != r.want || next != r.next || msg != r.err {
+			t.Errorf("%s: %q, next %q, error %q; want %q, next %q, error %q", r.name, have, next, msg, r.want, r.next, r.err)
+		}
+	}
+}
+
 func TestInstitutionUnknown(t *testing.T) {
-	_, err := testStore(t).Institution(context.Background(), "123456")
+	_, err := institution(t.Context(), testStore(t).pool, "123456", "")
 	if !errors.Is(err, nip.ErrUnknownInstitution) {
 		t.Fatalf("got %v, want nip.ErrUnknownInstitution", err)
 	}
@@ -177,7 +217,7 @@ func TestSetStatus(t *testing.T) {
 			wantErr(t, err, st.want)
 		}
 	}
-	in, _ := s.Institution(ctx, "999003")
+	in, _ := institution(ctx, s.pool, "999003", "")
 	if in.Status != nip.StatusRemoved {
 		t.Errorf("status %s, want removed", in.Status)
 	}

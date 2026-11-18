@@ -128,7 +128,7 @@ func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
 	if err := os.WriteFile(renamed, []byte(strings.Replace(string(body), "name: Bank B", "name: Zenith Bank", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if r := invoke(cmdDiff, "", false, "--dir", dir, "-f", renamed); r.code != exitChanges || !strings.Contains(r.out, "~ bank bank-b") || !strings.Contains(r.out, "Zenith Bank") || !strings.Contains(r.err, "beerus: NIBSS is not reachable (") || !strings.Contains(r.err, "cannot check codes against live banks.") {
+	if r := invoke(cmdDiff, "", false, "--dir", dir, "-f", renamed); r.code != exitChanges || !strings.Contains(r.out, "~ bank bank-b") || !strings.Contains(r.out, "Zenith Bank") || r.err != "" {
 		t.Fatalf("offline diff of a rename: %+v", r)
 	}
 	if r := invoke(cmdVerify, "", false, "--dir", dir); r.code != 0 || !regexp.MustCompile(`^setup sha256:[0-9a-f]{64}\n$`).MatchString(r.out) {

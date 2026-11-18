@@ -18,6 +18,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -82,29 +83,29 @@ type admission struct {
 	partners map[string]*config.Partner
 }
 
-func (a *App) Plan(desired setup.Spec) (setup.Plan, error) {
+func (a *App) Plan(ctx context.Context, desired setup.Spec) (setup.Plan, error) {
 	st, err := a.ctl.status()
 	if err != nil {
 		return setup.Plan{}, err
 	}
-	pl, err := a.buildPlan(desired, st, ApplyOptions{})
+	pl, err := a.buildPlan(ctx, desired, st, ApplyOptions{})
 	return pl.plan, err
 }
 
-func (a *App) Apply(desired setup.Spec, opt ApplyOptions) (setup.Plan, error) {
+func (a *App) Apply(ctx context.Context, desired setup.Spec, opt ApplyOptions) (setup.Plan, error) {
 	if !a.applyMu.TryLock() {
 		return setup.Plan{}, errApplyRunning
 	}
 	defer a.applyMu.Unlock()
-	return a.applyLocked(func(setup.Status) (setup.Spec, error) { return desired, nil }, opt)
+	return a.applyLocked(ctx, func(setup.Status) (setup.Spec, error) { return desired, nil }, opt)
 }
 
-func (a *App) applyEdit(edit func(*setup.Spec) error, opt ApplyOptions) error {
+func (a *App) applyEdit(ctx context.Context, edit func(*setup.Spec) error, opt ApplyOptions) error {
 	if !a.applyMu.TryLock() {
 		return errApplyRunning
 	}
 	defer a.applyMu.Unlock()
-	_, err := a.applyLocked(func(st setup.Status) (setup.Spec, error) {
+	_, err := a.applyLocked(ctx, func(st setup.Status) (setup.Spec, error) {
 		cp, err := cloneStatus(st)
 		if err != nil {
 			return setup.Spec{}, err
@@ -115,7 +116,7 @@ func (a *App) applyEdit(edit func(*setup.Spec) error, opt ApplyOptions) error {
 	return err
 }
 
-func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt ApplyOptions) (setup.Plan, error) {
+func (a *App) applyLocked(ctx context.Context, next func(setup.Status) (setup.Spec, error), opt ApplyOptions) (setup.Plan, error) {
 	st, err := a.ctl.status()
 	if err != nil {
 		return setup.Plan{}, err
@@ -124,7 +125,7 @@ func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt Apply
 	if err != nil {
 		return setup.Plan{}, err
 	}
-	pl, err := a.buildPlan(desired, st, opt)
+	pl, err := a.buildPlan(ctx, desired, st, opt)
 	if err != nil {
 		return setup.Plan{}, err
 	}
@@ -140,7 +141,7 @@ func (a *App) applyLocked(next func(setup.Status) (setup.Spec, error), opt Apply
 		a.requestSettleNow(opt, settling)
 		return pl.plan, a.syncSetupFile(pl.desired)
 	}
-	ad, err := a.prepare(pl, opt.Money, retarget)
+	ad, err := a.prepare(ctx, pl, opt.Money, retarget)
 	if err != nil {
 		return pl.plan, err
 	}
@@ -372,7 +373,7 @@ func checkMoney(rm *setup.Removal) error {
 	return nil
 }
 
-func (a *App) buildPlan(desired setup.Spec, st setup.Status, opt ApplyOptions) (planned, error) {
+func (a *App) buildPlan(ctx context.Context, desired setup.Spec, st setup.Status, opt ApplyOptions) (planned, error) {
 	if err := checkMoney(opt.Money); err != nil {
 		return planned{}, err
 	}
@@ -380,13 +381,9 @@ func (a *App) buildPlan(desired setup.Spec, st setup.Status, opt ApplyOptions) (
 	if errs := setup.Validate(desired); len(errs) > 0 {
 		return planned{}, planFailure(errs)
 	}
-	sw := a.nibssStore()
-	if sw == nil {
-		return planned{}, applyFail(http.StatusServiceUnavailable, codeNotReady, "The NIBSS directory is not open yet, so removed banks cannot be checked. Try again soon.")
-	}
-	dir, err := sw.Directory(context.Background())
+	dir, err := a.planDirectory(ctx, desired, st)
 	if err != nil {
-		return planned{}, fmt.Errorf("read the NIBSS directory: %w", err)
+		return planned{}, err
 	}
 	pack, err := countrypack.Nigeria()
 	if err != nil {
@@ -397,10 +394,29 @@ func (a *App) buildPlan(desired setup.Spec, st setup.Status, opt ApplyOptions) (
 		return planned{}, planFailure(plan.Errors)
 	}
 	pl := planned{plan: plan, desired: desired, st: st}
-	if err := a.fillImpact(context.Background(), &pl); err != nil {
+	if err := a.fillImpact(ctx, &pl); err != nil {
 		return planned{}, err
 	}
 	return pl, nil
+}
+
+func (a *App) planDirectory(ctx context.Context, desired setup.Spec, st setup.Status) ([]nip.Institution, error) {
+	adds := slices.ContainsFunc(desired.Spec.Banks, func(b setup.Bank) bool {
+		_, ok := bankIn(st.Applied, b.ID)
+		return !ok
+	})
+	if !adds {
+		return nil, nil
+	}
+	dir, err := a.nibssCtl.directory(ctx)
+	var down *nibssDownError
+	if errors.As(err, &down) {
+		return nil, applyFail(http.StatusServiceUnavailable, codeNotReady, "The NIBSS directory is not open yet, so removed banks cannot be checked. Try again soon.")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the NIBSS directory: %w", err)
+	}
+	return dir, nil
 }
 
 func (a *App) fillImpact(ctx context.Context, pl *planned) error {
@@ -412,7 +428,7 @@ func (a *App) fillImpact(ctx context.Context, pl *planned) error {
 		var err error
 		switch act.Kind {
 		case setup.KindBank:
-			err = a.bankImpact(ctx, act, pl.st)
+			err = a.bankImpact(ctx, act)
 		case setup.KindPartner:
 			act.Impact.Connections = a.partnerConnections(act.ID)
 		}
@@ -435,7 +451,7 @@ func (a *App) partnerConnections(id string) int {
 	return n
 }
 
-func (a *App) bankImpact(ctx context.Context, act *setup.Action, st setup.Status) error {
+func (a *App) bankImpact(ctx context.Context, act *setup.Action) error {
 	im := act.Impact
 	a.mu.Lock()
 	open := a.ledgerFor(act.ID) != nil
@@ -454,14 +470,7 @@ func (a *App) bankImpact(ctx context.Context, act *setup.Action, st setup.Status
 			im.MoneyMinor, im.Connections = ci.Deposits, len(ci.Connections)
 		}
 	}
-	code := ""
-	if b, ok := bankIn(st.Applied, act.ID); ok {
-		code = b.NIPCode
-	}
-	if r := findResource(&st, setup.KindBank, act.ID); r != nil && code == "" {
-		code = r.Allocated.NIPCode
-	}
-	transfers, net, err := a.openTransfers(code)
+	transfers, net, err := a.openTransfers(ctx, act.ID)
 	if err != nil {
 		return err
 	}
@@ -469,40 +478,28 @@ func (a *App) bankImpact(ctx context.Context, act *setup.Action, st setup.Status
 	return nil
 }
 
-func (a *App) openTransfers(code string) (int, int64, error) {
-	sw := a.nibssStore()
-	if sw == nil || code == "" {
+func (a *App) openTransfers(ctx context.Context, id string) (int, int64, error) {
+	open, err := a.nibssCtl.openSessions(ctx, id)
+	var peer *server.PeerError
+	var down *nibssDownError
+	switch {
+	case errors.As(err, &peer) && peer.Status == http.StatusNotFound:
 		return 0, 0, nil
+	case errors.As(err, &down):
+		return 0, 0, applyFail(http.StatusServiceUnavailable, codeNotReady, "NIBSS is not answering, so the open transfers of %s cannot be counted. Try again soon.", id)
+	case err != nil:
+		return 0, 0, err
 	}
-	sessions, err := sw.Open(context.Background())
-	if err != nil {
-		return 0, 0, fmt.Errorf("read open NIP sessions: %w", err)
+	inward, ok := open.inwardAll()
+	if !ok {
+		return 0, 0, fmt.Errorf("the open transfers of the bank add up to more than 64 bits")
 	}
-	count := 0
-	var net int64
-	for _, x := range sessions {
-		var delta int64
-		switch {
-		case x.ToCode == code && x.FromCode != code:
-			delta = x.Amount
-		case x.FromCode == code && x.ToCode != code:
-			delta = -x.Amount
-		case x.FromCode != code:
-			continue
-		}
-		count++
-		sum := net + delta
-		if (delta > 0 && sum < net) || (delta < 0 && sum > net) {
-			return 0, 0, fmt.Errorf("the open transfers of the bank add up to more than 64 bits")
-		}
-		net = sum
-	}
-	return count, net, nil
+	return open.Transfers, inward - open.Outward, nil
 }
 
-func (a *App) prepare(pl planned, money *setup.Removal, retarget map[string]bool) (*admission, error) {
+func (a *App) prepare(ctx context.Context, pl planned, money *setup.Removal, retarget map[string]bool) (*admission, error) {
 	ad := &admission{pl: pl, money: money, retarget: retarget, dir: a.cfg.Dir, now: a.clock.Real(), ports: map[string][2]int{}, partners: map[string]*config.Partner{}}
-	if err := a.allocatePorts(ad); err != nil {
+	if err := a.allocatePorts(ctx, ad); err != nil {
 		return nil, err
 	}
 	for _, act := range pl.plan.Actions {
@@ -518,7 +515,7 @@ func (a *App) prepare(pl planned, money *setup.Removal, retarget map[string]bool
 	return ad, nil
 }
 
-func (a *App) allocatePorts(ad *admission) error {
+func (a *App) allocatePorts(ctx context.Context, ad *admission) error {
 	var creates []string
 	for _, act := range ad.pl.plan.Actions {
 		if act.Kind == setup.KindBank && act.Op == setup.OpCreate {
@@ -528,7 +525,7 @@ func (a *App) allocatePorts(ad *admission) error {
 	if len(creates) == 0 {
 		return nil
 	}
-	if err := a.postgresRoom(context.Background()); err != nil {
+	if err := a.postgresRoom(ctx); err != nil {
 		return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 	}
 	c := a.cfg.Connect
@@ -908,7 +905,7 @@ func (a *App) ctlPlan(w http.ResponseWriter, r *http.Request) {
 	st, err := a.ctl.status()
 	if err == nil {
 		var pl planned
-		if pl, err = a.buildPlan(spec, st, opt); err == nil {
+		if pl, err = a.buildPlan(r.Context(), spec, st, opt); err == nil {
 			web.WriteJSON(w, http.StatusOK, a.planBody(pl.plan))
 			return
 		}
@@ -921,7 +918,7 @@ func (a *App) ctlApply(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	plan, err := a.Apply(spec, opt)
+	plan, err := a.Apply(r.Context(), spec, opt)
 	if err != nil {
 		a.applyFailed(w, r, err)
 		return

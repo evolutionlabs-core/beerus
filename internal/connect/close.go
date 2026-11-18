@@ -239,8 +239,8 @@ type CloseResult struct {
 	Lines    []setup.ClosureLine `json:"lines"`
 }
 
-func (a *App) CloseBank(id string, req CloseRequest) (setup.Resource, error) {
-	err := a.applyEdit(func(sp *setup.Spec) error {
+func (a *App) CloseBank(ctx context.Context, id string, req CloseRequest) (setup.Resource, error) {
+	err := a.applyEdit(ctx, func(sp *setup.Spec) error {
 		i := slices.IndexFunc(sp.Spec.Banks, func(b setup.Bank) bool { return b.ID == id })
 		if i < 0 {
 			return errNotFound
@@ -567,14 +567,15 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 }
 
 func (a *App) closureKey(ctx context.Context, id, nuban, key string) (string, error) {
-	b := a.bankByID(id)
-	sw := a.nibssStore()
-	if b == nil || sw == nil {
-		return "", errors.New("NIBSS is not available right now, so the closure moves cannot be sent; try again soon")
-	}
-	failed, err := sw.ClosureFailed(ctx, b.NIPCode, nuban)
+	all, err := a.nibssCtl.closureSessions(ctx, id)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("count failed closure moves: %w", err)
+	}
+	failed := 0
+	for _, x := range all {
+		if x.FromAccount == nuban && x.Status != nibss.SessionOK && x.Status != nibss.SessionPending {
+			failed++
+		}
 	}
 	if failed == 0 {
 		return key, nil
@@ -583,15 +584,13 @@ func (a *App) closureKey(ctx context.Context, id, nuban, key string) (string, er
 }
 
 func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choice map[string]string, from *ledgerSource) (CloseResult, error) {
-	b := a.bankByID(id)
-	sw := a.nibssStore()
-	if b == nil || sw == nil {
-		return CloseResult{}, errors.New("NIBSS is not available right now, so the closure moves cannot be read back; try again soon")
-	}
-	sent, err := sw.ClosureSent(ctx, b.NIPCode)
+	all, err := a.nibssCtl.closureSessions(ctx, id)
 	if err != nil {
 		return CloseResult{}, fmt.Errorf("read back closure moves: %w", err)
 	}
+	sent := slices.DeleteFunc(all, func(x nibss.ClosureSession) bool {
+		return x.Status != nibss.SessionOK && x.Status != nibss.SessionPending
+	})
 	bk := from.Bank()
 	payouts, err := bk.ClosurePayouts(ctx)
 	if err != nil {
@@ -614,19 +613,19 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 	}
 	res := CloseResult{Moves: []Move{}, Lines: []setup.ClosureLine{}, ClosedAt: a.clock.Now(), Revoked: a.revokedConnections(func(c *Connection) bool { return c.Institution == id })}
 	for _, x := range sent {
-		if _, ok := owner[x.FromNUBAN]; !ok {
+		if _, ok := owner[x.FromAccount]; !ok {
 			continue
 		}
 		if x.Status != nibss.SessionOK {
-			return CloseResult{}, fmt.Errorf("closure session %s from %s is %s, not %s", x.ID, x.FromNUBAN, x.Status, nibss.SessionOK)
+			return CloseResult{}, fmt.Errorf("closure session %s from %s is %s, not %s", x.ID, x.FromAccount, x.Status, nibss.SessionOK)
 		}
-		dest := targets[x.ToCode]
+		dest := targets[x.ToBankCode]
 		if dest == nil {
-			dest = &config.Bank{Name: x.ToCode}
+			dest = &config.Bank{Name: x.ToBankCode}
 		}
-		res.Moves = append(res.Moves, Move{From: x.FromNUBAN, To: x.ToNUBAN, ToBank: dest.ID, Amount: x.Amount})
-		moved := line(x.FromNUBAN, setup.OutcomeTransferred, x.Amount)
-		moved.ToBank, moved.ToBankName, moved.ToNUBAN = dest.ID, dest.Name, x.ToNUBAN
+		res.Moves = append(res.Moves, Move{From: x.FromAccount, To: x.ToAccount, ToBank: dest.ID, Amount: x.Amount})
+		moved := line(x.FromAccount, setup.OutcomeTransferred, x.Amount)
+		moved.ToBank, moved.ToBankName, moved.ToNUBAN = dest.ID, dest.Name, x.ToAccount
 		res.Lines = append(res.Lines, moved)
 		res.Moved += x.Amount
 	}
@@ -713,7 +712,7 @@ func (a *App) ctlCloseBank(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"money":"transfer","to":"bank-a"}.`)
 		return
 	}
-	res, err := a.CloseBank(r.PathValue("id"), req)
+	res, err := a.CloseBank(r.Context(), r.PathValue("id"), req)
 	if err != nil {
 		a.bankError(w, r, err)
 		return

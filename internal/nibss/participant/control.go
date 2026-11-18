@@ -55,9 +55,12 @@ func (p *Participant) Handler() http.Handler {
 	mux.HandleFunc("/v1/health", only(http.MethodGet, p.health))
 	mux.HandleFunc("/v1/status", only(http.MethodGet, p.status))
 	mux.HandleFunc("/v1/control/name-enquiries", only(http.MethodGet, p.controlNameEnquiry))
-	mux.HandleFunc("/v1/control/banks/{bank_id}", only(http.MethodPut, p.register))
+	mux.HandleFunc("/v1/control/banks", only(http.MethodGet, p.listBanks))
+	mux.HandleFunc("/v1/control/banks/{bank_id}", p.bank)
 	mux.HandleFunc("/v1/control/banks/{bank_id}/status", only(http.MethodPut, p.setStatus))
 	mux.HandleFunc("/v1/control/banks/{bank_id}/open-sessions", only(http.MethodGet, p.openSessions))
+	mux.HandleFunc("/v1/control/banks/{bank_id}/closure-sessions", only(http.MethodGet, p.closureSessions))
+	mux.HandleFunc("/v1/control/sessions/{session_id}", only(http.MethodGet, p.controlSession))
 	mux.HandleFunc("/v1/control/registry/clients", only(http.MethodGet, p.listClients))
 	mux.HandleFunc("/v1/control/registry/clients/{client_id}", only(http.MethodPut, p.ensureClient))
 	mux.HandleFunc("/v1/control/consents", only(http.MethodGet, p.listConsents))
@@ -148,6 +151,52 @@ func (p *Participant) settlementState(ctx context.Context) ([]string, int, error
 	return problems, posted, nil
 }
 
+func (p *Participant) bank(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		p.getBank(w, r)
+	case http.MethodPut:
+		p.register(w, r)
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		web.WriteError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "Use GET or PUT for this path.")
+	}
+}
+
+func (p *Participant) getBank(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("bank_id")
+	m, err := p.store.Member(r.Context(), id)
+	switch {
+	case err == nil:
+		web.WriteJSON(w, http.StatusOK, m.Institution)
+	case errors.Is(err, nip.ErrUnknownInstitution):
+		unknownBank(w, r, id)
+	default:
+		p.unavailable(w, r, "bank not read", err)
+	}
+}
+
+func (p *Participant) listBanks(w http.ResponseWriter, r *http.Request) {
+	limit, ok := pageLimit(w, r)
+	if !ok {
+		return
+	}
+	data, next, err := p.store.Institutions(r.Context(), limit, r.URL.Query().Get("cursor"))
+	var cursor *nibss.CursorError
+	switch {
+	case err == nil:
+		web.WriteJSON(w, http.StatusOK, web.ListPage(data, next))
+	case errors.As(err, &cursor):
+		badCursor(w, r)
+	default:
+		p.unavailable(w, r, "banks not listed", err)
+	}
+}
+
+func unknownBank(w http.ResponseWriter, r *http.Request, id string) {
+	web.WriteError(w, r, http.StatusNotFound, "not_found", fmt.Sprintf("Bank %s is not in the NIBSS directory. Register it first.", id))
+}
+
 func (p *Participant) openSessions(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("bank_id")
 	open, err := p.store.OpenSessions(r.Context(), id)
@@ -156,7 +205,7 @@ func (p *Participant) openSessions(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		web.WriteJSON(w, http.StatusOK, open)
 	case errors.Is(err, nip.ErrUnknownInstitution):
-		web.WriteError(w, r, http.StatusNotFound, "not_found", fmt.Sprintf("Bank %s is not in the NIBSS directory. Register it first.", id))
+		unknownBank(w, r, id)
 	case errors.As(err, &sum):
 		p.cannotSum(w, r, "open sessions not added up", err)
 	default:
@@ -222,7 +271,7 @@ func (p *Participant) setStatus(w http.ResponseWriter, r *http.Request) {
 	case errors.As(err, &bad):
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The status must be active, suspended, terminating or removed.")
 	case errors.Is(err, nip.ErrUnknownInstitution):
-		web.WriteError(w, r, http.StatusNotFound, "not_found", fmt.Sprintf("Bank %s is not in the NIBSS directory. Register it first.", id))
+		unknownBank(w, r, id)
 	case errors.Is(err, nibss.ErrTransition):
 		p.refused(w, r, id, req.Status)
 	default:

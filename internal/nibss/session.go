@@ -420,22 +420,38 @@ func (s *Store) MarkPosted(ctx context.Context, session string, at time.Time) er
 	return nil
 }
 
-func (s *Store) ClosureSent(ctx context.Context, fromCode string) ([]Session, error) {
-	return s.sessions(ctx, "closure sessions", `SELECT `+sessionCols+` FROM nip_sessions WHERE from_code = $1 AND closure AND status IN ('00', 'pending') ORDER BY created_at, session_id`, fromCode)
-}
-
-func (s *Store) ClosureFailed(ctx context.Context, fromCode, fromNUBAN string) (int, error) {
-	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM nip_sessions WHERE from_code = $1 AND from_nuban = $2 AND closure AND status NOT IN ('00', 'pending')`, fromCode, fromNUBAN).Scan(&n)
-	if err != nil {
-		return 0, fmt.Errorf("count failed closure sessions: %w", err)
+func (s *Store) ClosureSessions(ctx context.Context, fromCode string, limit int, after string) ([]ClosureSession, string, error) {
+	var from time.Time
+	if after != "" {
+		err := s.pool.QueryRow(ctx, `SELECT created_at FROM nip_sessions WHERE session_id = $1 AND from_code = $2 AND closure`, after, fromCode).Scan(&from)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, "", &CursorError{Cursor: after}
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("look up closure cursor %s: %w", after, err)
+		}
 	}
-	return n, nil
-}
-
-func (s *Store) Open(ctx context.Context) ([]Session, error) {
-	return s.sessions(ctx, "open sessions", `
-SELECT `+sessionCols+` FROM nip_sessions
-WHERE status = 'pending' OR (status = '00' AND settlement_session = '')
-ORDER BY created_at, session_id`)
+	rows, err := s.pool.Query(ctx, `SELECT session_id, from_nuban, to_code, to_nuban, amount_minor, status, created_at FROM nip_sessions
+WHERE from_code = $1 AND closure AND ($2 = '' OR (created_at, session_id) > ($3, $2))
+ORDER BY created_at, session_id LIMIT $4`, fromCode, after, from, limit+1)
+	if err != nil {
+		return nil, "", fmt.Errorf("list closure sessions: %w", err)
+	}
+	defer rows.Close()
+	out := []ClosureSession{}
+	for rows.Next() {
+		var x ClosureSession
+		if err := rows.Scan(&x.ID, &x.FromAccount, &x.ToBankCode, &x.ToAccount, &x.Amount, &x.Status, &x.CreatedAt); err != nil {
+			return nil, "", fmt.Errorf("read closure session: %w", err)
+		}
+		out = append(out, x)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("list closure sessions: %w", err)
+	}
+	if len(out) <= limit {
+		return out, "", nil
+	}
+	out = out[:limit]
+	return out, out[limit-1].ID, nil
 }

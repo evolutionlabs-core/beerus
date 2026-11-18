@@ -2,15 +2,18 @@ package connect
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -32,10 +35,16 @@ func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
 		return PlanReply{}, planFailure(errs)
 	}
 	warning := ""
-	rows, err := offlineDirectory(cfg)
-	if err != nil {
-		rows = slices.Clone(st.Tombstones)
-		warning = fmt.Sprintf("NIBSS is not reachable (%v); the plan uses only the removed banks cached in %s, so it cannot check codes against live banks.", err, statusFile)
+	ctx, cancel := context.WithTimeout(context.Background(), offlineTimeout)
+	defer cancel()
+	rows, err := offlineDirectory(ctx, cfg)
+	var down *nibssDownError
+	switch {
+	case errors.As(err, &down) || errors.Is(err, os.ErrNotExist):
+		rows = nil
+	case err != nil:
+		rows = nil
+		warning = fmt.Sprintf("NIBSS did not answer as expected (%v); the plan checks codes against this setup and the removed banks cached in %s only.", err, statusFile)
 	}
 	pack, err := countrypack.Nigeria()
 	if err != nil {
@@ -48,23 +57,14 @@ func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
 	return PlanReply{Plan: plan, Text: setup.Render(plan), Changed: changes(plan), Warning: warning}, nil
 }
 
-func offlineDirectory(cfg *config.Config) ([]nip.Institution, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), offlineTimeout)
-	defer cancel()
-	name := config.DatabaseName(cfg.Dir, setup.SystemNIBSS)
-	found, err := store.List(ctx, cfg.DatabaseURL, name)
+func offlineDirectory(ctx context.Context, cfg *config.Config) ([]nip.Institution, error) {
+	token, err := config.ReadSecret(filepath.Join(config.NIBSSDir(cfg.Dir), config.NIBSSTokenFile))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("NIBSS control token: %w", err)
 	}
-	if !slices.Contains(found, name) {
-		return nil, fmt.Errorf("the NIBSS database %s does not exist", name)
-	}
-	s, err := nibss.Open(ctx, cfg.DatabaseURL, name)
-	if err != nil {
-		return nil, fmt.Errorf("open the NIBSS directory: %w", err)
-	}
-	defer s.Close()
-	return s.Directory(ctx)
+	port := cfg.Connect.NIBSSControlPort
+	n := &nibssAdmin{link: server.NewLink(token, ""), base: "http://127.0.0.1:" + strconv.Itoa(port), port: port}
+	return n.directory(ctx)
 }
 
 func keepTombstone(st *setup.Status, in nip.Institution) {
