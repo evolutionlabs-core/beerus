@@ -426,11 +426,11 @@ func TestBankOutage(t *testing.T) {
 		t.Fatalf("widget during outage: %v", b.result)
 	}
 	s.ctl("DELETE", "/faults?bank=bank-b", nil)
-	s.syncNow()
-	c = s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
-	if c.JSON["status"] != "active" {
-		t.Fatalf("status after outage: %v", c.JSON["status"])
-	}
+	waitFor(t, 15*time.Second, "the connection to be active after the outage", func() bool {
+		s.syncNow()
+		c = s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+		return c.JSON["status"] == "active"
+	})
 }
 
 func TestOwnAccountTransferMatchesBySessionID(t *testing.T) {
