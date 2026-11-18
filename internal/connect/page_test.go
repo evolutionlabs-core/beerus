@@ -17,14 +17,13 @@ import (
 )
 
 func TestPageNumbersAreBoundedBeforeTheyAreUsed(t *testing.T) {
-	now := time.Date(2026, 10, 28, 12, 0, 0, 0, clock.Lagos)
 	st := newState()
 	st.Deliveries = []*Delivery{{ID: "dlv_1"}, {ID: "dlv_2"}, {ID: "dlv_3"}}
 	a := &App{
 		cfg:   &config.Config{},
 		st:    st,
 		log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		clock: clock.New(func() time.Time { return now }),
+		clock: clock.New(),
 	}
 	cases := []struct {
 		page        string

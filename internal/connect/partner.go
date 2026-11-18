@@ -176,10 +176,7 @@ func (a *App) effectiveStart(start clock.Date, institution string) (clock.Date, 
 	if b == nil {
 		return start, false
 	}
-	if min := a.clock.Today().AddDays(-b.HistoryDays); start.Before(min) {
-		return min, true
-	}
-	return start, false
+	return historyStart(start, a.clock.Today(), b.HistoryDays)
 }
 
 func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
@@ -341,8 +338,8 @@ func (a *App) authoriseLocked(c *Connection, ls *LinkSession) authorisation {
 		if rec == nil {
 			rec = &AccountRec{ID: id, PartnerID: c.PartnerID, Key: key, From: eff}
 			a.st.Accounts[id] = rec
-		} else if eff.Before(rec.From) {
-			rec.From = eff
+		} else {
+			rec.From = reconnectFrom(rec.From, eff)
 		}
 		rec.NUBAN = nuban
 		for _, ba := range ls.BankAccounts {
@@ -623,8 +620,7 @@ func (a *App) balanceQueryLocked(w http.ResponseWriter, r *http.Request) (balanc
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "as_of must be a date in YYYY-MM-DD form.")
 		return balanceQuery{}, false
 	}
-	min := rec.From.AddDays(-1)
-	max := a.clock.Today().AddDays(-1)
+	min, max := asOfBounds(rec.From, a.clock.Today())
 	if d.Before(min) || d.After(max) {
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "as_of_out_of_range", "as_of must be between "+min.String()+" and "+max.String()+", the day before the first date Connect holds and the last completed business day.")
 		return balanceQuery{}, false

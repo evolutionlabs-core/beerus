@@ -470,25 +470,13 @@ func (a *App) runConnection(id string) {
 		a.mu.Unlock()
 		return
 	}
-	now := a.clock.Now()
-	real := a.clock.Real()
-	if c.Status == "syncing" && real.Before(c.SyncDueReal) {
-		a.mu.Unlock()
-		return
-	}
-	at := now
-	expired := !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt)
-	if expired {
-		at = c.ExpiresAt.Add(-time.Millisecond)
-	}
-	due := c.Status == "syncing" || c.Status == "institution_down" || expired ||
-		real.Sub(c.LastSyncedReal) >= a.cfg.SyncInterval()
+	p := planSync(c, a.cfg.SyncInterval(), a.clock.Now(), a.clock.Real())
 	a.mu.Unlock()
-	if !due {
+	if !p.due {
 		return
 	}
-	a.syncConnection(c, at)
-	if !expired {
+	a.syncConnection(c, p.at)
+	if !p.expired {
 		return
 	}
 	a.mu.Lock()

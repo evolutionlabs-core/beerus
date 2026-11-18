@@ -396,12 +396,24 @@ func (a *App) refreshToken(vid string, b *config.Bank, seen *VaultEntry) error {
 	return f.err
 }
 
+func accessUsable(expiry, now time.Time) bool {
+	return expiry.After(now.Add(refreshMargin))
+}
+
+func refreshDue(expiry, now time.Time) bool {
+	return !expiry.After(now.Add(refreshAhead))
+}
+
+func revokeDue(next, now time.Time) bool {
+	return !now.Before(next)
+}
+
 func (a *App) accessTokenLocked(vid string, force bool) (string, *VaultEntry, error) {
 	e := a.st.Vault[vid]
 	if e == nil {
 		return "", nil, errReauth
 	}
-	if force || !e.AccessExpires.After(a.clock.Real().Add(refreshMargin)) {
+	if force || !accessUsable(e.AccessExpires, a.clock.Real()) {
 		return "", e, nil
 	}
 	tok, err := a.openAccessLocked(vid)
@@ -512,7 +524,7 @@ func (a *App) dueRevokesLocked() []dueRevoke {
 			continue
 		}
 		kept = append(kept, p)
-		if !now.Before(p.Next) {
+		if revokeDue(p.Next, now) {
 			due = append(due, dueRevoke{PendingRevoke: p, bank: b})
 		}
 	}
@@ -577,7 +589,7 @@ func (a *App) refreshConnectionToken(id string) {
 	}
 	e := a.st.Vault[id]
 	b := a.cfg.Bank(c.Institution)
-	if e == nil || b == nil || e.AccessExpires.After(a.clock.Real().Add(refreshAhead)) {
+	if e == nil || b == nil || !refreshDue(e.AccessExpires, a.clock.Real()) {
 		a.mu.Unlock()
 		return
 	}

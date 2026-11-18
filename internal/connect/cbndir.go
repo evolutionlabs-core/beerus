@@ -35,7 +35,7 @@ func (a *App) ensureCBNDir() error {
 		return nil
 	}
 	now := a.clock.Real()
-	if !a.cbnEnsured.IsZero() && now.Sub(a.cbnEnsured) < bankEnsureEvery {
+	if ensuredRecently(a.cbnEnsured, now) {
 		return nil
 	}
 	if err := a.cfg.EnsureCBNDir(now); err != nil {

@@ -13,7 +13,7 @@ import (
 
 func (a *App) ensureNIBSSDir() error {
 	now := a.clock.Real()
-	if !a.nibssEnsured.IsZero() && now.Sub(a.nibssEnsured) < bankEnsureEvery {
+	if ensuredRecently(a.nibssEnsured, now) {
 		return nil
 	}
 	a.mu.Lock()

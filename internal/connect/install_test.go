@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -224,7 +225,7 @@ func TestInstall(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		in := &installer{clock: clock.New(nil), report: func(InstallStep) {}}
+		in := &installer{clock: clock.New(), report: func(InstallStep) {}}
 		if err := installCBN(t.Context(), in, cfg, ctl, stored); err != nil {
 			t.Fatal(err)
 		}
@@ -260,8 +261,8 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := time.Date(2026, time.November, 12, 10, 30, 15, 0, clock.Lagos)
-	second := first.Add(48 * time.Hour)
+	clk := clock.New()
+	before := clk.Now()
 	b := &config.Bank{ID: "bank-g", Name: "Bank G", NIPCode: "999007", NUBANCode: "907", Database: config.DatabaseName(cfg.Dir, "bank-g")}
 	postedAt := func(pool *pgxpool.Pool, key string) (time.Time, int) {
 		t.Helper()
@@ -273,15 +274,26 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 		}
 		return at, n
 	}
-	for _, at := range []time.Time{first, second} {
-		ls, err := openLedgerSource(t.Context(), cfg, ctl, clock.New(func() time.Time { return at }), b)
+	var first time.Time
+	for round := range 2 {
+		ls, err := openLedgerSource(t.Context(), cfg, ctl, clk, b)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, n := postedAt(ls.Pool(), "genesis"); !got.Equal(first) || n != 1 {
-			t.Fatalf("bank genesis opened at %v: posted at %v, %d entries; want %v, 1", at, got, n, first)
+		got, n := postedAt(ls.Pool(), "genesis")
+		if round == 0 {
+			first = got
+			if first.Before(before) || first.After(clk.Now()) {
+				t.Fatalf("genesis posted at %v, want it between %v and now", first, before)
+			}
+			for !clk.Now().After(first) {
+				runtime.Gosched()
+			}
 		}
-		if at == second {
+		if !got.Equal(first) || n != 1 {
+			t.Fatalf("round %d: genesis posted at %v, %d entries; want %v, 1", round, got, n, first)
+		}
+		if round == 1 {
 			if err := ls.Drop(t.Context()); err != nil {
 				t.Fatal(err)
 			}
