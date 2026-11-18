@@ -15,18 +15,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
-func (a *App) faultSet(id string) *server.Faults {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.faults == nil {
-		a.faults = map[string]*server.Faults{}
-	}
-	if a.faults[id] == nil {
-		a.faults[id] = &server.Faults{}
-	}
-	return a.faults[id]
-}
-
 func (a *App) AddFault(ctx context.Context, req server.FaultRequest) (server.Fault, error) {
 	b, ok := a.bankCopy(req.Bank)
 	if !ok {
@@ -38,18 +26,13 @@ func (a *App) AddFault(ctx context.Context, req server.FaultRequest) (server.Fau
 		return server.Fault{}, err
 	}
 	f.Bank = req.Bank
-	switch {
-	case f.Kind == server.FaultDown:
+	if f.Kind == server.FaultDown {
 		f.ID = server.FaultID(fmt.Sprintf("%s|%s|%d", f.Bank, f.Kind, f.At.UnixNano()))
 		a.mu.Lock()
 		a.st.Faults = append(a.st.Faults, &f)
 		a.dirty()
 		a.mu.Unlock()
 		a.pokePush()
-		return f, nil
-	case a.role != RoleCore:
-		f.ID = server.FaultID(web.NewID("flt"))
-		a.faultSet(b.ID).Add(f, now)
 		return f, nil
 	}
 	req.Bank = ""
@@ -95,13 +78,6 @@ func (a *App) timeoutFaults(ctx context.Context) ([]server.Fault, error) {
 	out := []server.Fault{}
 	var errs []error
 	for _, b := range a.bankList() {
-		if a.role != RoleCore {
-			for _, f := range a.faultSet(b.ID).Live(a.clock.Now()) {
-				f.Bank = b.ID
-				out = append(out, f)
-			}
-			continue
-		}
 		if !pushable(a.bankPhase(b.ID)) {
 			continue
 		}
@@ -170,9 +146,6 @@ func (a *App) ClearFaults(ctx context.Context, bank string) (int, error) {
 }
 
 func (a *App) clearTimeouts(ctx context.Context, b *config.Bank) (int, error) {
-	if a.role != RoleCore {
-		return a.faultSet(b.ID).Clear(a.clock.Now()), nil
-	}
 	if !pushable(a.bankPhase(b.ID)) {
 		return 0, nil
 	}
@@ -212,18 +185,6 @@ func (a *App) faultBanks(ctx context.Context) (map[string]bool, error) {
 		out[f.Bank] = true
 	}
 	return out, nil
-}
-
-func (a *App) bankDown(id string) bool {
-	return len(a.downFaults(id)) > 0
-}
-
-func (a *App) bankRefusing(id string) bool {
-	return a.bankPhase(id) == PhaseSuspended || a.bankDown(id)
-}
-
-func (a *App) takeTimeout(id string) (string, bool) {
-	return a.faultSet(id).TakeTimeout()
 }
 
 func (a *App) pruneFaultsLocked(now time.Time) {

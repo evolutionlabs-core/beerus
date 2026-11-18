@@ -1,7 +1,6 @@
 package connect
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -46,19 +45,4 @@ func (a *App) prepareNIBSS() error {
 	port := a.cfg.Connect.NIBSSControlPort
 	a.nibssCtl = &nibssAdmin{link: server.NewLink(token, ""), base: "http://127.0.0.1:" + strconv.Itoa(port), port: port}
 	return nil
-}
-
-func (a *App) serveNIBSS(ctx context.Context, errc chan<- error) (<-chan struct{}, error) {
-	done := make(chan struct{})
-	if a.localNIBSS == nil {
-		close(done)
-		return done, nil
-	}
-	go func() {
-		defer close(done)
-		if err := a.localNIBSS.Serve(ctx); err != nil {
-			errc <- fmt.Errorf("serve NIBSS: %w", err)
-		}
-	}()
-	return done, nil
 }

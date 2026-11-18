@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
@@ -16,6 +17,8 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
+
+const snapshotInfix = "_snap_"
 
 type PurgeImpact struct {
 	Bank        BankStatus `json:"bank"`
@@ -89,28 +92,15 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 		return a.blocked(setup.ReasonSettlementPending, "%s", waiting), nil
 	}
 	b := a.bankByID(id)
-	a.dropBankState(id)
-	var ls *ledgerSource
 	if b != nil {
 		if err := a.retireBank(ctx, b); err != nil {
 			return nil, fmt.Errorf("purge %s: %w", id, err)
 		}
-		a.detach(b, config.StepSite)
-		if a.role != RoleCore {
-			a.mu.Lock()
-			ls = a.ledgerFor(id)
-			a.mu.Unlock()
-		}
-		a.detach(b, config.StepDatabase)
 	}
 	var errs []error
-	switch {
-	case ls != nil:
-		errs = append(errs, ls.Drop(ctx))
-	case r.Allocated.Database != "":
+	if r.Allocated.Database != "" {
 		errs = append(errs, a.dropBankDatabase(ctx, r.Allocated.Database))
 	}
-	a.forgetOpenBanking(id)
 	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.memberGone(ctx, id))
 	a.dropBankRows(id)
 	if err := errors.Join(errs...); err != nil {
@@ -255,10 +245,19 @@ func (a *App) ctlPurgeBank(w http.ResponseWriter, r *http.Request) {
 	web.WriteJSON(w, http.StatusAccepted, res)
 }
 
-func (a *App) bankRetired(id string) bool {
-	if a.role != RoleCore {
-		return false
+func (a *App) dropBankDatabase(ctx context.Context, name string) error {
+	all, err := store.List(ctx, a.cfg.DatabaseURL, name)
+	if err != nil {
+		return fmt.Errorf("list the databases of %s: %w", name, err)
 	}
+	owned := slices.DeleteFunc(all, func(n string) bool { return n != name && !strings.HasPrefix(n, name+snapshotInfix) })
+	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, owned); err != nil {
+		return fmt.Errorf("drop database %s: %w", name, err)
+	}
+	return a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
+}
+
+func (a *App) bankRetired(id string) bool {
 	st, err := a.ctl.status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
@@ -269,9 +268,6 @@ func (a *App) bankRetired(id string) bool {
 }
 
 func (a *App) retireBank(ctx context.Context, b *config.Bank) error {
-	if a.role != RoleCore {
-		return nil
-	}
 	a.recordBank(b.ID, func(r *setup.Resource) bool {
 		if r.Steps[stepRetired] == stepDone {
 			return false

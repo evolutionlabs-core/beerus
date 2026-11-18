@@ -2,10 +2,8 @@ package connect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
@@ -22,45 +20,12 @@ func (a *App) schedule() nibss.Schedule {
 	return nibss.Schedule{Per: a.cfg.Sessions(), Cal: a.cfg.Calendar()}
 }
 
-func (a *App) settleDue(ctx context.Context) {
-	if err := a.postBooks(ctx); err != nil {
-		a.log.Error("NIP settlement of bank books", "err", err)
-	}
-}
-
 func (a *App) SettleNow(ctx context.Context) (int, error) {
 	return a.settleRun(ctx, true)
 }
 
 func (a *App) settleRun(ctx context.Context, adhoc bool) (int, error) {
-	n, err := a.nibssCtl.settle(ctx, adhoc)
-	if err != nil {
-		return 0, err
-	}
-	return n, a.postBooks(ctx)
-}
-
-func (a *App) postBooks(ctx context.Context) error {
-	if a.role == RoleCore {
-		return nil
-	}
-	a.mu.Lock()
-	ledgers := slices.Clone(a.ledgers)
-	a.mu.Unlock()
-	var errs []error
-	for _, l := range ledgers {
-		if a.bankGone(l.Inst.ID) {
-			continue
-		}
-		n, err := a.bankNIBSS(l.Inst.ID)
-		if err == nil {
-			err = a.postBank(ctx, n, l)
-		}
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	return a.nibssCtl.settle(ctx, adhoc)
 }
 
 func (a *App) bankGone(id string) bool {
@@ -69,13 +34,6 @@ func (a *App) bankGone(id string) bool {
 	}
 	phase := a.bankPhase(id)
 	return phase == PhaseClosed || phase == PhaseTerminating
-}
-
-func (a *App) postBank(ctx context.Context, n server.NIBSSClient, l *ledgerSource) error {
-	if err := server.PostSettlements(ctx, n, l.Bank(), a.clock.Now()); err != nil {
-		return fmt.Errorf("settle %s: %w", l.Inst.ID, err)
-	}
-	return nil
 }
 
 type SettlementCheck struct {
@@ -125,36 +83,11 @@ func (a *App) CheckSettlement(ctx context.Context) (SettlementCheck, error) {
 }
 
 func (a *App) bankSettlementProblems(ctx context.Context, id string) ([]string, error) {
-	if a.role == RoleCore {
-		b := a.bankByID(id)
-		if b == nil {
-			return nil, fmt.Errorf("%s is not in the setup", id)
-		}
-		return a.freshBankProblems(ctx, b)
+	b := a.bankByID(id)
+	if b == nil {
+		return nil, fmt.Errorf("%s is not in the setup", id)
 	}
-	a.mu.Lock()
-	ls := a.ledgerFor(id)
-	a.mu.Unlock()
-	if ls == nil {
-		return nil, fmt.Errorf("the books of %s are not open", id)
-	}
-	n, err := a.bankNIBSS(id)
-	if err != nil {
-		return nil, err
-	}
-	c, err := a.bankCBN(id)
-	if err != nil {
-		return nil, err
-	}
-	check, err := server.CheckBooks(ctx, n, c, ls.Bank(), id, a.clock.Now())
-	if err != nil {
-		return nil, err
-	}
-	var refused *server.BookingError
-	if check.Booking != nil && !errors.As(check.Booking, &refused) {
-		return nil, fmt.Errorf("settle %s: %w", id, check.Booking)
-	}
-	return check.Problems, nil
+	return a.freshBankProblems(ctx, b)
 }
 
 type uncheckedError struct {

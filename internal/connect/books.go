@@ -2,59 +2,48 @@ package connect
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
-	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
-type bookSource struct {
-	a *App
+func (a *App) booksOf(id string) bankBooks {
+	if !a.booksReady(id) {
+		return nil
+	}
+	c, err := a.adminOf(id)
+	if err != nil {
+		return nil
+	}
+	return c
 }
 
-func (s bookSource) Book(id string) (server.Book, error) {
-	s.a.mu.Lock()
-	b := s.a.cfg.Bank(id)
-	var name string
-	var ls *ledgerSource
-	if b != nil {
-		name = b.Name
-		if s.a.role != RoleCore {
-			ls = s.a.ledgerFor(id)
+func (a *App) booksReady(id string) bool {
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	st := a.status[id]
+	return st != nil && st.Phase != PhaseClosed && st.Steps[stepIndex(config.StepOpenBankingSchema)].Done
+}
+
+func (a *App) VerifyBank(ctx context.Context) (ledger.Check, error) {
+	var out ledger.Check
+	for _, b := range a.bankList() {
+		books := a.booksOf(b.ID)
+		if books == nil {
+			if a.bankPhase(b.ID) != PhaseClosed && !a.bankRetired(b.ID) {
+				return out, &bankNotReadyError{Name: b.Name}
+			}
+			continue
 		}
-	}
-	s.a.mu.Unlock()
-	if b == nil {
-		return server.Book{Name: id, Phase: PhaseClosed}, nil
-	}
-	bk := server.Book{Name: name, Phase: s.a.bankPhase(id), Enrol: s.enrolAt(id), Send: s.a.bankSender(id)}
-	if ls != nil {
-		bk.Bank = ls.Bank()
-	}
-	return bk, nil
-}
-
-func (s bookSource) enrolAt(bankID string) func(context.Context, string, string, clock.Date) (string, string, error) {
-	return func(ctx context.Context, name, phone string, dob clock.Date) (string, string, error) {
-		c, err := s.a.bankNIBSS(bankID)
+		c, err := books.check(ctx)
 		if err != nil {
-			return "", "", err
+			return out, fmt.Errorf("verify the books of %s: %w", b.ID, err)
 		}
-		out, err := c.Enrol(ctx, name, phone, dob)
-		if err != nil {
-			return "", "", err
-		}
-		return out.BVN, out.Phone, nil
+		out.TrialBalance += c.TrialBalance
+		out.BalanceMismatch = append(out.BalanceMismatch, c.BalanceMismatch...)
+		out.EventMismatch = append(out.EventMismatch, c.EventMismatch...)
+		out.UnbalancedEntries = append(out.UnbalancedEntries, c.UnbalancedEntries...)
 	}
-}
-
-func (s bookSource) Empty() bool {
-	return len(s.a.bankList()) == 0
-}
-
-func (s bookSource) Refusing(id string) bool {
-	return s.a.bankRefusing(id)
-}
-
-func (s bookSource) TakeTimeout(id string) (string, bool) {
-	return s.a.takeTimeout(id)
+	return out, nil
 }

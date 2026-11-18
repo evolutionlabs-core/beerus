@@ -19,7 +19,6 @@ func coreOf(t *testing.T) *App {
 	t.Helper()
 	fixed := Options{Real: func() time.Time { return participantNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	a, _ := newTestAppWithNIBSS(t, fixed)
-	a.role = RoleCore
 	return a
 }
 
