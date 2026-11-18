@@ -256,6 +256,10 @@ func (a *App) closeLedgers() {
 	}
 }
 
+func (a *App) Close() {
+	a.closeLedgers()
+}
+
 func (a *App) Banking() *server.Banking {
 	return a.banking
 }

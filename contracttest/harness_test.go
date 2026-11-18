@@ -707,15 +707,8 @@ func (s *Stack) openAccount(p persona, typ string) string {
 
 func (s *Stack) balances(p persona) map[string]int64 {
 	s.t.Helper()
-	got, err := s.ctlTry("GET", "/banks/"+p.Bank+"/accounts?customer="+p.Customer, nil)
-	if err != nil && strings.Contains(err.Error(), "bank_closed") {
-		return s.closedBalances(p)
-	}
-	if err != nil {
-		s.t.Fatal(err)
-	}
 	out := map[string]int64{}
-	for _, a := range got["data"].([]any) {
+	for _, a := range s.ctl("GET", "/banks/"+p.Bank+"/accounts?customer="+p.Customer, nil)["data"].([]any) {
 		m := a.(map[string]any)
 		out[fmt.Sprint(m["nuban"])] = int64(m["balance_minor"].(float64))
 	}
