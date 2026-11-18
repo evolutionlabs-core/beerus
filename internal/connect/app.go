@@ -77,7 +77,6 @@ type App struct {
 	recMu        sync.Mutex
 	stepMu       sync.Mutex
 	status       map[string]*BankStatus
-	retired      map[string]bool
 	sites        map[string]*siteServer
 	serving      bool
 	warnings     []string

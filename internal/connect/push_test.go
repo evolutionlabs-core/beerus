@@ -15,6 +15,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
 const pushWait = 5 * time.Second
@@ -99,8 +100,13 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 		}
 		return stubReply(404, `{}`), nil
 	})
+	ctl, err := createStore(t.TempDir(), setup.Status{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	a := &App{
 		cfg:      bankDirConfig(t, &config.Bank{ID: "bank-a", Port: 1}, &config.Bank{ID: "bank-b", Port: 2}),
+		ctl:      ctl,
 		role:     RoleCore,
 		st:       newState(),
 		log:      slog.New(slog.NewTextHandler(io.Discard, nil)),

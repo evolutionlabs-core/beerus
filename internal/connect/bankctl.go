@@ -15,13 +15,21 @@ import (
 )
 
 const (
-	bankAway       = "%s is not running or cannot be reached. Run beerus get banks to see its state, then try again."
-	bankPage       = bank.MaxPage
-	bankAccounts   = "/v1/accounts"
-	bankCustomers  = "/v1/customers"
-	bankPayoutsURL = "/v1/closure-payouts"
-	bankBooksURL   = "/v1/books/"
+	bankAway      = "%s is not running or cannot be reached. Run beerus get banks to see its state, then try again."
+	bankPage      = bank.MaxPage
+	bankAccounts  = "/v1/accounts"
+	bankCustomers = "/v1/customers"
+	bankPayouts   = "/v1/closure-payouts"
+	bankBookRoot  = "/v1/books/"
 )
+
+type bankNotReadyError struct {
+	Name string
+}
+
+func (e *bankNotReadyError) Error() string {
+	return e.Name + " is not ready, so its books cannot be checked. Try again soon."
+}
 
 type bankDownError struct {
 	ID   string
@@ -82,6 +90,9 @@ func (c *bankAdmin) call(ctx context.Context, method, path string, key string, i
 	}
 	_, err := c.link.Request(ctx, c.base, method, path, header, in, out)
 	var peer *server.PeerError
+	if errors.As(err, &peer) && peer.Status == http.StatusServiceUnavailable {
+		return &bankDownError{ID: c.id, Name: c.name, Err: err}
+	}
 	if err == nil || errors.As(err, &peer) || ctx.Err() != nil {
 		return err
 	}
@@ -166,7 +177,7 @@ func (c *bankAdmin) openAccount(ctx context.Context, key, customer, product stri
 }
 
 func (c *bankAdmin) payouts(ctx context.Context) (map[string]int64, error) {
-	paid, err := listAll[server.ClosurePaid](ctx, c, bankPayoutsURL, url.Values{})
+	paid, err := listAll[server.ClosurePaid](ctx, c, bankPayouts, url.Values{})
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +190,7 @@ func (c *bankAdmin) payouts(ctx context.Context) (map[string]int64, error) {
 
 func (c *bankAdmin) payout(ctx context.Context, key, nuban string, amount int64) error {
 	req := server.ClosurePayoutRequest{Account: nuban, Amount: amount}
-	return c.call(ctx, http.MethodPost, bankPayoutsURL, key, req, nil)
+	return c.call(ctx, http.MethodPost, bankPayouts, key, req, nil)
 }
 
 func (c *bankAdmin) freeze(ctx context.Context, key, nuban string) error {
@@ -188,7 +199,7 @@ func (c *bankAdmin) freeze(ctx context.Context, key, nuban string) error {
 
 func (c *bankAdmin) totals(ctx context.Context) (bank.Totals, error) {
 	var out server.Totals
-	err := c.call(ctx, http.MethodGet, bankBooksURL+"totals", "", nil, &out)
+	err := c.call(ctx, http.MethodGet, bankBookRoot+"totals", "", nil, &out)
 	return bank.Totals{Customers: out.Customers, Accounts: out.Accounts, Deposits: out.Deposits}, err
 }
 
@@ -198,7 +209,7 @@ func (c *bankAdmin) recent(ctx context.Context, nuban string, limit int, cursor 
 		q.Set("cursor", cursor)
 	}
 	var page pageOf[server.Entry]
-	err := c.call(ctx, http.MethodGet, bankBooksURL+"accounts/"+url.PathEscape(nuban)+"/entries?"+q.Encode(), "", nil, &page)
+	err := c.call(ctx, http.MethodGet, bankBookRoot+"accounts/"+url.PathEscape(nuban)+"/entries?"+q.Encode(), "", nil, &page)
 	var peer *server.PeerError
 	if errors.As(err, &peer) && peer.Code == "invalid_cursor" {
 		return nil, "", fmt.Errorf("%w: %q", bank.ErrBadCursor, cursor)
@@ -212,7 +223,7 @@ func (c *bankAdmin) recent(ctx context.Context, nuban string, limit int, cursor 
 
 func (c *bankAdmin) line(ctx context.Context, nuban, id string) (bank.FeedLine, error) {
 	var out server.Entry
-	err := c.call(ctx, http.MethodGet, bankBooksURL+"accounts/"+url.PathEscape(nuban)+"/entries/"+url.PathEscape(id), "", nil, &out)
+	err := c.call(ctx, http.MethodGet, bankBookRoot+"accounts/"+url.PathEscape(nuban)+"/entries/"+url.PathEscape(id), "", nil, &out)
 	var peer *server.PeerError
 	if errors.As(err, &peer) && peer.Status == http.StatusNotFound {
 		return bank.FeedLine{}, fmt.Errorf("%w: %s", bank.ErrUnknownLine, id)
@@ -231,7 +242,7 @@ func (c *bankAdmin) sessionLines(ctx context.Context, sessionID string) ([]bank.
 	var out struct {
 		Data []server.Entry `json:"data"`
 	}
-	if err := c.call(ctx, http.MethodGet, bankBooksURL+"sessions/"+url.PathEscape(sessionID), "", nil, &out); err != nil {
+	if err := c.call(ctx, http.MethodGet, bankBookRoot+"sessions/"+url.PathEscape(sessionID), "", nil, &out); err != nil {
 		return nil, err
 	}
 	return feedLines(out.Data)

@@ -76,6 +76,9 @@ func (a *App) VerifyBank(ctx context.Context) (ledger.Check, error) {
 	for _, b := range a.bankList() {
 		books := a.booksOf(b.ID)
 		if books == nil {
+			if a.role == RoleCore && a.bankPhase(b.ID) != PhaseClosed && !a.bankRetired(b.ID) {
+				return out, &bankNotReadyError{Name: b.Name}
+			}
 			continue
 		}
 		c, err := books.check(ctx)

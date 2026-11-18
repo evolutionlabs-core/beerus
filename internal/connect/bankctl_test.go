@@ -17,7 +17,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
-func bankAdminOnServer(t *testing.T) *bankAdmin {
+func bankAdminOnServer(t *testing.T, ensure bool) *bankAdmin {
 	t.Helper()
 	fixed := Options{Real: func() time.Time { return participantNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	core, _ := newTestAppWithNIBSS(t, fixed)
@@ -27,7 +27,9 @@ func bankAdminOnServer(t *testing.T) *bankAdmin {
 		t.Fatal(err)
 	}
 	t.Cleanup(p.Close)
-	p.Ensure(t.Context())
+	if ensure {
+		p.Ensure(t.Context())
+	}
 	tok, err := config.ReadSecret(config.BankDir(core.cfg.Dir, "bank-a") + "/" + config.BankTokenFile)
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +57,7 @@ func bankAdminOnServer(t *testing.T) *bankAdmin {
 }
 
 func TestBankAdminAgainstABankServer(t *testing.T) {
-	c := bankAdminOnServer(t)
+	c := bankAdminOnServer(t, true)
 	ctx := t.Context()
 	body := server.CustomerRequest{Name: "Ada Obi", Phone: "08031234567", DOB: "1990-04-21", Username: "ada", Password: "correct horse battery"}
 	var made bank.Customer
@@ -149,7 +151,7 @@ func TestBankAdminAgainstABankServer(t *testing.T) {
 }
 
 func TestBankAdminClosurePayoutsReplay(t *testing.T) {
-	c := bankAdminOnServer(t)
+	c := bankAdminOnServer(t, true)
 	ctx := t.Context()
 	var made bank.Customer
 	body := server.CustomerRequest{Name: "Ada Obi", Phone: "08031234567", DOB: "1990-04-21"}
@@ -208,5 +210,37 @@ func TestBankAdminWhenTheBankIsAway(t *testing.T) {
 	want := `{"error":{"code":"unavailable","message":"Bank A is not running or cannot be reached. Run beerus get banks to see its state, then try again.","request_id":""}}`
 	if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != want {
 		t.Fatalf("got %d %q, want 503 %q", rec.Code, rec.Body.String(), want)
+	}
+}
+
+func TestBankAdminTreatsABankWithoutBooksAsAway(t *testing.T) {
+	c := bankAdminOnServer(t, false)
+	_, err := c.totals(t.Context())
+	var down *bankDownError
+	if !errors.As(err, &down) || down.Name != "Bank A" {
+		t.Fatalf("got %v, want a down error for Bank A", err)
+	}
+	if want := "bank-a is not answering: The bank database is not ready yet. Try again soon."; err.Error() != want {
+		t.Fatalf("got %q, want %q", err.Error(), want)
+	}
+}
+
+func TestHolderOfNeedsTheCustomer(t *testing.T) {
+	holders := map[string]bank.Customer{"cus_1": {ID: "cus_1", Name: "Ada Obi"}}
+	rows := []struct {
+		name, owner, want string
+	}{
+		{"known", "cus_1", "Ada Obi"},
+		{"unknown", "cus_2", "read customer cus_2: bank: unknown customer"},
+	}
+	for _, r := range rows {
+		c, err := holderOf(holders, r.owner)
+		got := c.Name
+		if err != nil {
+			got = err.Error()
+		}
+		if got != r.want {
+			t.Errorf("%s: got %q, want %q", r.name, got, r.want)
+		}
 	}
 }

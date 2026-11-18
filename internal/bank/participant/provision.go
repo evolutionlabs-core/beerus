@@ -2,6 +2,7 @@ package participant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -21,6 +22,15 @@ type ensureStep struct {
 	run func(ctx context.Context) (int, error)
 }
 
+var errClosed = errors.New("the bank is closed, so its database is left alone")
+
+func (p *Participant) openPhase() error {
+	if phase, _ := p.srv.Phase(); phase == config.PhaseClosed {
+		return errClosed
+	}
+	return nil
+}
+
 func (p *Participant) booksNow() *store.Books {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -30,12 +40,21 @@ func (p *Participant) booksNow() *store.Books {
 func (p *Participant) ensureSteps(b *config.Bank) []ensureStep {
 	return []ensureStep{
 		{config.StepDatabase, func(ctx context.Context) (int, error) {
+			if err := p.openPhase(); err != nil {
+				return 0, err
+			}
 			return 0, store.Create(ctx, p.cfg.DatabaseURL, b.Database)
 		}},
 		{config.StepLedgerSchema, func(ctx context.Context) (int, error) {
+			if err := p.openPhase(); err != nil {
+				return 0, err
+			}
 			return store.Migrate(ctx, p.cfg.DatabaseURL, b.Database, ledger.Migrate)
 		}},
 		{config.StepOpenBankingSchema, func(ctx context.Context) (int, error) {
+			if err := p.openPhase(); err != nil {
+				return 0, err
+			}
 			n, err := store.Migrate(ctx, p.cfg.DatabaseURL, b.Database, openbanking.Migrate)
 			if err != nil {
 				return 0, err
@@ -68,7 +87,7 @@ func (p *Participant) ready() bool {
 func (p *Participant) Ensure(ctx context.Context) {
 	for !p.ready() {
 		p.ensureDue(ctx)
-		if p.ready() || !p.pause(ctx, p.retryAt.Sub(p.clock.Real())) {
+		if p.ready() || p.openPhase() != nil || !p.pause(ctx, p.retryAt.Sub(p.clock.Real())) {
 			return
 		}
 	}
@@ -92,7 +111,7 @@ func (p *Participant) heal(ctx context.Context) {
 			return
 		case <-tick.C:
 		}
-		if !p.booksLost(ctx) {
+		if !p.booksLost(ctx) || p.openPhase() != nil {
 			continue
 		}
 		p.log.Warn("bank database lost; rebuilding", "bank", p.id)
@@ -128,6 +147,7 @@ func (p *Participant) redoBefore(i int) {
 }
 
 func (p *Participant) forgetBooks() {
+	p.srv.SetBooks(nil)
 	p.mu.Lock()
 	books := p.books
 	p.books = nil

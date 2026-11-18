@@ -558,7 +558,11 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		if dest == nil {
 			return CloseResult{}, fmt.Errorf("the books of %s are not open", to)
 		}
-		nuban, err := a.closureAccount(ctx, id, dest, a.bankByID(to), holders[acc.Owner], acc)
+		holder, err := holderOf(holders, acc.Owner)
+		if err != nil {
+			return CloseResult{}, err
+		}
+		nuban, err := a.closureAccount(ctx, id, dest, a.bankByID(to), holder, acc)
 		if err != nil {
 			return CloseResult{}, err
 		}
@@ -589,6 +593,14 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		}
 	}
 	return a.closeOutcome(ctx, id, imp, choice, from)
+}
+
+func holderOf(holders map[string]bank.Customer, owner string) (bank.Customer, error) {
+	c, ok := holders[owner]
+	if !ok {
+		return bank.Customer{}, fmt.Errorf("read customer %s: %w", owner, bank.ErrUnknownCustomer)
+	}
+	return c, nil
 }
 
 func (a *App) closureKey(ctx context.Context, id, nuban, key string) (string, error) {

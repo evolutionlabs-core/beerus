@@ -341,7 +341,10 @@ func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	var down *bankDownError
+	var notReady *bankNotReadyError
 	switch {
+	case errors.As(err, &notReady):
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", notReady.Error())
 	case errors.Is(err, server.ErrInvalid):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", strings.TrimPrefix(err.Error(), server.ErrInvalid.Error()+": "))
 	case errors.Is(err, errNotFound):
