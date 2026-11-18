@@ -11,7 +11,7 @@ import (
 const (
 	modulePath   = "github.com/evolutionlabs-core/beerus"
 	installPath  = modulePath + "/internal/install"
-	corePath  = modulePath + "/internal/core"
+	corePath     = modulePath + "/internal/core"
 	cmdPath      = modulePath + "/cmd/beerus"
 	contractPath = modulePath + "/contracttest"
 )
