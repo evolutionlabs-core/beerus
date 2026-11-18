@@ -14,18 +14,18 @@ import (
 )
 
 const (
-	localFile = "local.yaml"
+	LocalFile = "local.yaml"
 	maxPort   = 65535
 )
 
 func LoadLocal(dir string) (Local, error) {
-	path := filepath.Join(dir, localFile)
+	path := filepath.Join(dir, LocalFile)
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return Local{}, fmt.Errorf("read %s: %w", localFile, err)
+		return Local{}, fmt.Errorf("read %s: %w", LocalFile, err)
 	}
 	var l Local
-	d := &nodeDecoder{file: localFile, pos: map[string]Pos{}}
+	d := &nodeDecoder{file: LocalFile, pos: map[string]Pos{}}
 	d.document(raw, reflect.ValueOf(&l).Elem())
 	if len(d.errs) > 0 && len(d.pos) == 0 {
 		return Local{}, errors.Join(d.errs...)
@@ -76,7 +76,7 @@ func (c *localChecker) duration(path, v string) {
 func (l Local) check(pos map[string]Pos) []specProblem {
 	c := &localChecker{pos: pos}
 	if l.DatabaseURL == "" {
-		c.add("database_url", "database_url is required. Set it in %s or in %s", localFile, config.DatabaseURLEnv)
+		c.add("database_url", "database_url is required. Set it in %s or in %s", LocalFile, config.DatabaseURLEnv)
 	}
 	if (l.Bind != "" || c.has("bind")) && net.ParseIP(l.Bind) == nil {
 		c.add("bind", "bind %q is not an IP address. Use an address such as 127.0.0.1", l.Bind)
@@ -112,4 +112,31 @@ func (l Local) check(pos map[string]Pos) []specProblem {
 		}
 	}
 	return c.problems
+}
+
+const (
+	defaultDatabaseURL  = "postgres:///postgres"
+	defaultPartnerPort  = 7443
+	defaultWidgetPort   = 7444
+	defaultControlPort  = 7480
+	defaultHealthPort   = 7490
+	defaultSyncInterval = "1m"
+	defaultRefreshEvery = "1m"
+)
+
+func DefaultLocal() Local {
+	return Local{
+		DatabaseURL: defaultDatabaseURL,
+		Connect: LocalConnect{
+			Host:         DefaultConnectHost,
+			PartnerPort:  defaultPartnerPort,
+			WidgetPort:   defaultWidgetPort,
+			ControlPort:  defaultControlPort,
+			HealthPort:   defaultHealthPort,
+			NIBSSPort:    DefaultNIBSSPort,
+			CBNPort:      DefaultCBNPort,
+			SyncInterval: defaultSyncInterval,
+			RefreshEvery: defaultRefreshEvery,
+		},
+	}
 }

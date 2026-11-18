@@ -1,4 +1,4 @@
-package connect
+package install
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
@@ -20,10 +19,15 @@ import (
 
 const offlineTimeout = 5 * time.Second
 
-type PlanReply = planBody
+type PlanReply struct {
+	setup.Plan
+	Text    string `json:"text"`
+	Changed bool   `json:"changed"`
+	Warning string `json:"warning,omitempty"`
+}
 
-func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
-	cfg, err := LoadConfig(dir)
+func PlanOffline(ctx context.Context, dir string, desired setup.Spec) (PlanReply, error) {
+	cfg, err := setup.LoadConfig(dir)
 	if err != nil {
 		return PlanReply{}, err
 	}
@@ -32,19 +36,19 @@ func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
 		return PlanReply{}, err
 	}
 	if errs := setup.Validate(desired); len(errs) > 0 {
-		return PlanReply{}, planFailure(errs)
+		return PlanReply{}, errors.Join(errs...)
 	}
 	warning := ""
-	ctx, cancel := context.WithTimeout(context.Background(), offlineTimeout)
+	ctx, cancel := context.WithTimeout(ctx, offlineTimeout)
 	defer cancel()
 	rows, err := offlineDirectory(ctx, cfg)
-	var down *nibssDownError
+	var down *server.NIBSSDownError
 	switch {
 	case errors.As(err, &down) || errors.Is(err, os.ErrNotExist):
 		rows = slices.Clone(st.Tombstones)
 	case err != nil:
 		rows = slices.Clone(st.Tombstones)
-		warning = fmt.Sprintf("NIBSS did not answer as expected (%v); the plan checks codes against this setup and the removed banks cached in %s only.", err, statusFile)
+		warning = fmt.Sprintf("NIBSS did not answer as expected (%v); the plan checks codes against this setup and the removed banks cached in %s only.", err, setup.StatusFile)
 	}
 	pack, err := countrypack.Nigeria()
 	if err != nil {
@@ -52,9 +56,9 @@ func PlanOffline(dir string, desired setup.Spec) (PlanReply, error) {
 	}
 	plan := setup.Build(pack, desired, st, rows, clock.New().Today())
 	if len(plan.Errors) > 0 {
-		return PlanReply{}, planFailure(plan.Errors)
+		return PlanReply{}, errors.Join(plan.Errors...)
 	}
-	return PlanReply{Plan: plan, Text: setup.Render(plan), Changed: changes(plan), Warning: warning}, nil
+	return PlanReply{Plan: plan, Text: setup.Render(plan), Changed: plan.Changes(), Warning: warning}, nil
 }
 
 func offlineDirectory(ctx context.Context, cfg *config.Config) ([]nip.Institution, error) {
@@ -62,12 +66,5 @@ func offlineDirectory(ctx context.Context, cfg *config.Config) ([]nip.Institutio
 	if err != nil {
 		return nil, fmt.Errorf("NIBSS control token: %w", err)
 	}
-	port := cfg.Connect.NIBSSControlPort
-	n := &nibssAdmin{link: server.NewLink(token, ""), base: "http://127.0.0.1:" + strconv.Itoa(port), port: port}
-	return n.directory(ctx)
-}
-
-func keepTombstone(st *setup.Status, in nip.Institution) {
-	st.Tombstones = slices.DeleteFunc(st.Tombstones, func(x nip.Institution) bool { return x.ID == in.ID })
-	st.Tombstones = append(st.Tombstones, in)
+	return server.NewNIBSSControl(server.NewLink(token, ""), cfg.Connect.NIBSSControlPort).Directory(ctx)
 }

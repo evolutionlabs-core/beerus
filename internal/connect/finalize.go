@@ -90,7 +90,7 @@ func clearCondition(r *setup.Resource, kind string) bool {
 }
 
 func (a *App) advanceFinalizers(ctx context.Context, lists map[string][]finalizer) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return
@@ -115,8 +115,8 @@ func (a *App) advanceFinalizers(ctx context.Context, lists map[string][]finalize
 		}
 		kind, id := r.Kind, r.ID
 		closed := false
-		uerr := a.ctl.update(func(st *setup.Status) (bool, error) {
-			cur := findResource(st, kind, id)
+		uerr := a.ctl.Update(func(st *setup.Status) (bool, error) {
+			cur := setup.FindResource(st, kind, id)
 			if cur == nil || nextFinalizer(*cur) != name {
 				return false, nil
 			}

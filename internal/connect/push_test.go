@@ -16,6 +16,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 const pushWait = 5 * time.Second
@@ -100,7 +101,7 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 		}
 		return stubReply(404, `{}`), nil
 	})
-	ctl, err := createStore(t.TempDir(), setup.Status{})
+	ctl, err := state.Create(t.TempDir(), setup.Status{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -112,7 +113,7 @@ func TestRestartResumesProvisioning(t *testing.T) {
 	first := runOnce(t, cfg)
 	first.stop()
 	t.Cleanup(func() {
-		if _, err := connect.Reset(context.Background(), cfg.Dir, cfg.DatabaseURL); err != nil {
+		if _, err := install.Reset(context.Background(), cfg.Dir, cfg.DatabaseURL); err != nil {
 			t.Error(err)
 		}
 	})
@@ -129,7 +130,7 @@ func TestRestartResumesProvisioning(t *testing.T) {
 	if err := setup.SaveStatus(cfg.Dir, st); err != nil {
 		t.Fatal(err)
 	}
-	again, err := connect.LoadConfig(cfg.Dir)
+	again, err := setup.LoadConfig(cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,13 +160,13 @@ func TestResetDropsEveryDatabase(t *testing.T) {
 	if err := os.WriteFile(cfg.Path("running"), []byte("now"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := connect.Reset(context.Background(), cfg.Dir, cfg.DatabaseURL); !errors.Is(err, connect.ErrRunning) {
+	if _, err := install.Reset(context.Background(), cfg.Dir, cfg.DatabaseURL); !errors.Is(err, install.ErrRunning) {
 		t.Fatalf("reset while running: %v", err)
 	}
 	if err := os.Remove(cfg.Path("running")); err != nil {
 		t.Fatal(err)
 	}
-	dropped, err := connect.Reset(context.Background(), cfg.Dir, cfg.DatabaseURL)
+	dropped, err := install.Reset(context.Background(), cfg.Dir, cfg.DatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +187,7 @@ func TestResetDropsEveryDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != connect.LocalFile {
+	if len(entries) != 1 || entries[0].Name() != setup.LocalFile {
 		names := []string{}
 		for _, e := range entries {
 			names = append(names, e.Name())

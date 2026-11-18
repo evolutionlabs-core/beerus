@@ -49,7 +49,7 @@ func Open(ctx context.Context, url, name string) (*Store, error) {
 	if !validName.MatchString(name) {
 		return nil, fmt.Errorf("database name %q must look like beerus_something", name)
 	}
-	if err := Create(ctx, url, name); err != nil {
+	if err := create(ctx, url, name); err != nil {
 		return nil, err
 	}
 	cfg, err := pgxpool.ParseConfig(url)
@@ -70,7 +70,7 @@ func Open(ctx context.Context, url, name string) (*Store, error) {
 	return s, nil
 }
 
-func Create(ctx context.Context, url, name string) error {
+func create(ctx context.Context, url, name string) error {
 	if !validName.MatchString(name) {
 		return fmt.Errorf("database name %q must look like beerus_something", name)
 	}
@@ -109,21 +109,6 @@ func newStore(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 		return nil, err
 	}
 	return &Store{pool: pool, phone: p.Phone}, nil
-}
-
-func Migrate(ctx context.Context, url, name string) (int, error) {
-	cfg, err := pgxpool.ParseConfig(url)
-	if err != nil {
-		return 0, fmt.Errorf("parse NIBSS database url: %w", err)
-	}
-	cfg.ConnConfig.Database = name
-	cfg.MaxConns = maxConns
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return 0, fmt.Errorf("open NIBSS database: %w", err)
-	}
-	defer pool.Close()
-	return migrate(ctx, pool)
 }
 
 func migrate(ctx context.Context, pool *pgxpool.Pool) (int, error) {

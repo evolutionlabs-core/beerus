@@ -299,7 +299,7 @@ func sameRemoval(a, b *setup.Removal) bool {
 }
 
 func (a *App) closeMovesDue(ctx context.Context) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return
@@ -413,8 +413,8 @@ func (a *App) decideMoney(ctx context.Context, r setup.Resource) (*setup.Conditi
 	if err != nil {
 		return nil, fmt.Errorf("encode the close result: %w", err)
 	}
-	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
-		cur := findResource(st, setup.KindBank, id)
+	if err := a.ctl.Update(func(st *setup.Status) (bool, error) {
+		cur := setup.FindResource(st, setup.KindBank, id)
 		if cur == nil {
 			return false, errNotFound
 		}
@@ -496,14 +496,14 @@ func (a *App) closeChoices(ctx context.Context, r setup.Resource, imp CloseImpac
 }
 
 func (a *App) targetChange(id string) (suspended, changing bool, err error) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		return false, false, fmt.Errorf("read control.json: %w", err)
 	}
 	if sb, ok := bankIn(st.Applied, id); ok && sb.State == setup.StateSuspended {
 		suspended = true
 	}
-	if r := findResource(&st, setup.KindBank, id); r != nil && r.Generation != r.ObservedGeneration {
+	if r := setup.FindResource(&st, setup.KindBank, id); r != nil && r.Generation != r.ObservedGeneration {
 		changing = true
 	}
 	return suspended, changing, nil
@@ -759,7 +759,7 @@ func keepClosure(st *setup.Status, c setup.Closure) {
 }
 
 func (a *App) Closure(id string) (setup.Closure, error) {
-	st, err := a.ctl.durableStatus()
+	st, err := a.ctl.DurableStatus()
 	if err != nil {
 		return setup.Closure{}, err
 	}

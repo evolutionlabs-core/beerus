@@ -1,15 +1,13 @@
 package connect
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
-	"os"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -36,8 +34,7 @@ const (
 )
 
 var (
-	typeHistoryDays = map[string]int{"commercial": 730, "digital": 180, "microfinance": 365}
-	slugRe          = regexp.MustCompile(`[^a-z0-9]+`)
+	slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 )
 
 type BankStep struct {
@@ -119,20 +116,6 @@ type BankRequest struct {
 	SettlesThrough string `json:"settles_through"`
 }
 
-func portFree(p int) bool {
-	for _, host := range []string{"127.0.0.1", "::1"} {
-		l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(p)))
-		if err != nil {
-			if host == "::1" {
-				continue
-			}
-			return false
-		}
-		l.Close()
-	}
-	return true
-}
-
 func (a *App) postgresRoom(ctx context.Context) error {
 	if len(a.bankList()) == 0 {
 		return nil
@@ -156,8 +139,8 @@ func (a *App) postgresRoom(ctx context.Context) error {
 }
 
 func (a *App) removedBanks(ctx context.Context) ([]nip.Institution, error) {
-	all, err := a.nibssCtl.directory(ctx)
-	var down *nibssDownError
+	all, err := a.nibssCtl.Directory(ctx)
+	var down *server.NIBSSDownError
 	if errors.As(err, &down) {
 		return nil, errors.New("the NIBSS directory is not open yet, so the codes of removed banks cannot be checked; try again soon")
 	}
@@ -193,11 +176,11 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 			return BankStatus{}, err
 		}
 	}
-	stored, err := a.ctl.status()
+	stored, err := a.ctl.Status()
 	if err != nil {
 		return BankStatus{}, fmt.Errorf("read control.json: %w", err)
 	}
-	if r := findResource(&stored, setup.KindBank, id); r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
+	if r := setup.FindResource(&stored, setup.KindBank, id); r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
 		return BankStatus{}, applyFail(http.StatusConflict, codeBeingRemoved, "banks[%s] is being removed, and its id is never reused. Choose another id.", id)
 	}
 	err = a.applyEdit(ctx, func(sp *setup.Spec) error {
@@ -222,7 +205,7 @@ func (a *App) CreateBank(ctx context.Context, req BankRequest) (BankStatus, erro
 				id = fmt.Sprintf("%s-%d", slug, n)
 			}
 		}
-		nb := setup.Bank{ID: id, Name: name, Type: orDefault(req.Type, "commercial"), SettlesThrough: req.SettlesThrough}
+		nb := setup.Bank{ID: id, Name: name, Type: cmp.Or(req.Type, "commercial"), SettlesThrough: req.SettlesThrough}
 		if nb.SettlesThrough == "" && nb.Type == "microfinance" {
 			for _, b := range sp.Spec.Banks {
 				if b.Type == "commercial" && b.State != setup.StateClosed {
@@ -283,7 +266,11 @@ func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	var down *bankDownError
 	var notReady *bankNotReadyError
+	var unchecked *uncheckedError
 	switch {
+	case errors.As(err, &unchecked):
+		a.log.Warn("bank lifecycle", "err", err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", unchecked.message())
 	case errors.As(err, &notReady):
 		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", notReady.Error())
 	case errors.Is(err, server.ErrInvalid):
@@ -330,30 +317,4 @@ func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool)
 	}
 	st, _ := a.bankStatus(id)
 	web.WriteJSON(w, http.StatusOK, st)
-}
-
-func CheckPorts(c *config.Config) error {
-	ports := []int{c.Connect.PartnerPort, c.Connect.WidgetPort, c.Connect.ControlPort, c.Connect.HealthPort, c.Connect.NIBSSPort}
-	for _, p := range []int{c.Connect.NIBSSControlPort, c.Connect.CBNControlPort, c.Connect.CBNPort} {
-		if p != 0 {
-			ports = append(ports, p)
-		}
-	}
-	for _, b := range c.Banks {
-		if !b.Closed() {
-			ports = append(ports, b.Port, b.APIPort)
-		}
-	}
-	_, err := os.Stat(c.Path("running"))
-	running := err == nil
-	for _, p := range ports {
-		if portFree(p) {
-			continue
-		}
-		if running {
-			return fmt.Errorf("beerus is already running for %s; stop it (Ctrl+C in its terminal) before starting it again", c.Dir)
-		}
-		return fmt.Errorf("port %d is already in use by another program; free it or change it in local.yaml", p)
-	}
-	return nil
 }

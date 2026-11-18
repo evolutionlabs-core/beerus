@@ -2,6 +2,7 @@ package connect
 
 import (
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"io"
 	"log/slog"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func coreOf(t *testing.T) *App {
@@ -36,7 +38,7 @@ func TestRetiringABankNeedsItsAcknowledgement(t *testing.T) {
 	}
 	setBankPhase(a, b.ID, PhaseTerminating)
 	err := a.retireBank(ctx, b)
-	if err == nil || !unreachable(err) {
+	if err == nil || !server.Unreachable(err) {
 		t.Fatalf("an unreachable live bank was retired: %v", err)
 	}
 	if !a.bankRetired(b.ID) {
@@ -51,8 +53,8 @@ func TestRetiringABankNeedsItsAcknowledgement(t *testing.T) {
 		t.Fatalf("a closed bank that is not running: %v", err)
 	}
 	setBankPhase(a, b.ID, PhaseTerminating)
-	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
-		delete(findResource(st, setup.KindBank, b.ID).Steps, stepRetired)
+	if err := a.ctl.Update(func(st *setup.Status) (bool, error) {
+		delete(setup.FindResource(st, setup.KindBank, b.ID).Steps, stepRetired)
 		return true, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -104,7 +106,7 @@ func TestVerifyBankNamesABankThatIsNotReady(t *testing.T) {
 		setBankPhase(a, b.ID, r.phase)
 		if r.retire {
 			a.recordBank(b.ID, func(res *setup.Resource) bool {
-				res.Steps[stepRetired] = stepDone
+				res.Steps[stepRetired] = state.StepDone
 				return true
 			})
 		}

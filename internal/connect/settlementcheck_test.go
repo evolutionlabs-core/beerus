@@ -48,7 +48,7 @@ func controlAt(t *testing.T, routes map[string]string) *nibssAdmin {
 		<-done
 	})
 	port := l.Addr().(*net.TCPAddr).Port
-	return &nibssAdmin{link: server.NewLink("", ""), base: "http://127.0.0.1:" + strconv.Itoa(port), port: port}
+	return &nibssAdmin{server.NewNIBSSControl(server.NewLink("", ""), port)}
 }
 
 func TestNIBSSStatusNeedsTheCountOfPostedSessions(t *testing.T) {
@@ -90,28 +90,36 @@ func equalLines(a, b []string) bool {
 
 func TestOpenSessionsDecideWhatClosingWaitsFor(t *testing.T) {
 	a := newTestApp(t, Options{})
-	cutoff := a.schedule().Next(a.clock.Now()).In(clock.Lagos).Format("15:04")
+	const cutoff = "12:00"
+	const reported = `{"next_cutoff_at":"2026-11-04T11:00:00Z"}`
 	live := a.nibssCtl
 	t.Cleanup(func() { a.nibssCtl = live })
 	rows := []struct {
-		name string
-		body string
-		down bool
-		want string
-		err  string
+		name   string
+		body   string
+		status string
+		down   bool
+		want   string
+		err    string
 	}{
-		{"nothing open", `{"transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":0}`, false, "", ""},
-		{"transfers still to settle", `{"transfers":2,"outward_minor":500000,"inward_minor":270000,"unposted_settlements":0}`, false, "Waiting for the " + cutoff + " NIP session to settle 2 transfers (net ₦2,300.00). Wait for it, or run beerus nip settle-now.", ""},
-		{"one transfer to settle", `{"transfers":1,"outward_minor":0,"inward_minor":10000,"unposted_settlements":0}`, false, "Waiting for the " + cutoff + " NIP session to settle 1 transfer (net ₦100.00). Wait for it, or run beerus nip settle-now.", ""},
-		{"settlements not posted", `{"transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":2}`, false, "Waiting for 2 settlements with bank-a to be posted to the books. Try again soon.", ""},
-		{"one settlement not posted", `{"transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":1}`, false, "Waiting for 1 settlement with bank-a to be posted to the books. Try again soon.", ""},
-		{"negative outward", `{"transfers":1,"outward_minor":-1,"inward_minor":0,"unposted_settlements":0}`, false, "", "the open NIP sessions of bank-a do not add up"},
-		{"negative inward", `{"transfers":1,"outward_minor":0,"inward_minor":-1,"unposted_settlements":0}`, false, "", "the open NIP sessions of bank-a do not add up"},
-		{"largest inward", `{"transfers":1,"outward_minor":0,"inward_minor":` + strconv.FormatInt(math.MaxInt64, 10) + `,"unposted_settlements":0}`, false, "Waiting for the " + cutoff + " NIP session to settle 1 transfer (net ₦92,233,720,368,547,758.07). Wait for it, or run beerus nip settle-now.", ""},
-		{"NIBSS not open", ``, true, "", nibssAway},
+		{"nothing open", `{"transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":0}`, "", false, "", ""},
+		{"transfers still to settle", `{"transfers":2,"outward_minor":500000,"inward_minor":270000,"unposted_settlements":0}`, "", false, "Waiting for the " + cutoff + " NIP session to settle 2 transfers (net ₦2,300.00). Wait for it, or run beerus nip settle-now.", ""},
+		{"one transfer to settle", `{"transfers":1,"outward_minor":0,"inward_minor":10000,"unposted_settlements":0}`, "", false, "Waiting for the " + cutoff + " NIP session to settle 1 transfer (net ₦100.00). Wait for it, or run beerus nip settle-now.", ""},
+		{"settlements not posted", `{"transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":2}`, "", false, "Waiting for 2 settlements with bank-a to be posted to the books. Try again soon.", ""},
+		{"one settlement not posted", `{"transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":1}`, "", false, "Waiting for 1 settlement with bank-a to be posted to the books. Try again soon.", ""},
+		{"negative outward", `{"transfers":1,"outward_minor":-1,"inward_minor":0,"unposted_settlements":0}`, "", false, "", "the open NIP sessions of bank-a do not add up"},
+		{"negative inward", `{"transfers":1,"outward_minor":0,"inward_minor":-1,"unposted_settlements":0}`, "", false, "", "the open NIP sessions of bank-a do not add up"},
+		{"largest inward", `{"transfers":1,"outward_minor":0,"inward_minor":` + strconv.FormatInt(math.MaxInt64, 10) + `,"unposted_settlements":0}`, "", false, "Waiting for the " + cutoff + " NIP session to settle 1 transfer (net ₦92,233,720,368,547,758.07). Wait for it, or run beerus nip settle-now.", ""},
+		{"NIBSS gives no cutoff", `{"transfers":1,"outward_minor":0,"inward_minor":10000,"unposted_settlements":0}`, `{}`, false, "", "NIBSS has not said when the next NIP session is"},
+		{"cutoff after UTC midnight", `{"transfers":1,"outward_minor":0,"inward_minor":10000,"unposted_settlements":0}`, `{"next_cutoff_at":"2026-11-04T23:00:00Z"}`, false, "Waiting for the 00:00 NIP session to settle 1 transfer (net ₦100.00). Wait for it, or run beerus nip settle-now.", ""},
+		{"NIBSS not open", ``, "", true, "", nibssAway},
 	}
 	for _, r := range rows {
-		a.nibssCtl = controlAt(t, map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: r.body})
+		status := r.status
+		if status == "" {
+			status = reported
+		}
+		a.nibssCtl = controlAt(t, map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: r.body, nibssStatusPath: status})
 		if r.down {
 			a.nibssCtl = nil
 		}
@@ -160,6 +168,72 @@ func TestUncheckedBankAnswersUnavailable(t *testing.T) {
 		}
 		if w.Code != r.status || body.Error.Code != r.code || body.Error.Message != r.message {
 			t.Errorf("%s: %d %s %q, want %d %s %q", r.name, w.Code, body.Error.Code, body.Error.Message, r.status, r.code, r.message)
+		}
+	}
+}
+
+func positionsAt(t *testing.T, status string) *httptest.ResponseRecorder {
+	t.Helper()
+	const open = `{"transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":0}`
+	routes := map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: open, nibssBanksPath + "bank-b" + nibssOpenSuffix: open, nibssStatusPath: status}
+	a := &App{log: slog.New(slog.DiscardHandler), nibssCtl: controlAt(t, routes), cfg: &config.Config{Banks: []*config.Bank{{ID: "bank-a"}, {ID: "bank-b"}}}}
+	w := httptest.NewRecorder()
+	a.ctlNIPPositions(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	return w
+}
+
+func TestPositionsTakeTheNextSessionFromNIBSS(t *testing.T) {
+	rows := []struct {
+		name   string
+		status string
+		want   string
+	}{
+		{"a Monday cutoff after a weekend", `{"next_cutoff_at":"2026-11-09T02:00:00+01:00"}`, "2026-11-09T02:00:00+01:00"},
+		{"a cutoff in UTC is shown in Lagos", `{"next_cutoff_at":"2026-12-31T23:00:00Z"}`, "2027-01-01T00:00:00+01:00"},
+	}
+	for _, r := range rows {
+		w := positionsAt(t, r.status)
+		var body struct {
+			Data []struct {
+				BankID string `json:"bank_id"`
+				Next   string `json:"next_session"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: %v", r.name, err)
+		}
+		if w.Code != http.StatusOK || len(body.Data) != 2 || body.Data[0].Next != r.want || body.Data[1].Next != r.want {
+			t.Errorf("%s: %d %+v, want both banks at %q", r.name, w.Code, body.Data, r.want)
+		}
+	}
+}
+
+func TestMissingCutoffAnswersUnavailable(t *testing.T) {
+	const want = "NIBSS has not said when the next NIP session is. Try again soon."
+	const busy = `{"transfers":1,"outward_minor":0,"inward_minor":10000,"unposted_settlements":0}`
+	a := &App{log: slog.New(slog.DiscardHandler), nibssCtl: controlAt(t, map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: busy, nibssStatusPath: `{}`})}
+	_, err := a.inflightWith(t.Context(), "bank-a", 0)
+	closing := httptest.NewRecorder()
+	a.bankError(closing, httptest.NewRequest(http.MethodGet, "/", nil), err)
+	rows := []struct {
+		name string
+		w    *httptest.ResponseRecorder
+	}{
+		{"positions", positionsAt(t, `{}`)},
+		{"close preview", closing},
+	}
+	for _, r := range rows {
+		var body struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(r.w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: %v", r.name, err)
+		}
+		if r.w.Code != http.StatusServiceUnavailable || body.Error.Code != "unavailable" || body.Error.Message != want {
+			t.Errorf("%s: %d %s %q, want 503 unavailable %q", r.name, r.w.Code, body.Error.Code, body.Error.Message, want)
 		}
 	}
 }

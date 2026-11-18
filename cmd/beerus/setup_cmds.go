@@ -28,6 +28,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -97,7 +98,7 @@ func (e *cli) flagset(name string) (*flag.FlagSet, *string, *bool) {
 }
 
 func (e *cli) client(dir string) (*ctl, error) {
-	c, err := connect.LoadConfig(dir)
+	c, err := setup.LoadConfig(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +255,7 @@ func (m moneyFlags) removal() (*setup.Removal, error) {
 func specRequest(dir, file string) (applyRequest, error) {
 	path := file
 	if path == "" {
-		path = filepath.Join(dir, connect.SpecFile)
+		path = filepath.Join(dir, setup.SpecFile)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -684,12 +685,12 @@ func (e *cli) livePlan(dir string, req applyRequest) ([]byte, planReply, error) 
 	return e.plan(c, req)
 }
 
-func offlinePlan(dir string, req applyRequest) ([]byte, planReply, error) {
+func offlinePlan(ctx context.Context, dir string, req applyRequest) ([]byte, planReply, error) {
 	spec, errs := setup.Parse(req.File, []byte(req.Spec))
 	if len(errs) > 0 {
 		return nil, planReply{}, errors.Join(errs...)
 	}
-	reply, err := connect.PlanOffline(dir, spec)
+	reply, err := install.PlanOffline(ctx, dir, spec)
 	if err != nil {
 		return nil, planReply{}, err
 	}
@@ -714,9 +715,11 @@ func cmdDiff(e *cli, args []string) error {
 	if err != nil {
 		return err
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	raw, p, err := e.livePlan(*dir, req)
 	if errors.Is(err, errNotRunning) {
-		raw, p, err = offlinePlan(*dir, req)
+		raw, p, err = offlinePlan(ctx, *dir, req)
 	}
 	if err != nil {
 		return err
@@ -739,7 +742,7 @@ func cmdDiff(e *cli, args []string) error {
 }
 
 func loadApplied(dir string) (setup.Status, error) {
-	ok, err := connect.Initialized(dir)
+	ok, err := setup.Initialized(dir)
 	if err != nil {
 		return setup.Status{}, err
 	}
@@ -1102,7 +1105,7 @@ func cmdBankEnd(e *cli, args []string) error {
 	if err != nil {
 		return err
 	}
-	req := applyRequest{File: filepath.Join(*dir, connect.SpecFile), Spec: string(raw), ApplyOptions: connect.ApplyOptions{Prune: verb == "purge" && *yes, Money: rm, SettleNow: *settle}}
+	req := applyRequest{File: filepath.Join(*dir, setup.SpecFile), Spec: string(raw), ApplyOptions: connect.ApplyOptions{Prune: verb == "purge" && *yes, Money: rm, SettleNow: *settle}}
 	if !*yes {
 		if err := e.confirm(c, &req, *asJSON, op); err != nil {
 			return err
@@ -1177,14 +1180,14 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 			return errors.Join(errs...)
 		}
 	}
-	if err := connect.CheckStart(*dir); err != nil {
+	if err := install.CheckStart(*dir); err != nil {
 		return err
 	}
-	c, err := connect.LoadConfig(*dir)
+	c, err := setup.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}
-	if err := connect.CheckPorts(c); err != nil {
+	if err := install.CheckPorts(c); err != nil {
 		return err
 	}
 	if err := c.EnsureCertificates(time.Now()); err != nil {

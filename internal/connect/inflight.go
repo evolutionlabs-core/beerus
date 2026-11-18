@@ -104,7 +104,7 @@ func (a *App) openSends(ctx context.Context, b *config.Bank) (int, error) {
 }
 
 func (a *App) sendsDue(ctx context.Context) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return
@@ -210,8 +210,11 @@ func (a *App) inflightWith(ctx context.Context, id string, sends int) (string, e
 		if open.Inward < 0 || open.Outward < 0 || !ok {
 			return "", fmt.Errorf("the open NIP sessions of %s do not add up", id)
 		}
-		cutoff := a.schedule().Next(a.clock.Now()).In(clock.Lagos).Format("15:04")
-		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Wait for it, or run beerus nip settle-now.", cutoff, view.Plural(open.Transfers, "transfer", "transfers"), bank.Naira(max(net, -net))), nil
+		next, err := a.nibssCtl.nextCutoff(ctx)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Waiting for the %s NIP session to settle %s (net %s). Wait for it, or run beerus nip settle-now.", next.In(clock.Lagos).Format("15:04"), view.Plural(open.Transfers, "transfer", "transfers"), bank.Naira(max(net, -net))), nil
 	}
 	if open.Unposted > 0 {
 		return fmt.Sprintf("Waiting for %s with %s to be posted to the books. Try again soon.", view.Plural(open.Unposted, "settlement", "settlements"), id), nil

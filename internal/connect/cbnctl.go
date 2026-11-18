@@ -58,7 +58,7 @@ func (c *cbnAdmin) call(ctx context.Context, method, path string, in, out any) e
 	if err == nil || errors.As(err, &peer) || ctx.Err() != nil {
 		return err
 	}
-	if unreachable(err) {
+	if server.Unreachable(err) {
 		return &cbnDownError{Port: c.port, Err: err}
 	}
 	return fmt.Errorf("call the CBN on port %d: %w", c.port, err)

@@ -1,4 +1,4 @@
-package connect
+package install
 
 import (
 	"context"
@@ -13,24 +13,17 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
-
-func countMigrations(t *testing.T, dir string) int {
-	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "*.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return len(files)
-}
 
 func installURL(t *testing.T) string {
 	t.Helper()
 	t.Setenv(config.DatabaseURLEnv, "")
-	url := DefaultLocal().DatabaseURL
+	url := setup.DefaultLocal().DatabaseURL
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		url = u
 	}
@@ -44,7 +37,7 @@ func installURL(t *testing.T) string {
 
 func runInstall(ctx context.Context, dir, url string, after func(InstallStep)) ([]string, error) {
 	today := clock.Date{Y: 2026, M: 11, D: 3}
-	local := DefaultLocal()
+	local := setup.DefaultLocal()
 	local.DatabaseURL = url
 	var lines []string
 	err := Install(ctx, dir, banktest.Spec("beerus"), local, today, func(s InstallStep) {
@@ -62,65 +55,45 @@ func runInstall(ctx context.Context, dir, url string, after func(InstallStep)) (
 
 func TestInstall(t *testing.T) {
 	url := installURL(t)
-	ledgerN := countMigrations(t, "../bank/ledger/migrations")
-	nibssN := countMigrations(t, "../nibss/migrations")
-	migrations := func(n int) string { return fmt.Sprintf("%d migrations", n) }
 
-	freshLines := func(dir string) []string {
-		return []string{
-			"Checking Postgres||ok",
-			"Writing config||ok",
-			"Creating CBN database||ok",
-			"Migrating CBN ledger|" + migrations(ledgerN) + "|ok",
-			"Opening CBN settlement ledger||ok",
-			"Creating NIBSS database||ok",
-			"Migrating NIBSS schema|" + migrations(nibssN) + "|ok",
-		}
+	freshLines := []string{
+		"Checking Postgres||ok",
+		"Writing config||ok",
+		"Reserving CBN and NIBSS database names||ok",
+		"Preparing CBN ports and certificates||ok",
 	}
+	resumed := slices.Clone(freshLines)
+	resumed[1] = "Writing config|already written|ok"
 
 	cases := []struct {
 		name        string
 		cancelAfter string
-		wantFirst   func(dir string) []string
+		wantFirst   []string
 		wantFirstEr string
-		wantResume  func(dir string) []string
+		wantResume  []string
 	}{
 		{
 			name:      "fresh install, then a rerun is refused",
 			wantFirst: freshLines,
 		},
 		{
-			name:        "resume after Creating CBN database fails",
+			name:        "resume after Reserving CBN and NIBSS database names fails",
 			cancelAfter: "Writing config",
-			wantFirst: func(dir string) []string {
-				return []string{"Checking Postgres||ok", "Writing config||ok", "Creating CBN database||failed"}
-			},
+			wantFirst:   []string{"Checking Postgres||ok", "Writing config||ok", "Reserving CBN and NIBSS database names||failed"},
 			wantFirstEr: "context canceled",
-			wantResume: func(dir string) []string {
-				lines := freshLines(dir)
-				lines[1] = "Writing config|already written|ok"
-				return lines
-			},
+			wantResume:  resumed,
 		},
 		{
-			name:        "resume skips the steps that are recorded as done",
-			cancelAfter: "Migrating CBN ledger",
-			wantFirst: func(dir string) []string {
-				return []string{
-					"Checking Postgres||ok",
-					"Writing config||ok",
-					"Creating CBN database||ok",
-					"Migrating CBN ledger|" + migrations(ledgerN) + "|ok",
-					"Opening CBN settlement ledger||failed",
-				}
+			name:        "resume after Preparing CBN ports and certificates fails",
+			cancelAfter: "Reserving CBN and NIBSS database names",
+			wantFirst: []string{
+				"Checking Postgres||ok",
+				"Writing config||ok",
+				"Reserving CBN and NIBSS database names||ok",
+				"Preparing CBN ports and certificates||failed",
 			},
 			wantFirstEr: "context canceled",
-			wantResume: func(dir string) []string {
-				lines := freshLines(dir)
-				lines[1] = "Writing config|already written|ok"
-				lines[3] = "Migrating CBN ledger|no new migrations|ok"
-				return lines
-			},
+			wantResume:  resumed,
 		},
 	}
 	for _, c := range cases {
@@ -139,8 +112,8 @@ func TestInstall(t *testing.T) {
 				}
 			}
 			got, err := runInstall(ctx, dir, url, cut)
-			if want := c.wantFirst(dir); !slices.Equal(got, want) {
-				t.Fatalf("first run:\n got %q\nwant %q", got, want)
+			if !slices.Equal(got, c.wantFirst) {
+				t.Fatalf("first run:\n got %q\nwant %q", got, c.wantFirst)
 			}
 			switch {
 			case c.wantFirstEr == "" && err != nil:
@@ -156,8 +129,8 @@ func TestInstall(t *testing.T) {
 				if err != nil {
 					t.Fatalf("resume: %v", err)
 				}
-				if want := c.wantResume(dir); !slices.Equal(got, want) {
-					t.Fatalf("resume:\n got %q\nwant %q", got, want)
+				if !slices.Equal(got, c.wantResume) {
+					t.Fatalf("resume:\n got %q\nwant %q", got, c.wantResume)
 				}
 			}
 			st, err := setup.LoadStatus(dir)
@@ -165,7 +138,7 @@ func TestInstall(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {
-				if r := findResource(&st, setup.KindSystem, id); r == nil || r.Phase != config.PhaseActive {
+				if r := setup.FindResource(&st, setup.KindSystem, id); r == nil || r.Phase != config.PhaseActive {
 					t.Errorf("%s after install: %+v", id, r)
 				}
 			}
@@ -197,41 +170,40 @@ func TestInstall(t *testing.T) {
 		}
 	})
 
-	t.Run("opening the CBN ledger activates CBN", func(t *testing.T) {
-		today := clock.Date{Y: 2026, M: 11, D: 3}
-		local := DefaultLocal()
-		local.DatabaseURL = url
+	t.Run("the CBN and NIBSS make their own databases", func(t *testing.T) {
 		dir := t.TempDir()
 		t.Cleanup(func() {
 			if _, err := Reset(context.Background(), dir, url); err != nil {
 				t.Errorf("drop databases: %v", err)
 			}
 		})
-		if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
+		if _, err := runInstall(t.Context(), dir, url, nil); err != nil {
 			t.Fatal(err)
 		}
-		cfg, err := LoadConfig(dir)
+		st, err := setup.LoadStatus(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctl, err := openStore(dir)
+		made, err := store.List(t.Context(), url, config.DatabaseName(dir, ""))
 		if err != nil {
 			t.Fatal(err)
 		}
-		stored, err := ctl.status()
-		if err != nil {
-			t.Fatal(err)
+		claims := state.Owned(st, state.OwnedDatabase)
+		for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {
+			name := config.DatabaseName(dir, id)
+			if claims[name] != setup.KindSystem+"/"+id {
+				t.Errorf("%s is not claimed: %v", name, claims)
+			}
+			if slices.Contains(made, name) {
+				t.Errorf("install made %s", name)
+			}
 		}
-		in := &installer{clock: clock.New(), report: func(InstallStep) {}}
-		if err := installCBN(t.Context(), in, cfg, ctl, stored); err != nil {
-			t.Fatal(err)
+		r := setup.FindResource(&st, setup.KindSystem, setup.SystemCBN)
+		if r == nil || r.Allocated.Port == 0 || r.Allocated.APIPort == 0 {
+			t.Errorf("CBN ports: %+v", r)
 		}
-		st, err := ctl.status()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := systemPhase(st, setup.SystemCBN); got != config.PhaseActive {
-			t.Fatalf("CBN phase after installCBN: %q", got)
+		if _, err := os.Stat(filepath.Join(config.CBNDir(dir), config.CBNTokenFile)); err != nil {
+			t.Errorf("CBN directory: %v", err)
 		}
 	})
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func noError() error {
@@ -46,12 +47,12 @@ func newStatus(b *config.Bank, done bool) *BankStatus {
 func (a *App) initLifecycle() {
 	a.status = map[string]*BankStatus{}
 	a.strikes = map[string]int{}
-	stored, err := a.ctl.status()
+	stored, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 	}
 	for _, b := range a.cfg.Banks {
-		r := findResource(&stored, setup.KindBank, b.ID)
+		r := setup.FindResource(&stored, setup.KindBank, b.ID)
 		st := newStatus(b, a.provisionedAtStart(b, r))
 		a.status[b.ID] = st
 		if r != nil && (r.Phase == PhaseClosing || r.Phase == PhaseTerminating) {
@@ -69,7 +70,7 @@ func (a *App) initLifecycle() {
 			st.Phase = PhaseRepairing
 		}
 		for i := range st.Steps {
-			st.Steps[i].Done = st.Steps[i].ID == config.StepAllocate && r != nil && r.Steps[config.StepAllocate] == stepDone
+			st.Steps[i].Done = st.Steps[i].ID == config.StepAllocate && r != nil && r.Steps[config.StepAllocate] == state.StepDone
 		}
 	}
 }
@@ -79,8 +80,8 @@ func (a *App) provisionedAtStart(b *config.Bank, r *setup.Resource) bool {
 }
 
 func (a *App) recordBank(id string, fn func(r *setup.Resource) bool) {
-	err := a.ctl.update(func(st *setup.Status) (bool, error) {
-		r := findResource(st, setup.KindBank, id)
+	err := a.ctl.Update(func(st *setup.Status) (bool, error) {
+		r := setup.FindResource(st, setup.KindBank, id)
 		if r == nil {
 			return false, nil
 		}
@@ -143,10 +144,10 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 			r.Attempts, r.NextAttemptAt = attempts, next
 			return true
 		}
-		if r.Steps[id] == stepDone {
+		if r.Steps[id] == state.StepDone {
 			return false
 		}
-		r.Steps[id] = stepDone
+		r.Steps[id] = state.StepDone
 		return true
 	})
 	return err == nil
@@ -155,7 +156,7 @@ func (a *App) step(st *BankStatus, id string, run func() error) bool {
 func (a *App) reconcileBanks(ctx context.Context) {
 	a.checkDrift()
 	now := a.clock.Real()
-	stored, err := a.ctl.status()
+	stored, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 	}
@@ -183,7 +184,7 @@ func (a *App) needsRepairLocked(st *BankStatus, stored setup.Status) bool {
 	if st.Phase != PhaseClosing && st.Phase != PhaseTerminating {
 		return false
 	}
-	r := findResource(&stored, setup.KindBank, st.ID)
+	r := setup.FindResource(&stored, setup.KindBank, st.ID)
 	if r == nil || nextFinalizer(*r) == setup.FinalizerPurgeOwned || slices.Contains(r.Done, setup.FinalizerPurgeOwned) {
 		return false
 	}
@@ -191,12 +192,12 @@ func (a *App) needsRepairLocked(st *BankStatus, stored setup.Status) bool {
 }
 
 func (a *App) bankGeneration(id string) int64 {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return 0
 	}
-	if r := findResource(&st, setup.KindBank, id); r != nil {
+	if r := setup.FindResource(&st, setup.KindBank, id); r != nil {
 		return r.Generation
 	}
 	return 0
@@ -285,7 +286,7 @@ func (a *App) bankCerts(b *config.Bank) error {
 	if _, err := a.ensureBankDir(b.ID, true); err != nil {
 		return fmt.Errorf("issue certificates for %s: %w", b.ID, err)
 	}
-	return a.ctl.Claim(setup.KindBank, b.ID, setup.Owned{Kind: ownedDir, Name: "banks/" + b.ID})
+	return a.ctl.Claim(setup.KindBank, b.ID, setup.Owned{Kind: state.OwnedDir, Name: "banks/" + b.ID})
 }
 
 func driftRepairs(phase string, done []string, missing []string) (redo []string, newPhase string) {
@@ -306,7 +307,7 @@ func (a *App) checkDrift() {
 		return
 	}
 	a.driftAt = a.clock.Real()
-	stored, err := a.ctl.status()
+	stored, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return
@@ -335,7 +336,7 @@ func (a *App) checkDrift() {
 		}
 		delete(a.strikes, b.ID)
 		var done []string
-		if r := findResource(&stored, setup.KindBank, b.ID); r != nil {
+		if r := setup.FindResource(&stored, setup.KindBank, b.ID); r != nil {
 			done = r.Done
 		}
 		a.lifeMu.Lock()

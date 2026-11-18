@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func TestTargetChange(t *testing.T) {
@@ -24,12 +25,12 @@ func TestTargetChange(t *testing.T) {
 	}
 	for _, r := range rows {
 		s := testStore(t)
-		err := s.update(func(st *setup.Status) (bool, error) {
+		err := s.Update(func(st *setup.Status) (bool, error) {
 			if r.bank != nil {
 				st.Applied.Spec.Banks = append(st.Applied.Spec.Banks, *r.bank)
 			}
 			if r.resource != nil {
-				x := ensureResource(st, setup.KindBank, "bank-a")
+				x := state.EnsureResource(st, setup.KindBank, "bank-a")
 				x.Generation, x.ObservedGeneration = r.resource.Generation, r.resource.ObservedGeneration
 			}
 			return true, nil

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
@@ -45,8 +46,8 @@ func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
-	list, err := a.nibssCtl.directory(r.Context())
-	var away *nibssDownError
+	list, err := a.nibssCtl.Directory(r.Context())
+	var away *server.NIBSSDownError
 	if errors.As(err, &away) {
 		a.log.Warn("NIBSS directory", "err", err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS is not available right now.")
@@ -72,7 +73,7 @@ func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
 	web.WriteJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
-func (a *App) position(ctx context.Context, b *config.Bank) (map[string]any, error) {
+func (a *App) position(ctx context.Context, b *config.Bank, next time.Time) (map[string]any, error) {
 	sessions, err := a.nibssCtl.openSessions(ctx, b.ID)
 	if err != nil {
 		return nil, err
@@ -91,8 +92,7 @@ func (a *App) position(ctx context.Context, b *config.Bank) (map[string]any, err
 	if b.Collateral > 0 {
 		collateral = b.Collateral
 	}
-	now := a.clock.Now()
-	return map[string]any{"bank_id": b.ID, "nip_code": b.NIPCode, "net_debit_cap_minor": b.Cap(), "cap_source": source, "collateral_minor": collateral, "open_outward_minor": open.Outward, "open_inward_minor": open.Inward, "position_minor": pos, "headroom_minor": b.Cap() - pos, "next_session": ts(a.schedule().Next(now))}, nil
+	return map[string]any{"bank_id": b.ID, "nip_code": b.NIPCode, "net_debit_cap_minor": b.Cap(), "cap_source": source, "collateral_minor": collateral, "open_outward_minor": open.Outward, "open_inward_minor": open.Inward, "position_minor": pos, "headroom_minor": b.Cap() - pos, "next_session": ts(next)}, nil
 }
 
 func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
@@ -100,11 +100,18 @@ func (a *App) ctlNIPPositions(w http.ResponseWriter, r *http.Request) {
 	banks := slices.Clone(a.cfg.Banks)
 	a.mu.Unlock()
 	out := []map[string]any{}
+	var next time.Time
+	if len(banks) > 0 {
+		var err error
+		if next, err = a.nibssCtl.nextCutoff(r.Context()); err != nil {
+			a.settlementFailed(w, r, "NIP positions", err)
+			return
+		}
+	}
 	for _, b := range banks {
-		row, err := a.position(r.Context(), b)
+		row, err := a.position(r.Context(), b, next)
 		if err != nil {
-			a.log.Error("NIP positions", "err", err)
-			web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The positions could not be worked out.")
+			a.settlementFailed(w, r, "NIP positions", err)
 			return
 		}
 		out = append(out, row)
@@ -123,14 +130,14 @@ func (a *App) ctlNIPSettlement(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) settlementFailed(w http.ResponseWriter, r *http.Request, msg string, err error) {
 	var cbnDown *cbnDownError
-	var nibssDown *nibssDownError
+	var nibssDown *server.NIBSSDownError
 	var peer *server.PeerError
 	var unchecked *uncheckedError
 	var away *server.UnavailableError
 	switch {
 	case errors.As(err, &unchecked):
 		a.log.Warn(msg, "err", err)
-		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", web.Sentence(unchecked.Name+" "+unchecked.Why)+" Try again soon.")
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", unchecked.message())
 		return
 	case errors.As(err, &away):
 		a.log.Warn(msg, "err", err)
@@ -229,10 +236,14 @@ func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	b := a.cfg.Bank(id)
 	a.mu.Unlock()
-	row, err := a.position(r.Context(), b)
+	next, err := a.nibssCtl.nextCutoff(r.Context())
 	if err != nil {
-		a.log.Error("NIP positions", "err", err)
-		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The position could not be worked out.")
+		a.settlementFailed(w, r, "NIP position", err)
+		return
+	}
+	row, err := a.position(r.Context(), b, next)
+	if err != nil {
+		a.settlementFailed(w, r, "NIP position", err)
 		return
 	}
 	web.WriteJSON(w, http.StatusOK, row)

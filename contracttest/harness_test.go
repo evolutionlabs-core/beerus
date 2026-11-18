@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"io"
 	mrand "math/rand/v2"
 	"net"
@@ -163,7 +164,7 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 		t.Skip("starts a full stack; run without -short")
 	}
 	ports := stackPorts(t, len(banktest.Spec("contract").Spec.Banks))
-	local := connect.DefaultLocal()
+	local := setup.DefaultLocal()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
@@ -183,10 +184,10 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 		WebhookURL:   webhookURL,
 	}}
 	dir := t.TempDir()
-	if err := connect.Init(dir, spec, local, today); err != nil {
+	if err := seed.Init(dir, spec, local, today); err != nil {
 		return nil, err
 	}
-	return connect.LoadConfig(dir)
+	return setup.LoadConfig(dir)
 }
 
 func newBankStack(t *testing.T) *Stack {
@@ -206,7 +207,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 	}
 	s := &Stack{t: t, people: map[string]persona{}}
 	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
-		cfg, err := connect.LoadConfig(dir)
+		cfg, err := setup.LoadConfig(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -284,7 +285,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 
 func (s *Stack) loadConfig() *config.Config {
 	s.t.Helper()
-	cfg, err := connect.LoadConfig(s.cfg.Dir)
+	cfg, err := setup.LoadConfig(s.cfg.Dir)
 	if err != nil {
 		s.t.Fatal(err)
 	}

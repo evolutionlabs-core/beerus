@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -37,7 +39,7 @@ func (a *App) AddPartner(ctx context.Context, req PartnerRequest) (string, error
 		if _, ok := partnerIn(*sp, o.ID); ok {
 			return server.Invalid("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
 		}
-		sp.Spec.Partners = append(sp.Spec.Partners, setup.Partner{ID: o.ID, Name: orDefault(o.Name, o.ID), LegalName: o.LegalName, Purpose: o.Purpose, RedirectURIs: o.RedirectURIs, WebhookURL: o.WebhookURL})
+		sp.Spec.Partners = append(sp.Spec.Partners, setup.Partner{ID: o.ID, Name: cmp.Or(o.Name, o.ID), LegalName: o.LegalName, Purpose: o.Purpose, RedirectURIs: o.RedirectURIs, WebhookURL: o.WebhookURL})
 		return nil
 	}, ApplyOptions{})
 	if err != nil {
@@ -72,7 +74,7 @@ func (a *App) RotatePartner(id string) (key string, err error) {
 	if err := os.Remove(filepath.Join(dir, "client.crt")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("remove old certificate of %s: %w", id, err)
 	}
-	key, err = writeAPIKey(a.cfg.Dir, id)
+	key, err = config.WriteAPIKey(a.cfg.Dir, id)
 	if err != nil {
 		return "", err
 	}
@@ -81,8 +83,8 @@ func (a *App) RotatePartner(id string) (key string, err error) {
 	if err := a.issuePartnerCert(&p); err != nil {
 		return "", err
 	}
-	err = a.ctl.update(func(st *setup.Status) (bool, error) {
-		r := ensureResource(st, setup.KindPartner, id)
+	err = a.ctl.Update(func(st *setup.Status) (bool, error) {
+		r := state.EnsureResource(st, setup.KindPartner, id)
 		r.Partner = &setup.PartnerKeys{CertCN: p.CertCN, APIKeySHA256: p.APIKeySHA256, CertSHA256: p.CertSHA256}
 		return true, nil
 	})
@@ -175,7 +177,7 @@ func (a *App) issuePartnerCert(p *config.Partner) error {
 }
 
 func resum(st *setup.Status) error {
-	sum, err := specSum(st.Applied)
+	sum, err := setup.SpecSum(st.Applied)
 	if err != nil {
 		return err
 	}

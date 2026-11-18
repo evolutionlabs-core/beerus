@@ -46,7 +46,7 @@ type revokeRead struct {
 }
 
 func (a *App) revokesDue(ctx context.Context) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return

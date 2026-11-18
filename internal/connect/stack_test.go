@@ -114,7 +114,7 @@ func prepareTestCore(t *testing.T, o Options) (*App, *config.Config) {
 	if err := cfg.EnsureCertificates(now); err != nil {
 		t.Fatal(err)
 	}
-	if err := PrepareCBN(cfg, now); err != nil {
+	if err := cfg.EnsureCBNDir(now); err != nil {
 		t.Fatal(err)
 	}
 	a, err := New(cfg, o)
@@ -252,7 +252,7 @@ func newTestStack(t *testing.T, o Options) *App {
 }
 
 func participantsAnswer(ctx context.Context, a *App) bool {
-	return answers(ctx, a.nibssCtl.link, a.nibssCtl.base) && answers(ctx, a.cbnCtl.link, a.cbnCtl.base)
+	return answers(ctx, a.nibssCtl.Link, a.nibssCtl.Base) && answers(ctx, a.cbnCtl.link, a.cbnCtl.base)
 }
 
 func answers(ctx context.Context, link server.Link, base string) bool {

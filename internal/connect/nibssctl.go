@@ -4,12 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
@@ -20,8 +17,7 @@ import (
 )
 
 const (
-	nibssDirectoryPath = "/v1/control/banks"
-	nibssBanksPath     = nibssDirectoryPath + "/"
+	nibssBanksPath     = server.NIBSSDirectoryPath + "/"
 	nibssSessionsPath  = "/v1/control/sessions/"
 	nibssClosureSuffix = "/closure-sessions"
 	nibssEnquiriesPath = "/v1/control/name-enquiries"
@@ -30,28 +26,12 @@ const (
 	nibssSettlePath    = "/v1/control/settlement-sessions"
 	nibssStatusPath    = "/v1/status"
 	nibssOpenSuffix    = "/open-sessions"
-	nibssPage          = 500
 	nibssAway          = "NIBSS is not available right now. Try again soon."
 	nibssSettleTimeout = 30 * time.Second
 )
 
 type nibssAdmin struct {
-	link server.Link
-	base string
-	port int
-}
-
-type nibssDownError struct {
-	Port int
-	Err  error
-}
-
-func (e *nibssDownError) Error() string {
-	return fmt.Sprintf("NIBSS is not answering on port %d: %v", e.Port, e.Err)
-}
-
-func (e *nibssDownError) Unwrap() error {
-	return e.Err
+	server.NIBSSControl
 }
 
 type registerBody struct {
@@ -82,7 +62,7 @@ type statusBody struct {
 func (n *nibssAdmin) enquire(ctx context.Context, code, nuban string) (nip.NameEnquiry, error) {
 	var out nip.NameEnquiry
 	q := url.Values{"bank_code": {code}, "account_number": {nuban}}
-	_, err := n.link.Do(ctx, n.base, http.MethodGet, nibssEnquiriesPath+"?"+q.Encode(), nil, &out)
+	_, err := n.Link.Do(ctx, n.Base, http.MethodGet, nibssEnquiriesPath+"?"+q.Encode(), nil, &out)
 	var peer *server.PeerError
 	switch {
 	case err == nil || errors.Is(err, context.Canceled):
@@ -96,11 +76,11 @@ func (n *nibssAdmin) enquire(ctx context.Context, code, nuban string) (nip.NameE
 func (n *nibssAdmin) register(ctx context.Context, b config.Bank) (nip.Institution, error) {
 	var in nip.Institution
 	body := registerBody{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Name: b.Name, Type: b.Type, CreditURL: b.APIURL(), CertificateIdentity: b.ID, NetDebitCap: b.Cap(), Collateral: b.Collateral}
-	return in, n.call(ctx, http.MethodPut, nibssBanksPath+url.PathEscape(b.ID), nil, body, &in)
+	return in, n.Call(ctx, http.MethodPut, nibssBanksPath+url.PathEscape(b.ID), nil, body, &in)
 }
 
 func (n *nibssAdmin) setStatus(ctx context.Context, id, status string) error {
-	return n.call(ctx, http.MethodPut, nibssBanksPath+url.PathEscape(id)+"/status", nil, statusBody{Status: status}, nil)
+	return n.Call(ctx, http.MethodPut, nibssBanksPath+url.PathEscape(id)+"/status", nil, statusBody{Status: status}, nil)
 }
 
 func (n *nibssAdmin) ensureClient(ctx context.Context, c openbanking.RegistryClient, createOnly bool) (openbanking.RegistryClient, error) {
@@ -110,7 +90,7 @@ func (n *nibssAdmin) ensureClient(ctx context.Context, c openbanking.RegistryCli
 	if createOnly {
 		header = http.Header{"If-None-Match": {"*"}}
 	}
-	return out, n.call(ctx, http.MethodPut, nibssClientsPath+"/"+url.PathEscape(c.ID), header, body, &out)
+	return out, n.Call(ctx, http.MethodPut, nibssClientsPath+"/"+url.PathEscape(c.ID), header, body, &out)
 }
 
 func (n *nibssAdmin) clients(ctx context.Context) ([]openbanking.RegistryClient, error) {
@@ -119,7 +99,7 @@ func (n *nibssAdmin) clients(ctx context.Context) ([]openbanking.RegistryClient,
 			Data       []openbanking.RegistryClient `json:"data"`
 			NextCursor string                       `json:"next_cursor"`
 		}
-		err := n.call(ctx, http.MethodGet, nibssClientsPath+"?"+pageQuery(cursor), nil, nil, &page)
+		err := n.Call(ctx, http.MethodGet, nibssClientsPath+"?"+server.PageQuery(cursor), nil, nil, &page)
 		return page.Data, page.NextCursor, err
 	})
 }
@@ -131,7 +111,7 @@ type consentPage struct {
 
 func (n *nibssAdmin) consents(ctx context.Context, q url.Values) (consentPage, error) {
 	var out consentPage
-	return out, n.call(ctx, http.MethodGet, nibssConsentsPath+"?"+q.Encode(), nil, nil, &out)
+	return out, n.Call(ctx, http.MethodGet, nibssConsentsPath+"?"+q.Encode(), nil, nil, &out)
 }
 
 func (n *nibssAdmin) settle(ctx context.Context, adhoc bool) (int, error) {
@@ -140,7 +120,7 @@ func (n *nibssAdmin) settle(ctx context.Context, adhoc bool) (int, error) {
 	var out struct {
 		Posted int `json:"posted_sessions"`
 	}
-	err := n.call(ctx, http.MethodPost, nibssSettlePath, nil, map[string]bool{"adhoc": adhoc}, &out)
+	err := n.Call(ctx, http.MethodPost, nibssSettlePath, nil, map[string]bool{"adhoc": adhoc}, &out)
 	return out.Posted, err
 }
 
@@ -149,13 +129,26 @@ func (n *nibssAdmin) status(ctx context.Context) (int, []string, error) {
 		Posted   *int     `json:"posted_sessions"`
 		Problems []string `json:"problems"`
 	}
-	if err := n.call(ctx, http.MethodGet, nibssStatusPath, nil, nil, &out); err != nil {
+	if err := n.Call(ctx, http.MethodGet, nibssStatusPath, nil, nil, &out); err != nil {
 		return 0, nil, fmt.Errorf("read the status of NIBSS: %w", err)
 	}
 	if out.Posted == nil {
 		return 0, nil, fmt.Errorf("NIBSS could not count its settlement sessions: %s", strings.Join(out.Problems, "; "))
 	}
 	return *out.Posted, out.Problems, nil
+}
+
+func (n *nibssAdmin) nextCutoff(ctx context.Context) (time.Time, error) {
+	var out struct {
+		NextCutoffAt *time.Time `json:"next_cutoff_at"`
+	}
+	if err := n.Call(ctx, http.MethodGet, nibssStatusPath, nil, nil, &out); err != nil {
+		return time.Time{}, fmt.Errorf("read the next NIP session of NIBSS: %w", err)
+	}
+	if out.NextCutoffAt == nil {
+		return time.Time{}, &uncheckedError{Name: "NIBSS", Why: "has not said when the next NIP session is"}
+	}
+	return *out.NextCutoffAt, nil
 }
 
 type openSessions struct {
@@ -173,26 +166,15 @@ func (o openSessions) inwardAll() (int64, bool) {
 
 func (n *nibssAdmin) openSessions(ctx context.Context, id string) (openSessions, error) {
 	var out openSessions
-	if err := n.call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id)+nibssOpenSuffix, nil, nil, &out); err != nil {
+	if err := n.Call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id)+nibssOpenSuffix, nil, nil, &out); err != nil {
 		return openSessions{}, fmt.Errorf("read the open sessions of %s at NIBSS: %w", id, err)
 	}
 	return out, nil
 }
 
-func (n *nibssAdmin) directory(ctx context.Context) ([]nip.Institution, error) {
-	return server.AllPages(ctx, func(ctx context.Context, cursor string) ([]nip.Institution, string, error) {
-		var page struct {
-			Data       []nip.Institution `json:"data"`
-			NextCursor string            `json:"next_cursor"`
-		}
-		err := n.call(ctx, http.MethodGet, nibssDirectoryPath+"?"+pageQuery(cursor), nil, nil, &page)
-		return page.Data, page.NextCursor, err
-	})
-}
-
 func (n *nibssAdmin) member(ctx context.Context, id string) (nip.Institution, error) {
 	var in nip.Institution
-	err := n.call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id), nil, nil, &in)
+	err := n.Call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id), nil, nil, &in)
 	var peer *server.PeerError
 	if errors.As(err, &peer) && peer.Status == http.StatusNotFound {
 		return nip.Institution{}, fmt.Errorf("bank id %s is %w", id, nip.ErrUnknownInstitution)
@@ -202,7 +184,7 @@ func (n *nibssAdmin) member(ctx context.Context, id string) (nip.Institution, er
 
 func (n *nibssAdmin) session(ctx context.Context, id string) (nibss.Session, error) {
 	var x nibss.Session
-	err := n.call(ctx, http.MethodGet, nibssSessionsPath+url.PathEscape(id), nil, nil, &x)
+	err := n.Call(ctx, http.MethodGet, nibssSessionsPath+url.PathEscape(id), nil, nil, &x)
 	var peer *server.PeerError
 	if errors.As(err, &peer) && peer.Status == http.StatusNotFound {
 		return nibss.Session{}, fmt.Errorf("session %s: %w", id, nip.ErrNoRecord)
@@ -216,33 +198,7 @@ func (n *nibssAdmin) closureSessions(ctx context.Context, id string) ([]nibss.Cl
 			Data       []nibss.ClosureSession `json:"data"`
 			NextCursor string                 `json:"next_cursor"`
 		}
-		err := n.call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id)+nibssClosureSuffix+"?"+pageQuery(cursor), nil, nil, &page)
+		err := n.Call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id)+nibssClosureSuffix+"?"+server.PageQuery(cursor), nil, nil, &page)
 		return page.Data, page.NextCursor, err
 	})
-}
-
-func pageQuery(cursor string) string {
-	q := url.Values{"limit": {strconv.Itoa(nibssPage)}}
-	if cursor != "" {
-		q.Set("cursor", cursor)
-	}
-	return q.Encode()
-}
-
-func (n *nibssAdmin) call(ctx context.Context, method, path string, header http.Header, in, out any) error {
-	_, err := n.link.Request(ctx, n.base, method, path, header, in, out)
-	var peer *server.PeerError
-	if err == nil || errors.As(err, &peer) || ctx.Err() != nil {
-		return err
-	}
-	if unreachable(err) {
-		return &nibssDownError{Port: n.port, Err: err}
-	}
-	return fmt.Errorf("call NIBSS on port %d: %w", n.port, err)
-}
-
-func unreachable(err error) bool {
-	var op *net.OpError
-	var timeout net.Error
-	return errors.Is(err, syscall.ECONNREFUSED) || (errors.As(err, &op) && op.Op == "dial") || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout())
 }

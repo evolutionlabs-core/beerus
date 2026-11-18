@@ -4,36 +4,38 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/jackc/pgx/v5"
 )
 
 var resetToday = clock.Date{Y: 2026, M: 11, D: 3}
 
 func TestResetRefusesTheWrongName(t *testing.T) {
 	dir := t.TempDir()
-	if err := connect.Init(dir, banktest.Spec("lagos"), connect.DefaultLocal(), resetToday); err != nil {
+	if err := seed.Init(dir, banktest.Spec("lagos"), setup.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := cmdReset([]string{"beerus", "--dir", dir}, &out); !errors.Is(err, connect.ErrWrongName) || !strings.Contains(err.Error(), `"lagos"`) {
+	if err := cmdReset([]string{"beerus", "--dir", dir}, &out); !errors.Is(err, install.ErrWrongName) || !strings.Contains(err.Error(), `"lagos"`) {
 		t.Fatalf("reset with the wrong name: %v", err)
 	}
 	if err := cmdReset([]string{"--dir", dir}, &out); err == nil || !strings.Contains(err.Error(), "usage") {
 		t.Fatalf("reset without a name: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, connect.SpecFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, setup.SpecFile)); err != nil {
 		t.Fatalf("a refused reset touched the dir: %v", err)
 	}
 }
@@ -99,7 +101,7 @@ func TestResetClearsASetupFromAnOlderBeerus(t *testing.T) {
 			if !strings.Contains(out.String(), "Cleared "+dir) {
 				t.Fatalf("output: %s", out.String())
 			}
-			ok, err := connect.Initialized(dir)
+			ok, err := setup.Initialized(dir)
 			if err != nil || ok {
 				t.Fatalf("after reset: %v %v", ok, err)
 			}
@@ -126,7 +128,7 @@ func TestResetClearsAnOldDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
-	if _, err := connect.Initialized(dir); !errors.Is(err, setup.ErrOldSetup) {
+	if _, err := setup.Initialized(dir); !errors.Is(err, setup.ErrOldSetup) {
 		t.Fatalf("old dir before reset: %v", err)
 	}
 	var out bytes.Buffer
@@ -143,14 +145,14 @@ func TestResetClearsAnOldDir(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatalf("left in the dir: %v", entries)
 	}
-	ok, err := connect.Initialized(dir)
+	ok, err := setup.Initialized(dir)
 	if err != nil || ok {
 		t.Fatalf("after reset: %v %v", ok, err)
 	}
-	if err := connect.Init(dir, banktest.Spec(defaultSetupName), connect.DefaultLocal(), resetToday); err != nil {
+	if err := seed.Init(dir, banktest.Spec(defaultSetupName), setup.DefaultLocal(), resetToday); err != nil {
 		t.Fatalf("up after reset: %v", err)
 	}
-	if _, err := connect.LoadConfig(dir); err != nil {
+	if _, err := setup.LoadConfig(dir); err != nil {
 		t.Fatalf("load after reset: %v", err)
 	}
 }
@@ -162,7 +164,7 @@ func TestResetDropsOwnedDatabasesOutsideThePrefix(t *testing.T) {
 	}
 	t.Setenv(config.DatabaseURLEnv, url)
 	dir := t.TempDir()
-	if err := connect.Init(dir, banktest.Spec(defaultSetupName), connect.DefaultLocal(), resetToday); err != nil {
+	if err := seed.Init(dir, banktest.Spec(defaultSetupName), setup.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	custom := "beerus_custom_" + config.HashKey(dir)[:8]
@@ -200,7 +202,7 @@ func TestResetDropsALeftoverNIBSSSnapshotDatabase(t *testing.T) {
 	t.Setenv(config.DatabaseURLEnv, url)
 	ctx := context.Background()
 	dir := t.TempDir()
-	if err := connect.Init(dir, banktest.Spec(defaultSetupName), connect.DefaultLocal(), resetToday); err != nil {
+	if err := seed.Init(dir, banktest.Spec(defaultSetupName), setup.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	live := config.DatabaseName(dir, setup.SystemNIBSS)
@@ -227,7 +229,7 @@ func TestResetDropsALeftoverNIBSSSnapshotDatabase(t *testing.T) {
 	if err := cmdReset([]string{defaultSetupName, "--dir", dir}, &out); err != nil {
 		t.Fatal(err)
 	}
-	want := "Dropped databases:\n  " + live + "\n  " + leftover + "\nCleared " + dir + " (kept " + connect.LocalFile + "). Run beerus init to start again.\n"
+	want := "Dropped databases:\n  " + live + "\n  " + leftover + "\nCleared " + dir + " (kept " + setup.LocalFile + "). Run beerus init to start again.\n"
 	if out.String() != want {
 		t.Fatalf("output: %q, want %q", out.String(), want)
 	}

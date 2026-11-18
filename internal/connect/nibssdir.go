@@ -3,11 +3,11 @@ package connect
 import (
 	"fmt"
 	"path/filepath"
-	"strconv"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func (a *App) ensureNIBSSDir() error {
@@ -26,10 +26,10 @@ func (a *App) ensureNIBSSDir() error {
 }
 
 func (a *App) prepareNIBSS() error {
-	if err := a.ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: ownedDatabase, Name: config.DatabaseName(a.cfg.Dir, setup.SystemNIBSS)}); err != nil {
+	if err := a.ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: state.OwnedDatabase, Name: config.DatabaseName(a.cfg.Dir, setup.SystemNIBSS)}); err != nil {
 		return err
 	}
-	if err := markActive(a.ctl, setup.SystemNIBSS); err != nil {
+	if err := state.MarkActive(a.ctl, setup.SystemNIBSS); err != nil {
 		return err
 	}
 	if err := a.ensureNIBSSPort(); err != nil {
@@ -43,6 +43,6 @@ func (a *App) prepareNIBSS() error {
 		return fmt.Errorf("NIBSS control token: %w", err)
 	}
 	port := a.cfg.Connect.NIBSSControlPort
-	a.nibssCtl = &nibssAdmin{link: server.NewLink(token, ""), base: "http://127.0.0.1:" + strconv.Itoa(port), port: port}
+	a.nibssCtl = &nibssAdmin{server.NewNIBSSControl(server.NewLink(token, ""), port)}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"log/slog"
 	"net"
 	"net/http"
@@ -15,13 +16,13 @@ import (
 	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 )
 
 const healthShutdown = 5 * time.Second
 
 func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
-	ok, err := connect.Initialized(dir)
+	ok, err := setup.Initialized(dir)
 	if err != nil {
 		return err
 	}
@@ -30,7 +31,7 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 			return err
 		}
 	}
-	c, err := connect.LoadConfig(dir)
+	c, err := setup.LoadConfig(dir)
 	if err != nil {
 		return err
 	}
@@ -41,11 +42,11 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 	if err := c.EnsureCertificates(now); err != nil {
 		return err
 	}
-	if err := connect.PrepareCBN(c, now); err != nil {
+	if err := install.PrepareCBN(c, now); err != nil {
 		return err
 	}
 	if c.Connect.HealthPort <= 0 {
-		return fmt.Errorf("%s has no connect.health_port; set it to the port the cbn container listens on", c.Path(connect.LocalFile))
+		return fmt.Errorf("%s has no connect.health_port; set it to the port the cbn container listens on", c.Path(setup.LocalFile))
 	}
 	p, err := cbnparticipant.New(ctx, dir, cbnparticipant.Options{Logger: log, Bind: bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
 	if err != nil {

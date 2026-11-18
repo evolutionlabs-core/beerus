@@ -18,7 +18,7 @@ func (a *App) reconcileNow(ctx context.Context) {
 }
 
 func (a *App) reconcileChanges() {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return
@@ -42,7 +42,7 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	if !ok {
 		return
 	}
-	want := runtimeBank(sb, r)
+	want := setup.RuntimeBank(sb, r)
 	a.lifeMu.Lock()
 	b := a.cfg.Bank(r.ID)
 	if b == nil {
@@ -94,12 +94,12 @@ func (a *App) updateFailed(id string, err error) {
 func (a *App) updatePartner(id string) {
 	a.partnerMu.Lock()
 	defer a.partnerMu.Unlock()
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return
 	}
-	r := findResource(&st, setup.KindPartner, id)
+	r := setup.FindResource(&st, setup.KindPartner, id)
 	sp, ok := partnerIn(st.Applied, id)
 	if r == nil || r.Partner == nil || !ok {
 		return
@@ -109,10 +109,10 @@ func (a *App) updatePartner(id string) {
 		a.log.Error("read local.yaml", "err", err)
 		return
 	}
-	a.replacePartner(id, runtimePartner(sp, *r.Partner, local.Partners[id]))
+	a.replacePartner(id, setup.RuntimePartner(sp, *r.Partner, local.Partners[id]))
 	gen := r.Generation
-	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
-		cur := findResource(st, setup.KindPartner, id)
+	if err := a.ctl.Update(func(st *setup.Status) (bool, error) {
+		cur := setup.FindResource(st, setup.KindPartner, id)
 		if cur == nil || cur.ObservedGeneration == gen {
 			return false, nil
 		}

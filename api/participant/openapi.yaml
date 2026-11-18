@@ -1380,6 +1380,10 @@ components:
           format: int64
           minimum: 0
           description: How many settlement sessions NIBSS has posted to the CBN. Only NIBSS reports it. It is absent when NIBSS could not count them.
+        next_cutoff_at:
+          type: string
+          format: date-time
+          description: When the next NIP settlement session closes, in Lagos time. Only NIBSS reports it. It follows the NIBSS session count and holiday calendar, so it skips weekends and holidays. It is absent when NIBSS could not read its config.
         settlement_checked_at:
           type: string
           format: date-time

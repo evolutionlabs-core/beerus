@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"slices"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func (a *App) syncDirectoryDue(ctx context.Context) {
@@ -35,7 +37,7 @@ func (a *App) syncDirectoryDue(ctx context.Context) {
 }
 
 func (a *App) logNIBSS(msg string, err error) {
-	var down *nibssDownError
+	var down *server.NIBSSDownError
 	if errors.As(err, &down) {
 		a.log.Warn(msg, "err", err)
 		return
@@ -44,7 +46,7 @@ func (a *App) logNIBSS(msg string, err error) {
 }
 
 func (a *App) syncDirectory(ctx context.Context) error {
-	list, err := a.nibssCtl.directory(ctx)
+	list, err := a.nibssCtl.Directory(ctx)
 	if err != nil {
 		return fmt.Errorf("read the NIBSS directory: %w", err)
 	}
@@ -94,15 +96,15 @@ func (a *App) registerMember(ctx context.Context, b config.Bank) error {
 			return fmt.Errorf("set NIBSS status of %s: %w", b.ID, err)
 		}
 	}
-	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
-		r := findResource(st, setup.KindBank, b.ID)
-		if r == nil || r.Steps[config.StepDirectory] == stepDone {
+	if err := a.ctl.Update(func(st *setup.Status) (bool, error) {
+		r := setup.FindResource(st, setup.KindBank, b.ID)
+		if r == nil || r.Steps[config.StepDirectory] == state.StepDone {
 			return false, nil
 		}
 		if r.Steps == nil {
 			r.Steps = map[string]string{}
 		}
-		r.Steps[config.StepDirectory] = stepDone
+		r.Steps[config.StepDirectory] = state.StepDone
 		return true, nil
 	}); err != nil {
 		return err
@@ -164,7 +166,7 @@ func (a *App) driveMember(ctx context.Context, id string, path []string) error {
 }
 
 func (a *App) closingCallsDue(ctx context.Context) {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return
@@ -195,8 +197,8 @@ func (a *App) markRemoved(ctx context.Context, lines []bank.FeedLine) error {
 	if !slices.ContainsFunc(lines, func(l bank.FeedLine) bool { return l.Counterparty != nil }) {
 		return nil
 	}
-	directory, err := a.nibssCtl.directory(ctx)
-	var down *nibssDownError
+	directory, err := a.nibssCtl.Directory(ctx)
+	var down *server.NIBSSDownError
 	if errors.As(err, &down) {
 		a.logNIBSS("removed banks not marked", err)
 		return nil

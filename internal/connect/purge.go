@@ -15,6 +15,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -110,7 +111,7 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	if err != nil {
 		return nil, err
 	}
-	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
+	if err := a.ctl.Update(func(st *setup.Status) (bool, error) {
 		st.Applied.Spec.Banks = slices.DeleteFunc(st.Applied.Spec.Banks, func(x setup.Bank) bool { return x.ID == id })
 		st.Resources = slices.DeleteFunc(st.Resources, func(x setup.Resource) bool { return x.Kind == setup.KindBank && x.ID == id })
 		keepTombstone(st, tomb)
@@ -180,7 +181,7 @@ func (a *App) purgePartner(_ context.Context, r setup.Resource) (*setup.Conditio
 	if err := os.RemoveAll(a.cfg.Path("partners", id)); err != nil {
 		return nil, fmt.Errorf("remove partners/%s: %w", id, err)
 	}
-	if err := a.ctl.update(func(st *setup.Status) (bool, error) {
+	if err := a.ctl.Update(func(st *setup.Status) (bool, error) {
 		st.Applied.Spec.Partners = slices.DeleteFunc(st.Applied.Spec.Partners, func(x setup.Partner) bool { return x.ID == id })
 		st.Resources = slices.DeleteFunc(st.Resources, func(x setup.Resource) bool { return x.Kind == setup.KindPartner && x.ID == id })
 		return true, resum(st)
@@ -254,35 +255,35 @@ func (a *App) dropBankDatabase(ctx context.Context, name string) error {
 	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, owned); err != nil {
 		return fmt.Errorf("drop database %s: %w", name, err)
 	}
-	return a.ctl.Release(setup.Owned{Kind: ownedDatabase, Name: name})
+	return a.ctl.Release(setup.Owned{Kind: state.OwnedDatabase, Name: name})
 }
 
 func (a *App) bankRetired(id string) bool {
-	st, err := a.ctl.status()
+	st, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
 		return false
 	}
-	r := findResource(&st, setup.KindBank, id)
-	return r != nil && r.Steps[stepRetired] == stepDone
+	r := setup.FindResource(&st, setup.KindBank, id)
+	return r != nil && r.Steps[stepRetired] == state.StepDone
 }
 
 func (a *App) retireBank(ctx context.Context, b *config.Bank) error {
 	a.recordBank(b.ID, func(r *setup.Resource) bool {
-		if r.Steps[stepRetired] == stepDone {
+		if r.Steps[stepRetired] == state.StepDone {
 			return false
 		}
 		if r.Steps == nil {
 			r.Steps = map[string]string{}
 		}
-		r.Steps[stepRetired] = stepDone
+		r.Steps[stepRetired] = state.StepDone
 		return true
 	})
 	if !a.bankRetired(b.ID) {
 		return fmt.Errorf("retire %s: the retirement was not saved", b.ID)
 	}
 	err := a.closeAtBank(ctx, b)
-	if err != nil && unreachable(err) && !a.mustRetireLive(b.ID) {
+	if err != nil && server.Unreachable(err) && !a.mustRetireLive(b.ID) {
 		return nil
 	}
 	if err != nil {
@@ -319,4 +320,9 @@ func (a *App) closeAtBank(ctx context.Context, b *config.Bank) error {
 		return fmt.Errorf("%s has not closed yet", b.ID)
 	}
 	return nil
+}
+
+func keepTombstone(st *setup.Status, in nip.Institution) {
+	st.Tombstones = slices.DeleteFunc(st.Tombstones, func(x nip.Institution) bool { return x.ID == in.ID })
+	st.Tombstones = append(st.Tombstones, in)
 }

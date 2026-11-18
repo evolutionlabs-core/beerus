@@ -3,22 +3,18 @@ package connect
 import (
 	"context"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 	"net/http"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 )
 
 const (
 	bankCheckWait = 15 * time.Second
 	bankCheckPoll = 200 * time.Millisecond
 )
-
-func (a *App) schedule() nibss.Schedule {
-	return nibss.Schedule{Per: a.cfg.Sessions(), Cal: a.cfg.Calendar()}
-}
 
 func (a *App) SettleNow(ctx context.Context) (int, error) {
 	return a.settleRun(ctx, true)
@@ -100,6 +96,10 @@ func (e *uncheckedError) Error() string {
 	return e.Name + " " + e.Why
 }
 
+func (e *uncheckedError) message() string {
+	return web.Sentence(e.Name+" "+e.Why) + " Try again soon."
+}
+
 func (e *uncheckedError) Unwrap() error {
 	return e.Err
 }
@@ -111,7 +111,7 @@ func (a *App) freshBankProblems(ctx context.Context, b *config.Bank) ([]string, 
 	for {
 		var state server.State
 		if _, err := a.link.Do(ctx, b.URL(), http.MethodGet, "/v1/status", nil, &state); err != nil {
-			if unreachable(err) {
+			if server.Unreachable(err) {
 				return nil, &uncheckedError{Name: b.Name, Why: "is not answering, so its books were not checked", Err: err}
 			}
 			return nil, fmt.Errorf("read the status of %s: %w", b.ID, err)

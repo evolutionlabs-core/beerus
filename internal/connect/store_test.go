@@ -4,162 +4,29 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"slices"
-	"sync"
 	"testing"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
-func testStore(t *testing.T) *ctlStore {
+func testStore(t *testing.T) *state.Store {
 	t.Helper()
-	s, err := createStore(t.TempDir(), setup.Status{Version: setup.StatusVersion, Setup: "beerus", SetupKey: 9})
+	s, err := state.Create(t.TempDir(), setup.Status{Version: setup.StatusVersion, Setup: "beerus", SetupKey: 9})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return s
 }
 
-func diskStatus(t *testing.T, s *ctlStore) setup.Status {
-	t.Helper()
-	st, err := setup.LoadStatus(s.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return st
-}
-
-func TestStoreClaimIsIdempotent(t *testing.T) {
-	s := testStore(t)
-	db := setup.Owned{Kind: ownedDatabase, Name: "beerus_x_bank_a"}
-	port := setup.Owned{Kind: ownedPort, Name: "7445"}
-	for range 2 {
-		if err := s.Claim(setup.KindBank, "bank-a", db, port); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if s.version != 2 {
-		t.Fatalf("a repeated claim wrote the store again: version %d", s.version)
-	}
-	got := diskStatus(t, s).Resources
-	if len(got) != 1 || !slices.Equal(got[0].Owned, []setup.Owned{db, port}) {
-		t.Fatalf("resources: %+v", got)
-	}
-	if err := s.Release(port); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Release(setup.Owned{Kind: ownedPort, Name: "9999"}); err != nil {
-		t.Fatalf("releasing an unknown name: %v", err)
-	}
-	if got := diskStatus(t, s).Resources[0].Owned; !slices.Equal(got, []setup.Owned{db}) {
-		t.Fatalf("after release: %+v", got)
-	}
-	if err := s.forget(setup.KindBank, "bank-a"); err != nil {
-		t.Fatal(err)
-	}
-	if got := diskStatus(t, s).Resources; len(got) != 0 {
-		t.Fatalf("after forget: %+v", got)
-	}
-}
-
-func TestStoreSkipsOlderCopies(t *testing.T) {
-	s := testStore(t)
-	add := func(name string) uint64 {
-		v, err := s.change(func(st *setup.Status) (bool, error) {
-			r := ensureResource(st, setup.KindBank, "bank-a")
-			r.Owned = append(r.Owned, setup.Owned{Kind: ownedPort, Name: name})
-			return true, nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return v
-	}
-	ov := add("1")
-	nv := add("2")
-	if err := s.flush(nv); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.flush(ov); err != nil {
-		t.Fatal(err)
-	}
-	if got := diskStatus(t, s).Resources[0].Owned; len(got) != 2 {
-		t.Fatalf("an older copy overwrote a newer one: %+v", got)
-	}
-}
-
-func TestStoreFlushWritesLatestAfterFailedWrite(t *testing.T) {
-	s := testStore(t)
-	add := func(name string) uint64 {
-		v, err := s.change(func(st *setup.Status) (bool, error) {
-			r := ensureResource(st, setup.KindBank, "bank-a")
-			r.Owned = append(r.Owned, setup.Owned{Kind: ownedPort, Name: name})
-			return true, nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return v
-	}
-	ov := add("1")
-	add("2")
-	if err := s.flush(ov); err != nil {
-		t.Fatal(err)
-	}
-	if got := diskStatus(t, s).Resources[0].Owned; len(got) != 2 {
-		t.Fatalf("an older flush wrote an older state: %+v", got)
-	}
-}
-
-func TestStoreConcurrentClaims(t *testing.T) {
-	s := testStore(t)
-	var wg sync.WaitGroup
-	for i := range 20 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := s.Claim(setup.KindBank, "bank-a", setup.Owned{Kind: ownedPort, Name: string(rune('a' + i))}); err != nil {
-				t.Error(err)
-			}
-		}()
-	}
-	wg.Wait()
-	if got := diskStatus(t, s).Resources[0].Owned; len(got) != 20 {
-		t.Fatalf("%d claims saved, want 20", len(got))
-	}
-}
-
-func TestStoreFileMode(t *testing.T) {
-	s := testStore(t)
-	fi, err := os.Stat(filepath.Join(s.dir, "control.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v", fi.Mode().Perm())
-	}
-}
-
-func TestNewSetupKeyIsRandom(t *testing.T) {
-	a, err := newSetupKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := newSetupKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a == 0 || a == b {
-		t.Fatalf("keys %d and %d", a, b)
-	}
-}
-
 func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	t.Helper()
-	local := DefaultLocal()
+	local := setup.DefaultLocal()
 	ports := testPorts(t, 2)
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort, local.Connect.CBNPort = ports[0], ports[1], ports[2], ports[3], ports[4], ports[5]
 	return initConfigWith(t, today, local)
@@ -171,10 +38,10 @@ func initConfigWith(t *testing.T, today clock.Date, local setup.Local) *config.C
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
-	if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
+	if err := seed.Init(dir, banktest.Spec("beerus"), local, today); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := LoadConfig(dir)
+	cfg, err := setup.LoadConfig(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +60,7 @@ func testPorts(t *testing.T, banks int) []int {
 		base := testPortLow + rand.IntN(testPortHigh-testPortLow-need-config.DefaultAPIPortOffset)
 		free := true
 		for p := base; p < base+need && free; p++ {
-			free = portFree(p) && (p < base+7 || portFree(p+config.DefaultAPIPortOffset))
+			free = config.PortFree(p) && (p < base+7 || config.PortFree(p+config.DefaultAPIPortOffset))
 		}
 		if free {
 			return []int{base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 6}
@@ -232,18 +99,15 @@ func TestWriteFilesRestoresExactlyTheSavedSet(t *testing.T) {
 	}
 }
 
-func TestCBNPortClaimsFollowTheConfig(t *testing.T) {
-	s := testStore(t)
-	cfg := &config.Config{}
-	cfg.Connect.CBNPort = 39100
-	for _, port := range []int{39100, 39200} {
-		cfg.Connect.CBNPort = port
-		if err := ensureCBNPorts(s, cfg); err != nil {
-			t.Fatal(err)
-		}
+func TestClockIsReal(t *testing.T) {
+	app := newTestApp(t, Options{})
+	before := time.Now().Truncate(time.Millisecond)
+	got := app.clock.Now()
+	after := time.Now()
+	if got.Before(before) || got.After(after) || got.Location() != clock.Lagos {
+		t.Fatalf("clock now %v, want between %v and %v in Lagos", got, before, after)
 	}
-	r := findResource(&setup.Status{Resources: diskStatus(t, s).Resources}, setup.KindSystem, setup.SystemCBN)
-	if r == nil || len(r.Owned) != 2 || !slices.Contains(r.Owned, setup.Owned{Kind: ownedPort, Name: "39200"}) || slices.Contains(r.Owned, setup.Owned{Kind: ownedPort, Name: "39100"}) {
-		t.Fatalf("claims after the port changed: %+v", r)
+	if app.setupKey == 0 || app.setupKey != app.ctl.SetupKey() {
+		t.Fatalf("setup key %d", app.setupKey)
 	}
 }

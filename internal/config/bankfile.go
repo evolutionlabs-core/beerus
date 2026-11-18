@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
@@ -174,20 +173,14 @@ func (f BankFile) Bank() *Bank {
 	}
 }
 
-func (f BankFile) Config(dir, databaseURL string) (*Config, error) {
-	pack, err := countrypack.Nigeria()
-	if err != nil {
-		return nil, fmt.Errorf("load country pack: %w", err)
-	}
-	c := &Config{
+func (f BankFile) Config(dir, databaseURL string) *Config {
+	return &Config{
 		Dir:         dir,
 		DatabaseURL: databaseURL,
 		Banks:       []*Bank{f.Bank()},
 		SetupKey:    f.SetupKey,
 		Connect:     Connect{Host: f.Host, WidgetPort: f.WidgetPort, WidgetTLS: f.WidgetTLS, NIBSSPort: f.NIBSSPort, CBNPort: f.CBNPort, BrandName: f.BrandName},
 	}
-	c.buildFees(pack)
-	return c, nil
 }
 
 func (c *Config) bankFileBytes(b *Bank) ([]byte, error) {

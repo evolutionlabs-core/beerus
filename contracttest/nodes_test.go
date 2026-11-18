@@ -16,6 +16,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/fleet"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 )
 
@@ -175,7 +176,7 @@ func startNodes(cfg *config.Config, opts connect.Options) (*nodes, error) {
 	if err := cfg.EnsureCertificates(time.Now()); err != nil {
 		return ns, err
 	}
-	if err := connect.PrepareCBN(cfg, time.Now()); err != nil {
+	if err := install.PrepareCBN(cfg, time.Now()); err != nil {
 		return ns, err
 	}
 	cbn, err := cbnparticipant.New(context.Background(), cfg.Dir, cbnparticipant.Options{Bind: nodeBind, DatabaseURL: cfg.DatabaseURL})

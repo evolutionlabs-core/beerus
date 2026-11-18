@@ -1,4 +1,4 @@
-package connect
+package seed
 
 import (
 	"errors"
@@ -6,37 +6,53 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
+
+func initConfig(t *testing.T, today clock.Date, local setup.Local) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
+		local.DatabaseURL = u
+	}
+	if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := setup.LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
 
 func TestOldDirIsRefused(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, oldSpecFile), []byte("seed: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, setup.OldSpecFile), []byte("seed: 1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for name, err := range map[string]error{
-		"load":  func() error { _, err := LoadConfig(dir); return err }(),
-		"init":  Init(dir, banktest.Spec("beerus"), DefaultLocal(), clock.Date{Y: 2026, M: 11, D: 3}),
-		"check": func() error { _, err := Initialized(dir); return err }(),
+		"load":  func() error { _, err := setup.LoadConfig(dir); return err }(),
+		"init":  Init(dir, banktest.Spec("beerus"), setup.DefaultLocal(), clock.Date{Y: 2026, M: 11, D: 3}),
+		"check": func() error { _, err := setup.Initialized(dir); return err }(),
 	} {
 		if !errors.Is(err, setup.ErrOldSetup) || !strings.Contains(err.Error(), "This setup was made by an older Beerus. Run beerus reset, then beerus init.") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, statusFile)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, setup.StatusFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("an old dir got a status store: %v", err)
 	}
 }
 
 func TestInitWritesTheDefaultSetup(t *testing.T) {
 	today := clock.Date{Y: 2026, M: 11, D: 3}
-	cfg := initConfigWith(t, today, DefaultLocal())
-	for _, f := range []string{SpecFile, LocalFile, statusFile, "control-token"} {
+	cfg := initConfig(t, today, setup.DefaultLocal())
+	for _, f := range []string{setup.SpecFile, setup.LocalFile, setup.StatusFile, "control-token"} {
 		fi, err := os.Stat(cfg.Path(f))
 		if err != nil {
 			t.Fatal(err)
@@ -45,11 +61,11 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 			t.Errorf("%s has mode %v", f, fi.Mode().Perm())
 		}
 	}
-	raw, err := os.ReadFile(cfg.Path(SpecFile))
+	raw, err := os.ReadFile(cfg.Path(setup.SpecFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec, errs := setup.Parse(SpecFile, raw)
+	spec, errs := setup.Parse(setup.SpecFile, raw)
 	if len(errs) > 0 {
 		t.Fatal(errs)
 	}
@@ -58,14 +74,14 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 	}
 	want := []struct {
 		id, typ, nip, nuban string
-		port, api           int
-	}{{"bank-a", "commercial", "000001", "001", 7445, 7455}, {"bank-b", "digital", "000002", "002", 7448, 7458}}
+		port, api, history  int
+	}{{"bank-a", "commercial", "000001", "001", 7445, 7455, 730}, {"bank-b", "digital", "000002", "002", 7448, 7458, 180}}
 	for i, w := range want {
 		b := cfg.Banks[i]
 		if b.ID != w.id || b.Type != w.typ || b.NIPCode != w.nip || b.NUBANCode != w.nuban || b.Port != w.port || b.APIPort != w.api || b.Database == "" {
 			t.Errorf("bank %d: %+v", i, b)
 		}
-		if b.HistoryDays != typeHistoryDays[w.typ] {
+		if b.HistoryDays != w.history {
 			t.Errorf("%s history %d", b.ID, b.HistoryDays)
 		}
 	}
@@ -79,16 +95,16 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 	if st.Applied.Spec.Banks[0].NIPCode != "000001" {
 		t.Errorf("applied codes are not pinned: %+v", st.Applied.Spec.Banks[0])
 	}
-	r := findResource(&st, setup.KindBank, "bank-b")
-	if r == nil || r.Phase != config.PhaseProvisioning || r.Steps[config.StepAllocate] != stepDone || r.Generation != 1 {
+	r := setup.FindResource(&st, setup.KindBank, "bank-b")
+	if r == nil || r.Phase != config.PhaseProvisioning || r.Steps[config.StepAllocate] != state.StepDone || r.Generation != 1 {
 		t.Fatalf("bank-b resource: %+v", r)
 	}
 	for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {
-		if findResource(&st, setup.KindSystem, id) == nil {
+		if setup.FindResource(&st, setup.KindSystem, id) == nil {
 			t.Errorf("no %s system resource", id)
 		}
 	}
-	if err := Init(cfg.Dir, banktest.Spec("beerus"), DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "already holds") {
+	if err := Init(cfg.Dir, banktest.Spec("beerus"), setup.DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "already holds") {
 		t.Fatalf("second init: %v", err)
 	}
 }
@@ -96,11 +112,11 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 func TestDatabaseURLFromEnvIsNeverWritten(t *testing.T) {
 	const secret = "postgres://postgres:hunter2@db:5432/postgres"
 	t.Setenv("BEERUS_DATABASE_URL", secret)
-	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
+	cfg := initConfig(t, clock.Date{Y: 2026, M: 11, D: 3}, setup.DefaultLocal())
 	if cfg.DatabaseURL != secret {
 		t.Fatalf("the environment did not win: %q", cfg.DatabaseURL)
 	}
-	for _, f := range []string{LocalFile, SpecFile, statusFile} {
+	for _, f := range []string{setup.LocalFile, setup.SpecFile, setup.StatusFile} {
 		raw, err := os.ReadFile(cfg.Path(f))
 		if err != nil {
 			t.Fatal(err)
@@ -116,23 +132,24 @@ func TestInitRefusesABadSpec(t *testing.T) {
 	spec := banktest.Spec("beerus")
 	spec.Spec.Banks[1].ID = "cbn"
 	dir := t.TempDir()
-	if err := Init(dir, spec, DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "reserved for the CBN") {
+	if err := Init(dir, spec, setup.DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "reserved for the CBN") {
 		t.Fatalf("init with a reserved id: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, statusFile)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(dir, setup.StatusFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a refused spec left a status store: %v", err)
 	}
 }
 
-func TestClockIsReal(t *testing.T) {
-	app := newTestApp(t, Options{})
-	before := time.Now().Truncate(time.Millisecond)
-	got := app.clock.Now()
-	after := time.Now()
-	if got.Before(before) || got.After(after) || got.Location() != clock.Lagos {
-		t.Fatalf("clock now %v, want between %v and %v in Lagos", got, before, after)
+func TestNewSetupKeyIsRandom(t *testing.T) {
+	a, err := newSetupKey()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if app.setupKey == 0 || app.setupKey != app.ctl.setupKey() {
-		t.Fatalf("setup key %d", app.setupKey)
+	b, err := newSetupKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == 0 || a == b {
+		t.Fatalf("keys %d and %d", a, b)
 	}
 }

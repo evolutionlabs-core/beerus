@@ -1,4 +1,4 @@
-package connect
+package install
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 type DoctorReport struct {
@@ -43,7 +44,7 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		}
 	}
 	expected := map[string]bool{}
-	for name := range owned(live, ownedDatabase) {
+	for name := range state.Owned(live, state.OwnedDatabase) {
 		expected[name] = true
 	}
 	if len(c.Banks) > 0 {
@@ -80,7 +81,7 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		if r.Kind == setup.KindBank && byID[r.ID] == nil {
 			rep.StaleOwned = append(rep.StaleOwned, r.ID)
 			for _, o := range r.Owned {
-				if (o.Kind == ownedDatabase) && !slices.Contains(rep.Orphans, o.Name) {
+				if (o.Kind == state.OwnedDatabase) && !slices.Contains(rep.Orphans, o.Name) {
 					rep.Orphans = append(rep.Orphans, o.Name)
 				}
 			}
@@ -89,10 +90,10 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 	if !fix || rep.Clean() {
 		return rep, nil
 	}
-	var ctl *ctlStore
+	var ctl *state.Store
 	if len(rep.StaleOwned) > 0 {
 		var err error
-		ctl, err = openStore(c.Dir)
+		ctl, err = state.Open(c.Dir)
 		if err != nil {
 			return rep, err
 		}
@@ -101,7 +102,7 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		return rep, err
 	}
 	for _, bank := range rep.StaleOwned {
-		if err := ctl.forget(setup.KindBank, bank); err != nil {
+		if err := ctl.Forget(setup.KindBank, bank); err != nil {
 			return rep, err
 		}
 	}
