@@ -487,7 +487,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	for _, row := range ada2["data"].([]any) {
 		if m := row.(map[string]any); m["name"] == "Ada Obi" {
 			adaNUBAN = fmt.Sprint(m["nuban"])
-			if m["balance_minor"] != float64(500_000) {
+			if m["balance_minor"] != json.Number("500000") {
 				t.Fatalf("Ada Obi at bank-a: %v", m)
 			}
 		}

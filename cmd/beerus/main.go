@@ -272,7 +272,9 @@ func (c *ctl) doKeyed(method, path string, body any, key string) (map[string]any
 	defer resp.Body.Close()
 	out := map[string]any{}
 	b, _ := io.ReadAll(resp.Body)
-	_ = json.Unmarshal(b, &out)
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	_ = dec.Decode(&out)
 	if resp.StatusCode >= 300 {
 		if e, ok := out["error"].(map[string]any); ok {
 			return nil, errors.New(fmt.Sprint(e["message"]))
