@@ -90,7 +90,7 @@ func FindResetTarget(dir string) (ResetTarget, error) {
 	default:
 		return t, fmt.Errorf("%s holds no Beerus setup", dir)
 	}
-	t.DatabaseURL = defaultDatabaseURL
+	t.DatabaseURL = setup.DefaultLocal().DatabaseURL
 	for _, u := range []string{os.Getenv(config.DatabaseURLEnv), local.DatabaseURL, old.DatabaseURL} {
 		if u != "" {
 			t.DatabaseURL = u

@@ -2,6 +2,8 @@ package connect
 
 import (
 	"context"
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
+	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"os"
 	"runtime"
@@ -16,14 +18,13 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
-	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func testDatabaseURL(t *testing.T) string {
 	t.Helper()
 	t.Setenv(config.DatabaseURLEnv, "")
-	url := install.DefaultLocal().DatabaseURL
+	url := setup.DefaultLocal().DatabaseURL
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		url = u
 	}
@@ -38,15 +39,15 @@ func testDatabaseURL(t *testing.T) string {
 func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 	url := testDatabaseURL(t)
 	today := clock.Date{Y: 2026, M: 11, D: 3}
-	local := install.DefaultLocal()
+	local := setup.DefaultLocal()
 	local.DatabaseURL = url
 	dir := t.TempDir()
 	t.Cleanup(func() {
-		if _, err := install.Reset(context.WithoutCancel(t.Context()), dir, url); err != nil {
+		if err := store.DropDatabases(context.WithoutCancel(t.Context()), url, []string{config.DatabaseName(dir, "bank-g")}); err != nil {
 			t.Errorf("drop databases: %v", err)
 		}
 	})
-	if err := install.Init(dir, banktest.Spec("beerus"), local, today); err != nil {
+	if err := seed.Init(dir, banktest.Spec("beerus"), local, today); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := setup.LoadConfig(dir)

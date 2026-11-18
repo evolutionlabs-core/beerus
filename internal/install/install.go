@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"net"
 	"os"
 	"strconv"
@@ -79,7 +80,7 @@ func Install(ctx context.Context, dir string, spec setup.Spec, local setup.Local
 		if found {
 			return detailWritten, nil
 		}
-		return "", Init(dir, spec, local, today)
+		return "", seed.Init(dir, spec, local, today)
 	})
 	if err != nil {
 		return err

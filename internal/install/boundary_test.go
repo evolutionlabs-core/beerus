@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	modulePath  = "github.com/evolutionlabs-core/beerus"
-	installPath = modulePath + "/internal/install"
-	connectPath = modulePath + "/internal/connect"
-	cmdPath     = modulePath + "/cmd/beerus"
+	modulePath   = "github.com/evolutionlabs-core/beerus"
+	installPath  = modulePath + "/internal/install"
+	connectPath  = modulePath + "/internal/connect"
+	cmdPath      = modulePath + "/cmd/beerus"
+	contractPath = modulePath + "/contracttest"
 )
 
 func goList(t *testing.T, args ...string) []string {
@@ -29,22 +30,27 @@ func goList(t *testing.T, args ...string) []string {
 }
 
 func TestOnlyTheCommandImportsInstall(t *testing.T) {
-	lines := goList(t, "-f", `{{.ImportPath}} {{join .Imports " "}}`, modulePath+"/...")
+	lines := goList(t, "-f", `{{.ImportPath}}|{{join .Imports " "}}|{{join .TestImports " "}}|{{join .XTestImports " "}}`, modulePath+"/...")
 	listed := map[string]bool{}
 	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
+		fields := strings.Split(line, "|")
+		if len(fields) != 4 {
+			t.Fatalf("unexpected list line %q", line)
+		}
+		pkg := fields[0]
+		listed[pkg] = true
+		if pkg == cmdPath || pkg == installPath {
 			continue
 		}
-		listed[fields[0]] = true
-		if fields[0] == cmdPath || fields[0] == installPath {
-			continue
+		if slices.Contains(strings.Fields(fields[1]), installPath) {
+			t.Errorf("%s imports %s; only %s may", pkg, installPath, cmdPath)
 		}
-		if slices.Contains(fields[1:], installPath) {
-			t.Errorf("%s imports %s; only %s may", fields[0], installPath, cmdPath)
+		tests := slices.Concat(strings.Fields(fields[2]), strings.Fields(fields[3]))
+		if slices.Contains(tests, installPath) && pkg != contractPath {
+			t.Errorf("the tests of %s import %s; only %s and %s may", pkg, installPath, cmdPath, contractPath)
 		}
 	}
-	for _, p := range []string{cmdPath, connectPath, installPath} {
+	for _, p := range []string{cmdPath, connectPath, installPath, contractPath} {
 		if !listed[p] {
 			t.Errorf("%s is not covered by the boundary check", p)
 		}

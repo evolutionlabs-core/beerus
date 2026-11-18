@@ -98,7 +98,7 @@ func parseInit(args []string) (initPlan, error) {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	file := fs.String("f", "", "setup `FILE` to start from")
-	flagged := install.DefaultLocal().Connect
+	flagged := setup.DefaultLocal().Connect
 	fs.IntVar(&flagged.PartnerPort, "partner-port", flagged.PartnerPort, "partner API `port`; banks take the next free ports")
 	fs.IntVar(&flagged.WidgetPort, "widget-port", flagged.WidgetPort, "widget `port`")
 	fs.IntVar(&flagged.ControlPort, "control-port", flagged.ControlPort, "control API `port`")

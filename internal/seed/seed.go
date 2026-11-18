@@ -1,10 +1,11 @@
-package install
+package seed
 
 import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"go.yaml.in/yaml/v3"
 	"os"
 	"path/filepath"
 
@@ -198,4 +199,15 @@ func newSetupKey() (uint64, error) {
 			return k, nil
 		}
 	}
+}
+
+func writeYAML(path string, v any) error {
+	raw, err := yaml.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", filepath.Base(path), err)
+	}
+	if err := config.WriteSecret(path, string(raw)); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
+	}
+	return nil
 }

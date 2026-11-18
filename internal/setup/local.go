@@ -113,3 +113,30 @@ func (l Local) check(pos map[string]Pos) []specProblem {
 	}
 	return c.problems
 }
+
+const (
+	defaultDatabaseURL  = "postgres:///postgres"
+	defaultPartnerPort  = 7443
+	defaultWidgetPort   = 7444
+	defaultControlPort  = 7480
+	defaultHealthPort   = 7490
+	defaultSyncInterval = "1m"
+	defaultRefreshEvery = "1m"
+)
+
+func DefaultLocal() Local {
+	return Local{
+		DatabaseURL: defaultDatabaseURL,
+		Connect: LocalConnect{
+			Host:         DefaultConnectHost,
+			PartnerPort:  defaultPartnerPort,
+			WidgetPort:   defaultWidgetPort,
+			ControlPort:  defaultControlPort,
+			HealthPort:   defaultHealthPort,
+			NIBSSPort:    DefaultNIBSSPort,
+			CBNPort:      DefaultCBNPort,
+			SyncInterval: defaultSyncInterval,
+			RefreshEvery: defaultRefreshEvery,
+		},
+	}
+}

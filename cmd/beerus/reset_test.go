@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,7 @@ var resetToday = clock.Date{Y: 2026, M: 11, D: 3}
 
 func TestResetRefusesTheWrongName(t *testing.T) {
 	dir := t.TempDir()
-	if err := install.Init(dir, banktest.Spec("lagos"), install.DefaultLocal(), resetToday); err != nil {
+	if err := seed.Init(dir, banktest.Spec("lagos"), setup.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -148,7 +149,7 @@ func TestResetClearsAnOldDir(t *testing.T) {
 	if err != nil || ok {
 		t.Fatalf("after reset: %v %v", ok, err)
 	}
-	if err := install.Init(dir, banktest.Spec(defaultSetupName), install.DefaultLocal(), resetToday); err != nil {
+	if err := seed.Init(dir, banktest.Spec(defaultSetupName), setup.DefaultLocal(), resetToday); err != nil {
 		t.Fatalf("up after reset: %v", err)
 	}
 	if _, err := setup.LoadConfig(dir); err != nil {
@@ -163,7 +164,7 @@ func TestResetDropsOwnedDatabasesOutsideThePrefix(t *testing.T) {
 	}
 	t.Setenv(config.DatabaseURLEnv, url)
 	dir := t.TempDir()
-	if err := install.Init(dir, banktest.Spec(defaultSetupName), install.DefaultLocal(), resetToday); err != nil {
+	if err := seed.Init(dir, banktest.Spec(defaultSetupName), setup.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	custom := "beerus_custom_" + config.HashKey(dir)[:8]
@@ -201,7 +202,7 @@ func TestResetDropsALeftoverNIBSSSnapshotDatabase(t *testing.T) {
 	t.Setenv(config.DatabaseURLEnv, url)
 	ctx := context.Background()
 	dir := t.TempDir()
-	if err := install.Init(dir, banktest.Spec(defaultSetupName), install.DefaultLocal(), resetToday); err != nil {
+	if err := seed.Init(dir, banktest.Spec(defaultSetupName), setup.DefaultLocal(), resetToday); err != nil {
 		t.Fatal(err)
 	}
 	live := config.DatabaseName(dir, setup.SystemNIBSS)

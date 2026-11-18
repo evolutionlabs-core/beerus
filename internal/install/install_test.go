@@ -23,7 +23,7 @@ import (
 func installURL(t *testing.T) string {
 	t.Helper()
 	t.Setenv(config.DatabaseURLEnv, "")
-	url := DefaultLocal().DatabaseURL
+	url := setup.DefaultLocal().DatabaseURL
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		url = u
 	}
@@ -37,7 +37,7 @@ func installURL(t *testing.T) string {
 
 func runInstall(ctx context.Context, dir, url string, after func(InstallStep)) ([]string, error) {
 	today := clock.Date{Y: 2026, M: 11, D: 3}
-	local := DefaultLocal()
+	local := setup.DefaultLocal()
 	local.DatabaseURL = url
 	var lines []string
 	err := Install(ctx, dir, banktest.Spec("beerus"), local, today, func(s InstallStep) {

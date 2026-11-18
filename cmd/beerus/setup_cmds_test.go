@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -55,7 +56,7 @@ func portsFree(base int) bool {
 
 func freeLocal(t *testing.T) setup.Local {
 	t.Helper()
-	local := install.DefaultLocal()
+	local := setup.DefaultLocal()
 	for range 200 {
 		base := 20000 + rand.IntN(11900)
 		if portsFree(base) {
@@ -70,7 +71,7 @@ func freeLocal(t *testing.T) setup.Local {
 func initDir(t *testing.T, local setup.Local, spec setup.Spec) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := install.Init(dir, spec, local, clock.DateOf(time.Now())); err != nil {
+	if err := seed.Init(dir, spec, local, clock.DateOf(time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	return dir

@@ -2,6 +2,7 @@ package connect
 
 import (
 	"context"
+	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -18,7 +19,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
@@ -34,7 +34,7 @@ func testStore(t *testing.T) *state.Store {
 
 func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	t.Helper()
-	local := install.DefaultLocal()
+	local := setup.DefaultLocal()
 	ports := testPorts(t, 2)
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort, local.Connect.CBNPort = ports[0], ports[1], ports[2], ports[3], ports[4], ports[5]
 	return initConfigWith(t, today, local)
@@ -46,7 +46,7 @@ func initConfigWith(t *testing.T, today clock.Date, local setup.Local) *config.C
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
-	if err := install.Init(dir, banktest.Spec("beerus"), local, today); err != nil {
+	if err := seed.Init(dir, banktest.Spec("beerus"), local, today); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := setup.LoadConfig(dir)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,7 +19,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
-	"github.com/evolutionlabs-core/beerus/internal/install"
 	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -89,7 +89,7 @@ func cmdRun(args []string) error {
 }
 
 func initFromEnv(dir string) error {
-	local := install.DefaultLocal()
+	local := setup.DefaultLocal()
 	for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &local.Connect.PartnerPort, "BEERUS_WIDGET_PORT": &local.Connect.WidgetPort, "BEERUS_CONTROL_PORT": &local.Connect.ControlPort, "BEERUS_HEALTH_PORT": &local.Connect.HealthPort, "BEERUS_NIBSS_PORT": &local.Connect.NIBSSPort, "BEERUS_CBN_PORT": &local.Connect.CBNPort} {
 		n, err := envNumber(key, true)
 		if err != nil {
@@ -114,7 +114,7 @@ func initFromEnv(dir string) error {
 		}
 		spec.Spec.Partners = append(spec.Spec.Partners, p)
 	}
-	return install.Init(dir, spec, local, today)
+	return seed.Init(dir, spec, local, today)
 }
 
 func cmdHealth(args []string) error {
