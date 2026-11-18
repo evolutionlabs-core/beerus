@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-@source "../internal/connect";
+@source "../internal/core";
 @source "../internal/aggregator";
 @source "../internal/bank/site";
 @source "../internal/view";
