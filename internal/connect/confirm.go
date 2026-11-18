@@ -30,9 +30,6 @@ type confirmJob struct {
 }
 
 func (a *App) confirmDue(ctx context.Context) {
-	if a.role != RoleCore {
-		return
-	}
 	stored, err := a.ctl.Status()
 	if err != nil {
 		a.log.Error("read control.json", "err", err)
@@ -125,9 +122,6 @@ func (a *App) recordConfirm(j confirmJob, err error) {
 }
 
 func (a *App) takeConfirm(id string, gen int64) bool {
-	if a.role != RoleCore {
-		return true
-	}
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
 	c := a.confirms[id]

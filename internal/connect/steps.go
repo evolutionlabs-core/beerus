@@ -4,19 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
+
+func noError() error {
+	return nil
+}
 
 func ensuredSteps() []string {
 	return []string{config.StepDatabase, config.StepLedgerSchema, config.StepOpenBankingSchema}
@@ -46,7 +46,6 @@ func newStatus(b *config.Bank, done bool) *BankStatus {
 
 func (a *App) initLifecycle() {
 	a.status = map[string]*BankStatus{}
-	a.sites = map[string]*siteServer{}
 	a.strikes = map[string]int{}
 	stored, err := a.ctl.Status()
 	if err != nil {
@@ -77,10 +76,7 @@ func (a *App) initLifecycle() {
 }
 
 func (a *App) provisionedAtStart(b *config.Bank, r *setup.Resource) bool {
-	if a.role == RoleCore {
-		return r != nil && r.Phase != PhaseProvisioning
-	}
-	return a.ledgerFor(b.ID) != nil
+	return r != nil && r.Phase != PhaseProvisioning
 }
 
 func (a *App) recordBank(id string, fn func(r *setup.Resource) bool) {
@@ -214,22 +210,9 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	a.lifeMu.Unlock()
 	ok := a.step(st, config.StepAllocate, func() error {
 		return a.claimBank(b)
-	}) && a.stepDone(st, config.StepDirectory) && a.bankStorage(ctx, b, st) && a.step(st, config.StepCerts, func() error {
+	}) && a.stepDone(st, config.StepDirectory) && a.step(st, config.StepCerts, func() error {
 		return a.bankCerts(b)
-	}) && a.stepDone(st, config.StepCBN) && a.bankBooksReady(ctx, b, st) && a.step(st, config.StepSite, func() error {
-		if b.Closed() {
-			return nil
-		}
-		if err := a.startBankSite(b); err != nil {
-			return err
-		}
-		return a.probeSite(b)
-	}) && a.step(st, config.StepAPI, func() error {
-		if b.Closed() {
-			return nil
-		}
-		return a.checkBankAPI(b)
-	})
+	}) && a.stepDone(st, config.StepCBN) && a.bankBooksReady(ctx, b, st) && a.step(st, config.StepSite, noError) && a.step(st, config.StepAPI, noError)
 	if !ok {
 		return
 	}
@@ -251,33 +234,7 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	a.pokePush()
 }
 
-func (a *App) bankStorage(ctx context.Context, b *config.Bank, st *BankStatus) bool {
-	if a.role == RoleCore {
-		return true
-	}
-	return a.step(st, config.StepDatabase, func() error {
-		return store.Create(ctx, a.cfg.DatabaseURL, b.Database)
-	}) && a.step(st, config.StepLedgerSchema, func() error {
-		n, err := store.Migrate(ctx, a.cfg.DatabaseURL, b.Database, ledger.Migrate)
-		if err != nil {
-			return err
-		}
-		a.nameStep(st, config.StepLedgerSchema, config.MigrationCount(n))
-		return nil
-	}) && a.step(st, config.StepOpenBankingSchema, func() error {
-		n, err := store.Migrate(ctx, a.cfg.DatabaseURL, b.Database, openbanking.Migrate)
-		if err != nil {
-			return err
-		}
-		a.nameStep(st, config.StepOpenBankingSchema, config.MigrationCount(n))
-		return a.openLedger(b)
-	})
-}
-
 func (a *App) bankBooksReady(ctx context.Context, b *config.Bank, st *BankStatus) bool {
-	if a.role != RoleCore {
-		return true
-	}
 	admin, err := a.adminOf(b.ID)
 	if err != nil {
 		return false
@@ -325,69 +282,11 @@ func (a *App) stepDone(st *BankStatus, id string) bool {
 	return st.Steps[stepIndex(id)].Done
 }
 
-func (a *App) nameStep(st *BankStatus, id, detail string) {
-	i := stepIndex(id)
-	a.lifeMu.Lock()
-	defer a.lifeMu.Unlock()
-	st.Steps[i].Name = config.BankSteps()[i].Name + " (" + detail + ")"
-}
-
-func (a *App) openLedger(b *config.Bank) error {
-	a.mu.Lock()
-	ls := a.ledgerFor(b.ID)
-	a.mu.Unlock()
-	if ls == nil {
-		var err error
-		if ls, err = openLedgerSource(context.Background(), a.cfg, a.ctl, a.clock, a.fees, b); err != nil {
-			return err
-		}
-		a.mu.Lock()
-		a.addLedger(ls)
-		a.mu.Unlock()
-	}
-	return nil
-}
-
 func (a *App) bankCerts(b *config.Bank) error {
 	if _, err := a.ensureBankDir(b.ID, true); err != nil {
 		return fmt.Errorf("issue certificates for %s: %w", b.ID, err)
 	}
 	return a.ctl.Claim(setup.KindBank, b.ID, setup.Owned{Kind: state.OwnedDir, Name: "banks/" + b.ID})
-}
-
-func (a *App) probeSite(b *config.Bank) error {
-	a.lifeMu.Lock()
-	serving := a.serving
-	a.lifeMu.Unlock()
-	if !serving || a.role == RoleCore {
-		return nil
-	}
-	resp, err := a.probeHTTP.Get(a.siteProbeURL(b))
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && !(b.Suspended() && resp.StatusCode == http.StatusServiceUnavailable) {
-		return fmt.Errorf("online banking answered %d", resp.StatusCode)
-	}
-	return nil
-}
-
-func (a *App) checkBankAPI(b *config.Bank) error {
-	a.lifeMu.Lock()
-	serving := a.serving
-	site := a.sites[b.ID]
-	a.lifeMu.Unlock()
-	if !serving || a.role == RoleCore {
-		return nil
-	}
-	a.obMu.Lock()
-	ob := a.obs[b.ID]
-	a.obMu.Unlock()
-	if site == nil || site.api == nil || ob == nil {
-		return fmt.Errorf("the open banking API of %s is not running", b.ID)
-	}
-	return nil
 }
 
 func driftRepairs(phase string, done []string, missing []string) (redo []string, newPhase string) {
@@ -447,7 +346,6 @@ func (a *App) checkDrift() {
 		if len(redo) == 0 {
 			continue
 		}
-		a.detach(b, redo[0])
 		a.log.Warn("bank drifted; repairing", "bank", b.ID, "reason", reason)
 		a.lifeMu.Lock()
 		st.Phase, st.Reason = phase, reason
@@ -470,34 +368,18 @@ func (a *App) probe(b *config.Bank) (string, []string) {
 	rebuild := []string{config.StepDatabase, config.StepLedgerSchema, config.StepOpenBankingSchema, config.StepSite, config.StepAPI}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if reason := a.probeBooks(ctx, b); reason != "" {
+	if reason := a.probeBank(ctx, b); reason != "" {
 		return reason, rebuild
 	}
 	if b.Closed() {
 		return "", nil
 	}
-	resp, err := a.probeHTTP.Get(a.siteProbeURL(b))
+	resp, err := a.probeHTTP.Get(b.URL() + "/health")
 	if err == nil {
 		resp.Body.Close()
 		return "", nil
 	}
 	return "online banking is not answering", []string{config.StepSite, config.StepAPI}
-}
-
-func (a *App) probeBooks(ctx context.Context, b *config.Bank) string {
-	if a.role == RoleCore {
-		return a.probeBank(ctx, b)
-	}
-	a.mu.Lock()
-	ls := a.ledgerFor(b.ID)
-	a.mu.Unlock()
-	if ls == nil {
-		return "its ledger is not open"
-	}
-	if err := ls.Ping(ctx); err != nil {
-		return "its database cannot be reached: " + err.Error()
-	}
-	return ""
 }
 
 func (a *App) probeBank(ctx context.Context, b *config.Bank) string {
@@ -530,44 +412,4 @@ func (a *App) rebuiltSince(bankID, step string, completed *time.Time) bool {
 	}
 	seen := st.Steps[stepIndex(step)].At
 	return seen != nil && completed.After(*seen)
-}
-
-func (a *App) detach(b *config.Bank, from string) {
-	if from == config.StepDatabase {
-		a.mu.Lock()
-		var ls *ledgerSource
-		for i, l := range a.ledgers {
-			if l.Inst.ID == b.ID {
-				ls = l
-				a.ledgers = append(a.ledgers[:i:i], a.ledgers[i+1:]...)
-				a.poolMu.Lock()
-				delete(a.pools, b.ID)
-				a.poolMu.Unlock()
-				break
-			}
-		}
-		hc, cc := a.nibssBanks[b.ID], a.cbnBanks[b.ID]
-		delete(a.nibssBanks, b.ID)
-		delete(a.cbnBanks, b.ID)
-		a.mu.Unlock()
-		for _, c := range []*http.Client{hc, cc} {
-			if c != nil {
-				c.CloseIdleConnections()
-			}
-		}
-		if ls != nil {
-			ls.Close()
-		}
-		return
-	}
-	a.lifeMu.Lock()
-	site := a.sites[b.ID]
-	delete(a.sites, b.ID)
-	a.lifeMu.Unlock()
-	if site != nil {
-		_ = site.srv.Close()
-		if site.api != nil {
-			_ = site.api.Close()
-		}
-	}
 }

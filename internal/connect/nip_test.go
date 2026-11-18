@@ -25,18 +25,18 @@ func (w *stallWriter) Write(b []byte) (int, error) {
 }
 
 func TestResponsesAreWrittenWithoutTheLock(t *testing.T) {
-	a := newTestApp(t, Options{})
+	a := newTestStack(t, Options{})
 	from := funded(t, a, "bank-a", "Ada Obi", "50000")
 	to := funded(t, a, "bank-b", "Ngozi Eze", "")
 	transfer := `{"from":"` + from + `","to_bank":"bank-b","to":"` + to + `","amount":"10"}`
-	send := a.banking.HandleTransfer
+	send := a.atBankSyncing
 	for name, c := range map[string]struct {
 		handler http.HandlerFunc
 		target  string
 		body    string
 	}{
-		"transfer":     {send, "/", transfer},
-		"replay":       {send, "/", transfer},
+		"transfer":     {send, "/banks/bank-a/transfers", transfer},
+		"replay":       {send, "/banks/bank-a/transfers", transfer},
 		"positions":    {a.ctlNIPPositions, "/", ""},
 		"participants": {a.ctlNIPParticipants, "/", ""},
 		"enquiry":      {a.ctlNameEnquiry, "/?bank_code=999002&account_number=0000000017", ""},
@@ -56,9 +56,17 @@ func TestResponsesAreWrittenWithoutTheLock(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatalf("%s never wrote", name)
 		}
-		if !a.mu.TryLock() {
-			t.Fatalf("%s writes its response while holding the lock", name)
+		lockDeadline := time.NewTimer(10 * time.Second)
+		lockTick := time.NewTicker(time.Millisecond)
+		for !a.mu.TryLock() {
+			select {
+			case <-lockDeadline.C:
+				t.Fatalf("%s writes its response while holding the lock", name)
+			case <-lockTick.C:
+			}
 		}
+		lockTick.Stop()
+		lockDeadline.Stop()
 		a.mu.Unlock()
 		close(sw.release)
 		<-done

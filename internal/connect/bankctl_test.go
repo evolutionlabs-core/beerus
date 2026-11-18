@@ -18,10 +18,10 @@ import (
 
 func bankAdminOnServer(t *testing.T, ensure bool) *bankAdmin {
 	t.Helper()
-	fixed := Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	core, _ := newTestAppWithNIBSS(t, fixed)
+	opts := Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	core, _ := newTestAppWithNIBSS(t, opts)
 	coreURL := startCore(t, core)
-	p, err := participant.New(t.Context(), core.cfg.Dir, participant.Options{Logger: fixed.Logger, BankID: "bank-a", CoreURL: coreURL, Bind: "127.0.0.1", DatabaseURL: core.cfg.DatabaseURL})
+	p, err := participant.New(t.Context(), core.cfg.Dir, participant.Options{Logger: opts.Logger, BankID: "bank-a", CoreURL: coreURL, Bind: "127.0.0.1", DatabaseURL: core.cfg.DatabaseURL})
 	if err != nil {
 		t.Fatal(err)
 	}

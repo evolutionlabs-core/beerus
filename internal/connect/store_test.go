@@ -1,24 +1,16 @@
 package connect
 
 import (
-	"context"
-	"github.com/evolutionlabs-core/beerus/internal/seed"
-	"log/slog"
 	"math/rand/v2"
-	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
@@ -76,137 +68,6 @@ func testPorts(t *testing.T, banks int) []int {
 	}
 	t.Fatal("no free block of ports for the app")
 	return nil
-}
-
-const (
-	testProvisionLimit = 30 * time.Second
-	testProvisionPoll  = 50 * time.Millisecond
-)
-
-const testBindTries = 4
-
-func startTestNIBSS(t *testing.T, o Options) (*App, context.Context, func(), error) {
-	t.Helper()
-	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
-	conn, err := pgx.Connect(context.Background(), cfg.DatabaseURL)
-	if err != nil {
-		t.Skipf("no Postgres for app tests (%v); set BEERUS_TEST_DATABASE_URL", err)
-	}
-	conn.Close(context.Background())
-	a, err := New(t.Context(), cfg, o)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := a.DropBankDatabases(context.WithoutCancel(t.Context())); err != nil {
-			t.Errorf("drop databases: %v", err)
-		}
-	})
-	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
-	errc := make(chan error, 1)
-	done, err := a.serveNIBSS(ctx, errc)
-	if err != nil {
-		cancel()
-		return nil, nil, nil, err
-	}
-	cbnDone, err := a.serveCBN(ctx, errc)
-	if err != nil {
-		cancel()
-		<-done
-		return nil, nil, nil, err
-	}
-	stop := sync.OnceFunc(func() {
-		cancel()
-		<-done
-		<-cbnDone
-	})
-	t.Cleanup(stop)
-	tick := time.NewTicker(testProvisionPoll)
-	defer tick.Stop()
-	upCtx, upStop := context.WithTimeout(ctx, testProvisionLimit)
-	defer upStop()
-	for !participantsAnswer(upCtx, a) {
-		select {
-		case <-upCtx.Done():
-			stop()
-			return nil, nil, nil, upCtx.Err()
-		case err := <-errc:
-			stop()
-			return nil, nil, nil, err
-		case <-tick.C:
-		}
-	}
-	return a, ctx, stop, nil
-}
-
-func newTestApp(t *testing.T, o Options) *App {
-	t.Helper()
-	a, _ := newTestAppWithNIBSS(t, o)
-	return a
-}
-
-func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
-	t.Helper()
-	if testing.Short() {
-		t.Skip("opens bank databases; run without -short")
-	}
-	if o.Logger == nil {
-		o.Logger = slog.New(slog.DiscardHandler)
-	}
-	var a *App
-	var ctx context.Context
-	var stopNIBSS func()
-	for try := 0; ; try++ {
-		var err error
-		if a, ctx, stopNIBSS, err = startTestNIBSS(t, o); err == nil {
-			break
-		}
-		if try == testBindTries {
-			t.Fatal(err)
-		}
-	}
-	waitCtx, stop := context.WithTimeout(ctx, testProvisionLimit)
-	defer stop()
-	tick := time.NewTicker(testProvisionPoll)
-	defer tick.Stop()
-	for !participantsAnswer(waitCtx, a) || provisioning(a) {
-		select {
-		case <-waitCtx.Done():
-			t.Fatalf("banks still provisioning: %+v", a.BankStatuses())
-		case <-tick.C:
-		}
-		a.Step(waitCtx)
-	}
-	for _, b := range a.cfg.Banks {
-		api, err := a.startBankAPI(b)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = api.Close() })
-	}
-	return a, stopNIBSS
-}
-
-func participantsAnswer(ctx context.Context, a *App) bool {
-	return answers(ctx, a.nibssCtl.Link, a.nibssCtl.Base) && answers(ctx, a.cbnCtl.link, a.cbnCtl.base)
-}
-
-func answers(ctx context.Context, link server.Link, base string) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/health", nil)
-	if err != nil {
-		return false
-	}
-	req.Header.Set("Authorization", "Bearer "+link.Token)
-	resp, err := link.Client.Do(req)
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
-}
-
-func provisioning(a *App) bool {
-	return slices.ContainsFunc(a.BankStatuses(), func(st BankStatus) bool { return st.Phase == PhaseProvisioning })
 }
 
 func TestWriteFilesRestoresExactlyTheSavedSet(t *testing.T) {

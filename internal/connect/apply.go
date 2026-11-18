@@ -936,7 +936,7 @@ func (a *App) applyFailed(w http.ResponseWriter, r *http.Request, err error) {
 func (a *App) ctlResources(w http.ResponseWriter, r *http.Request) {
 	limit, cursor, err := server.ListParams(r)
 	if err != nil {
-		a.banking.Error(w, r, err)
+		a.bankingError(w, r, err)
 		return
 	}
 	kind := r.URL.Query().Get("kind")

@@ -157,26 +157,6 @@ func (s *Store) Release(o setup.Owned) error {
 	})
 }
 
-func (s *Store) ReleasePorts(kind, id string) error {
-	st, err := s.Status()
-	if err != nil {
-		return err
-	}
-	r := setup.FindResource(&st, kind, id)
-	if r == nil {
-		return nil
-	}
-	for _, o := range slices.Clone(r.Owned) {
-		if o.Kind != OwnedPort {
-			continue
-		}
-		if err := s.Release(o); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *Store) Forget(kind, id string) error {
 	return s.Update(func(st *setup.Status) (bool, error) {
 		n := len(st.Resources)

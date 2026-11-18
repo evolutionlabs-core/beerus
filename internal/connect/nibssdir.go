@@ -1,7 +1,6 @@
 package connect
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 
@@ -46,19 +45,4 @@ func (a *App) prepareNIBSS() error {
 	port := a.cfg.Connect.NIBSSControlPort
 	a.nibssCtl = &nibssAdmin{server.NewNIBSSControl(server.NewLink(token, ""), port)}
 	return nil
-}
-
-func (a *App) serveNIBSS(ctx context.Context, errc chan<- error) (<-chan struct{}, error) {
-	done := make(chan struct{})
-	if a.localNIBSS == nil {
-		close(done)
-		return done, nil
-	}
-	go func() {
-		defer close(done)
-		if err := a.localNIBSS.Serve(ctx); err != nil {
-			errc <- fmt.Errorf("serve NIBSS: %w", err)
-		}
-	}()
-	return done, nil
 }

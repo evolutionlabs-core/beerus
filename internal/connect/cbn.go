@@ -5,10 +5,7 @@ import (
 	"fmt"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func (a *App) cbnDue(ctx context.Context) {
@@ -34,15 +31,4 @@ func (a *App) openCBNAccount(ctx context.Context, id string) error {
 		return fmt.Errorf("open the CBN settlement account of %s: %w", id, err)
 	}
 	return nil
-}
-
-func (a *App) dropCBN(ctx context.Context) error {
-	name := config.DatabaseName(a.cfg.Dir, setup.SystemCBN)
-	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, []string{name}); err != nil {
-		return fmt.Errorf("drop the CBN database: %w", err)
-	}
-	if err := a.ctl.Release(setup.Owned{Kind: state.OwnedDatabase, Name: name}); err != nil {
-		return err
-	}
-	return a.ctl.ReleasePorts(setup.KindSystem, setup.SystemCBN)
 }

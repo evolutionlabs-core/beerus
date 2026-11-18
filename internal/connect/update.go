@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -55,7 +53,6 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	renamed := b.Name != want.Name
 	restate := b.State != want.State
 	relimit := b.NetDebitCap != want.NetDebitCap || b.Collateral != want.Collateral
-	retermed := renamed || b.API != want.API
 	b.Name, b.State, b.NetDebitCap, b.Collateral, b.API = want.Name, want.State, want.NetDebitCap, want.Collateral, want.API
 	a.mu.Unlock()
 	if st := a.status[r.ID]; st != nil {
@@ -66,9 +63,6 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	if renamed || restate || relimit {
 		a.markStale(r.ID, r.Generation)
 		a.updateFailed(r.ID, errors.New("waiting for NIBSS to take the change"))
-	}
-	if retermed {
-		a.retune(current)
 	}
 	phase := current.RunningPhase()
 	a.lifeMu.Lock()
@@ -95,16 +89,6 @@ func (a *App) updateFailed(id string, err error) {
 		setCondition(r, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: setup.ReasonStepFailed, Message: fmt.Sprintf("update: %v", err), ChangedAt: now})
 		return true
 	})
-}
-
-func (a *App) retune(b config.Bank) {
-	a.obMu.Lock()
-	ob := a.obs[b.ID]
-	a.obMu.Unlock()
-	if ob == nil {
-		return
-	}
-	ob.SetTerms(server.OpenTerms(b))
 }
 
 func (a *App) updatePartner(id string) {

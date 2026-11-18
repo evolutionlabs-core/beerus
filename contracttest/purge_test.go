@@ -178,7 +178,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
-	again, err := connect.New(t.Context(), c, connect.Options{Role: connect.RoleCore})
+	again, err := connect.New(c, connect.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestPurgeRules(t *testing.T) {
 	if len(c.Banks) != 0 {
 		t.Fatal("the setup still lists a purged bank")
 	}
-	again, err := connect.New(t.Context(), c, connect.Options{Role: connect.RoleCore})
+	again, err := connect.New(c, connect.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

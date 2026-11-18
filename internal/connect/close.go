@@ -429,7 +429,6 @@ func (a *App) decideMoney(ctx context.Context, r setup.Resource) (*setup.Conditi
 	b.State = setup.StateClosed
 	a.mu.Unlock()
 	a.lifeMu.Unlock()
-	a.detach(b, config.StepSite)
 	if _, err := a.ensureBankDir(id, false); err != nil {
 		return nil, err
 	}

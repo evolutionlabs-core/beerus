@@ -5,11 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -64,11 +62,6 @@ type BankStatus struct {
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 }
 
-type siteServer struct {
-	srv *http.Server
-	api *http.Server
-}
-
 func (a *App) BankStatuses() []BankStatus {
 	a.lifeMu.Lock()
 	defer a.lifeMu.Unlock()
@@ -99,10 +92,6 @@ func (a *App) bankPhaseReason(id string) (string, string) {
 		return PhaseActive, ""
 	}
 	return PhaseProvisioning, ""
-}
-
-func (a *App) bankReady(id string) bool {
-	return a.bankPhase(id) != PhaseProvisioning
 }
 
 func (a *App) BankWarnings() []string {
@@ -259,61 +248,12 @@ func (a *App) SetBankSuspended(ctx context.Context, id string, suspended bool) e
 	return nil
 }
 
-func (a *App) startBankSite(b *config.Bank) error {
-	a.lifeMu.Lock()
-	serving := a.serving
-	_, running := a.sites[b.ID]
-	a.lifeMu.Unlock()
-	if !serving || running || a.role == RoleCore {
-		return nil
-	}
-	a.forgetOpenBanking(b.ID)
-	h := a.bankHandler(b.ID)
-	if h == nil {
-		return fmt.Errorf("no ledger for %s", b.ID)
-	}
-	ls, err := a.link.Listen(b.Port)
-	if err != nil {
-		return err
-	}
-	api, err := a.startBankAPI(b)
-	if err != nil {
-		for _, l := range ls {
-			l.Close()
-		}
-		return err
-	}
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
-	for _, l := range ls {
-		go func(l net.Listener) { _ = srv.Serve(l) }(l)
-	}
-	a.lifeMu.Lock()
-	a.sites[b.ID] = &siteServer{srv: srv, api: api}
-	a.lifeMu.Unlock()
-	return nil
-}
-
-func (a *App) stopBankSites(ctx context.Context) {
-	a.lifeMu.Lock()
-	sites := a.sites
-	a.sites = map[string]*siteServer{}
-	a.serving = false
-	a.lifeMu.Unlock()
-	ids := make([]string, 0, len(sites))
-	for id := range sites {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		_ = sites[id].srv.Shutdown(ctx)
-		if sites[id].api != nil {
-			_ = sites[id].api.Shutdown(ctx)
-		}
-	}
+func (a *App) noBanks() bool {
+	return len(a.bankList()) == 0
 }
 
 func (a *App) noSuchBank(w http.ResponseWriter, r *http.Request) {
-	if len(a.bankList()) == 0 {
+	if a.noBanks() {
 		web.WriteError(w, r, http.StatusNotFound, "not_found", server.NoBanksMessage)
 		return
 	}
@@ -377,11 +317,4 @@ func (a *App) ctlSuspend(w http.ResponseWriter, r *http.Request, suspended bool)
 	}
 	st, _ := a.bankStatus(id)
 	web.WriteJSON(w, http.StatusOK, st)
-}
-
-func (a *App) siteProbeURL(b *config.Bank) string {
-	if a.role == RoleCore {
-		return b.URL() + "/health"
-	}
-	return fmt.Sprintf("http://127.0.0.1:%d/login", b.Port)
 }

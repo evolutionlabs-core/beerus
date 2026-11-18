@@ -228,11 +228,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 			ns, err := startNodes(cfg, opts)
 			if err != nil {
 				lastErr = err
-				if ns.app != nil {
-					if err := ns.app.DropBankDatabases(context.WithoutCancel(t.Context())); err != nil {
-						t.Errorf("drop bank database: %v", err)
-					}
-				}
+				dropDatabases(t, cfg)
 				continue
 			}
 			s.cfg, s.app = cfg, ns.app
@@ -240,9 +236,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 				if err := ns.halt(); err != nil {
 					t.Errorf("stop the stack: %v", err)
 				}
-				if err := ns.app.DropBankDatabases(context.WithoutCancel(t.Context())); err != nil {
-					t.Errorf("drop bank database: %v", err)
-				}
+				dropDatabases(t, cfg)
 			})
 		}
 		if s.app == nil {
@@ -754,6 +748,18 @@ func (b *browser) postTo(base, path string, form url.Values) int {
 	b.last = string(body)
 	b.cur = resp.Request.URL
 	return resp.StatusCode
+}
+
+func dropDatabases(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	ctx := context.WithoutCancel(t.Context())
+	names, err := store.List(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, ""))
+	if err == nil {
+		err = store.DropDatabases(ctx, cfg.DatabaseURL, names)
+	}
+	if err != nil {
+		t.Errorf("drop databases: %v", err)
+	}
 }
 
 func (b *browser) atBank() bool {

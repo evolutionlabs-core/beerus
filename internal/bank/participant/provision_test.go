@@ -278,6 +278,26 @@ func TestStatusCanBeReadWhileTheBankProvisions(t *testing.T) {
 	}
 }
 
+func TestRetryDue(t *testing.T) {
+	at := time.Date(2026, time.November, 14, 10, 0, 0, 0, clock.Lagos)
+	for _, c := range []struct {
+		name string
+		now  time.Time
+		want bool
+	}{
+		{"a second before the backoff ends", at.Add(-time.Second), false},
+		{"at the backoff", at, true},
+		{"after the backoff", at.Add(clock.Backoff(1)), true},
+	} {
+		if got := retryDue(at, c.now); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+	if !retryDue(time.Time{}, at) {
+		t.Error("a bank that never failed is not due")
+	}
+}
+
 func TestBankRebuildsADroppedDatabase(t *testing.T) {
 	s := newStage(t)
 	p := s.start(t, s.dbURL)
@@ -375,25 +395,5 @@ func TestBankRefusesRequestsWhileItsBooksAreRebuilt(t *testing.T) {
 	p.forgetBooks()
 	if _, err := p.Server().Books(); err == nil {
 		t.Fatal("the closed books were still handed out")
-	}
-}
-
-func TestRetryDue(t *testing.T) {
-	at := time.Date(2026, time.November, 14, 10, 0, 0, 0, clock.Lagos)
-	for _, c := range []struct {
-		name string
-		now  time.Time
-		want bool
-	}{
-		{"a second before the backoff ends", at.Add(-time.Second), false},
-		{"at the backoff", at, true},
-		{"after the backoff", at.Add(clock.Backoff(1)), true},
-	} {
-		if got := retryDue(at, c.now); got != c.want {
-			t.Errorf("%s: %v, want %v", c.name, got, c.want)
-		}
-	}
-	if !retryDue(time.Time{}, at) {
-		t.Error("a bank that never failed is not due")
 	}
 }

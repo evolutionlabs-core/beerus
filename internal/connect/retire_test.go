@@ -18,9 +18,8 @@ import (
 
 func coreOf(t *testing.T) *App {
 	t.Helper()
-	fixed := Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	a, _ := newTestAppWithNIBSS(t, fixed)
-	a.role = RoleCore
+	opts := Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	a, _ := newTestAppWithNIBSS(t, opts)
 	return a
 }
 

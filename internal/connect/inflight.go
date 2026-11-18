@@ -93,15 +93,6 @@ type moveRead struct {
 }
 
 func (a *App) openSends(ctx context.Context, b *config.Bank) (int, error) {
-	if a.role != RoleCore {
-		a.mu.Lock()
-		ls := a.ledgerFor(b.ID)
-		a.mu.Unlock()
-		if ls == nil {
-			return 0, fmt.Errorf("the books of %s are not open", b.Name)
-		}
-		return ls.Bank().OpenSends(ctx)
-	}
 	if b.Closed() || !pushable(a.bankPhase(b.ID)) {
 		return 0, nil
 	}

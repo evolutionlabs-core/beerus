@@ -81,8 +81,8 @@ func (s *Banking) activeBook(id string) (Book, error) {
 	return bk, nil
 }
 
-func (s *Banking) noSuchBank(w http.ResponseWriter, r *http.Request) {
-	if s.Src.Empty() {
+func noSuchBank(w http.ResponseWriter, r *http.Request, empty func() bool) {
+	if empty() {
 		web.WriteError(w, r, http.StatusNotFound, "not_found", NoBanksMessage)
 		return
 	}
@@ -316,6 +316,10 @@ func clean(err error) string {
 }
 
 func (s *Banking) Error(w http.ResponseWriter, r *http.Request, err error) {
+	WriteBankingError(w, r, s.Log, s.Src.Empty, err)
+}
+
+func WriteBankingError(w http.ResponseWriter, r *http.Request, log *slog.Logger, noBanks func() bool, err error) {
 	var te *TransferError
 	var fe *bank.InsufficientFundsError
 	var pe *bank.PayoutTooLargeError
@@ -326,7 +330,7 @@ func (s *Banking) Error(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.As(err, &te):
 		web.WriteError(w, r, te.Status, te.ErrCode, web.Sentence(te.Error()))
 	case errors.Is(err, ErrBankNotFound):
-		s.noSuchBank(w, r)
+		noSuchBank(w, r, noBanks)
 	case errors.Is(err, errBankNotActive):
 		web.WriteError(w, r, http.StatusConflict, "bank_not_active", web.Sentence(err.Error()))
 	case errors.Is(err, errBankNotClosing):
@@ -356,7 +360,7 @@ func (s *Banking) Error(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ledger.ErrInvalid):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", clean(err))
 	case errors.As(err, &ue):
-		s.Log.Warn("banking unavailable", "path", r.URL.Path, "err", ue.Err)
+		log.Warn("banking unavailable", "path", r.URL.Path, "err", ue.Err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", ue.Msg)
 	case errors.As(err, &pe):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "insufficient_funds", pe.Message())
@@ -371,7 +375,7 @@ func (s *Banking) Error(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ledger.ErrAccountClosed), errors.Is(err, ledger.ErrAccountFrozen), errors.Is(err, ledger.ErrPostNoDebit):
 		web.WriteError(w, r, http.StatusUnprocessableEntity, "account_restricted", clean(err))
 	default:
-		s.Log.Error("banking", "path", r.URL.Path, "err", err)
+		log.Error("banking", "path", r.URL.Path, "err", err)
 		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", web.SomethingWentWrong)
 	}
 }

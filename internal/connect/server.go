@@ -44,23 +44,8 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 	}
 	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	errc := make(chan error, 8)
-	cbnDone, err := a.serveCBN(runCtx, errc)
-	if err != nil {
-		cancel()
-		return err
-	}
-	nibssDone, err := a.serveNIBSS(runCtx, errc)
-	if err != nil {
-		cancel()
-		<-cbnDone
-		return err
-	}
-	defer func() {
-		cancel()
-		<-nibssDone
-		<-cbnDone
-	}()
 	type srv struct {
 		s   *http.Server
 		tls *tls.Config
@@ -88,23 +73,7 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 		servers = append(servers, srv{s: &http.Server{Handler: sp.h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: server.ErrorLog(a.log)}, tls: sp.tls, ls: ls})
 	}
-	a.lifeMu.Lock()
-	a.serving = true
-	a.lifeMu.Unlock()
-	for _, b := range a.cfg.Banks {
-		if b.Closed() || !a.bankReady(b.ID) {
-			continue
-		}
-		if err := a.startBankSite(b); err != nil {
-			for _, s := range servers {
-				for _, l := range s.ls {
-					l.Close()
-				}
-			}
-			a.stopBankSites(context.Background())
-			return err
-		}
-	}
+	a.setServing(true)
 	for _, s := range servers {
 		for _, l := range s.ls {
 			ln := l
@@ -126,16 +95,7 @@ func (a *App) Serve(ctx context.Context) error {
 	pushDone := make(chan struct{})
 	go func() {
 		defer close(pushDone)
-		if a.role == RoleCore {
-			a.runPush(runCtx)
-		}
-	}()
-	sendsDone := make(chan struct{})
-	go func() {
-		defer close(sendsDone)
-		if a.role != RoleCore {
-			a.runSends(runCtx)
-		}
+		a.runPush(runCtx)
 	}()
 	var serr error
 	select {
@@ -147,12 +107,16 @@ func (a *App) Serve(ctx context.Context) error {
 	for _, s := range servers {
 		_ = s.s.Shutdown(shut)
 	}
-	a.stopBankSites(shut)
+	a.setServing(false)
 	cancel()
 	<-done
 	<-pushDone
-	<-sendsDone
 	a.confirmWG.Wait()
-	a.closeLedgers()
 	return serr
+}
+
+func (a *App) setServing(on bool) {
+	a.lifeMu.Lock()
+	defer a.lifeMu.Unlock()
+	a.serving = on
 }
