@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 	"net/http"
 	"slices"
 	"time"
@@ -160,6 +161,10 @@ type uncheckedError struct {
 
 func (e *uncheckedError) Error() string {
 	return e.Name + " " + e.Why
+}
+
+func (e *uncheckedError) message() string {
+	return web.Sentence(e.Name+" "+e.Why) + " Try again soon."
 }
 
 func (e *uncheckedError) Unwrap() error {

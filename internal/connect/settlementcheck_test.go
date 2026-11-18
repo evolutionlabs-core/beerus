@@ -110,7 +110,7 @@ func TestOpenSessionsDecideWhatClosingWaitsFor(t *testing.T) {
 		{"negative outward", `{"transfers":1,"outward_minor":-1,"inward_minor":0,"unposted_settlements":0}`, "", false, "", "the open NIP sessions of bank-a do not add up"},
 		{"negative inward", `{"transfers":1,"outward_minor":0,"inward_minor":-1,"unposted_settlements":0}`, "", false, "", "the open NIP sessions of bank-a do not add up"},
 		{"largest inward", `{"transfers":1,"outward_minor":0,"inward_minor":` + strconv.FormatInt(math.MaxInt64, 10) + `,"unposted_settlements":0}`, "", false, "Waiting for the " + cutoff + " NIP session to settle 1 transfer (net ₦92,233,720,368,547,758.07). Wait for it, or run beerus nip settle-now.", ""},
-		{"NIBSS gives no cutoff", `{"transfers":1,"outward_minor":0,"inward_minor":10000,"unposted_settlements":0}`, `{}`, false, "", "NIBSS did not report its next NIP session"},
+		{"NIBSS gives no cutoff", `{"transfers":1,"outward_minor":0,"inward_minor":10000,"unposted_settlements":0}`, `{}`, false, "", "NIBSS has not said when the next NIP session is"},
 		{"cutoff after UTC midnight", `{"transfers":1,"outward_minor":0,"inward_minor":10000,"unposted_settlements":0}`, `{"next_cutoff_at":"2026-11-04T23:00:00Z"}`, false, "Waiting for the 00:00 NIP session to settle 1 transfer (net ₦100.00). Wait for it, or run beerus nip settle-now.", ""},
 		{"NIBSS not open", ``, "", true, "", nibssAway},
 	}
@@ -172,29 +172,68 @@ func TestUncheckedBankAnswersUnavailable(t *testing.T) {
 	}
 }
 
-func TestPositionTakesTheNextSessionFromNIBSS(t *testing.T) {
+func positionsAt(t *testing.T, status string) *httptest.ResponseRecorder {
+	t.Helper()
 	const open = `{"transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":0}`
-	b := &config.Bank{ID: "bank-a"}
+	routes := map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: open, nibssBanksPath + "bank-b" + nibssOpenSuffix: open, nibssStatusPath: status}
+	a := &App{log: slog.New(slog.DiscardHandler), nibssCtl: controlAt(t, routes), cfg: &config.Config{Banks: []*config.Bank{{ID: "bank-a"}, {ID: "bank-b"}}}}
+	w := httptest.NewRecorder()
+	a.ctlNIPPositions(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	return w
+}
+
+func TestPositionsTakeTheNextSessionFromNIBSS(t *testing.T) {
 	rows := []struct {
 		name   string
 		status string
 		want   string
-		err    string
 	}{
-		{"a Monday cutoff after a weekend", `{"next_cutoff_at":"2026-11-09T02:00:00+01:00"}`, "2026-11-09T02:00:00+01:00", ""},
-		{"a cutoff in UTC is shown in Lagos", `{"next_cutoff_at":"2026-12-31T23:00:00Z"}`, "2027-01-01T00:00:00+01:00", ""},
-		{"no cutoff reported", `{}`, "", "NIBSS did not report its next NIP session"},
+		{"a Monday cutoff after a weekend", `{"next_cutoff_at":"2026-11-09T02:00:00+01:00"}`, "2026-11-09T02:00:00+01:00"},
+		{"a cutoff in UTC is shown in Lagos", `{"next_cutoff_at":"2026-12-31T23:00:00Z"}`, "2027-01-01T00:00:00+01:00"},
 	}
 	for _, r := range rows {
-		a := &App{nibssCtl: controlAt(t, map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: open, nibssStatusPath: r.status})}
-		row, err := a.position(t.Context(), b)
-		msg := ""
-		if err != nil {
-			msg = err.Error()
+		w := positionsAt(t, r.status)
+		var body struct {
+			Data []struct {
+				BankID string `json:"bank_id"`
+				Next   string `json:"next_session"`
+			} `json:"data"`
 		}
-		got, _ := row["next_session"].(string)
-		if got != r.want || msg != r.err {
-			t.Errorf("%s: %q, %v, want %q, %q", r.name, got, err, r.want, r.err)
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: %v", r.name, err)
+		}
+		if w.Code != http.StatusOK || len(body.Data) != 2 || body.Data[0].Next != r.want || body.Data[1].Next != r.want {
+			t.Errorf("%s: %d %+v, want both banks at %q", r.name, w.Code, body.Data, r.want)
+		}
+	}
+}
+
+func TestMissingCutoffAnswersUnavailable(t *testing.T) {
+	const want = "NIBSS has not said when the next NIP session is. Try again soon."
+	const busy = `{"transfers":1,"outward_minor":0,"inward_minor":10000,"unposted_settlements":0}`
+	a := &App{log: slog.New(slog.DiscardHandler), nibssCtl: controlAt(t, map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: busy, nibssStatusPath: `{}`})}
+	_, err := a.inflightWith(t.Context(), "bank-a", 0)
+	closing := httptest.NewRecorder()
+	a.bankError(closing, httptest.NewRequest(http.MethodGet, "/", nil), err)
+	rows := []struct {
+		name string
+		w    *httptest.ResponseRecorder
+	}{
+		{"positions", positionsAt(t, `{}`)},
+		{"close preview", closing},
+	}
+	for _, r := range rows {
+		var body struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(r.w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: %v", r.name, err)
+		}
+		if r.w.Code != http.StatusServiceUnavailable || body.Error.Code != "unavailable" || body.Error.Message != want {
+			t.Errorf("%s: %d %s %q, want 503 unavailable %q", r.name, r.w.Code, body.Error.Code, body.Error.Message, want)
 		}
 	}
 }

@@ -146,7 +146,7 @@ func (n *nibssAdmin) nextCutoff(ctx context.Context) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("read the next NIP session of NIBSS: %w", err)
 	}
 	if out.NextCutoffAt == nil {
-		return time.Time{}, errors.New("NIBSS did not report its next NIP session")
+		return time.Time{}, &uncheckedError{Name: "NIBSS", Why: "has not said when the next NIP session is"}
 	}
 	return *out.NextCutoffAt, nil
 }

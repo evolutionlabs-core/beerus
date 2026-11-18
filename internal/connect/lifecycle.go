@@ -326,7 +326,11 @@ func (a *App) bankError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	var down *bankDownError
 	var notReady *bankNotReadyError
+	var unchecked *uncheckedError
 	switch {
+	case errors.As(err, &unchecked):
+		a.log.Warn("bank lifecycle", "err", err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", unchecked.message())
 	case errors.As(err, &notReady):
 		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", notReady.Error())
 	case errors.Is(err, server.ErrInvalid):

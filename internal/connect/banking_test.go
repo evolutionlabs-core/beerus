@@ -159,7 +159,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 		t.Fatalf("the sender holds %d after a repeated key, want one debit leaving %d: %v", bal, first.BalanceAfter, err)
 	}
 
-	before, err := a.position(t.Context(), a.cfg.Bank("bank-a"))
+	before, err := a.position(t.Context(), a.cfg.Bank("bank-a"), a.clock.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestBankingThroughTheApp(t *testing.T) {
 	if err != nil || held.Status != "pending" {
 		t.Fatalf("a held transfer: %+v, %v", held, err)
 	}
-	after, err := a.position(t.Context(), a.cfg.Bank("bank-a"))
+	after, err := a.position(t.Context(), a.cfg.Bank("bank-a"), a.clock.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
