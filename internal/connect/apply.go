@@ -517,7 +517,7 @@ func (a *App) allocatePorts(ctx context.Context, ad *admission) error {
 		return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s", strings.TrimPrefix(err.Error(), control.ErrInvalid.Error()+": "))
 	}
 	c := a.cfg.Connect
-	used := map[int]bool{c.PartnerPort: true, c.WidgetPort: true, c.ControlPort: true, c.HealthPort: true, c.NIBSSPort: true, c.NIBSSControlPort: true, c.CBNControlPort: true, c.CBNPort: true}
+	used := map[int]bool{c.PartnerPort: true, c.WidgetPort: true, c.ControlPort: true, c.HealthPort: true, c.NIBSSPort: true, c.NIBSSControlPort: true, c.CBNControlPort: true, c.CBNPort: true, c.ConnectControlPort: true}
 	top := c.PartnerPort
 	for _, r := range ad.pl.st.Resources {
 		for _, p := range []int{r.Allocated.Port, r.Allocated.APIPort} {

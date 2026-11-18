@@ -67,7 +67,10 @@ func SpecSum(s Spec) (string, error) {
 }
 
 func portHolders(ln LocalConnect, st Status) map[int]string {
-	holders := map[int]string{ln.PartnerPort: "connect.partner_port", ln.WidgetPort: "connect.widget_port", ln.ControlPort: "connect.control_port", ln.HealthPort: "connect.health_port", cmp.Or(ln.ConnectControlPort, DefaultConnectControlPort): "connect.connect_control_port"}
+	holders := map[int]string{ln.PartnerPort: "connect.partner_port", ln.WidgetPort: "connect.widget_port", ln.ControlPort: "connect.control_port", ln.HealthPort: "connect.health_port"}
+	if ln.ConnectControlPort != 0 {
+		holders[ln.ConnectControlPort] = "connect.connect_control_port"
+	}
 	for _, r := range st.Resources {
 		if r.Kind == KindSystem {
 			holders[r.Allocated.Port] = r.ID + " control API"
@@ -123,11 +126,22 @@ func connectPort(ln LocalConnect, nibss, cbn int, st Status) (int, error) {
 	})}
 	holders := portHolders(ln, own)
 	holders[nibss], holders[cbn] = "connect.nibss_port", "connect.cbn_port"
-	port := cmp.Or(ln.ConnectControlPort, DefaultConnectControlPort)
-	if holder, taken := holders[port]; taken && holder != "connect.connect_control_port" {
-		return 0, fmt.Errorf("Connect control port %d is already used by %s; set connect.connect_control_port in %s to a free port", port, holder, LocalFile)
+	if ln.ConnectControlPort != 0 {
+		if holder, taken := holders[ln.ConnectControlPort]; taken && holder != "connect.connect_control_port" {
+			return 0, fmt.Errorf("Connect control port %d is already used by %s; set connect.connect_control_port in %s to a free port", ln.ConnectControlPort, holder, LocalFile)
+		}
+		return ln.ConnectControlPort, nil
 	}
-	return port, nil
+	if r := FindResource(&st, KindSystem, SystemConnect); r != nil && r.Allocated.Port != 0 {
+		return r.Allocated.Port, nil
+	}
+	port := DefaultConnectControlPort
+	for {
+		if _, taken := holders[port]; !taken {
+			return port, nil
+		}
+		port++
+	}
 }
 
 func LoadConfig(dir string) (*config.Config, error) {

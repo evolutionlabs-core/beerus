@@ -129,16 +129,15 @@ func DefaultLocal() Local {
 	return Local{
 		DatabaseURL: defaultDatabaseURL,
 		Connect: LocalConnect{
-			Host:               DefaultConnectHost,
-			PartnerPort:        defaultPartnerPort,
-			WidgetPort:         defaultWidgetPort,
-			ControlPort:        defaultControlPort,
-			HealthPort:         defaultHealthPort,
-			NIBSSPort:          DefaultNIBSSPort,
-			CBNPort:            DefaultCBNPort,
-			ConnectControlPort: DefaultConnectControlPort,
-			SyncInterval:       defaultSyncInterval,
-			RefreshEvery:       defaultRefreshEvery,
+			Host:         DefaultConnectHost,
+			PartnerPort:  defaultPartnerPort,
+			WidgetPort:   defaultWidgetPort,
+			ControlPort:  defaultControlPort,
+			HealthPort:   defaultHealthPort,
+			NIBSSPort:    DefaultNIBSSPort,
+			CBNPort:      DefaultCBNPort,
+			SyncInterval: defaultSyncInterval,
+			RefreshEvery: defaultRefreshEvery,
 		},
 	}
 }
