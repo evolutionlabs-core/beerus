@@ -260,11 +260,11 @@ func (s *Server) postAndCheck(ctx context.Context, n NIBSSClient, c CBNClient) e
 	if books == nil {
 		return nil
 	}
+	at := s.clock.Real()
 	check, err := CheckBooks(ctx, n, c, books, s.id, s.clock.Now())
 	if err != nil {
 		return err
 	}
-	at := s.clock.Real()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.settlementProblems, s.settlementCheckedAt = check.Problems, &at

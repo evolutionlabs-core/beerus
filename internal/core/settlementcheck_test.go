@@ -137,7 +137,7 @@ func TestOpenSessionsDecideWhatClosingWaitsFor(t *testing.T) {
 func TestUncheckedBankAnswersUnavailable(t *testing.T) {
 	a := &App{log: slog.New(slog.DiscardHandler), link: control.NewLink("", ""), clock: clock.New()}
 	down := &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1}
-	_, err := a.freshBankProblems(t.Context(), down)
+	_, err := a.freshBankProblems(t.Context(), down, a.clock.Real())
 	var unchecked *uncheckedError
 	if !errors.As(err, &unchecked) || unchecked.Error() != "Bank A is not answering, so its books were not checked" || unchecked.Unwrap() == nil {
 		t.Fatalf("a bank that is down: %v", err)

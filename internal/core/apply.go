@@ -518,30 +518,43 @@ func (a *App) allocatePorts(ctx context.Context, ad *admission) error {
 	}
 	c := a.cfg.Connect
 	used := map[int]bool{c.PartnerPort: true, c.WidgetPort: true, c.ControlPort: true, c.HealthPort: true, c.NIBSSPort: true, c.NIBSSControlPort: true, c.CBNControlPort: true, c.CBNPort: true, c.ConnectControlPort: true}
-	top := c.PartnerPort
+	banks := 0
 	for _, r := range ad.pl.st.Resources {
+		if r.Kind == setup.KindBank {
+			banks++
+		}
 		for _, p := range []int{r.Allocated.Port, r.Allocated.APIPort} {
 			if p != 0 {
 				used[p] = true
-				top = max(top, p)
 			}
 		}
 	}
+	start := c.PartnerPort + 1
+	end := start + a.cfg.PortWindow()
 	for _, id := range creates {
-		port, err := a.cfg.AllocatePort(top+1, used, config.PortFree)
+		full := applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "The port window of %d is full with %s. Raise ports.window in local.yaml.", a.cfg.PortWindow(), bankCount(banks))
+		port, err := a.cfg.AllocatePort(start, used, config.PortFree)
 		if err != nil {
-			return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s: online banking: %v", id, err)
+			return full
 		}
 		used[port] = true
 		api, err := a.cfg.AllocatePort(port+a.cfg.APIPortOffset(), used, config.PortFree)
-		if err != nil {
-			return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s: bank API: %v", id, err)
+		if err != nil || api >= end {
+			delete(used, port)
+			return full
 		}
 		used[api] = true
-		top = port
+		banks++
 		ad.ports[id] = [2]int{port, api}
 	}
 	return nil
+}
+
+func bankCount(n int) string {
+	if n == 1 {
+		return "1 bank"
+	}
+	return fmt.Sprintf("%d banks", n)
 }
 
 func (a *App) makePartner(desired setup.Spec, id string) (*config.Partner, error) {

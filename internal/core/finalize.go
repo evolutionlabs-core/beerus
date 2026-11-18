@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+)
+
+const (
+	reasonRetrying = "Retrying"
+	quietAttempts  = 4
 )
 
 type ApplyOptions struct {
@@ -83,6 +89,24 @@ func setCondition(r *setup.Resource, c setup.Condition) bool {
 	return true
 }
 
+func noteRetry(r *setup.Resource, step string, err error, now time.Time) {
+	if r.Attempts > quietAttempts {
+		clearRetrying(r)
+		setCondition(r, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: setup.ReasonStepFailed, Message: fmt.Sprintf("%s: %v", step, err), ChangedAt: now})
+		return
+	}
+	clearCondition(r, setup.ConditionDegraded)
+	setCondition(r, setup.Condition{Type: setup.ConditionProgressing, Status: "True", Reason: reasonRetrying, Message: fmt.Sprintf("%s is not done yet; trying again (attempt %d)", step, r.Attempts), ChangedAt: now})
+}
+
+func clearRetrying(r *setup.Resource) bool {
+	n := len(r.Conditions)
+	r.Conditions = slices.DeleteFunc(r.Conditions, func(c setup.Condition) bool {
+		return c.Type == setup.ConditionProgressing && c.Reason == reasonRetrying
+	})
+	return len(r.Conditions) != n
+}
+
 func clearCondition(r *setup.Resource, kind string) bool {
 	n := len(r.Conditions)
 	r.Conditions = slices.DeleteFunc(r.Conditions, func(c setup.Condition) bool { return c.Type == kind })
@@ -125,16 +149,19 @@ func (a *App) advanceFinalizers(ctx context.Context, lists map[string][]finalize
 				cur.Attempts++
 				next := now.Add(clock.Backoff(cur.Attempts))
 				cur.NextAttemptAt = &next
-				setCondition(cur, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: setup.ReasonStepFailed, Message: fmt.Sprintf("%s: %v", name, err), ChangedAt: now})
+				a.log.Warn("step failed; retrying", "resource", kind+"/"+id, "step", name, "attempt", cur.Attempts, "err", err)
+				noteRetry(cur, name, err, now)
 			case cond != nil:
 				changed := cur.Attempts != 0 || cur.NextAttemptAt != nil
 				cur.Attempts, cur.NextAttemptAt = 0, nil
 				cleared := clearCondition(cur, setup.ConditionDegraded)
+				cleared = clearRetrying(cur) || cleared
 				return setCondition(cur, *cond) || changed || cleared, nil
 			default:
 				cur.Done = append(cur.Done, name)
 				cur.Attempts, cur.NextAttemptAt = 0, nil
 				clearCondition(cur, setup.ConditionDegraded)
+				clearRetrying(cur)
 				clearCondition(cur, setup.ConditionBlocked)
 				if cur.Phase == config.PhaseClosing && nextFinalizer(*cur) == "" {
 					cur.Phase = config.PhaseClosed

@@ -330,6 +330,7 @@ func (a *App) finishStale(j staleJob, err error) {
 		r.ObservedGeneration = max(r.ObservedGeneration, j.generation)
 		r.Attempts, r.NextAttemptAt = 0, nil
 		clearCondition(r, setup.ConditionDegraded)
+		clearRetrying(r)
 		return true
 	})
 }

@@ -91,6 +91,7 @@ func (s *Server) API() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", s.health)
 	mux.HandleFunc("GET /v1/status", s.status)
+	mux.HandleFunc("POST /v1/settlement/check", s.requestCheck)
 	mux.HandleFunc("PUT /v1/phase", s.setPhase)
 	mux.HandleFunc("GET /v1/faults", s.listFaults)
 	mux.HandleFunc("POST /v1/faults", idempotent(s.setFault))
@@ -143,6 +144,18 @@ func (s *Server) guard(next http.Handler) http.Handler {
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	web.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "participant_id": s.id, "world_id": s.WorldID()})
+}
+
+func (s *Server) requestCheck(w http.ResponseWriter, r *http.Request) {
+	select {
+	case s.checkRequests <- struct{}{}:
+	default:
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Server) CheckRequests() <-chan struct{} {
+	return s.checkRequests
 }
 
 func (s *Server) state() control.State {
