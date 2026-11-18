@@ -173,7 +173,7 @@ func (a *App) readMoves(ctx context.Context, id string) {
 }
 
 func (a *App) moveProblems(ctx context.Context, id string) ([]string, error) {
-	return a.bankSettlementProblems(ctx, id)
+	return a.bankSettlementProblems(ctx, id, a.clock.Real())
 }
 
 func (a *App) recordedSends(id string) (int, *setup.Condition, error) {
