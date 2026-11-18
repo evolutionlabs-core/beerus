@@ -109,7 +109,7 @@ func TestNIPSwitch(t *testing.T) {
 	if _, err := s.payTry("bank-a", from, "bank-b", to, "1600", key); err == nil || !strings.Contains(err.Error(), "422") {
 		t.Fatalf("key reused for another transfer: %v", err)
 	}
-	s.advance("48h")
+	s.ctl("POST", "/nip/sessions/"+sid+"/status", nil)
 	if n := s.sessionCredits("bank-b", to, sid); n != 1 {
 		t.Fatalf("the beneficiary was credited %d times", n)
 	}
@@ -128,7 +128,7 @@ func TestNIPSwitch(t *testing.T) {
 	if err != nil || over["status"] != "reversed" || over["response_code"] != "61" {
 		t.Fatalf("over the cap: %v %v", over, err)
 	}
-	s.advance("72h")
+	s.ctl("POST", "/nip/settle-now", nil)
 	s.setCap("bank-a", int64(s.position("bank-a")["position_minor"].(float64))+150000)
 	if _, err := s.payTry("bank-a", from, "bank-b", to, "1500", nil); err != nil {
 		t.Fatalf("after the session settled: %v", err)
@@ -231,7 +231,7 @@ func TestStatusQueryReportsReversal(t *testing.T) {
 	if tsq := s.ctl("GET", "/nip/sessions/"+sid, nil); tsq["status"] == "00" {
 		t.Fatalf("a timed-out transfer: %v then %v", sent, tsq)
 	}
-	s.advance("3h")
+	s.ctl("POST", "/nip/sessions/"+sid+"/status", nil)
 	waitFor(t, waitLimit, "the status query to fail the session", func() bool {
 		return s.ctl("GET", "/nip/sessions/"+sid, nil)["status"] == "25"
 	})

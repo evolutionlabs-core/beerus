@@ -536,7 +536,7 @@ func (s *Banking) NIP(id string) http.Handler {
 		defer mu.Unlock()
 		if cached != b {
 			cached = b
-			handler = inbound.New(b, s.Clock.Now, nibss, s.Log)
+			handler = inbound.New(b, s.Clock, nibss, s.Log)
 		}
 		return handler
 	}

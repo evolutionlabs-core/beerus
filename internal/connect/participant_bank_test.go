@@ -11,9 +11,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
@@ -44,10 +44,10 @@ func startCore(t *testing.T, core *App) string {
 }
 
 func TestParticipantBankContract(t *testing.T) {
-	fixed := Options{Real: func() time.Time { return participantNow }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	fixed := Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	core, stopNIBSS := newTestAppWithNIBSS(t, fixed)
 	coreURL := startCore(t, core)
-	a, err := participant.New(t.Context(), core.cfg.Dir, participant.Options{Real: fixed.Real, Logger: fixed.Logger, BankID: "bank-a", CoreURL: coreURL, Bind: "127.0.0.1", DatabaseURL: core.cfg.DatabaseURL})
+	a, err := participant.New(t.Context(), core.cfg.Dir, participant.Options{Logger: fixed.Logger, BankID: "bank-a", CoreURL: coreURL, Bind: "127.0.0.1", DatabaseURL: core.cfg.DatabaseURL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,14 +128,15 @@ func TestParticipantBankContract(t *testing.T) {
 	}
 	step("balance after the overdraw", "GET", "/v1/accounts?customer="+adaID, "", "", 200, accountsOf(adaID, 380000))
 	step("accounts of nobody", "GET", "/v1/accounts?customer="+bolaID, "", "", 200, `{"data":[]}`)
+	today := clock.New().Today().String()
 	line := func(seq, amount, after int64, narration string) string {
-		return fmt.Sprintf(`{"seq":%d,"amount_minor":%d,"balance_after_minor":%d,"posted_at":"T","value_date":"2026-11-14","narration":%q}`, seq, amount, after, narration)
+		return fmt.Sprintf(`{"seq":%d,"amount_minor":%d,"balance_after_minor":%d,"posted_at":"T","value_date":%q,"narration":%q}`, seq, amount, after, today, narration)
 	}
 	deposited, withdrew := line(1, 500000, 500000, "CASH DEPOSIT"), line(2, -120000, 380000, "CASH WITHDRAWAL")
 	step("statement", "GET", "/v1/accounts/"+adaAcct+"/statement", "", "", 200, fmt.Sprintf(`{"data":[%s,%s]}`, deposited, withdrew))
 	step("statement first page", "GET", "/v1/accounts/"+adaAcct+"/statement?limit=1", "", "", 200, fmt.Sprintf(`{"data":[%s],"next_cursor":"1"}`, deposited))
-	step("statement last page", "GET", "/v1/accounts/"+adaAcct+"/statement?limit=1&cursor=1&from=2026-11-14&to=2026-11-14", "", "", 200, fmt.Sprintf(`{"data":[%s]}`, withdrew))
-	step("statement of another day", "GET", "/v1/accounts/"+adaAcct+"/statement?from=2026-11-15", "", "", 200, `{"data":[]}`)
+	step("statement last page", "GET", "/v1/accounts/"+adaAcct+"/statement?limit=1&cursor=1&from="+today+"&to="+today, "", "", 200, fmt.Sprintf(`{"data":[%s]}`, withdrew))
+	step("statement of another day", "GET", "/v1/accounts/"+adaAcct+"/statement?from="+clock.New().Today().AddDays(1).String(), "", "", 200, `{"data":[]}`)
 	refused("statement with a bad date", "GET", "/v1/accounts/"+adaAcct+"/statement?from=soon", "", "", 422, apiErr("invalid_request", `From "soon" must be a date like 2026-03-01.`))
 	step("statement of nothing", "GET", "/v1/accounts/0000000000/statement", "", "", 404, apiErr("not_found", "No such account."))
 	step("close an account with money", "POST", "/v1/accounts/"+adaAcct+"/close", "close-1", "", 422, apiErr("balance_not_zero", "Account balance is not zero: account "+adaAcct+" holds ₦3,800.00; move it out by transfer or cash first."))

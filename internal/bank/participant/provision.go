@@ -175,8 +175,12 @@ func (p *Participant) pause(ctx context.Context, wait time.Duration) bool {
 	}
 }
 
+func retryDue(retryAt, now time.Time) bool {
+	return !now.Before(retryAt)
+}
+
 func (p *Participant) ensureDue(ctx context.Context) {
-	if p.ready() || p.clock.Real().Before(p.retryAt) {
+	if p.ready() || !retryDue(p.retryAt, p.clock.Real()) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, ensureLimit)

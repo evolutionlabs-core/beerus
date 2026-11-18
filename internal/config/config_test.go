@@ -68,6 +68,16 @@ func TestPortAllocation(t *testing.T) {
 	if _, err := finish(Config{Banks: []*Bank{{ID: "bank-a", API: BankAPI{DormantDays: -5}}}}); err == nil || !strings.Contains(err.Error(), "dormant_days") {
 		t.Fatalf("negative dormant_days: %v", err)
 	}
+	want := "bank bank-a open_banking.access_seconds 129 is out of range. Use 130 to 3600, or leave it out for the default"
+	if _, err := finish(Config{Banks: []*Bank{{ID: "bank-a", API: BankAPI{AccessSeconds: 129}}}}); err == nil || err.Error() != want {
+		t.Fatalf("low access_seconds: %v", err)
+	}
+	if _, err := finish(Config{Banks: []*Bank{{ID: "bank-a", API: BankAPI{AccessSeconds: 3601}}}}); err == nil || !strings.Contains(err.Error(), "access_seconds 3601 is out of range") {
+		t.Fatalf("high access_seconds: %v", err)
+	}
+	if _, err := finish(Config{Banks: []*Bank{{ID: "bank-a", API: BankAPI{AccessSeconds: MaxAccessSeconds}}}}); err != nil {
+		t.Fatalf("access_seconds at the ceiling: %v", err)
+	}
 }
 
 func TestNIBSSClientCertificate(t *testing.T) {

@@ -30,7 +30,8 @@ const (
 
 var (
 	participantRequestID = regexp.MustCompile(`"request_id":"req_[A-Za-z0-9]+"`)
-	participantNow       = time.Date(2026, 11, 14, 10, 0, 0, 0, clock.Lagos)
+	participantStamp     = regexp.MustCompile(`"(created_at|until_at)":"[^"]*"`)
+	participantNow       = clock.New().Now()
 )
 
 type controlReply struct {
@@ -109,7 +110,7 @@ func newContractCall(t *testing.T, handler http.Handler) contractCall {
 				t.Fatalf("%s %s response %d %s: %v", method, path, resp.StatusCode, raw, errs)
 			}
 		}
-		return controlReply{resp.StatusCode, participantRequestID.ReplaceAllString(strings.TrimSpace(string(raw)), `"request_id":"req_ID"`), resp.Header.Get("Idempotent-Replayed") == "true"}
+		return controlReply{resp.StatusCode, participantStamp.ReplaceAllString(participantRequestID.ReplaceAllString(strings.TrimSpace(string(raw)), `"request_id":"req_ID"`), `"$1":"T"`), resp.Header.Get("Idempotent-Replayed") == "true"}
 	}
 }
 
@@ -120,7 +121,7 @@ func TestParticipantControlContract(t *testing.T) {
 		Bank:  *cfg.Bank("bank-a"),
 		Link:  server.Link{Token: participantTok},
 		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock: clock.New(func() time.Time { return participantNow }),
+		Clock: clock.New(),
 		Phase: PhaseActive,
 	})
 	call := newContractCall(t, srv.API())
@@ -130,8 +131,8 @@ func TestParticipantControlContract(t *testing.T) {
 	first, second := server.FaultID("flt_one"), server.FaultID("flt_two")
 	down := `{"kind":"down","for":"1h"}`
 	timeout := `{"kind":"timeout","outcome":"credited","count":2}`
-	downFault := fmt.Sprintf(`{"id":%q,"kind":"down","until_at":"2026-11-14T11:00:00+01:00","created_at":"2026-11-14T10:00:00+01:00"}`, first)
-	timeoutFault := fmt.Sprintf(`{"id":%q,"kind":"timeout","outcome":"credited","left":2,"created_at":"2026-11-14T10:00:00+01:00"}`, second)
+	downFault := fmt.Sprintf(`{"id":%q,"kind":"down","until_at":"T","created_at":"T"}`, first)
+	timeoutFault := fmt.Sprintf(`{"id":%q,"kind":"timeout","outcome":"credited","left":2,"created_at":"T"}`, second)
 	cursorError := `{"error":{"code":"invalid_cursor","message":"That cursor is not valid. Use the next_cursor value from the last page.","request_id":"req_ID"}}`
 	badRequest := `{"error":{"code":"invalid_request","message":"Send {\"kind\":\"down\",\"for\":\"1h\"} or {\"kind\":\"timeout\",\"outcome\":\"credited\"}.","request_id":"req_ID"}}`
 	rows := []struct {
@@ -152,7 +153,7 @@ func TestParticipantControlContract(t *testing.T) {
 		{name: "phase with an unreadable config", before: func() { _ = os.Remove(bankFile) }, method: "PUT", path: "/v1/phase", body: `{"phase":"suspended","generation":9,"world_id":"wld_9"}`, token: participantTok, status: 500, want: `{"error":{"code":"config_unreadable","message":"The bank config could not be read. Fix banks/bank-a/bank.json and send the phase again.","request_id":"req_ID"}}`},
 		{name: "status after the refused phase", method: "GET", path: "/v1/status", token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","kind":"bank","phase":"active","generation":4,"observed_generation":4,"steps":[]}`},
 		{name: "phase with a renamed bank", before: func() {
-			if err := cfg.EnsureBankDir(&renamed, clock.New(nil).Real()); err != nil {
+			if err := cfg.EnsureBankDir(&renamed, clock.New().Real()); err != nil {
 				t.Fatal(err)
 			}
 		}, method: "PUT", path: "/v1/phase", body: `{"phase":"suspended","generation":6,"world_id":"wld_1"}`, token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","kind":"bank","phase":"suspended","generation":6,"observed_generation":6,"steps":[]}`},

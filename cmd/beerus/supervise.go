@@ -58,7 +58,7 @@ func newSupervisor(exe, dir, coreURL, databaseURL string, c *ctl, out io.Writer)
 		coreURL:  coreURL,
 		database: databaseURL,
 		ctl:      c,
-		clock:    clock.New(nil),
+		clock:    clock.New(),
 		log:      slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		logs:     logs,
 	}

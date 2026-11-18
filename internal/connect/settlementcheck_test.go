@@ -127,7 +127,7 @@ func TestOpenSessionsDecideWhatClosingWaitsFor(t *testing.T) {
 }
 
 func TestUncheckedBankAnswersUnavailable(t *testing.T) {
-	a := &App{log: slog.New(slog.DiscardHandler), link: server.NewLink("", ""), clock: clock.New(func() time.Time { return time.Date(2026, 11, 4, 12, 0, 0, 0, clock.Lagos) })}
+	a := &App{log: slog.New(slog.DiscardHandler), link: server.NewLink("", ""), clock: clock.New()}
 	down := &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1}
 	_, err := a.freshBankProblems(t.Context(), down)
 	var unchecked *uncheckedError

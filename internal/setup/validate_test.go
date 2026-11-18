@@ -80,6 +80,12 @@ func TestValidateRules(t *testing.T) {
 		{"negative cap", func(s *Spec) { s.Spec.Banks[0].NetDebitCap = -1 }, []string{"banks[bank-a].net_debit_cap_minor -1 must be more than zero. Give it in kobo, or leave it out for the default."}},
 		{"negative collateral", func(s *Spec) { s.Spec.Banks[0].Collateral = -5 }, []string{"banks[bank-a].collateral_minor -5 must be more than zero. Give it in kobo, or leave it out for the default."}},
 		{"negative consent months", func(s *Spec) { s.Spec.Banks[0].OpenBanking.ConsentMonths = -1 }, []string{"banks[bank-a].open_banking.consent_months -1 must be more than zero. Leave it out for the default."}},
+		{"access seconds too short", func(s *Spec) { s.Spec.Banks[0].OpenBanking.AccessSeconds = 129 }, []string{"banks[bank-a].open_banking.access_seconds 129 is out of range. Use 130 to 3600, or leave it out for the default."}},
+		{"access seconds too long", func(s *Spec) { s.Spec.Banks[0].OpenBanking.AccessSeconds = 3601 }, []string{"banks[bank-a].open_banking.access_seconds 3601 is out of range. Use 130 to 3600, or leave it out for the default."}},
+		{"access seconds at the edges", func(s *Spec) {
+			s.Spec.Banks[0].OpenBanking.AccessSeconds = 130
+			s.Spec.Banks[1].OpenBanking.AccessSeconds = 3600
+		}, nil},
 		{"no money choice", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{To: "bank-a"} }, []string{"banks[bank-b].on_remove.money is required. Use transfer, payout or leave."}},
 		{"bad money choice", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: "burn"} }, []string{`banks[bank-b].on_remove.money "burn" is not valid. Use transfer, payout or leave.`}},
 		{"transfer without target", func(s *Spec) { s.Spec.Banks[1].OnRemove = &Removal{Money: MoneyTransfer} }, []string{"banks[bank-b].on_remove.to is required when money is transferred. Name the bank that receives it."}},

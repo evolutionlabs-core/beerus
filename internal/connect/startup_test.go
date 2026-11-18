@@ -125,10 +125,12 @@ func TestInitRefusesABadSpec(t *testing.T) {
 }
 
 func TestClockIsReal(t *testing.T) {
-	real := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	app := newTestApp(t, Options{Real: func() time.Time { return real }})
-	if got := app.clock.Now(); !got.Equal(real) || got.Location() != clock.Lagos {
-		t.Fatalf("clock now %v, want %v in Lagos", got, real)
+	app := newTestApp(t, Options{})
+	before := time.Now().Truncate(time.Millisecond)
+	got := app.clock.Now()
+	after := time.Now()
+	if got.Before(before) || got.After(after) || got.Location() != clock.Lagos {
+		t.Fatalf("clock now %v, want between %v and %v in Lagos", got, before, after)
 	}
 	if app.setupKey == 0 || app.setupKey != app.ctl.setupKey() {
 		t.Fatalf("setup key %d", app.setupKey)

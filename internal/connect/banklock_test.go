@@ -33,7 +33,7 @@ func TestBankCallsDoNotHoldTheLockAndLateResultsAreDropped(t *testing.T) {
 		{name: "revoked while the bank answers", revoke: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			now := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+			now := clock.New().Real()
 			entered := make(chan struct{})
 			release := make(chan struct{})
 			reply := func(body string) *http.Response {
@@ -43,7 +43,7 @@ func TestBankCallsDoNotHoldTheLockAndLateResultsAreDropped(t *testing.T) {
 				cfg:   &config.Config{Banks: []*config.Bank{{ID: "bank-a", Port: 7001, APIPort: 7011}}},
 				st:    newState(),
 				log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-				clock: clock.New(func() time.Time { return now }),
+				clock: clock.New(),
 				vault: &vault{master: bytes.Repeat([]byte{7}, vaultKeyBytes)},
 				obHTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 					switch {
@@ -128,14 +128,14 @@ func TestBankCallsDoNotHoldTheLockAndLateResultsAreDropped(t *testing.T) {
 
 func TestRevokeKeepsTokensOfAConnectionRelinkedMeanwhile(t *testing.T) {
 	const wait = 5 * time.Second
-	now := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	now := clock.New().Real()
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	a := &App{
 		cfg:   &config.Config{Banks: []*config.Bank{{ID: "bank-a", Port: 7001, APIPort: 7011}}},
 		st:    newState(),
 		log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		clock: clock.New(func() time.Time { return now }),
+		clock: clock.New(),
 		vault: &vault{master: bytes.Repeat([]byte{7}, vaultKeyBytes)},
 		obHTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 			entered <- struct{}{}
@@ -193,7 +193,7 @@ func newRefreshApp(t *testing.T, now time.Time, refreshes *atomic.Int64, entered
 		cfg:   &config.Config{Banks: []*config.Bank{b}},
 		st:    newState(),
 		log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		clock: clock.New(func() time.Time { return now }),
+		clock: clock.New(),
 		vault: &vault{master: bytes.Repeat([]byte{7}, vaultKeyBytes)},
 		obKey: key,
 		obHTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
@@ -216,7 +216,7 @@ func TestConcurrentCallersRefreshAnExpiredTokenOnce(t *testing.T) {
 		wait    = 5 * time.Second
 		callers = 8
 	)
-	now := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	now := clock.New().Real()
 	var refreshes atomic.Int64
 	entered := make(chan struct{}, callers)
 	release := make(chan struct{})
@@ -273,7 +273,7 @@ func TestConcurrentCallersRefreshAnExpiredTokenOnce(t *testing.T) {
 
 func TestConcurrentCallersNeverOverwriteNewerTokens(t *testing.T) {
 	const wait = 5 * time.Second
-	now := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	now := clock.New().Real()
 	for _, tc := range []struct {
 		name             string
 		relinkDuringCall bool

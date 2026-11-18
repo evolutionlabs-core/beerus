@@ -132,6 +132,7 @@ type OpenBanking struct {
 	RefreshDays      int `yaml:"refresh_days,omitempty" json:"refresh_days,omitempty"`
 	DormantDays      int `yaml:"dormant_days,omitempty" json:"dormant_days,omitempty"`
 	AssertionSeconds int `yaml:"assertion_seconds,omitempty" json:"assertion_seconds,omitempty"`
+	AccessSeconds    int `yaml:"access_seconds,omitempty" json:"access_seconds,omitempty"`
 }
 
 type Removal struct {

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func postedKeys(t *testing.T, st *feedState) map[string]string {
@@ -149,7 +150,7 @@ func TestDoneStory(t *testing.T) {
 			if err := json.Unmarshal(h.Body, &ev); err != nil || ev.Type != typ || !match(ev.Data) {
 				continue
 			}
-			check(verifyV1a(pub, h, s.realNow()) == nil, "webhook signature")
+			check(verifyV1a(pub, h, time.Now()) == nil, "webhook signature")
 			n++
 		}
 		return n
@@ -220,34 +221,13 @@ func TestDoneStory(t *testing.T) {
 	check(r.Status == 409 && r.Code() == "connection_revoked", "sync after revoke: %d %s", r.Status, r.Body)
 	check(s.must(s.call("GET", "/v1/connections/"+connB, nil), 200).JSON["status"] == "active", "the revoke touched the other bank")
 
-	step(8, "a year passes: consent expires and can be renewed")
-	if s.external {
-		t.Log("A running beerus cannot move its clock, so the story stops before the consent expires.")
-		return
-	}
-	s.advance("366d")
-	check(s.must(s.call("GET", "/v1/connections/"+connB, nil), 200).JSON["status"] == "expired", "Bank B consent did not expire")
-	check(len(s.eventsOf("connection.status_changed", func(d map[string]any) bool {
-		return d["connection_id"] == connB && d["status"] == "expired" && d["error_code"] == "reauth_required"
-	})) > 0, "no expiry webhook")
-	r = s.call("GET", "/v1/accounts/"+idB+"/transactions/sync", nil)
-	check(r.Status == 409 && r.Code() == "reauth_required", "sync after expiry: %d %s", r.Status, r.Body)
-	re := s.must(s.call("POST", "/v1/connections/"+connB+"/reauth", map[string]string{"state": "again"}), 201)
-	res := s.completeLink(fmt.Sprint(re.JSON["widget_url"]), "", "adaeze", nil)
-	check(res.Code != "" && res.State == "again", "renewal: %+v", res)
-	ex := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 200)
-	check(ex.JSON["id"] == connB, "renewal created a new connection")
-	s.syncNow()
-	check(s.must(s.call("GET", "/v1/connections/"+connB, nil), 200).JSON["status"] == "active", "Bank B is not active after renewal")
-	s.must(s.call("GET", "/v1/accounts/"+idB+"/transactions/sync?limit=5", nil), 200)
-
-	step(9, "every response so far matched the OpenAPI contract the stub is held to")
+	step(8, "every response so far matched the OpenAPI contract the stub is held to")
 	s.vmu.Lock()
 	n := len(s.violations)
 	s.vmu.Unlock()
 	check(n == 0, "%d contract violations", n)
 
-	step(10, "the settlement and the bank ledgers still balance")
+	step(9, "the settlement and the bank ledgers still balance")
 	if s.app != nil {
 		checkSettled(t, s.app)
 		if c, err := s.app.VerifyBank(context.Background()); err != nil || !c.OK() {

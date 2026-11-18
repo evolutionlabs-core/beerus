@@ -21,7 +21,7 @@ import (
 const bankTestBudget = 100 * time.Millisecond
 
 func TestBankCallsAnswerWithTheRightCode(t *testing.T) {
-	now := clock.New(nil).Now()
+	now := clock.New().Now()
 	stage := t.TempDir()
 	cfg := &config.Config{Dir: stage, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: 1, NIBSSControlPort: 2}}
 	if err := config.Prepare(cfg, now); err != nil {

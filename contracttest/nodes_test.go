@@ -128,18 +128,17 @@ func coreAnswers(ctx context.Context, cfg *config.Config) bool {
 }
 
 type banks struct {
-	dir  string
-	real func() time.Time
-	url  string
-	db   string
-	log  *slog.Logger
+	dir string
+	url string
+	db  string
+	log *slog.Logger
 }
 
 func (b banks) Start(id string) (func(), <-chan struct{}) {
 	n := spawn(id, func(ctx context.Context) error {
 		warned := ""
 		for {
-			p, err := participant.New(ctx, b.dir, participant.Options{Real: b.real, BankID: id, CoreURL: b.url, Bind: nodeBind, DatabaseURL: b.db})
+			p, err := participant.New(ctx, b.dir, participant.Options{BankID: id, CoreURL: b.url, Bind: nodeBind, DatabaseURL: b.db})
 			if err == nil {
 				if err = p.Serve(ctx); err == nil {
 					return nil
@@ -172,18 +171,15 @@ type nodes struct {
 
 func startNodes(cfg *config.Config, opts connect.Options) (*nodes, error) {
 	ns := &nodes{}
-	if opts.Real == nil {
-		opts.Real = time.Now
-	}
 	opts.Role = connect.RoleCore
 	opts.Bind = nodeBind
-	if err := cfg.EnsureCertificates(opts.Real()); err != nil {
+	if err := cfg.EnsureCertificates(time.Now()); err != nil {
 		return ns, err
 	}
-	if err := connect.PrepareCBN(cfg, opts.Real()); err != nil {
+	if err := connect.PrepareCBN(cfg, time.Now()); err != nil {
 		return ns, err
 	}
-	cbn, err := cbnparticipant.New(context.Background(), cfg.Dir, cbnparticipant.Options{Real: opts.Real, Bind: nodeBind, DatabaseURL: cfg.DatabaseURL})
+	cbn, err := cbnparticipant.New(context.Background(), cfg.Dir, cbnparticipant.Options{Bind: nodeBind, DatabaseURL: cfg.DatabaseURL})
 	if err != nil {
 		return ns, err
 	}
@@ -199,7 +195,7 @@ func startNodes(cfg *config.Config, opts connect.Options) (*nodes, error) {
 	if err := core.await(func(ctx context.Context) bool { return coreAnswers(ctx, cfg) }); err != nil {
 		return ns, errors.Join(err, ns.halt())
 	}
-	nibss, err := nibssparticipant.New(context.Background(), cfg.Dir, nibssparticipant.Options{Real: opts.Real, Bind: nodeBind, DatabaseURL: cfg.DatabaseURL})
+	nibss, err := nibssparticipant.New(context.Background(), cfg.Dir, nibssparticipant.Options{Bind: nodeBind, DatabaseURL: cfg.DatabaseURL})
 	if err != nil {
 		return ns, errors.Join(err, ns.halt())
 	}
@@ -213,7 +209,7 @@ func startNodes(cfg *config.Config, opts connect.Options) (*nodes, error) {
 		return ns, errors.Join(err, ns.halt())
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	f := fleet.New(cfg.ControlURL(), token, banks{dir: cfg.Dir, real: opts.Real, url: cfg.ControlURL(), db: cfg.DatabaseURL, log: log}, log)
+	f := fleet.New(cfg.ControlURL(), token, banks{dir: cfg.Dir, url: cfg.ControlURL(), db: cfg.DatabaseURL, log: log}, log)
 	ns.stop = spawn("the bank fleet", func(ctx context.Context) error {
 		f.Run(ctx)
 		f.Close()

@@ -37,7 +37,7 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 	if id := os.Getenv("BEERUS_PARTNER_ID"); ok && os.Getenv("BEERUS_PARTNER_REDIRECT_URI") != "" && c.Partner(id) == nil {
 		log.Warn("BEERUS_PARTNER_* only applies when the setup is first made; register the partner with beerus partner add once Beerus is running", "partner", id)
 	}
-	now := clock.New(nil).Real()
+	now := clock.New().Real()
 	if err := c.EnsureCertificates(now); err != nil {
 		return err
 	}

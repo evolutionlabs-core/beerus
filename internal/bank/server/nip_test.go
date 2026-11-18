@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
@@ -71,7 +70,7 @@ func TestNIPMountAnswersByPhase(t *testing.T) {
 		{"refusing bank", fakeSource{book: Book{Name: "Bank A", Phase: config.PhaseActive, Bank: &bank.Bank{}}, refusing: true}, http.StatusServiceUnavailable, "30"},
 	}
 	for _, r := range rows {
-		b := &Banking{Src: r.src, Clock: clock.New(func() time.Time { return time.Unix(0, 0) }), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		b := &Banking{Src: r.src, Clock: clock.New(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 		req, err := http.NewRequest(http.MethodGet, "/v1/nip/account-names/0123456789", nil)
 		if err != nil {
 			t.Fatal(err)
@@ -87,7 +86,7 @@ func TestNIPMountAnswersByPhase(t *testing.T) {
 func TestNIPFaultWaitsForTheCaller(t *testing.T) {
 	taken := 0
 	src := fakeSource{book: Book{Name: "Bank A", Phase: config.PhaseActive, Bank: &bank.Bank{}}, taken: &taken}
-	b := &Banking{Src: src, Clock: clock.New(func() time.Time { return time.Unix(0, 0) }), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	b := &Banking{Src: src, Clock: clock.New(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	req, err := http.NewRequest(http.MethodPost, "/v1/nip/credits", nil)
 	if err != nil {
 		t.Fatal(err)

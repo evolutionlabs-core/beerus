@@ -158,7 +158,7 @@ func startSoloBank(t *testing.T, state string) soloBank {
 	}
 	ctx := context.WithoutCancel(t.Context())
 	dbURL := cmp.Or(os.Getenv(config.DatabaseURLEnv), os.Getenv("BEERUS_TEST_DATABASE_URL"), "postgres:///postgres")
-	now := clock.New(nil).Now()
+	now := clock.New().Now()
 	stage := filepath.Join(t.TempDir(), "stage")
 	if err := os.Mkdir(stage, 0o700); err != nil {
 		t.Fatal(err)

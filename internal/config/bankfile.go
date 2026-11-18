@@ -52,6 +52,7 @@ type BankFileAPI struct {
 	RefreshDays      int `json:"refresh_days"`
 	DormantDays      int `json:"dormant_days"`
 	AssertionSeconds int `json:"assertion_seconds"`
+	AccessSeconds    int `json:"access_seconds"`
 }
 
 type BankFileMissingError struct {
@@ -143,6 +144,9 @@ func (f BankFile) check(dir, id string) error {
 		return errors.New("setup_key is not set; start Beerus with beerus up to write it again")
 	case f.State != stateActive && f.State != "suspended" && f.State != "closed":
 		return fmt.Errorf("state %q is not active, suspended or closed", f.State)
+	}
+	if err := accessSecondsError(f.API.AccessSeconds); err != nil {
+		return fmt.Errorf("open_banking.%w", err)
 	}
 	return nil
 }

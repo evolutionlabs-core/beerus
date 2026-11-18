@@ -399,6 +399,7 @@ func (p *planner) updateAction(old, b Bank, r Resource, hasRes bool) (Action, bo
 	add("open_banking.refresh_days", strconv.Itoa(old.OpenBanking.RefreshDays), strconv.Itoa(b.OpenBanking.RefreshDays))
 	add("open_banking.dormant_days", strconv.Itoa(old.OpenBanking.DormantDays), strconv.Itoa(b.OpenBanking.DormantDays))
 	add("open_banking.assertion_seconds", strconv.Itoa(old.OpenBanking.AssertionSeconds), strconv.Itoa(b.OpenBanking.AssertionSeconds))
+	add("open_banking.access_seconds", strconv.Itoa(old.OpenBanking.AccessSeconds), strconv.Itoa(b.OpenBanking.AccessSeconds))
 	add("on_remove", removal(old.OnRemove), removal(b.OnRemove))
 	closing := from != StateClosed && to == StateClosed
 	if to == StateClosed {

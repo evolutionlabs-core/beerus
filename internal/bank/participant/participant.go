@@ -28,7 +28,6 @@ const (
 )
 
 type Options struct {
-	Real        func() time.Time
 	Logger      *slog.Logger
 	BankID      string
 	CoreURL     string
@@ -73,7 +72,7 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 		return nil, fmt.Errorf("control token: %w", err)
 	}
 	b := cfg.Banks[0]
-	p := &Participant{id: b.ID, dir: dir, cfg: cfg, log: o.Logger, clock: clock.New(o.Real), link: server.NewLink(token, o.Bind)}
+	p := &Participant{id: b.ID, dir: dir, cfg: cfg, log: o.Logger, clock: clock.New(), link: server.NewLink(token, o.Bind)}
 	if p.log == nil {
 		p.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
