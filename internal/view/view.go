@@ -11,7 +11,9 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -130,7 +132,11 @@ func Funcs() template.FuncMap {
 			if s == "" {
 				return "?"
 			}
-			return s[len(s)-1:]
+			r, _ := utf8.DecodeRuneInString(s)
+			if r == utf8.RuneError {
+				return "?"
+			}
+			return strings.ToUpper(string(r))
 		},
 		"statusClass": func(s string) string {
 			switch s {
