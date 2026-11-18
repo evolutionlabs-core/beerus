@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
@@ -28,14 +28,14 @@ func cmdReset(args []string, out io.Writer) error {
 	if name == "" {
 		return usageError("reset")
 	}
-	t, err := connect.FindResetTarget(*dir)
+	t, err := install.FindResetTarget(*dir)
 	if err != nil {
 		return err
 	}
 	if err := t.Check(name); err != nil {
 		return err
 	}
-	dropped, err := connect.Reset(context.Background(), t.Dir, t.DatabaseURL)
+	dropped, err := install.Reset(context.Background(), t.Dir, t.DatabaseURL)
 	if err != nil {
 		return err
 	}

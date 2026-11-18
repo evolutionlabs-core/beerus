@@ -325,3 +325,8 @@ func (a *App) closeAtBank(ctx context.Context, b *config.Bank) error {
 	}
 	return nil
 }
+
+func keepTombstone(st *setup.Status, in nip.Institution) {
+	st.Tombstones = slices.DeleteFunc(st.Tombstones, func(x nip.Institution) bool { return x.ID == in.ID })
+	st.Tombstones = append(st.Tombstones, in)
+}

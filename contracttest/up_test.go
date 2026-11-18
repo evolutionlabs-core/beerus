@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -27,13 +27,13 @@ func TestSecondUpIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := connect.CheckPorts(s.cfg); err == nil || !strings.Contains(err.Error(), "already running") {
+	if err := install.CheckPorts(s.cfg); err == nil || !strings.Contains(err.Error(), "already running") {
 		t.Fatalf("second start while running: %v", err)
 	}
 	if err := os.Remove(s.cfg.Path("running")); err != nil {
 		t.Fatal(err)
 	}
-	if err := connect.CheckPorts(s.cfg); err == nil || !strings.Contains(err.Error(), "another program") {
+	if err := install.CheckPorts(s.cfg); err == nil || !strings.Contains(err.Error(), "another program") {
 		t.Fatalf("start with a busy port and no run marker: %v", err)
 	}
 	after, _ := os.ReadFile(s.cfg.Path("control.json"))

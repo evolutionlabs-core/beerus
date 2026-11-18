@@ -8,7 +8,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
@@ -17,7 +17,7 @@ func newSetup(t *testing.T, local setup.Local) *config.Config {
 	t.Helper()
 	dir := t.TempDir()
 	today := clock.DateOf(time.Now())
-	if err := connect.Init(dir, setup.DefaultSpec(defaultSetupName), local, today); err != nil {
+	if err := install.Init(dir, setup.DefaultSpec(defaultSetupName), local, today); err != nil {
 		t.Fatal(err)
 	}
 	c, err := state.LoadConfig(dir)
@@ -28,7 +28,7 @@ func newSetup(t *testing.T, local setup.Local) *config.Config {
 }
 
 func TestComposeFollowsTheSetup(t *testing.T) {
-	c := newSetup(t, connect.DefaultLocal())
+	c := newSetup(t, install.DefaultLocal())
 	out, err := renderCompose(c)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +65,7 @@ func TestComposeFollowsTheSetup(t *testing.T) {
 }
 
 func TestComposeFollowsTheHealthPort(t *testing.T) {
-	local := connect.DefaultLocal()
+	local := install.DefaultLocal()
 	local.Connect.HealthPort = 7555
 	c := newSetup(t, local)
 	out, err := renderCompose(c)

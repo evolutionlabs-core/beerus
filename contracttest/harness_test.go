@@ -38,6 +38,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
@@ -164,7 +165,7 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 		t.Skip("starts a full stack; run without -short")
 	}
 	ports := stackPorts(t, len(banktest.Spec("contract").Spec.Banks))
-	local := connect.DefaultLocal()
+	local := install.DefaultLocal()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
@@ -184,7 +185,7 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 		WebhookURL:   webhookURL,
 	}}
 	dir := t.TempDir()
-	if err := connect.Init(dir, spec, local, today); err != nil {
+	if err := install.Init(dir, spec, local, today); err != nil {
 		return nil, err
 	}
 	return state.LoadConfig(dir)

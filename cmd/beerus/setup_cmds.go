@@ -28,6 +28,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
@@ -690,7 +691,7 @@ func offlinePlan(dir string, req applyRequest) ([]byte, planReply, error) {
 	if len(errs) > 0 {
 		return nil, planReply{}, errors.Join(errs...)
 	}
-	reply, err := connect.PlanOffline(dir, spec)
+	reply, err := install.PlanOffline(dir, spec)
 	if err != nil {
 		return nil, planReply{}, err
 	}
@@ -1178,14 +1179,14 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 			return errors.Join(errs...)
 		}
 	}
-	if err := connect.CheckStart(*dir); err != nil {
+	if err := install.CheckStart(*dir); err != nil {
 		return err
 	}
 	c, err := state.LoadConfig(*dir)
 	if err != nil {
 		return err
 	}
-	if err := connect.CheckPorts(c); err != nil {
+	if err := install.CheckPorts(c); err != nil {
 		return err
 	}
 	if err := c.EnsureCertificates(time.Now()); err != nil {

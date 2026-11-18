@@ -15,7 +15,7 @@ import (
 	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
@@ -42,7 +42,7 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 	if err := c.EnsureCertificates(now); err != nil {
 		return err
 	}
-	if err := connect.PrepareCBN(c, now); err != nil {
+	if err := install.PrepareCBN(c, now); err != nil {
 		return err
 	}
 	if c.Connect.HealthPort <= 0 {

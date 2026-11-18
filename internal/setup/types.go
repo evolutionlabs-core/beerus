@@ -2,6 +2,7 @@ package setup
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -296,4 +297,8 @@ type Plan struct {
 	Setup   string   `json:"setup"`
 	Actions []Action `json:"actions"`
 	Errors  []error  `json:"-"`
+}
+
+func (p Plan) Changes() bool {
+	return slices.ContainsFunc(p.Actions, func(a Action) bool { return a.Op != OpDrift })
 }

@@ -1,4 +1,4 @@
-package connect
+package install
 
 import (
 	"errors"
@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
@@ -14,6 +13,22 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
+
+func initConfig(t *testing.T, today clock.Date, local setup.Local) *config.Config {
+	t.Helper()
+	dir := t.TempDir()
+	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
+		local.DatabaseURL = u
+	}
+	if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := state.LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
 
 func TestOldDirIsRefused(t *testing.T) {
 	dir := t.TempDir()
@@ -36,7 +51,7 @@ func TestOldDirIsRefused(t *testing.T) {
 
 func TestInitWritesTheDefaultSetup(t *testing.T) {
 	today := clock.Date{Y: 2026, M: 11, D: 3}
-	cfg := initConfigWith(t, today, DefaultLocal())
+	cfg := initConfig(t, today, DefaultLocal())
 	for _, f := range []string{state.SpecFile, state.LocalFile, state.StatusFile, "control-token"} {
 		fi, err := os.Stat(cfg.Path(f))
 		if err != nil {
@@ -97,7 +112,7 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 func TestDatabaseURLFromEnvIsNeverWritten(t *testing.T) {
 	const secret = "postgres://postgres:hunter2@db:5432/postgres"
 	t.Setenv("BEERUS_DATABASE_URL", secret)
-	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
+	cfg := initConfig(t, clock.Date{Y: 2026, M: 11, D: 3}, DefaultLocal())
 	if cfg.DatabaseURL != secret {
 		t.Fatalf("the environment did not win: %q", cfg.DatabaseURL)
 	}
@@ -125,15 +140,16 @@ func TestInitRefusesABadSpec(t *testing.T) {
 	}
 }
 
-func TestClockIsReal(t *testing.T) {
-	app := newTestApp(t, Options{})
-	before := time.Now().Truncate(time.Millisecond)
-	got := app.clock.Now()
-	after := time.Now()
-	if got.Before(before) || got.After(after) || got.Location() != clock.Lagos {
-		t.Fatalf("clock now %v, want between %v and %v in Lagos", got, before, after)
+func TestNewSetupKeyIsRandom(t *testing.T) {
+	a, err := newSetupKey()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if app.setupKey == 0 || app.setupKey != app.ctl.SetupKey() {
-		t.Fatalf("setup key %d", app.setupKey)
+	b, err := newSetupKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == 0 || a == b {
+		t.Fatalf("keys %d and %d", a, b)
 	}
 }

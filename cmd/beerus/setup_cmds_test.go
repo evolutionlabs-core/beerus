@@ -22,7 +22,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
@@ -56,7 +56,7 @@ func portsFree(base int) bool {
 
 func freeLocal(t *testing.T) setup.Local {
 	t.Helper()
-	local := connect.DefaultLocal()
+	local := install.DefaultLocal()
 	for range 200 {
 		base := 20000 + rand.IntN(11900)
 		if portsFree(base) {
@@ -71,7 +71,7 @@ func freeLocal(t *testing.T) setup.Local {
 func initDir(t *testing.T, local setup.Local, spec setup.Spec) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := connect.Init(dir, spec, local, clock.DateOf(time.Now())); err != nil {
+	if err := install.Init(dir, spec, local, clock.DateOf(time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -80,7 +80,7 @@ func initDir(t *testing.T, local setup.Local, spec setup.Spec) string {
 func installDir(t *testing.T, local setup.Local, spec setup.Spec) string {
 	t.Helper()
 	dir := t.TempDir()
-	err := connect.Install(context.Background(), dir, spec, local, clock.DateOf(time.Now()), func(connect.InstallStep) {})
+	err := install.Install(context.Background(), dir, spec, local, clock.DateOf(time.Now()), func(install.InstallStep) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		stop()
-		if _, err := connect.Reset(context.Background(), dir, url); err != nil {
+		if _, err := install.Reset(context.Background(), dir, url); err != nil {
 			t.Errorf("clean up databases: %v", err)
 		}
 	})

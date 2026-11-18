@@ -18,6 +18,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
@@ -31,23 +32,9 @@ func testStore(t *testing.T) *state.Store {
 	return s
 }
 
-func TestNewSetupKeyIsRandom(t *testing.T) {
-	a, err := newSetupKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := newSetupKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a == 0 || a == b {
-		t.Fatalf("keys %d and %d", a, b)
-	}
-}
-
 func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	t.Helper()
-	local := DefaultLocal()
+	local := install.DefaultLocal()
 	ports := testPorts(t, 2)
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort, local.Connect.CBNPort = ports[0], ports[1], ports[2], ports[3], ports[4], ports[5]
 	return initConfigWith(t, today, local)
@@ -59,7 +46,7 @@ func initConfigWith(t *testing.T, today clock.Date, local setup.Local) *config.C
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
-	if err := Init(dir, banktest.Spec("beerus"), local, today); err != nil {
+	if err := install.Init(dir, banktest.Spec("beerus"), local, today); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := state.LoadConfig(dir)
@@ -248,5 +235,18 @@ func TestWriteFilesRestoresExactlyTheSavedSet(t *testing.T) {
 	}
 	if err := writeFiles(filepath.Join(dir, "api.key", "x"), map[string][]byte{"a": nil}); err == nil {
 		t.Fatal("a restore under a file did not fail")
+	}
+}
+
+func TestClockIsReal(t *testing.T) {
+	app := newTestApp(t, Options{})
+	before := time.Now().Truncate(time.Millisecond)
+	got := app.clock.Now()
+	after := time.Now()
+	if got.Before(before) || got.After(after) || got.Location() != clock.Lagos {
+		t.Fatalf("clock now %v, want between %v and %v in Lagos", got, before, after)
+	}
+	if app.setupKey == 0 || app.setupKey != app.ctl.SetupKey() {
+		t.Fatalf("setup key %d", app.setupKey)
 	}
 }

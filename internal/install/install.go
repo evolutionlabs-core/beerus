@@ -1,4 +1,4 @@
-package connect
+package install
 
 import (
 	"context"
@@ -46,47 +46,14 @@ func InstallLabels() []string {
 	return []string{stepNamePostgres, stepNameConfig + longest, stepNameCBNCreate, stepNameCBNMigrate + longest, stepNameCBNOpen, stepNameNIBSSMake, stepNameNIBSSMigr + longest}
 }
 
-func CheckStart(dir string) error {
-	st, found, err := loadSetup(dir)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return fmt.Errorf("no Beerus setup in %s. Run beerus init first.", dir)
-	}
-	if systemPhase(st, setup.SystemCBN) == config.PhaseProvisioning {
-		return fmt.Errorf("the setup in %s is not finished. Run beerus init again to finish it.", dir)
-	}
-	return nil
-}
-
-func loadSetup(dir string) (setup.Status, bool, error) {
-	ok, err := state.Initialized(dir)
-	if err != nil || !ok {
-		return setup.Status{}, false, err
-	}
-	st, err := setup.LoadStatus(dir)
-	if err != nil {
-		return setup.Status{}, false, err
-	}
-	return st, true, nil
-}
-
-func systemPhase(st setup.Status, id string) string {
-	if r := state.FindResource(&st, setup.KindSystem, id); r != nil {
-		return r.Phase
-	}
-	return ""
+type installer struct {
+	clock  *clock.Clock
+	report func(InstallStep)
 }
 
 func stepRecorded(st setup.Status, system, step string) bool {
 	r := state.FindResource(&st, setup.KindSystem, system)
 	return r != nil && r.Steps[step] == state.StepDone
-}
-
-type installer struct {
-	clock  *clock.Clock
-	report func(InstallStep)
 }
 
 func (i *installer) run(name string, fn func() (string, error)) error {

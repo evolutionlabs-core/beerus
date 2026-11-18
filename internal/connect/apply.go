@@ -139,7 +139,7 @@ func (a *App) applyLocked(ctx context.Context, next func(setup.Status) (setup.Sp
 	if opt.SettleNow && len(settling) == 0 {
 		return pl.plan, applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "settle_now needs a bank that is being closed or removed. Nothing was changed.")
 	}
-	if !changes(pl.plan) && len(retarget) == 0 {
+	if !pl.plan.Changes() && len(retarget) == 0 {
 		a.requestSettleNow(opt, settling)
 		return pl.plan, a.syncSetupFile(pl.desired)
 	}
@@ -243,10 +243,6 @@ func (a *App) requestSettleNow(opt ApplyOptions, ids []string) {
 	for _, id := range ids {
 		a.markSettleNow(setup.KindBank, id)
 	}
-}
-
-func changes(p setup.Plan) bool {
-	return slices.ContainsFunc(p.Actions, func(act setup.Action) bool { return act.Op != setup.OpDrift })
 }
 
 func admissible(p setup.Plan, opt ApplyOptions) error {
@@ -873,7 +869,7 @@ type planBody struct {
 }
 
 func (a *App) planBody(p setup.Plan) planBody {
-	out := planBody{Plan: p, Text: setup.Render(p), Changed: changes(p)}
+	out := planBody{Plan: p, Text: setup.Render(p), Changed: p.Changes()}
 	for _, act := range p.Actions {
 		if act.Kind == setup.KindPartner && act.Op == setup.OpCreate {
 			out.KeyFiles = append(out.KeyFiles, filepath.Join(a.cfg.Path("partners", act.ID), partnerKeyFile))

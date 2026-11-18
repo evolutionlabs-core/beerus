@@ -20,6 +20,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
@@ -142,7 +143,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 			t.Fatalf("create %v after the purge: %v", req, err)
 		}
 	}
-	rep, err := connect.Doctor(context.Background(), c, false)
+	rep, err := install.Doctor(context.Background(), c, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,19 +155,19 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 		t.Fatal(err)
 	}
 	stray.Close()
-	if rep, err := connect.Doctor(context.Background(), c, false); err != nil || fmt.Sprint(rep.Orphans) != "["+config.DatabaseName(c.Dir, "stray")+"]" {
+	if rep, err := install.Doctor(context.Background(), c, false); err != nil || fmt.Sprint(rep.Orphans) != "["+config.DatabaseName(c.Dir, "stray")+"]" {
 		t.Fatalf("doctor with a stray database: %+v %v", rep, err)
 	}
-	if _, err := connect.Doctor(context.Background(), c, true); err == nil || !strings.Contains(err.Error(), "running") {
+	if _, err := install.Doctor(context.Background(), c, true); err == nil || !strings.Contains(err.Error(), "running") {
 		t.Fatalf("doctor --fix while running: %v", err)
 	}
 	if err := os.Remove(c.Path("running")); err != nil {
 		t.Fatal(err)
 	}
-	if rep, err := connect.Doctor(context.Background(), c, true); err != nil || !rep.Fixed {
+	if rep, err := install.Doctor(context.Background(), c, true); err != nil || !rep.Fixed {
 		t.Fatalf("doctor --fix: %+v %v", rep, err)
 	}
-	if rep, err := connect.Doctor(context.Background(), c, false); err != nil || !rep.Clean() {
+	if rep, err := install.Doctor(context.Background(), c, false); err != nil || !rep.Clean() {
 		t.Fatalf("doctor after --fix: %+v %v", rep, err)
 	}
 	if ck, err := s.app.VerifyBank(context.Background()); err != nil || !ck.OK() {
@@ -328,7 +329,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if _, err := connect.Reset(context.Background(), cfg.Dir, cfg.DatabaseURL); err != nil {
+		if _, err := install.Reset(context.Background(), cfg.Dir, cfg.DatabaseURL); err != nil {
 			t.Error(err)
 		}
 	})
@@ -429,7 +430,7 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep, err := connect.Doctor(context.Background(), final, false); err != nil || !rep.Clean() || len(rep.Missing) != 0 {
+	if rep, err := install.Doctor(context.Background(), final, false); err != nil || !rep.Clean() || len(rep.Missing) != 0 {
 		t.Fatalf("doctor: %+v %v", rep, err)
 	}
 }

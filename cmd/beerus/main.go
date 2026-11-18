@@ -19,7 +19,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/install"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -61,12 +61,12 @@ func cmdInit(args []string) error {
 		return err
 	}
 	width := 0
-	for _, n := range connect.InstallLabels() {
+	for _, n := range install.InstallLabels() {
 		width = max(width, len(n))
 	}
 	clk := clock.New()
 	start := clk.Real()
-	err = connect.Install(context.Background(), p.dir, p.spec, p.local, p.today, func(s connect.InstallStep) {
+	err = install.Install(context.Background(), p.dir, p.spec, p.local, p.today, func(s install.InstallStep) {
 		fmt.Println(stepLine(installLabel(s), width, s.Err == nil, s.Duration))
 	})
 	if err != nil {
@@ -76,7 +76,7 @@ func cmdInit(args []string) error {
 	return nil
 }
 
-func installLabel(s connect.InstallStep) string {
+func installLabel(s install.InstallStep) string {
 	if s.Detail == "" {
 		return s.Name
 	}
@@ -99,7 +99,7 @@ func parseInit(args []string) (initPlan, error) {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
 	file := fs.String("f", "", "setup `FILE` to start from")
-	flagged := connect.DefaultLocal().Connect
+	flagged := install.DefaultLocal().Connect
 	fs.IntVar(&flagged.PartnerPort, "partner-port", flagged.PartnerPort, "partner API `port`; banks take the next free ports")
 	fs.IntVar(&flagged.WidgetPort, "widget-port", flagged.WidgetPort, "widget `port`")
 	fs.IntVar(&flagged.ControlPort, "control-port", flagged.ControlPort, "control API `port`")
@@ -107,7 +107,7 @@ func parseInit(args []string) (initPlan, error) {
 	if err := parseFlags("init", fs, args); err != nil {
 		return initPlan{}, err
 	}
-	local, err := connect.FreshLocal(*dir)
+	local, err := install.FreshLocal(*dir)
 	if err != nil {
 		return initPlan{}, err
 	}
@@ -188,7 +188,7 @@ func cmdDoctor(args []string) error {
 	if err != nil {
 		return err
 	}
-	rep, err := connect.Doctor(context.Background(), c, *fix)
+	rep, err := install.Doctor(context.Background(), c, *fix)
 	if err != nil {
 		return err
 	}
