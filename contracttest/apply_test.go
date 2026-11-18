@@ -246,7 +246,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 		}
 		cursor = next
 	}
-	if want := []string{"Bank/bank-a", "Bank/bank-b", "Partner/balance", "System/cbn", "System/nibss"}; !slices.Equal(seen, want) {
+	if want := []string{"Bank/bank-a", "Bank/bank-b", "Partner/balance", "System/cbn", "System/connect", "System/nibss"}; !slices.Equal(seen, want) {
 		t.Fatalf("resources %v, want %v", seen, want)
 	}
 	if _, err := s.ctlTry("GET", "/resources/bank/nope", nil); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
