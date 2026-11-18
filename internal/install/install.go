@@ -6,18 +6,14 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"slices"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 )
@@ -25,13 +21,11 @@ import (
 const postgresTimeout = 5 * time.Second
 
 const (
-	stepNamePostgres   = "Checking Postgres"
-	stepNameConfig     = "Writing config"
-	stepNameCBNCreate  = "Creating CBN database"
-	stepNameCBNMigrate = "Migrating CBN ledger"
-	stepNameCBNOpen    = "Opening CBN settlement ledger"
-	stepNameNIBSSMake  = "Creating NIBSS database"
-	stepNameNIBSSMigr  = "Migrating NIBSS schema"
+	stepNamePostgres = "Checking Postgres"
+	stepNameConfig   = "Writing config"
+	stepNameClaims   = "Reserving CBN and NIBSS database names"
+	stepNameCBN      = "Preparing CBN ports and certificates"
+	detailWritten    = "already written"
 )
 
 type InstallStep struct {
@@ -42,8 +36,7 @@ type InstallStep struct {
 }
 
 func InstallLabels() []string {
-	longest := " (" + config.MigrationCount(0) + ")"
-	return []string{stepNamePostgres, stepNameConfig + longest, stepNameCBNCreate, stepNameCBNMigrate + longest, stepNameCBNOpen, stepNameNIBSSMake, stepNameNIBSSMigr + longest}
+	return []string{stepNamePostgres, stepNameConfig + " (" + detailWritten + ")", stepNameClaims, stepNameCBN}
 }
 
 type installer struct {
@@ -51,14 +44,12 @@ type installer struct {
 	report func(InstallStep)
 }
 
-func stepRecorded(st setup.Status, system, step string) bool {
-	r := state.FindResource(&st, setup.KindSystem, system)
-	return r != nil && r.Steps[step] == state.StepDone
-}
-
-func (i *installer) run(name string, fn func() (string, error)) error {
+func (i *installer) run(ctx context.Context, name string, fn func() (string, error)) error {
 	start := i.clock.Real()
-	detail, err := fn()
+	detail, err := "", ctx.Err()
+	if err == nil {
+		detail, err = fn()
+	}
 	i.report(InstallStep{Name: name, Detail: detail, Duration: i.clock.Real().Sub(start), Err: err})
 	return err
 }
@@ -81,12 +72,12 @@ func Install(ctx context.Context, dir string, spec setup.Spec, local setup.Local
 	} else if u := os.Getenv(config.DatabaseURLEnv); u != "" {
 		url = u
 	}
-	if err := in.run(stepNamePostgres, func() (string, error) { return "", checkPostgres(ctx, url) }); err != nil {
+	if err := in.run(ctx, stepNamePostgres, func() (string, error) { return "", checkPostgres(ctx, url) }); err != nil {
 		return err
 	}
-	err = in.run(stepNameConfig, func() (string, error) {
+	err = in.run(ctx, stepNameConfig, func() (string, error) {
 		if found {
-			return "already written", nil
+			return detailWritten, nil
 		}
 		return "", Init(dir, spec, local, today)
 	})
@@ -101,13 +92,15 @@ func Install(ctx context.Context, dir string, spec setup.Spec, local setup.Local
 	if err != nil {
 		return err
 	}
-	if st, err = ctl.Status(); err != nil {
+	err = in.run(ctx, stepNameClaims, func() (string, error) { return "", claimSystems(ctl, cfg) })
+	if err != nil {
 		return err
 	}
-	if err := installCBN(ctx, in, cfg, ctl, st); err != nil {
+	err = in.run(ctx, stepNameCBN, func() (string, error) { return "", in.prepareCBN(ctl, cfg) })
+	if err != nil {
 		return err
 	}
-	return installNIBSS(ctx, in, cfg, ctl, st)
+	return activate(ctl)
 }
 
 func checkPostgres(ctx context.Context, url string) error {
@@ -130,83 +123,30 @@ func checkPostgres(ctx context.Context, url string) error {
 	return c.Close(ctx)
 }
 
-func installCBN(ctx context.Context, in *installer, cfg *config.Config, ctl *state.Store, st setup.Status) error {
-	name := config.DatabaseName(cfg.Dir, setup.SystemCBN)
-	steps := []string{config.StepDatabase, config.StepLedgerSchema, setup.StepSettlement}
-	err := in.ensure(ctl, st, setup.SystemCBN, steps[0], stepNameCBNCreate, steps, func() (string, error) {
-		if err := ctl.Claim(setup.KindSystem, setup.SystemCBN, setup.Owned{Kind: state.OwnedDatabase, Name: name}); err != nil {
-			return "", err
+func claimSystems(ctl *state.Store, cfg *config.Config) error {
+	for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {
+		if err := ctl.Claim(setup.KindSystem, id, setup.Owned{Kind: state.OwnedDatabase, Name: config.DatabaseName(cfg.Dir, id)}); err != nil {
+			return err
 		}
-		return "", store.Create(ctx, cfg.DatabaseURL, name)
-	})
-	if err != nil {
-		return err
 	}
-	err = in.ensure(ctl, st, setup.SystemCBN, steps[1], stepNameCBNMigrate, steps, func() (string, error) {
-		n, err := store.Migrate(ctx, cfg.DatabaseURL, name, ledger.Migrate)
-		return config.MigrationCount(n), err
-	})
-	if err != nil {
-		return err
-	}
-	return in.ensure(ctl, st, setup.SystemCBN, steps[2], stepNameCBNOpen, steps, func() (string, error) {
-		open, err := store.Open(ctx, cfg.DatabaseURL, name)
-		if err != nil {
-			return "", err
-		}
-		open.Close()
-		if err := state.EnsureCBNPorts(ctl, cfg); err != nil {
-			return "", err
-		}
-		return "", cfg.EnsureCBNDir(in.clock.Real())
-	})
+	return nil
 }
 
-func installNIBSS(ctx context.Context, in *installer, cfg *config.Config, ctl *state.Store, st setup.Status) error {
-	name := config.DatabaseName(cfg.Dir, setup.SystemNIBSS)
-	steps := []string{config.StepDatabase, setup.StepSchema}
-	err := in.ensure(ctl, st, setup.SystemNIBSS, steps[0], stepNameNIBSSMake, steps, func() (string, error) {
-		if err := ctl.Claim(setup.KindSystem, setup.SystemNIBSS, setup.Owned{Kind: state.OwnedDatabase, Name: name}); err != nil {
-			return "", err
-		}
-		return "", nibss.Create(ctx, cfg.DatabaseURL, name)
-	})
-	if err != nil {
+func (i *installer) prepareCBN(ctl *state.Store, cfg *config.Config) error {
+	if err := state.EnsureCBNPorts(ctl, cfg); err != nil {
 		return err
 	}
-	return in.ensure(ctl, st, setup.SystemNIBSS, steps[1], stepNameNIBSSMigr, steps, func() (string, error) {
-		n, err := nibss.Migrate(ctx, cfg.DatabaseURL, name)
-		return config.MigrationCount(n), err
-	})
-}
-
-func (in *installer) ensure(ctl *state.Store, st setup.Status, system, step, name string, all []string, fn func() (string, error)) error {
-	return in.run(name, func() (string, error) {
-		if stepRecorded(st, system, step) {
-			return skippedDetail(step), nil
-		}
-		detail, err := fn()
-		if err != nil {
-			return "", err
-		}
-		return detail, ctl.Update(func(s *setup.Status) (bool, error) {
-			r := state.EnsureResource(s, setup.KindSystem, system)
-			if r.Steps == nil {
-				r.Steps = map[string]string{}
-			}
-			r.Steps[step] = state.StepDone
-			if slices.ContainsFunc(all, func(id string) bool { return r.Steps[id] != state.StepDone }) {
-				return true, nil
-			}
-			r.Phase = config.PhaseActive
-			return true, nil
-		})
-	})
-}
-
-func skippedDetail(step string) string {
-	if step == config.StepLedgerSchema || step == setup.StepSchema {
-		return config.MigrationCount(0)
+	if err := cfg.EnsureCBNDir(i.clock.Real()); err != nil {
+		return fmt.Errorf("ensure the CBN directory: %w", err)
 	}
-	return ""
+	return nil
+}
+
+func activate(ctl *state.Store) error {
+	for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {
+		if err := state.MarkActive(ctl, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }

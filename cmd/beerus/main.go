@@ -204,7 +204,7 @@ func cmdDoctor(args []string) error {
 	fmt.Printf("%d databases belong to %s.\n", len(rep.Databases), c.Dir)
 	list("Leftover databases:", rep.Orphans)
 	list("Status entries for banks that no longer exist:", rep.StaleOwned)
-	list("Missing databases (beerus up recreates bank databases):", rep.Missing)
+	list("Missing databases (beerus up recreates them):", rep.Missing)
 	switch {
 	case rep.Fixed:
 		fmt.Println("Fixed.")

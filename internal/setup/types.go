@@ -60,9 +60,6 @@ const (
 	FinalizerSettleMoves       = "settle-moves"
 	FinalizerPurgeOwned        = "purge-owned"
 
-	StepSettlement = "settlement"
-	StepSchema     = "schema"
-
 	StatusVersion = 2
 )
 
