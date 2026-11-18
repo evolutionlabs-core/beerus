@@ -117,7 +117,7 @@ func TestSetupCommandsAnswerWithoutARunningBeerus(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw), "bank-b") || strings.Contains(string(raw), "nuban_code") {
-		t.Fatalf("export should leave out the codes:\n%s", raw)
+		t.Fatalf("export should leave out the assigned codes:\n%s", raw)
 	}
 	if r := invoke(cmdDiff, "", false, "--dir", dir, "-f", file); r.code != 0 || r.out != "No changes.\n" {
 		t.Fatalf("offline diff of the export: %+v", r)
