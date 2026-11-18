@@ -124,15 +124,16 @@ func TestApplyFromTheSpec(t *testing.T) {
 	if signedIn.get(site+"/accounts") != http.StatusOK || signedIn.cur.Path != "/accounts" || !strings.Contains(signedIn.last, nuban) {
 		t.Fatalf("the rename signed the customer out: %v %.300s", signedIn.cur, signedIn.last)
 	}
-	resp, err := http.Get(site + "/login")
-	if err != nil {
-		t.Fatal(err)
-	}
-	page, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if !strings.Contains(string(page), "Abuja Digital") {
-		t.Fatalf("the bank site still shows the old name: %.300s", page)
-	}
+	var page []byte
+	waitFor(t, waitLimit, "the bank site to show the new name", func() bool {
+		resp, err := http.Get(site + "/login")
+		if err != nil {
+			return false
+		}
+		page, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return strings.Contains(string(page), "Abuja Digital")
+	})
 	statement := fmt.Sprint(s.ctl("GET", "/banks/bank-a/accounts/"+s.persona("adaeze").Accounts[0]+"/statement?limit=100", nil)["data"])
 	if !strings.Contains(statement, "Bank C") || strings.Contains(statement, "Abuja Digital") {
 		t.Fatalf("the sender's statement should keep the name the bank had: %s", statement)

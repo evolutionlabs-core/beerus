@@ -2,8 +2,10 @@ package site
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
+	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -34,8 +36,14 @@ func (s *site) internalRevoke(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if err := s.Open.RevokeByBank(r.Context(), body.ConsentID, "bank"); err != nil {
+	err := s.Open.RevokeByBank(r.Context(), body.ConsentID, "bank")
+	if errors.Is(err, openbanking.ErrNotFound) {
 		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.Log.Error("consent not revoked", "consent", body.ConsentID, "err", err)
+		http.Error(w, "the consent could not be revoked", http.StatusInternalServerError)
 		return
 	}
 	ctx := context.WithoutCancel(r.Context())

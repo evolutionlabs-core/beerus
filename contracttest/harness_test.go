@@ -32,7 +32,10 @@ import (
 	"github.com/pb33f/libopenapi"
 	validator "github.com/pb33f/libopenapi-validator"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
+	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
@@ -263,29 +266,22 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 			for _, edit := range edits {
 				edit(cfg)
 			}
-			app, err := connect.New(t.Context(), cfg, opts)
+			ns, err := startNodes(cfg, opts)
 			if err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithCancel(context.Background())
-			done := make(chan error, 1)
-			go func() { done <- app.Serve(ctx) }()
-			select {
-			case lastErr = <-done:
-				cancel()
-				if err := app.DropBankDatabases(context.WithoutCancel(t.Context())); err != nil {
-					t.Errorf("drop bank database: %v", err)
+				lastErr = err
+				if ns.app != nil {
+					if err := ns.app.DropBankDatabases(context.WithoutCancel(t.Context())); err != nil {
+						t.Errorf("drop bank database: %v", err)
+					}
 				}
 				continue
-			case <-time.After(300 * time.Millisecond):
 			}
-			s.cfg, s.app = cfg, app
+			s.cfg, s.app = cfg, ns.app
 			t.Cleanup(func() {
-				cancel()
-				if err := <-done; err != nil {
-					t.Errorf("serve: %v", err)
+				if err := ns.halt(); err != nil {
+					t.Errorf("stop the stack: %v", err)
 				}
-				if err := app.DropBankDatabases(context.WithoutCancel(t.Context())); err != nil {
+				if err := ns.app.DropBankDatabases(context.WithoutCancel(t.Context())); err != nil {
 					t.Errorf("drop bank database: %v", err)
 				}
 			})
@@ -715,6 +711,28 @@ func (s *Stack) balances(p persona) map[string]int64 {
 	for _, a := range s.ctl("GET", "/banks/"+p.Bank+"/accounts?customer="+p.Customer, nil)["data"].([]any) {
 		m := a.(map[string]any)
 		out[fmt.Sprint(m["nuban"])] = int64(m["balance_minor"].(float64))
+	}
+	return out
+}
+
+func (s *Stack) closedBalances(p persona) map[string]int64 {
+	s.t.Helper()
+	ctx := context.Background()
+	st, err := store.Open(ctx, s.cfg.DatabaseURL, s.cfg.Bank(p.Bank).Database)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	defer st.Close()
+	l := ledger.New(st.Pool, nil)
+	accounts, _, err := bank.New(l, bank.Profile{}, nil).Accounts(ctx, p.Customer, 100, "")
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	out := map[string]int64{}
+	for _, a := range accounts {
+		if out[a.NUBAN], err = l.Balance(ctx, a.Code); err != nil {
+			s.t.Fatal(err)
+		}
 	}
 	return out
 }

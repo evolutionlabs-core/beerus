@@ -496,10 +496,10 @@ func TestCloseBank(t *testing.T) {
 		t.Fatalf("adaeze at bank-a has %d, want %d", got, before+2_500_000)
 	}
 	s.advance("72h")
-	if got := balance(opened["adaeze"]); got != 0 {
+	if got := s.closedBalances(opened["adaeze"])[opened["adaeze"].Accounts[0]]; got != 0 {
 		t.Fatalf("closed account keeps %d", got)
 	}
-	if got := balance(opened["tunde"]); got != 1_000_000 {
+	if got := s.closedBalances(opened["tunde"])[opened["tunde"].Accounts[0]]; got != 1_000_000 {
 		t.Fatalf("left account has %d", got)
 	}
 	if c, err := s.app.VerifyBank(context.Background()); err != nil || !c.OK() {
@@ -514,15 +514,19 @@ func TestCloseBank(t *testing.T) {
 		t.Fatalf("account.removed webhooks: %v", got)
 	}
 	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil), 409)
-	if _, err := http.Get(s.cfg.Bank("abuja-digital").URL() + "/login"); err == nil {
-		t.Fatal("online banking still answers")
-	}
+	waitFor(t, waitLimit, "online banking to stop answering", func() bool {
+		resp, err := http.Get(s.cfg.Bank("abuja-digital").URL() + "/login")
+		if err == nil {
+			resp.Body.Close()
+		}
+		return err != nil
+	})
 	for _, path := range []string{"/banks/abuja-digital/resume", "/banks/abuja-digital/suspend", "/banks/abuja-digital/close"} {
 		if _, err := s.ctlTry("POST", path, map[string]any{"to": "bank-a"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
 			t.Fatalf("%s on a closed bank: %v", path, err)
 		}
 	}
-	if _, err := s.payTry("bank-a", home["tunde"].Accounts[0], "abuja-digital", opened["tunde"].Accounts[0], "100", nil); err == nil || !strings.Contains(err.Error(), "bank_closed") {
+	if _, err := s.payTry("bank-a", home["tunde"].Accounts[0], "abuja-digital", opened["tunde"].Accounts[0], "100", nil); err == nil || !strings.Contains(err.Error(), `"code":"bank_unavailable","message":"Abuja Digital is not available right now, so nothing was debited."`) {
 		t.Fatalf("transfer into a closed bank: %v", err)
 	}
 	if _, err := s.ctlTry("POST", "/banks/abuja-digital/accounts", map[string]any{"customer": opened["tunde"].Customer, "type": "current"}); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
@@ -536,7 +540,7 @@ func TestCloseBank(t *testing.T) {
 	if !saved.Bank("abuja-digital").Closed() {
 		t.Fatal("the closed state was not saved")
 	}
-	again, err := connect.New(t.Context(), saved, connect.Options{})
+	again, err := connect.New(t.Context(), saved, connect.Options{Role: connect.RoleCore})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,14 +570,14 @@ func TestClosePaysInsuredDeposits(t *testing.T) {
 	for _, h := range []opening{{"current", "1500000"}, {"savings", "1000000"}} {
 		s.pay("bank-a", from.Accounts[0], "kano-microfinance", s.openAccount(who, h.typ), h.naira)
 	}
-	total := func(p persona) int64 {
+	total := func(balances func(persona) map[string]int64, p persona) int64 {
 		var sum int64
-		for _, v := range s.balances(p) {
+		for _, v := range balances(p) {
 			sum += v
 		}
 		return sum
 	}
-	before := total(from)
+	before := total(s.balances, from)
 	s.ctl("POST", "/banks/kano-microfinance/close", map[string]any{"money": "payout"})
 	res := s.closeResult("kano-microfinance")
 	if res["paid_out_minor"] != float64(200_000_000) || res["claims_minor"] != float64(50_000_000) || res["moved_minor"] != float64(0) {
@@ -593,11 +597,11 @@ func TestClosePaysInsuredDeposits(t *testing.T) {
 	if kept := s.ctl("GET", "/closures/kano-microfinance", nil); fmt.Sprint(kept["lines"]) != fmt.Sprint(res["lines"]) {
 		t.Fatalf("kept closure: %v", kept)
 	}
-	if got := total(from); got != before {
+	if got := total(s.balances, from); got != before {
 		t.Fatalf("a cash payout moved %d to bank-a", got-before)
 	}
 	s.advance("72h")
-	if got := total(who); got != 50_000_000 {
+	if got := total(s.closedBalances, who); got != 50_000_000 {
 		t.Fatalf("claims left at the closed bank: %d", got)
 	}
 	for _, nuban := range who.Accounts {

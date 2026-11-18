@@ -14,6 +14,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
+	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
 )
 
 func checkSettled(t *testing.T, app *connect.App) connect.SettlementCheck {
@@ -86,7 +87,12 @@ func TestNIPSessionsCannotChangeOnALiveSetup(t *testing.T) {
 	checkSettled(t, s.app)
 	cfg := s.loadConfig()
 	cfg.NIPSessions = 12
-	if _, err := connect.New(t.Context(), cfg, connect.Options{}); err == nil || !strings.Contains(err.Error(), "nip_sessions must stay 4") {
+	again, err := connect.New(t.Context(), cfg, connect.Options{Role: connect.RoleCore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(again.Close)
+	if _, err := nibssparticipant.New(t.Context(), cfg.Dir, nibssparticipant.Options{Bind: nodeBind, DatabaseURL: cfg.DatabaseURL}); err == nil || !strings.Contains(err.Error(), "nip_sessions must stay 4") {
 		t.Fatalf("starting with a different schedule: %v", err)
 	}
 }

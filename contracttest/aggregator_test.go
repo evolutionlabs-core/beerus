@@ -267,9 +267,13 @@ func TestConsentEventsAreKeptAndRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.skewReal(time.Hour)
-	s.app.Step(t.Context())
 	var left, delivered int
-	if err := db.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE delivered_at IS NULL), count(*) FILTER (WHERE delivered_at IS NOT NULL) FROM ob_events WHERE consent_id = $1`, consentID).Scan(&left, &delivered); err != nil || left != 0 || delivered < 2 {
+	var err error
+	waitFor(t, waitLimit, "the revoke event to be delivered again", func() bool {
+		err = db.QueryRow(context.Background(), `SELECT count(*) FILTER (WHERE delivered_at IS NULL), count(*) FILTER (WHERE delivered_at IS NOT NULL) FROM ob_events WHERE consent_id = $1`, consentID).Scan(&left, &delivered)
+		return err == nil && left == 0 && delivered >= 2
+	})
+	if err != nil || left != 0 || delivered < 2 {
 		t.Fatalf("events after the retry: %d undelivered, %d delivered, %v", left, delivered, err)
 	}
 	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "revoked" {

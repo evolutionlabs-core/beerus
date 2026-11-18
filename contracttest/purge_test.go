@@ -6,11 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"net"
 	"net/http"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -127,11 +125,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if o := s.owned(setup.KindBank, "abuja-digital"); o != nil {
 		t.Fatalf("the status store still claims %v", o)
 	}
-	if l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(bank.Port))); err != nil {
-		t.Fatalf("port %d is still taken: %v", bank.Port, err)
-	} else {
-		l.Close()
-	}
+	waitFor(t, waitLimit, fmt.Sprintf("port %d to be free", bank.Port), func() bool { return portOpen(bank.Port) })
 	for _, d := range s.ctl("GET", "/banks", nil)["data"].([]any) {
 		if d.(map[string]any)["id"] == "abuja-digital" {
 			t.Fatal("GET /banks still lists the bank")
@@ -184,7 +178,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if err := s.app.Save(); err != nil {
 		t.Fatal(err)
 	}
-	again, err := connect.New(t.Context(), c, connect.Options{})
+	again, err := connect.New(t.Context(), c, connect.Options{Role: connect.RoleCore})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +265,7 @@ func TestPurgeRules(t *testing.T) {
 	if len(c.Banks) != 0 {
 		t.Fatal("the setup still lists a purged bank")
 	}
-	again, err := connect.New(t.Context(), c, connect.Options{})
+	again, err := connect.New(t.Context(), c, connect.Options{Role: connect.RoleCore})
 	if err != nil {
 		t.Fatal(err)
 	}
