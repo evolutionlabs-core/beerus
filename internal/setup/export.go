@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -19,6 +20,10 @@ const (
 )
 
 func Export(s Spec) ([]byte, error) {
+	s.Spec.Banks = slices.Clone(s.Spec.Banks)
+	for i := range s.Spec.Banks {
+		s.Spec.Banks[i].NIPCode, s.Spec.Banks[i].NUBANCode = "", ""
+	}
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(exportIndent)

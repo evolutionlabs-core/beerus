@@ -103,6 +103,9 @@ func parseInit(args []string) (initPlan, error) {
 	fs.IntVar(&flagged.WidgetPort, "widget-port", flagged.WidgetPort, "widget `port`")
 	fs.IntVar(&flagged.ControlPort, "control-port", flagged.ControlPort, "control API `port`")
 	fs.IntVar(&flagged.HealthPort, "health-port", flagged.HealthPort, "health `port` of the cbn container")
+	fs.IntVar(&flagged.NIBSSPort, "nibss-port", flagged.NIBSSPort, "NIBSS `port`")
+	fs.IntVar(&flagged.CBNPort, "cbn-port", flagged.CBNPort, "CBN `port`")
+	fs.IntVar(&flagged.ConnectControlPort, "connect-control-port", flagged.ConnectControlPort, "Connect control `port`; the first free port from 7482 when 0")
 	if _, err := parseAfter("init", fs, args, 0); err != nil {
 		return initPlan{}, err
 	}
@@ -120,6 +123,12 @@ func parseInit(args []string) (initPlan, error) {
 			local.Connect.ControlPort = flagged.ControlPort
 		case "health-port":
 			local.Connect.HealthPort = flagged.HealthPort
+		case "nibss-port":
+			local.Connect.NIBSSPort = flagged.NIBSSPort
+		case "cbn-port":
+			local.Connect.CBNPort = flagged.CBNPort
+		case "connect-control-port":
+			local.Connect.ConnectControlPort = flagged.ConnectControlPort
 		}
 	})
 	today := clock.New().Today()
@@ -306,10 +315,7 @@ func cmdWebhooks(args []string) error {
 	}
 	switch args[0] {
 	case "list":
-		if _, err := noFlags("webhooks list", args, 1); err != nil {
-			return err
-		}
-		return printControl("GET", "/webhooks/deliveries?limit=20")
+		return cmdWebhooksList(args[1:])
 	case "replay":
 		pos, err := noFlags("webhooks replay", args, 2)
 		if err != nil {
@@ -318,6 +324,26 @@ func cmdWebhooks(args []string) error {
 		return printControl("POST", "/webhooks/deliveries/"+url.PathEscape(pos[1])+"/replay")
 	}
 	return usageError("webhooks")
+}
+
+func cmdWebhooksList(args []string) error {
+	fs := flag.NewFlagSet("webhooks list", flag.ContinueOnError)
+	limit := fs.String("limit", "", "page size, a `number` from 1 to 1000")
+	cursor := fs.String("cursor", "", "the next_cursor from the last page")
+	if _, err := parseAfter("webhooks list", fs, args, 0); err != nil {
+		return err
+	}
+	c, err := newCtl()
+	if err != nil {
+		return err
+	}
+	out, err := c.do("GET", "/webhooks/deliveries"+listQuery(*limit, *cursor, nil), nil)
+	if err != nil {
+		return err
+	}
+	pretty(out)
+	printNext(out)
+	return nil
 }
 
 func printControl(method, path string) error {
