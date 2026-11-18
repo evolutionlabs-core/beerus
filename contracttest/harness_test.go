@@ -33,6 +33,7 @@ import (
 	"github.com/pb33f/libopenapi"
 	validator "github.com/pb33f/libopenapi-validator"
 
+	"github.com/evolutionlabs-core/beerus/internal/aggregator"
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
@@ -76,6 +77,7 @@ type Stack struct {
 	t          *testing.T
 	cfg        *config.Config
 	app        *connect.App
+	agg        *aggregator.App
 	api        *http.Client
 	raw        *http.Client
 	apiKey     string
@@ -198,10 +200,10 @@ func newBankStack(t *testing.T) *Stack {
 
 func startStack(t *testing.T, edits ...func(*config.Config)) *Stack {
 	t.Helper()
-	return startStackWith(t, connect.Options{}, edits...)
+	return startStackWith(t, aggregator.Options{}, edits...)
 }
 
-func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Config)) *Stack {
+func startStackWith(t *testing.T, opts aggregator.Options, edits ...func(*config.Config)) *Stack {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
@@ -232,7 +234,7 @@ func startStackWith(t *testing.T, opts connect.Options, edits ...func(*config.Co
 				dropDatabases(t, cfg)
 				continue
 			}
-			s.cfg, s.app = cfg, ns.app
+			s.cfg, s.app, s.agg = cfg, ns.app, ns.agg
 			t.Cleanup(func() {
 				if err := ns.halt(); err != nil {
 					t.Errorf("stop the stack: %v", err)

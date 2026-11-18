@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/view"
@@ -176,8 +177,12 @@ func (a *App) roomFail(w http.ResponseWriter, r *http.Request, err error) {
 	a.log.Error("control room", "path", r.URL.Path, "err", err)
 	status, msg := http.StatusInternalServerError, err.Error()
 	var down *bankDownError
-	if errors.As(err, &down) {
+	var connectDown *control.ConnectDown
+	switch {
+	case errors.As(err, &down):
 		status, msg = http.StatusServiceUnavailable, fmt.Sprintf(bankAway, down.Name)
+	case errors.As(err, &connectDown):
+		status, msg = http.StatusServiceUnavailable, control.ConnectAway
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -200,21 +205,20 @@ func (a *App) roomOverview(w http.ResponseWriter, r *http.Request) {
 		sums = append(sums, bankSum{bk.bank, t})
 		total += t.Deposits
 	}
+	cs, err := a.agg.State(r.Context())
+	if err != nil {
+		a.roomFail(w, r, err)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	active := 0
-	for _, c := range a.st.Connections {
-		if c.Status == "active" || c.Status == "syncing" {
-			active++
-		}
-	}
 	a.roomRender(w, r, "overview", http.StatusOK, "overview", roomPage{
 		"Title":       "Overview",
 		"BankSums":    sums,
 		"Total":       total,
-		"Connections": len(a.st.Connections),
-		"Active":      active,
-		"Deliveries":  len(a.st.Deliveries),
+		"Connections": cs.Connections,
+		"Active":      cs.Active,
+		"Deliveries":  cs.Deliveries,
 	})
 }
 
@@ -312,23 +316,16 @@ func (a *App) roomAccount(w http.ResponseWriter, r *http.Request) {
 	for _, l := range ls {
 		lines = append(lines, newLineView(bk.bank, l))
 	}
+	shares, err := a.agg.Shares(ctx, v.Key, "")
+	if err != nil {
+		a.roomFail(w, r, err)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	recs := []map[string]any{}
-	for _, rec := range a.st.Accounts {
-		if rec.Key != v.Key {
-			continue
-		}
-		c, _ := a.grantFor(rec)
-		status := "revoked"
-		if c != nil {
-			status = c.Status
-		}
-		name := rec.PartnerID
-		if p := a.partnerOf(rec.PartnerID); p != nil {
-			name = p.Name
-		}
-		recs = append(recs, map[string]any{"Partner": name, "ID": rec.ID, "Status": status, "AsAt": rec.AsAt})
+	for _, sh := range shares {
+		recs = append(recs, map[string]any{"Partner": a.partnerName(sh.Partner), "ID": sh.AccountID, "Status": sh.Status, "AsAt": sh.AsAt})
 	}
 	a.roomRender(w, r, "account", http.StatusOK, "banks", roomPage{
 		"Title":    v.Name,
@@ -389,6 +386,11 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	given, err := a.agg.Shares(ctx, v.Key, l.Key)
+	if err != nil {
+		a.roomFail(w, r, err)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	type share struct {
@@ -396,22 +398,12 @@ func (a *App) roomLine(w http.ResponseWriter, r *http.Request) {
 		Synced                            bool
 	}
 	shares := []share{}
-	for _, rec := range a.st.Accounts {
-		if rec.Key != v.Key {
-			continue
+	for _, sh := range given {
+		x := share{AccountID: sh.AccountID, TxnID: sh.TxnID, Status: sh.Status, Synced: sh.Synced}
+		if p := a.partnerOf(sh.Partner); p != nil {
+			x.Partner = p.Name
 		}
-		id := txnID(rec.PartnerID, v.Key, l.Key, false)
-		sh := share{AccountID: rec.ID, TxnID: id, Status: "revoked"}
-		if p := a.partnerOf(rec.PartnerID); p != nil {
-			sh.Partner = p.Name
-		}
-		if c, _ := a.grantFor(rec); c != nil {
-			sh.Status = c.Status
-		}
-		if f := a.st.Feeds[rec.ID]; f != nil {
-			_, sh.Synced = f.Lines[id]
-		}
-		shares = append(shares, sh)
+		shares = append(shares, x)
 	}
 	lv := newLineView(bk.bank, l)
 	a.roomRender(w, r, "line", http.StatusOK, "banks", roomPage{
@@ -469,22 +461,30 @@ func (a *App) roomTransfer(w http.ResponseWriter, r *http.Request) {
 	a.roomRender(w, r, "transfer", status, "transfer", roomPage{"Title": "New transfer", "Key": key, "Form": f, "Error": message})
 }
 
+func (a *App) partnerName(id string) string {
+	if p := a.partnerOf(id); p != nil {
+		return p.Name
+	}
+	return id
+}
+
 func (a *App) roomConnections(w http.ResponseWriter, r *http.Request) {
+	list, err := a.agg.Connections(r.Context(), "", "")
+	if err != nil {
+		a.roomFail(w, r, err)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	type row struct {
-		*Connection
-		Partner, Bank, Customer string
-		Accounts                int
+		ID, Status, Partner, Bank, Customer string
+		Accounts                            int
+		ExpiresAt, CreatedAt                time.Time
 	}
 	rows := []row{}
-	for _, c := range a.st.Connections {
-		x := row{Connection: c, Partner: c.PartnerID, Accounts: len(c.AccountIDs)}
-		if p := a.partnerOf(c.PartnerID); p != nil {
-			x.Partner = p.Name
-		}
-		x.Customer = c.CustomerID
-		if b := a.cfg.Bank(c.Institution); b != nil {
+	for _, c := range list {
+		x := row{ID: c.ID, Status: c.Status, Partner: a.partnerName(c.PartnerID), Bank: c.Institution.Name, Customer: c.CustomerID, Accounts: len(c.AccountIDs), ExpiresAt: parseTime(c.ConsentExpiresAt), CreatedAt: parseTime(&c.CreatedAt)}
+		if b := a.cfg.Bank(c.Institution.ID); b != nil {
 			x.Bank = b.Name
 		}
 		rows = append(rows, x)
@@ -494,38 +494,52 @@ func (a *App) roomConnections(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) roomRevoke(w http.ResponseWriter, r *http.Request) {
-	if err := a.RevokeAtBank(r.Context(), r.PathValue("id")); err != nil {
-		if errors.Is(err, errNotFound) {
-			a.roomNotFound(w, r)
-			return
-		}
+	err := a.agg.RevokeConnection(r.Context(), r.PathValue("id"))
+	var peer *control.PeerError
+	if errors.As(err, &peer) && peer.Status == http.StatusNotFound {
+		a.roomNotFound(w, r)
+		return
+	}
+	if err != nil {
 		a.log.Error("revoke consent", "connection", r.PathValue("id"), "err", err)
 		http.Error(w, "The bank did not revoke the consent. Try again.", http.StatusBadGateway)
 		return
 	}
-	a.poke()
 	http.Redirect(w, r, "/ui/connections", http.StatusSeeOther)
 }
 
 func (a *App) roomWebhooks(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	page, ok := view.PageParam(w, r, "webhook list", view.PagesOf(len(a.st.Deliveries), pageSize))
+	cs, err := a.agg.State(r.Context())
+	if err != nil {
+		a.roomFail(w, r, err)
+		return
+	}
+	page, ok := view.PageParam(w, r, "webhook list", view.PagesOf(cs.Deliveries, pageSize))
 	if !ok {
 		return
 	}
-	end := max(len(a.st.Deliveries)-(page-1)*pageSize, 0)
-	start := max(end-pageSize, 0)
-	rows := []*Delivery{}
-	for i := end - 1; i >= start; i-- {
-		rows = append(rows, a.st.Deliveries[i])
+	var rows []control.DeliveryView
+	cursor := ""
+	for n := 1; n <= page; n++ {
+		if rows, cursor, err = a.agg.Deliveries(r.Context(), pageSize, cursor); err != nil {
+			a.roomFail(w, r, err)
+			return
+		}
 	}
-	a.roomRender(w, r, "webhooks", http.StatusOK, "webhooks", roomPage{"Title": "Webhooks", "Rows": rows, "Page": page, "Older": start > 0, "Newer": page > 1})
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.roomRender(w, r, "webhooks", http.StatusOK, "webhooks", roomPage{"Title": "Webhooks", "Rows": rows, "Page": page, "Older": cursor != "", "Newer": page > 1})
 }
 
 func (a *App) roomReplay(w http.ResponseWriter, r *http.Request) {
-	if err := a.Replay(r.PathValue("id")); err != nil {
+	err := a.agg.Replay(r.Context(), r.PathValue("id"))
+	var peer *control.PeerError
+	if errors.As(err, &peer) && peer.Status == http.StatusNotFound {
 		a.roomNotFound(w, r)
+		return
+	}
+	if err != nil {
+		a.roomFail(w, r, err)
 		return
 	}
 	http.Redirect(w, r, "/ui/webhooks", http.StatusSeeOther)
@@ -536,7 +550,7 @@ func (a *App) roomNotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 var roomPages = template.Must(template.New("").Funcs(view.Funcs()).Funcs(template.FuncMap{
-	"logo":  func() template.HTML { return template.HTML(logoSVG) },
+	"logo":  func() template.HTML { return template.HTML(view.LogoSVG) },
 	"pathq": url.PathEscape,
 	"amtClass": func(v int64) string {
 		if v > 0 {

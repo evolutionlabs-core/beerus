@@ -33,6 +33,7 @@ type supervisor struct {
 	logs      *syncWriter
 	core      *child
 	nibss     *child
+	connect   *child
 	cbn       *child
 	fleet     *fleet.Fleet
 	watchStop context.CancelFunc
@@ -158,6 +159,10 @@ func (s *supervisor) watch(ctx context.Context) {
 }
 
 func (s *supervisor) shutdown() {
+	if s.connect != nil {
+		s.connect.stop()
+		<-s.connect.done
+	}
 	if s.watchStop != nil {
 		s.watchStop()
 		<-s.watchDone

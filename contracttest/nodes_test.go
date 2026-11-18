@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/aggregator"
 	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
 	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -165,12 +166,14 @@ func (b banks) Start(id string) (func(), <-chan struct{}) {
 }
 
 type nodes struct {
-	app   *connect.App
-	order []*node
-	stop  *node
+	app     *connect.App
+	agg     *aggregator.App
+	order   []*node
+	stop    *node
+	connect *node
 }
 
-func startNodes(cfg *config.Config, opts connect.Options) (*nodes, error) {
+func startNodes(cfg *config.Config, opts aggregator.Options) (*nodes, error) {
 	ns := &nodes{}
 	opts.Bind = nodeBind
 	if err := cfg.EnsureCertificates(time.Now()); err != nil {
@@ -187,7 +190,7 @@ func startNodes(cfg *config.Config, opts connect.Options) (*nodes, error) {
 	if err := ns.order[0].await(func(ctx context.Context) bool { return cbnAnswers(ctx, cfg.Dir) }); err != nil {
 		return ns, errors.Join(err, ns.halt())
 	}
-	if ns.app, err = connect.New(cfg, opts); err != nil {
+	if ns.app, err = connect.New(cfg, connect.Options{Bind: nodeBind}); err != nil {
 		return ns, errors.Join(err, ns.halt())
 	}
 	core := spawn("core", ns.app.Serve)
@@ -215,11 +218,22 @@ func startNodes(cfg *config.Config, opts connect.Options) (*nodes, error) {
 		f.Close()
 		return nil
 	})
+	if ns.agg, err = aggregator.New(cfg.Dir, opts); err != nil {
+		return ns, errors.Join(err, ns.halt())
+	}
+	ns.connect = spawn("Connect", ns.agg.Serve)
+	if err := ns.connect.await(func(ctx context.Context) bool { return controlAnswers(ctx, cfg.Connect.ConnectControlPort, token) }); err != nil {
+		return ns, errors.Join(err, ns.halt())
+	}
 	return ns, nil
 }
 
 func (ns *nodes) halt() error {
 	var errs []error
+	if ns.connect != nil {
+		errs = append(errs, ns.connect.halt())
+		ns.connect = nil
+	}
 	if ns.stop != nil {
 		errs = append(errs, ns.stop.halt())
 		ns.stop = nil

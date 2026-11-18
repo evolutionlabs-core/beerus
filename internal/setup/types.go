@@ -16,8 +16,9 @@ const (
 	KindPartner = "Partner"
 	KindSystem  = "System"
 
-	SystemCBN   = "cbn"
-	SystemNIBSS = "nibss"
+	SystemCBN     = "cbn"
+	SystemNIBSS   = "nibss"
+	SystemConnect = "connect"
 
 	StateActive    = "active"
 	StateSuspended = "suspended"
@@ -162,16 +163,17 @@ type Ports struct {
 }
 
 type LocalConnect struct {
-	Host         string `yaml:"host,omitempty"`
-	PartnerPort  int    `yaml:"partner_port,omitempty"`
-	WidgetPort   int    `yaml:"widget_port,omitempty"`
-	WidgetTLS    bool   `yaml:"widget_tls,omitempty"`
-	ControlPort  int    `yaml:"control_port,omitempty"`
-	HealthPort   int    `yaml:"health_port,omitempty"`
-	NIBSSPort    int    `yaml:"nibss_port,omitempty"`
-	CBNPort      int    `yaml:"cbn_port,omitempty"`
-	SyncInterval string `yaml:"sync_interval,omitempty"`
-	RefreshEvery string `yaml:"refresh_min_interval,omitempty"`
+	Host               string `yaml:"host,omitempty"`
+	PartnerPort        int    `yaml:"partner_port,omitempty"`
+	WidgetPort         int    `yaml:"widget_port,omitempty"`
+	WidgetTLS          bool   `yaml:"widget_tls,omitempty"`
+	ControlPort        int    `yaml:"control_port,omitempty"`
+	HealthPort         int    `yaml:"health_port,omitempty"`
+	NIBSSPort          int    `yaml:"nibss_port,omitempty"`
+	CBNPort            int    `yaml:"cbn_port,omitempty"`
+	ConnectControlPort int    `yaml:"connect_control_port,omitempty"`
+	SyncInterval       string `yaml:"sync_interval,omitempty"`
+	RefreshEvery       string `yaml:"refresh_min_interval,omitempty"`
 }
 
 type PartnerLocal struct {

@@ -21,7 +21,7 @@ var (
 	specIDPattern      = regexp.MustCompile(`^[a-z][a-z0-9-]{1,30}$`)
 	specPartnerPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
 	specNIPPattern     = regexp.MustCompile(`^\d{6}$`)
-	specSystemIDs      = []string{SystemCBN, SystemNIBSS}
+	specSystemIDs      = []string{SystemCBN, SystemNIBSS, SystemConnect}
 	specStates         = []string{StateActive, StateSuspended, StateClosed}
 	specMoneyChoices   = []string{MoneyTransfer, MoneyPayout, MoneyLeave}
 )

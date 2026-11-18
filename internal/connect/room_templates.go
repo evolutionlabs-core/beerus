@@ -329,7 +329,7 @@ const roomTemplates = `
 <td class="border-b border-line px-5 py-3 group-last:border-b-0"><span class="num">{{.Type}}</span><span class="num block text-[12px] text-faint">{{.ID}}</span></td>
 <td class="border-b border-line px-5 py-3 group-last:border-b-0"><span class="badge badge-{{statusClass .Status}}">{{human .Status}}</span>{{if .LastError}}<span class="mt-1 block text-[12px] text-faint">{{short .LastError 60}}</span>{{end}}</td>
 <td class="border-b border-line px-5 py-3 text-muted group-last:border-b-0">{{.Attempts}}</td>
-<td class="border-b border-line px-5 py-3 whitespace-nowrap text-muted group-last:border-b-0">{{when .CreatedReal}}</td>
+<td class="border-b border-line px-5 py-3 whitespace-nowrap text-muted group-last:border-b-0">{{when .CreatedAt}}</td>
 <td class="border-b border-line px-5 py-3 text-right group-last:border-b-0"><form method="post" action="/ui/webhooks/{{.ID}}/replay"><button type="submit" class="btn btn-secondary btn-sm">Replay</button></form></td>
 </tr>{{end}}</tbody></table></div>{{else}}<p class="px-5 py-10 text-center text-muted">No webhooks sent yet.</p>{{end}}
 {{if or .Older .Newer}}<div class="flex items-center justify-between border-t border-line px-5 py-3 text-[13px]">

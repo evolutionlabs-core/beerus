@@ -28,6 +28,7 @@ x-beerus: &beerus
     BEERUS_CONTROL_PORT: "{{.ControlPort}}"
     BEERUS_HEALTH_PORT: "{{.HealthPort}}"
     BEERUS_CBN_PORT: "{{.CBNPort}}"
+    BEERUS_CONNECT_CONTROL_PORT: "{{.ConnectControlPort}}"
   volumes:
     - ${BEERUS_STATE:-state}:/state
 
@@ -81,6 +82,14 @@ services:
     depends_on:
       core:
         condition: service_started
+
+  connect:
+    <<: *beerus
+    command: ["run", "--participant", "connect"]
+    network_mode: "service:core"
+    depends_on:
+      nibss:
+        condition: service_started
 {{range .Banks}}
   {{.ID}}:
     <<: *beerus
@@ -126,14 +135,14 @@ volumes:
 `
 
 type composeData struct {
-	PartnerPort, WidgetPort, ControlPort, HealthPort, CBNPort int
-	ConnectHost                                               string
-	NeedsPartner                                              bool
-	Banks                                                     []*config.Bank
+	PartnerPort, WidgetPort, ControlPort, HealthPort, CBNPort, ConnectControlPort int
+	ConnectHost                                                                   string
+	NeedsPartner                                                                  bool
+	Banks                                                                         []*config.Bank
 }
 
 func renderCompose(c *config.Config) ([]byte, error) {
-	d := composeData{PartnerPort: c.Connect.PartnerPort, WidgetPort: c.Connect.WidgetPort, ControlPort: c.Connect.ControlPort, HealthPort: c.Connect.HealthPort, CBNPort: c.Connect.CBNPort, ConnectHost: c.Connect.Host, NeedsPartner: len(c.Partners) == 0}
+	d := composeData{PartnerPort: c.Connect.PartnerPort, WidgetPort: c.Connect.WidgetPort, ControlPort: c.Connect.ControlPort, HealthPort: c.Connect.HealthPort, CBNPort: c.Connect.CBNPort, ConnectControlPort: c.Connect.ConnectControlPort, ConnectHost: c.Connect.Host, NeedsPartner: len(c.Partners) == 0}
 	for _, b := range c.Banks {
 		if !b.Closed() {
 			d.Banks = append(d.Banks, b)

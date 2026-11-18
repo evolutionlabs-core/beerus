@@ -37,22 +37,23 @@ type Partner struct {
 }
 
 type Connect struct {
-	Host             string `yaml:"host"`
-	PartnerPort      int    `yaml:"partner_port"`
-	WidgetPort       int    `yaml:"widget_port"`
-	WidgetTLS        bool   `yaml:"widget_tls"`
-	ControlPort      int    `yaml:"control_port"`
-	HealthPort       int    `yaml:"health_port"`
-	NIBSSPort        int    `yaml:"nibss_port"`
-	NIBSSControlPort int    `yaml:"-"`
-	CBNPort          int    `yaml:"-"`
-	CBNControlPort   int    `yaml:"-"`
-	LegalName        string `yaml:"legal_name"`
-	BrandName        string `yaml:"brand_name"`
-	RegistryID       string `yaml:"registry_id"`
-	CACNumber        string `yaml:"cac_number"`
-	SyncInterval     string `yaml:"sync_interval"`
-	RefreshEvery     string `yaml:"refresh_min_interval"`
+	Host               string `yaml:"host"`
+	PartnerPort        int    `yaml:"partner_port"`
+	WidgetPort         int    `yaml:"widget_port"`
+	WidgetTLS          bool   `yaml:"widget_tls"`
+	ControlPort        int    `yaml:"control_port"`
+	HealthPort         int    `yaml:"health_port"`
+	NIBSSPort          int    `yaml:"nibss_port"`
+	NIBSSControlPort   int    `yaml:"-"`
+	ConnectControlPort int    `yaml:"-"`
+	CBNPort            int    `yaml:"-"`
+	CBNControlPort     int    `yaml:"-"`
+	LegalName          string `yaml:"legal_name"`
+	BrandName          string `yaml:"brand_name"`
+	RegistryID         string `yaml:"registry_id"`
+	CACNumber          string `yaml:"cac_number"`
+	SyncInterval       string `yaml:"sync_interval"`
+	RefreshEvery       string `yaml:"refresh_min_interval"`
 }
 
 type Bank struct {

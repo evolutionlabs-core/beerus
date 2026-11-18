@@ -1,4 +1,4 @@
-package connect
+package aggregator
 
 import (
 	"bytes"
@@ -56,7 +56,7 @@ func (j *jtiSet) first(key string, until, now time.Time) (bool, error) {
 func (a *App) bankConfig(id string) *config.Bank {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.cfg.Bank(id)
+	return a.bank(id)
 }
 
 func (a *App) bankVerifyKey(id string) (*ecdsa.PublicKey, error) {

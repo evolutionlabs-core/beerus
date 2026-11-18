@@ -1,4 +1,4 @@
-package connect
+package aggregator
 
 import (
 	"crypto/rand"
@@ -221,7 +221,7 @@ func (a *App) widgetInstitution(w http.ResponseWriter, r *http.Request) {
 	}
 	if ls.Institution == "" {
 		id := r.PostForm.Get("institution")
-		if b := a.cfg.Bank(id); b == nil || b.Closed() {
+		if b := a.bank(id); b == nil || b.Closed() {
 			a.message(w, http.StatusBadRequest, "Unknown bank", "Go back and choose a bank from the list.")
 			a.mu.Unlock()
 			return

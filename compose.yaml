@@ -15,6 +15,7 @@ x-beerus: &beerus
     BEERUS_CONTROL_PORT: "7480"
     BEERUS_HEALTH_PORT: "7490"
     BEERUS_CBN_PORT: "7446"
+    BEERUS_CONNECT_CONTROL_PORT: "7482"
   volumes:
     - ${BEERUS_STATE:-state}:/state
 
@@ -65,6 +66,14 @@ services:
     network_mode: "service:core"
     depends_on:
       core:
+        condition: service_started
+
+  connect:
+    <<: *beerus
+    command: ["run", "--participant", "connect"]
+    network_mode: "service:core"
+    depends_on:
+      nibss:
         condition: service_started
 
   core:

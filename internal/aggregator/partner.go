@@ -1,4 +1,4 @@
-package connect
+package aggregator
 
 import (
 	"bytes"
@@ -179,7 +179,7 @@ func historyStart(start, today clock.Date, days int) (clock.Date, bool) {
 }
 
 func (a *App) effectiveStart(start clock.Date, institution string) (clock.Date, bool) {
-	b := a.cfg.Bank(institution)
+	b := a.bank(institution)
 	if b == nil {
 		return start, false
 	}
@@ -211,7 +211,7 @@ func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	a.finishAuthoriseLocked(ex.conn, ex.auth)
 	out := a.connectionJSON(ex.conn)
-	b := a.cfg.Bank(ex.conn.Institution)
+	b := a.bank(ex.conn.Institution)
 	a.mu.Unlock()
 	if b != nil && ex.oldConsent != "" && ex.oldConsent != ex.consent {
 		a.revokeOrQueue(b, ex.oldConsent)
@@ -473,7 +473,7 @@ func (a *App) deleteConnection(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) institutionJSON(id string) map[string]string {
 	name := ""
-	if b := a.cfg.Bank(id); b != nil {
+	if b := a.bank(id); b != nil {
 		name = b.Name
 	}
 	return map[string]string{"id": id, "name": name}

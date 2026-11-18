@@ -79,10 +79,10 @@ func TestRealAggregator(t *testing.T) {
 		t.Fatalf("the bank never saw a resource call: %d %v", used, err)
 	}
 
-	if err := s.app.Save(); err != nil {
+	if err := s.agg.Save(); err != nil {
 		t.Fatal(err)
 	}
-	state, err := os.ReadFile(s.cfg.Path("stub-state.json"))
+	state, err := os.ReadFile(s.cfg.Path("connect", "state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

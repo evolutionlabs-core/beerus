@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/aggregator"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -21,7 +21,7 @@ func TestHungBankDoesNotStallPartnerAPI(t *testing.T) {
 	var hang atomic.Bool
 	var held atomic.Int32
 	release := make(chan struct{})
-	opts := connect.Options{BankWrap: func(base http.RoundTripper) http.RoundTripper {
+	opts := aggregator.Options{BankWrap: func(base http.RoundTripper) http.RoundTripper {
 		return roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if hang.Load() {
 				held.Add(1)

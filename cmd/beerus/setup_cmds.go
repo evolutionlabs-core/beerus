@@ -1217,6 +1217,10 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 		return err
 	}
 	sup.watch(ctx)
+	sup.startConnect()
+	if err := sup.awaitConnect(ctx); err != nil {
+		return err
+	}
 	if *file == "" {
 		if req, err = specRequest(*dir, ""); err != nil {
 			return err

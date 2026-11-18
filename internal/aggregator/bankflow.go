@@ -1,4 +1,4 @@
-package connect
+package aggregator
 
 import (
 	"context"
@@ -9,12 +9,13 @@ import (
 	"slices"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSession) {
 	a.mu.Lock()
-	b := a.cfg.Bank(ls.Institution)
+	b := a.bank(ls.Institution)
 	if b == nil || b.APIPort == 0 {
 		defer a.mu.Unlock()
 		a.failSession(w, r, ls, "institution_down")
@@ -55,13 +56,9 @@ func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSess
 	http.Redirect(w, r, b.URL()+"/authorize?"+q.Encode(), http.StatusSeeOther)
 }
 
-func (a *App) accountOwner(ctx context.Context, bankID, nuban string) (string, error) {
-	books := a.booksOf(bankID)
-	if books == nil {
-		return "", fmt.Errorf("the books of %s are not open", bankID)
-	}
-	acc, err := books.account(ctx, nuban)
-	if err != nil {
+func (a *App) accountOwner(ctx context.Context, b *config.Bank, nuban string) (string, error) {
+	var acc control.AccountJSON
+	if _, err := a.link.Do(ctx, b.URL(), http.MethodGet, "/v1/accounts/"+url.PathEscape(nuban), nil, &acc); err != nil {
 		return "", fmt.Errorf("look up the owner of %s: %w", nuban, err)
 	}
 	return acc.Customer, nil
@@ -85,7 +82,7 @@ func (a *App) bankCallbackBeginLocked(w http.ResponseWriter, r *http.Request) (b
 		a.message(w, http.StatusForbidden, "Request refused", "This sign-in does not match your session. Go back to the app and start again.")
 		return bankCallbackInput{}, false
 	}
-	b := a.cfg.Bank(ls.Institution)
+	b := a.bank(ls.Institution)
 	verifier := ls.Verifier
 	ls.BankState, ls.Verifier = "", ""
 	a.dirty()
@@ -122,7 +119,7 @@ func (a *App) bankSignIn(ctx context.Context, in bankCallbackInput) (bankToken, 
 	if len(g.Accounts) == 0 {
 		return tok, g, "", nil
 	}
-	owner, err := a.accountOwner(ctx, in.bank.ID, g.Accounts[0].ID)
+	owner, err := a.accountOwner(ctx, in.bank, g.Accounts[0].ID)
 	return tok, g, owner, err
 }
 

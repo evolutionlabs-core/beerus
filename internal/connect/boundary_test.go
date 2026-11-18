@@ -19,6 +19,7 @@ var participantPackages = []string{
 	modulePath + "/internal/bank/participant",
 	modulePath + "/internal/nibss/participant",
 	modulePath + "/internal/cbn/participant",
+	modulePath + "/internal/aggregator",
 }
 
 var limitedImports = map[string][]string{}

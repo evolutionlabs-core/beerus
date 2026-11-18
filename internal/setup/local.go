@@ -92,6 +92,7 @@ func (l Local) check(pos map[string]Pos) []specProblem {
 	c.port("connect.health_port", cn.HealthPort)
 	c.port("connect.nibss_port", cn.NIBSSPort)
 	c.port("connect.cbn_port", cn.CBNPort)
+	c.port("connect.connect_control_port", cn.ConnectControlPort)
 	c.duration("connect.sync_interval", cn.SyncInterval)
 	c.duration("connect.refresh_min_interval", cn.RefreshEvery)
 	ids := make([]string, 0, len(l.Partners))
@@ -128,15 +129,16 @@ func DefaultLocal() Local {
 	return Local{
 		DatabaseURL: defaultDatabaseURL,
 		Connect: LocalConnect{
-			Host:         DefaultConnectHost,
-			PartnerPort:  defaultPartnerPort,
-			WidgetPort:   defaultWidgetPort,
-			ControlPort:  defaultControlPort,
-			HealthPort:   defaultHealthPort,
-			NIBSSPort:    DefaultNIBSSPort,
-			CBNPort:      DefaultCBNPort,
-			SyncInterval: defaultSyncInterval,
-			RefreshEvery: defaultRefreshEvery,
+			Host:               DefaultConnectHost,
+			PartnerPort:        defaultPartnerPort,
+			WidgetPort:         defaultWidgetPort,
+			ControlPort:        defaultControlPort,
+			HealthPort:         defaultHealthPort,
+			NIBSSPort:          DefaultNIBSSPort,
+			CBNPort:            DefaultCBNPort,
+			ConnectControlPort: DefaultConnectControlPort,
+			SyncInterval:       defaultSyncInterval,
+			RefreshEvery:       defaultRefreshEvery,
 		},
 	}
 }

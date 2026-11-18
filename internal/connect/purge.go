@@ -52,13 +52,11 @@ func (a *App) PurgeImpact(ctx context.Context, id string) (PurgeImpact, error) {
 	if waiting != "" {
 		out.Blockers = append(out.Blockers, waiting)
 	}
-	a.mu.Lock()
-	for _, c := range a.st.Connections {
-		if c.Institution == id {
-			out.Connections++
-		}
+	imp, err := a.agg.Impact(ctx, "bank", id)
+	if err != nil {
+		return PurgeImpact{}, err
 	}
-	a.mu.Unlock()
+	out.Connections = imp.Total
 	return out, nil
 }
 
@@ -102,8 +100,8 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	if r.Allocated.Database != "" {
 		errs = append(errs, a.dropBankDatabase(ctx, r.Allocated.Database))
 	}
-	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.memberGone(ctx, id))
-	a.dropBankRows(id)
+	errs = append(errs, os.RemoveAll(a.cfg.Path("banks", id)), a.memberGone(ctx, id), a.dropConnect(ctx, "banks", id))
+	a.dropBankFaults(id)
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("purge %s: %w", id, err)
 	}
@@ -131,20 +129,9 @@ func (a *App) purgeBank(ctx context.Context, r setup.Resource) (*setup.Condition
 	return nil, nil
 }
 
-func (a *App) dropBankRows(id string) {
+func (a *App) dropBankFaults(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for cid, c := range a.st.Connections {
-		if c.Institution == id {
-			a.vaultDrop(cid)
-		}
-	}
-	for lid, l := range a.st.LinkSessions {
-		if l.Institution == id {
-			delete(a.st.LinkSessions, lid)
-		}
-	}
-	a.st.Revokes = slices.DeleteFunc(a.st.Revokes, func(p PendingRevoke) bool { return p.Bank == id })
 	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *control.Fault) bool { return f.Bank == id })
 	a.dirty()
 }
@@ -173,11 +160,13 @@ func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nip.Institut
 	return in, nil
 }
 
-func (a *App) purgePartner(_ context.Context, r setup.Resource) (*setup.Condition, error) {
+func (a *App) purgePartner(ctx context.Context, r setup.Resource) (*setup.Condition, error) {
 	id := r.ID
 	a.partnerMu.Lock()
 	defer a.partnerMu.Unlock()
-	a.dropPartnerRows(id)
+	if err := a.dropConnect(ctx, "partners", id); err != nil {
+		return nil, err
+	}
 	if err := os.RemoveAll(a.cfg.Path("partners", id)); err != nil {
 		return nil, fmt.Errorf("remove partners/%s: %w", id, err)
 	}
@@ -189,36 +178,8 @@ func (a *App) purgePartner(_ context.Context, r setup.Resource) (*setup.Conditio
 		return nil, err
 	}
 	a.replacePartner(id, nil)
+	a.reloadConnect(ctx)
 	return nil, nil
-}
-
-func (a *App) dropPartnerRows(id string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for cid, c := range a.st.Connections {
-		if c.PartnerID == id {
-			a.vaultDrop(cid)
-			delete(a.st.Connections, cid)
-		}
-	}
-	for aid, acct := range a.st.Accounts {
-		if acct.PartnerID == id {
-			delete(a.st.Accounts, aid)
-			delete(a.st.Feeds, aid)
-		}
-	}
-	for rid, ref := range a.st.Refreshes {
-		if a.st.Accounts[ref.AccountID] == nil {
-			delete(a.st.Refreshes, rid)
-		}
-	}
-	for lid, l := range a.st.LinkSessions {
-		if l.PartnerID == id {
-			delete(a.st.LinkSessions, lid)
-		}
-	}
-	a.st.Deliveries = slices.DeleteFunc(a.st.Deliveries, func(d *Delivery) bool { return d.PartnerID == id })
-	a.dirty()
 }
 
 func (a *App) ctlPurgeImpact(w http.ResponseWriter, r *http.Request) {

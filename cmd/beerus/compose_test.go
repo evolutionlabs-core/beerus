@@ -51,7 +51,7 @@ func TestComposeFollowsTheSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(out)
-	for _, want := range []string{"  cbn:", "\"--participant\", \"cbn\"", "cbn.localhost", "127.0.0.1:7446:7446", "  nibss:", "network_mode: \"service:core\"", "\"--participant\", \"nibss\"", "  bank-b:", "  bank-c:", "127.0.0.1:7460:7460", "bank-c.localhost", "connect.example.localhost", "BEERUS_BIND: 0.0.0.0"} {
+	for _, want := range []string{"  cbn:", "\"--participant\", \"cbn\"", "cbn.localhost", "127.0.0.1:7446:7446", "  nibss:", "network_mode: \"service:core\"", "\"--participant\", \"nibss\"", "  connect:", "\"--participant\", \"connect\"", "  bank-b:", "  bank-c:", "127.0.0.1:7460:7460", "bank-c.localhost", "connect.example.localhost", "BEERUS_BIND: 0.0.0.0"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("compose file lacks %q", want)
 		}
