@@ -38,10 +38,10 @@ func (p *Participant) runSettlement(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case req := <-p.settles:
-			n, err := p.settlePass(ctx, req.adhoc)
+			n, err := p.settlePass(ctx, p.clock.Now(), req.adhoc)
 			req.reply <- settleReply{posted: n, err: err}
 		case <-timer.C:
-			_, err := p.settlePass(ctx, false)
+			_, err := p.settlePass(ctx, p.clock.Now(), false)
 			delay := settlePoll
 			if err != nil && ctx.Err() == nil {
 				attempts++
@@ -82,12 +82,12 @@ func (p *Participant) schedule() (nibss.Schedule, error) {
 	return nibss.Schedule{Per: f.Sessions, Cal: cal}, nil
 }
 
-func (p *Participant) settlePass(ctx context.Context, adhoc bool) (int, error) {
+func (p *Participant) settlePass(ctx context.Context, now time.Time, adhoc bool) (int, error) {
 	sched, err := p.schedule()
 	if err != nil {
 		return 0, err
 	}
-	todo, err := p.store.Settle(ctx, sched, p.clock.Now(), adhoc)
+	todo, err := p.store.Settle(ctx, sched, now, adhoc)
 	if err != nil {
 		return 0, fmt.Errorf("settle sessions: %w", err)
 	}
