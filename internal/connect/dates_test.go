@@ -80,9 +80,9 @@ func TestAsOfBounds(t *testing.T) {
 		{"far future", day(2126, time.March, 1), day(2126, time.March, 2), day(2126, time.February, 28), day(2126, time.March, 1)},
 	}
 	for _, r := range rows {
-		min, max := asOfBounds(r.from, r.today)
-		if min != r.min || max != r.max {
-			t.Errorf("%s: %s to %s, want %s to %s", r.name, min, max, r.min, r.max)
+		first, last := asOfBounds(r.from, r.today)
+		if first != r.min || last != r.max {
+			t.Errorf("%s: %s to %s, want %s to %s", r.name, first, last, r.min, r.max)
 		}
 	}
 }

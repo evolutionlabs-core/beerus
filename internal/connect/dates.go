@@ -16,6 +16,6 @@ func reconnectFrom(current, eff clock.Date) clock.Date {
 	return current
 }
 
-func asOfBounds(from, today clock.Date) (min, max clock.Date) {
+func asOfBounds(from, today clock.Date) (first, last clock.Date) {
 	return from.AddDays(-1), today.AddDays(-1)
 }

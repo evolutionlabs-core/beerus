@@ -48,9 +48,12 @@ func TestBooksLedgerRules(t *testing.T) {
 		{"open too large", b, "bank-c", math.MaxInt64, 1, Account{}, "Send a settlement_minor and a vault_minor of zero or more, with one of them above zero, that fit together."},
 	}
 	for _, c := range open {
+		before := clk.Now()
 		got, err := c.books.OpenAccount(ctx, c.bank, c.settlement, c.vault)
+		after := clk.Now()
+		openedAtWrong := !c.want.OpenedAt.IsZero() && !got.OpenedAt.Equal(c.want.OpenedAt) || c.want.OpenedAt.IsZero() && (got.OpenedAt.Before(before) || got.OpenedAt.After(after))
 		switch {
-		case c.err == "" && (err != nil || got.BankID != c.want.BankID || got.Settlement != c.want.Settlement || got.Vault != c.want.Vault || (!c.want.OpenedAt.IsZero() && !got.OpenedAt.Equal(c.want.OpenedAt))):
+		case c.err == "" && (err != nil || got.BankID != c.want.BankID || got.Settlement != c.want.Settlement || got.Vault != c.want.Vault || openedAtWrong):
 			t.Errorf("%s: %+v, %v, want %+v", c.name, got, err, c.want)
 		case c.err != "" && (err == nil || err.Error() != c.err):
 			t.Errorf("%s: %v, want %q", c.name, err, c.err)

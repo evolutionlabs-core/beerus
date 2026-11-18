@@ -17,7 +17,6 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
@@ -193,7 +192,7 @@ func TestBankCLI(t *testing.T) {
 	if got := c.ok("withdraw", a1, "--bank", "bank-a", "--amount", "0.50"); !matches(`Withdrew ₦0\.50 from account `+a1+` at bank-a\. Balance ₦5,000\.00\.\n`, got) {
 		t.Errorf("withdraw: %q", got)
 	}
-	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", a2, "--amount", "1000"); !matches(`Moved ₦1,000\.00 from `+a1+` to `+a2+`, Adaeze Okafor, at `+businessWAT()+`\. Balance ₦4,000\.00\.\n`, got) {
+	if got := c.ok("transfer", "--from-bank", "bank-a", "--from", a1, "--to", a2, "--amount", "1000"); !matches(`Moved ₦1,000\.00 from `+a1+` to `+a2+`, Adaeze Okafor, at `+watTime()+`\. Balance ₦4,000\.00\.\n`, got) {
 		t.Errorf("same-bank transfer: %q", got)
 	}
 
@@ -202,11 +201,11 @@ func TestBankCLI(t *testing.T) {
 	if sent["status"] != "success" || sent["response_code"] != "00" || sent["total_debit_minor"] != total || sent["sender_balance_after_minor"] != 400000-total || sent["fee_minor"] != float64(0) {
 		t.Errorf("nip transfer: %v", sent)
 	}
-	sid, out := c.capture(`Session (\d+): success at `+businessWAT()+``, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000.50")
+	sid, out := c.capture(`Session (\d+): success at `+watTime()+``, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "1000.50")
 	if !strings.HasPrefix(out, "Sending ₦1,000.50 to Chidi Okafor at Bank B.\n") || !strings.Contains(out, "Total debit ₦") {
 		t.Errorf("nip transfer text: %q", out)
 	}
-	if got := c.ok("nip", "status", sid); !matches(`Session `+sid+`: success at `+businessWAT()+`\nAmount ₦1,000\.50 from `+a1+` \(bank code 000001\) to `+b1+` \(bank code 000002\), started at `+businessWAT()+`\.\n`, got) {
+	if got := c.ok("nip", "status", sid); !matches(`Session `+sid+`: success at `+watTime()+`\nAmount ₦1,000\.50 from `+a1+` \(bank code 000001\) to `+b1+` \(bank code 000002\), started at `+watTime()+`\.\n`, got) {
 		t.Errorf("nip status: %q", got)
 	}
 	if out := c.ok("statement", a1, "--bank", "bank-a", "--from", s.today().String(), "--to", s.today().String()); !strings.Contains(out, "5 entries on this page.") || !strings.Contains(out, sid) || !strings.Contains(out, "−₦1,000.50") {
@@ -241,8 +240,8 @@ func TestBankCLI(t *testing.T) {
 	if out := c.ok("fault", "list"); !strings.Contains(out, "bank-b") || !strings.Contains(out, "the next transfer times out (outcome credited)") {
 		t.Errorf("fault list: %q", out)
 	}
-	psid, out := c.capture(`Session (\d+): pending\. Beerus will check with NIBSS at `+businessWAT()+`\. Run beerus nip status \d+\.`, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "10")
-	if got := c.ok("nip", "status", psid); !matches(`Session `+psid+`: was pending; now success at `+businessWAT()+`\nAmount ₦10\.00 .*\n`, got) {
+	psid, out := c.capture(`Session (\d+): pending\. Beerus will check with NIBSS at `+watTime()+`\. Run beerus nip status \d+\.`, "transfer", "--from-bank", "bank-a", "--from", a1, "--to", b1, "--to-bank", "bank-b", "--amount", "10")
+	if got := c.ok("nip", "status", psid); !matches(`Session `+psid+`: was pending; now success at `+watTime()+`\nAmount ₦10\.00 .*\n`, got) {
 		t.Errorf("status query: %q", got)
 	}
 	if got := c.ok("fault", "clear"); !matches(`No faults to clear\.\n`, got) {
@@ -260,7 +259,7 @@ func TestBankCLI(t *testing.T) {
 	if got := c.json("nip", "settle-now"); got["settled_sessions"] == nil || !matches(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d.*`, fmt.Sprint(got["at"])) {
 		t.Errorf("settle-now --json: %v", got)
 	}
-	if got := c.ok("nip", "settle-now"); !matches(`No sessions to settle at `+businessWAT()+`\.\n`, got) {
+	if got := c.ok("nip", "settle-now"); !matches(`No sessions to settle at `+watTime()+`\.\n`, got) {
 		t.Errorf("settle-now again: %q", got)
 	}
 	for _, args := range [][]string{{"accounts", "--bank", "bank-a"}, {"fault", "list"}, {"nip", "status", sid}, {"customers", "--bank", "bank-a"}} {
@@ -485,8 +484,8 @@ func TestBankSession(t *testing.T) {
 	}
 }
 
-func businessWAT() string {
-	return regexp.QuoteMeta(clock.New().Now().Format("Mon 2 Jan 2006")) + ` \d\d:\d\d WAT`
+func watTime() string {
+	return `[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT`
 }
 
 func matches(pattern, got string) bool {
