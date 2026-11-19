@@ -9,7 +9,7 @@ Beerus is a copy of Nigeria's banking infrastructure in one Go binary: banks, NI
 - **Explicit beats implicit.** No `init()`, no mutable package-level state, no reflection tricks. Pass dependencies in.
 - **Delete, don't keep.** No dead code, no unused parameters, no code kept "for later".
 - **No code comments.** Names carry the meaning. Test code has none either. If a name needs a comment, rename it.
-- **No new `.md` files.** Docs live in Notion.
+- **Docs live in `README.md`.** Short: what you can do and the command. No other new `.md` files. A change to a command updates the README.
 
 ## Packages
 - **One purpose per package,** named with one short lower-case noun: `clock`, `charges`, `nibss`. Never `util`, `common` or `helpers`.

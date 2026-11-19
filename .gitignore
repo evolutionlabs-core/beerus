@@ -18,5 +18,6 @@ go.work.sum
 .vscode/
 .DS_Store
 node_modules/
-.beerus/
+.beerus*/
+.claude/worktrees/
 /beerus

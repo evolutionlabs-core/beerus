@@ -5,80 +5,152 @@
 
 # Beerus
 
-Beerus is a copy of Nigeria's banking infrastructure, running from one binary. It is not a simulator. Banks start empty, and every change comes from you or your app.
+Nigeria's banking infrastructure on your machine: banks, NIBSS, CBN settlement and open banking, in one binary. Build and test apps that move money or read bank data.
 
-## What it contains
+Banks start empty. Money moves only when you or your app move it. Time is real Lagos time.
 
-- **Banks**, each with its own database and a double-entry ledger, internet banking with 2FA, charges, VAT and stamp duty, and reversals.
-- **NIBSS**: the NIP switch (name enquiry, transfers, status queries), deferred net settlement in sessions, the BVN registry, the Open Banking Registry and the consent ledger.
-- **CBN**: the trust anchor for every participant's certificates, and the RTGS that holds banks' settlement accounts.
-- **Beerus Connect**: an open banking aggregator. Your app connects through its partner API to get account data and a transaction feed.
+## Install
 
-Participants talk to each other over mTLS with signed, idempotent messages.
+Needs Go and Postgres at `postgres:///postgres`. Set `BEERUS_DATABASE_URL` if yours is elsewhere.
 
-## Time
-
-Time is the normal current time. Business dates and settlement cut-offs are counted in WAT (Africa/Lagos, UTC+1), and timestamps are ISO 8601 with `+01:00`. Nothing can move the clock.
-
-Settlement and status checks run when they are due. To run one now:
-
-```
-beerus nip settle-now
-beerus nip status <session_id>
+```bash
+go install ./cmd/beerus
+export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
 ## Start
 
-1. Run a Postgres server. Beerus connects to `postgres:///postgres` by default; change `database_url` in `.beerus/local.yaml` if yours differs.
-2. Build it and set it up:
-
-```
-go build -o beerus ./cmd/beerus
-./beerus init
+```bash
+beerus init
+beerus up
 ```
 
-`beerus init` checks Postgres, writes the config and creates the CBN and NIBSS databases. It shows each step with the time it took. Run it again if it stops part-way; it carries on where it stopped.
+`up` stays running. Use a second terminal for everything else. Ctrl+C stops it.
 
-3. Start it:
-
-```
-./beerus up
+```bash
+beerus info
 ```
 
-4. Open a second terminal and add your first bank. A new Beerus has no banks:
+Prints every address and the control room link.
 
-```
-./beerus bank create --name "Bank A" --type commercial
-```
+## Banks
 
-5. Use the other commands.
-
-`beerus up` starts every participant and stays in the foreground. It needs a finished `beerus init` first. Press Ctrl+C to stop it. It prints the ports and the control room link; `beerus info` prints them again. The state directory is `.beerus` in the current directory. Set `BEERUS_DIR` to use another one, and set it the same way in every terminal.
-
-`beerus help` lists every command, and `beerus <command> --help` shows one command's usage.
-
-`beerus compose` prints a Docker Compose file if you prefer containers. It has one service for each bank in the setup, so a new setup gives a stack with no banks. To start containers with banks, write a setup file, render the compose file from it, and give the file to the cbn container through the state folder:
-
-```
-beerus init --dir render -f my-setup.yaml
-beerus compose --dir render > compose.yaml
-mkdir state && cp my-setup.yaml state/setup.yaml
-BEERUS_STATE=$PWD/state BEERUS_UID=$(id -u) BEERUS_GID=$(id -g) BEERUS_SETUP_FILE=/state/setup.yaml docker compose up -d --build --wait
+```bash
+beerus bank create --name "Bank A"
+beerus bank create --name "Bank B" --type digital
+beerus bank create --name "Lapo MFB" --type microfinance --settles-through bank-a
+beerus get banks
+beerus describe bank bank-a
+beerus bank suspend bank-b
+beerus bank resume bank-b
 ```
 
-`BEERUS_SETUP_FILE` is read once, when the state is first made. A file that is missing or invalid stops the cbn container with the reason.
+Types: `commercial`, `digital`, `microfinance`.
+
+## Customers and accounts
+
+```bash
+printf '%s' 'PASSWORD' | beerus customer create --bank bank-a --name "Ada Obi" --phone 08031234567 --dob 1990-05-14 --username ada --password-stdin
+beerus account open --bank bank-a --customer CUSTOMER_ID --type current
+beerus customers --bank bank-a
+beerus accounts --bank bank-a
+```
+
+`--username` gives the customer an online banking login. Leave it and `--password-stdin` out if you don't need one.
+
+Skip `--bank` on every command:
+
+```bash
+beerus use bank-a
+```
+
+## Cash
+
+```bash
+beerus deposit NUBAN --bank bank-a --amount 50000
+beerus withdraw NUBAN --bank bank-a --amount 1500.50
+beerus statement NUBAN --bank bank-a
+```
+
+Amounts are in naira.
+
+## Transfers
+
+See the charges first:
+
+```bash
+beerus transfer --from NUBAN --from-bank bank-a --to NUBAN --to-bank bank-b --amount 10000 --dry-run
+```
+
+```text
+Charges: fee ₦10.00, VAT ₦0.75 and stamp duty ₦50.00. Total debit ₦10,060.75.
+```
+
+Send it:
+
+```bash
+beerus transfer --from NUBAN --from-bank bank-a --to NUBAN --to-bank bank-b --amount 10000 --narration "Rent"
+beerus nip status SESSION_ID
+beerus nip name-enquiry 000002 NUBAN
+```
+
+| Amount | Fee | VAT | Stamp duty |
+| --- | --- | --- | --- |
+| Up to ₦5,000 | ₦0 | ₦0 | ₦0 |
+| ₦5,001 to ₦9,999 | ₦10 | ₦0.75 | ₦0 |
+| ₦10,000 to ₦50,000 | ₦10 | ₦0.75 | ₦50 |
+| Above ₦50,000 | ₦50 | ₦3.75 | ₦50 |
+
+Sources: CBN 2026 draft Guide to Charges, Nigeria Tax Act 2025.
+
+## Settlement
+
+The receiver is credited at once. Banks settle with each other later, through their CBN accounts, at 06:00, 12:00, 18:00 and 24:00 on business days.
+
+```bash
+beerus nip positions
+beerus nip settle-now
+beerus nip settlement
+```
+
+## Create faults
+
+```bash
+beerus fault down --bank bank-b --for 10m
+beerus fault timeout --bank bank-b --outcome credited
+beerus fault list
+beerus fault clear --bank bank-b
+```
+
+Timeout outcomes: `credited`, `failed`, `unknown`. Check a timed-out transfer with `beerus nip status`.
+
+## Close a bank
+
+Choose what happens to customers' money: `transfer` to another bank, `payout` in cash, or `leave` it frozen.
+
+```bash
+beerus bank close bank-b --money transfer --to bank-a --yes
+beerus bank purge bank-b --yes
+```
+
+Purge deletes the bank's database. It cannot be undone.
 
 ## Setup file
 
-The setup lives in `.beerus/setup.yaml`. It lists the banks and partners, and the NIP session settings. A new setup has no banks and no partners. You add your own; the example below has two.
+Save the running setup, edit it, then apply it:
 
+```bash
+beerus export -o my-setup.yaml
+beerus diff -f my-setup.yaml
+beerus apply -f my-setup.yaml
 ```
+
+```yaml
 apiVersion: beerus.dev/v1
 kind: Setup
 metadata:
   name: beerus
 spec:
-  start: "2026-11-04T08:00:00+01:00"
   nip:
     sessions: 4
     tsq_after: 2m
@@ -86,115 +158,85 @@ spec:
     - id: bank-a
       name: Bank A
       type: commercial
-    - id: bank-b
-      name: Bank B
-      type: digital
 ```
 
-Edit the file or write your own, then:
+Start a new Beerus from a file with `beerus init -f my-setup.yaml`.
 
+## Clean up
+
+```bash
+beerus doctor
+beerus reset beerus
 ```
-beerus diff -f my-setup.yaml
-beerus apply -f my-setup.yaml
-beerus up -f my-setup.yaml
-```
 
-- `diff` shows the plan and changes nothing.
-- `apply` makes the running system match the file. `--prune` also removes banks and partners that are not in the file.
-- `up -f` starts from that file. Run `beerus init -f my-setup.yaml` first to make a new directory from it.
-- `beerus get banks`, `beerus describe bank <id>`, `beerus export` and `beerus verify` show what is running.
+`reset` drops the setup's databases and keys. It cannot be undone.
 
-You can also add banks and partners one at a time. After `beerus init` there are no banks, so add the first one:
+---
 
-```
-beerus bank create --name "Bank A" --type commercial
-beerus bank create --name "Bank B" --type microfinance
+# Beerus Connect
+
+Connect your existing app to Beerus, the way you would connect it to Mono or Okra. Your customers link their bank accounts through Beerus Connect. Your app then reads their accounts, balances and transactions, and gets webhooks when something changes.
+
+## 1. Register your app
+
+```bash
 beerus partner add myapp --redirect-uri http://localhost:3000/callback --webhook-url http://localhost:3000/webhooks
-beerus bank suspend bank-b
-beerus bank resume bank-b
 ```
 
-## Customers, accounts and cash
+Your app's API key and mTLS certificates land in `.beerus/partners/myapp`. Every call to the Partner API at `https://connect.localhost:7443` uses them. To try calls from a terminal:
 
-Pick a default bank with `beerus use bank-a`, or pass `--bank` to each command. Add `--json` to print the API response.
-
-```
-beerus customer create --name "Ada Obi" --phone 08030000000 --dob 1990-04-12
-beerus account open --customer <customer_id> --type savings
-beerus deposit <nuban> --amount 50000
-beerus withdraw <nuban> --amount 1500.50
-beerus statement <nuban>
-beerus customers
-beerus accounts
+```bash
+P=.beerus/partners/myapp
+api() { curl -sS --cert $P/client.crt --key $P/client.key --cacert $P/ca.crt -H "X-Api-Key: $(cat $P/api-key)" -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "https://connect.localhost:7443$1" "${@:2}"; echo; }
 ```
 
-Amounts are in naira. Lists take `--limit` and `--cursor`.
+## 2. Let a customer link their bank
 
-## Transfers
+Your app creates a link session:
 
-```
-beerus transfer --from <nuban> --to <nuban> --amount 2500 --from-bank bank-a --to-bank bank-b --narration "Rent"
-beerus nip name-enquiry <bank_code> <nuban>
-beerus nip participants
-beerus nip positions
-beerus nip settlement
+```bash
+api /v1/link_sessions -d '{"start_date":"2026-11-01","workspace_id":"ws_1","redirect_uri":"http://localhost:3000/callback"}'
 ```
 
-A transfer between banks goes through the NIP switch and settles in a later session. Add `--dry-run` to `beerus transfer` to see the fee, VAT, stamp duty and total debit without sending.
+Send the customer to its `widget_url`. They pick their bank, log in with their online banking details and approve. Beerus Connect then sends them to your redirect URI with a `code`.
 
-## Faults
+## 3. Get the connection
 
-Faults make a bank misbehave so you can test your app.
+Exchange the code within 10 minutes:
 
-```
-beerus fault down --bank bank-b --for 1h
-beerus fault timeout --bank bank-b --outcome unknown --count 2
-beerus fault list
-beerus fault clear --bank bank-b
+```bash
+api /v1/connections/exchange -d '{"code":"CODE","link_session_id":"LINK_SESSION_ID"}'
 ```
 
-A timed-out transfer has an outcome of `credited`, `failed` or `unknown`. Check it with `beerus nip status <session_id>`, which says when it found a pending session resolved.
+## 4. Read customer data
 
-## Removing a bank
-
-Closing a bank needs a decision about its customers' money: `transfer` it to another bank, `payout` to the customers, or `leave` it. Only `transfer` takes `--to`: a payout is cash and needs no receiving bank. After every apply, the state directory's `setup.yaml` is rewritten to match what was applied, so a later `beerus up` starts from it.
-
-```
-beerus bank close bank-b --money transfer --to bank-a
-beerus bank close bank-b --money payout --customer <customer_id>=leave
-beerus bank purge bank-b --yes
+```bash
+api /v1/connections/CONNECTION_ID/accounts
+api /v1/accounts/ACCOUNT_ID/balance
+api /v1/accounts/ACCOUNT_ID/transactions/sync
 ```
 
-When the bank has finished, Beerus prints what happened to each customer account: paid out in cash, transferred to an account at another bank, or left as an uninsured claim on a frozen account. `beerus describe bank <id>` shows the same after the bank is purged. If the decision is missing, or the receiving bank is down, the command stops at once and says what to do.
+## Manage it
 
-`close` moves the bank to the closed state and handles its customers' money as you chose. `purge` deletes the closed bank's database and cannot be undone. Both wait up to five minutes for the bank to finish; change this with `--wait`, and add `--settle-now` to run an extra settlement session. Removing a bank from the setup file and running `beerus apply` does the same work, with the decision in the bank's `on_remove` block.
-
-## Partner apps
-
-```
-beerus partner list
-beerus partner rotate-key <id>
-beerus partner remove <id>
+```bash
 beerus connections
-beerus revoke <connection-id>
 beerus sync
 beerus webhooks
+beerus revoke CONNECTION_ID
+beerus partner rotate-key myapp
 ```
 
-## Housekeeping
+The customer needs an online banking login: create them with `--username`. Full API: [api/partner/openapi.yaml](api/partner/openapi.yaml).
 
-```
-beerus doctor [--fix]
-beerus reset <setup-name>
-beerus trust
-```
+---
 
-`doctor` finds leftover databases. `reset` drops the setup's databases and state, and needs the setup's name as a check. `trust` adds the Beerus root certificate to your system.
+## More
 
-## Standards
-
-Open banking follows the CBN Operational Guidelines for Open Banking (March 2023): FAPI 2.0, mTLS, certificate-bound tokens, time-bound consent and a central registry. Interbank messages follow the structure of ISO 20022. These controls are enforced in every environment, including local development.
+- `beerus help` lists every command. `beerus <command> --help` shows its flags.
+- State lives in `.beerus`. Use another folder with `BEERUS_DIR=path`.
+- Docker: `beerus compose > compose.yaml` prints a Compose file for your setup.
+- Placeholders: net debit caps, daily limits and CBN opening balances are invented figures, not CBN or NIBSS values.
 
 ## License
 
-Beerus is distributed under the terms in [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
+AGPL-3.0. See [LICENSE](LICENSE).
