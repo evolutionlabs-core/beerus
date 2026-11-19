@@ -279,6 +279,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -701,7 +703,7 @@ components:
               message: No such connection.
               request_id: req_01JBC9X4
     Conflict:
-      description: The resource is not in a state that allows this request, for example `connection_revoked` or `reauth_required` when no active consent covers the account.
+      description: The resource is not in a state that allows this request, for example `connection_revoked` or `reauth_required` when no active consent covers the account, or `account_not_shared` when the customer dropped the account at reauthorisation.
       content:
         application/json:
           schema:
@@ -822,6 +824,7 @@ components:
         - `cursor_reset` (409): the world was replaced after an unclean shutdown or a reset.
         - `connection_revoked` (409): the connection was revoked.
         - `reauth_required` (409): the customer must consent again.
+        - `account_not_shared` (409): the customer no longer shares this account. Ask them to reconnect and share it.
         - `link_session_expired` (409): the link session expired.
         - `link_session_mismatch` (403): the code or session belongs to another partner or workspace.
         - `idempotency_key_reused` (422): the key was used with a different body.

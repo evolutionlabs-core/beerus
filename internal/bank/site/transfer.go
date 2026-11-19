@@ -13,17 +13,21 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
-const accountNumberLen = 10
+const (
+	accountNumberLen = 10
+	formKeyBytes     = 16
+)
 
 var (
 	errChooseAccount = errors.New("choose one of your accounts to pay from")
 	errChooseOwn     = errors.New("choose which of your accounts to pay into")
 	errTenDigits     = errors.New("enter a 10-digit account number")
+	errFormExpired   = errors.New("the form expired; go back and try again")
 )
 
 func userFixable(err error) bool {
 	var te *control.TransferError
-	return errors.As(err, &te) || errors.Is(err, view.ErrBadAmount) || errors.Is(err, errChooseAccount) || errors.Is(err, errChooseOwn) || errors.Is(err, errTenDigits)
+	return errors.As(err, &te) || errors.Is(err, view.ErrBadAmount) || errors.Is(err, errChooseAccount) || errors.Is(err, errChooseOwn) || errors.Is(err, errTenDigits) || errors.Is(err, errFormExpired)
 }
 
 func (s *site) transferPage(ctx context.Context, sess *session, d data) (data, error) {
@@ -115,7 +119,12 @@ func (s *site) transferReview(w http.ResponseWriter, r *http.Request) {
 	if b := s.Host.Lookup(q.ToBank); b != nil {
 		to = b.Name
 	}
-	s.render(w, "bank_review", http.StatusOK, sess, data{"Title": "Review transfer", "Nav": "transfer", "Q": q, "ToBank": to, "Form": r.PostForm})
+	key, err := web.NewSecret("", formKeyBytes)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.render(w, "bank_review", http.StatusOK, sess, data{"Title": "Review transfer", "Nav": "transfer", "Q": q, "ToBank": to, "Form": r.PostForm, "Key": key})
 }
 
 func (s *site) transferConfirm(w http.ResponseWriter, r *http.Request) {
@@ -126,6 +135,9 @@ func (s *site) transferConfirm(w http.ResponseWriter, r *http.Request) {
 	req, err := s.transferRequest(r.Context(), sess, r.PostForm)
 	var res control.TransferResult
 	if err == nil {
+		req.Key, err = sess.transferKey(r.PostForm.Get("key"))
+	}
+	if err == nil {
 		res, err = s.Host.Transfer(r.Context(), req)
 	}
 	if err != nil {
@@ -133,4 +145,11 @@ func (s *site) transferConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/accounts/"+res.From+"?transfer="+url.QueryEscape(res.Status), http.StatusSeeOther)
+}
+
+func (sess *session) transferKey(formKey string) (string, error) {
+	if formKey == "" {
+		return "", errFormExpired
+	}
+	return "site:" + web.HashSecret(sess.CSRF+":"+formKey), nil
 }

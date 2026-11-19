@@ -383,7 +383,7 @@ func (a *App) finishAuthoriseLocked(c *Connection, auth authorisation) {
 		}
 		if rec := a.st.Accounts[id]; rec != nil {
 			rec.Grants = slices.DeleteFunc(rec.Grants, func(g string) bool { return g == c.ID })
-			rec.Removed = len(rec.Grants) == 0
+			rec.Removed = !a.liveGrant(rec)
 			if rec.ConnectionID == c.ID && len(rec.Grants) > 0 {
 				rec.ConnectionID = rec.Grants[len(rec.Grants)-1]
 			}
@@ -508,6 +508,10 @@ func (a *App) listAccounts(w http.ResponseWriter, r *http.Request) {
 	if c == nil {
 		return
 	}
+	if c.Status == "revoked" {
+		web.WriteError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
+		return
+	}
 	out := []map[string]any{}
 	for _, id := range c.AccountIDs {
 		if rec := a.st.Accounts[id]; rec != nil && !rec.Removed {
@@ -565,6 +569,15 @@ func (a *App) reauth(w http.ResponseWriter, r *http.Request) {
 	web.WriteJSON(w, http.StatusCreated, a.linkSessionJSON(ls, token))
 }
 
+func (a *App) liveGrant(rec *AccountRec) bool {
+	for _, id := range rec.Grants {
+		if c := a.st.Connections[id]; c != nil && c.Status != "revoked" {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) grantFor(rec *AccountRec) (*Connection, string) {
 	var best *Connection
 	code := "connection_revoked"
@@ -588,8 +601,12 @@ func (a *App) grantFor(rec *AccountRec) (*Connection, string) {
 func (a *App) accountFor(w http.ResponseWriter, r *http.Request) (*AccountRec, *Connection) {
 	p := partnerFrom(r)
 	rec := a.st.Accounts[r.PathValue("id")]
-	if rec == nil || rec.PartnerID != p.ID || rec.Removed {
+	if rec == nil || rec.PartnerID != p.ID {
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such account.")
+		return nil, nil
+	}
+	if rec.Removed {
+		web.WriteError(w, r, http.StatusConflict, "account_not_shared", "The customer no longer shares this account. Ask them to reconnect and share it.")
 		return nil, nil
 	}
 	c, code := a.grantFor(rec)

@@ -162,7 +162,8 @@ const templates = `
 <div class="mb-7"><h1 class="text-[24px]">Review transfer</h1><p class="mt-1.5 text-[13.5px] text-muted">Check the details. This can't be undone.</p></div>
 <form method="post" action="/transfer/confirm" class="max-w-[520px] rounded-2xl border border-line bg-panel p-6">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
-{{range $k, $v := .Form}}{{if ne $k "csrf"}}{{range $v}}<input type="hidden" name="{{$k}}" value="{{.}}">{{end}}{{end}}{{end}}
+<input type="hidden" name="key" value="{{.Key}}">
+{{range $k, $v := .Form}}{{if and (ne $k "csrf") (ne $k "key")}}{{range $v}}<input type="hidden" name="{{$k}}" value="{{.}}">{{end}}{{end}}{{end}}
 <p class="text-[12.5px] text-muted">To</p>
 <p class="mt-1 text-[16px]">{{.Q.ToName}}</p>
 <p class="text-[13px] text-muted">{{.ToBank}} · <span class="num">{{.Q.To}}</span></p>

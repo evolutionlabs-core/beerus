@@ -101,6 +101,7 @@ func TestOnlineBanking(t *testing.T) {
 		t.Fatalf("review page: %.600s", b.last)
 	}
 	form.Set("csrf", "")
+	form.Set("key", regexp.MustCompile(`name="key" value="([^"]+)"`).FindStringSubmatch(b.last)[1])
 	b.post("/transfer/confirm", form)
 	if b.loc != "/accounts/"+current || !strings.Contains(b.last, "Transfer sent. Both banks have posted it.") || !strings.Contains(b.last, "NIP CHARGE") {
 		t.Fatalf("after confirm at %s: %.600s", b.loc, b.last)
