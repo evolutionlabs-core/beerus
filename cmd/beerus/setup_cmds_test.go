@@ -301,8 +301,9 @@ func TestSetupCommandsRunASetupThroughItsLife(t *testing.T) {
 		return invoke(fn, stdin, tty, append(args, "--dir", dir)...)
 	}
 	banks := func(args ...string) string { return d(cmdGet, "", false, append([]string{"banks"}, args...)...).out }
-	until(t, "bank-c to become ready", func() bool {
-		return regexp.MustCompile(`bank-c\s+Bank C\s+active\s+yes`).MatchString(banks())
+	until(t, "every bank to become ready", func() bool {
+		out := banks()
+		return regexp.MustCompile(`bank-a\s+\S.*active\s+yes`).MatchString(out) && regexp.MustCompile(`bank-b\s+\S.*active\s+yes`).MatchString(out) && regexp.MustCompile(`bank-c\s+Bank C\s+active\s+yes`).MatchString(out)
 	})
 	if !strings.Contains(upOut.String(), "+ bank bank-c") {
 		t.Fatalf("up -f should print the plan it applied:\n%s", upOut.String())
