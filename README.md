@@ -11,12 +11,17 @@ Banks start empty. Money moves only when you or your app move it. Time is real L
 
 ## Install
 
-Needs Go and Postgres at `postgres:///postgres`. Set `BEERUS_DATABASE_URL` if yours is elsewhere.
+Beerus needs a running Postgres server. It connects to `postgres:///postgres`; set `BEERUS_DATABASE_URL` if yours is elsewhere.
+
+macOS and Linux, with Homebrew:
 
 ```bash
-go install ./cmd/beerus
-export PATH="$(go env GOPATH)/bin:$PATH"
+brew install evolutionlabs-core/tap/beerus
 ```
+
+Update with `brew upgrade beerus`.
+
+Without Homebrew, download the archive for your system from [Releases](https://github.com/evolutionlabs-core/beerus/releases), unpack it and put `beerus` on your `PATH`.
 
 ## Start
 
