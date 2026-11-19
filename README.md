@@ -5,69 +5,227 @@
 
 # Beerus
 
-Beerus runs a copy of Nigeria's banking infrastructure on your machine: banks, NIBSS, CBN settlement and open banking, in one binary. Use it to build and test apps that move money between banks or read account data through open banking.
+Nigeria's banking infrastructure on your machine: banks, NIBSS, CBN settlement and open banking, in one binary. Build and test apps that move money or read bank data.
+
+Banks start empty. Money moves only when you or your app move it. Time is real Lagos time.
 
 ## Install
 
-Needs Go 1.27 and a Postgres server at `postgres:///postgres`. If yours is elsewhere, set `BEERUS_DATABASE_URL`.
+Needs Go and Postgres at `postgres:///postgres`. Set `BEERUS_DATABASE_URL` if yours is elsewhere.
 
 ```bash
-go build -o beerus ./cmd/beerus
+go install ./cmd/beerus
+export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
-## Quickstart
-
-`beerus up` stays in the foreground, so start it in one terminal:
+## Start
 
 ```bash
-./beerus init
-./beerus up
+beerus init
+beerus up
 ```
 
-Run the rest in a second terminal, in the same folder:
+`up` stays running. Use a second terminal for everything else. Ctrl+C stops it.
 
 ```bash
-./beerus bank create --name "Bank A"
-./beerus bank create --name "Bank B" --type digital
-./beerus customer create --name "Ada Obi" --phone 08031234567 --dob 1990-05-14 --bank bank-a
-./beerus customer create --name "Tunde Bello" --phone 08037654321 --dob 1988-11-02 --bank bank-b
-./beerus account open --customer ADA_ID --type current --bank bank-a
-./beerus account open --customer TUNDE_ID --type savings --bank bank-b
-./beerus deposit 0000000014 --amount 50000 --bank bank-a
-./beerus transfer --from 0000000014 --from-bank bank-a --to 0000000011 --to-bank bank-b --amount 10000
-./beerus nip settle-now
+beerus info
 ```
 
-`ADA_ID` and `TUNDE_ID` are the `cus_` IDs that `customer create` prints. The transfer credits Tunde at once, and `settle-now` settles it between the banks:
+Prints every address and the control room link.
+
+## Banks
+
+```bash
+beerus bank create --name "Bank A"
+beerus bank create --name "Bank B" --type digital
+beerus bank create --name "Lapo MFB" --type microfinance --settles-through bank-a
+beerus get banks
+beerus describe bank bank-a
+beerus bank suspend bank-b
+beerus bank resume bank-b
+```
+
+Types: `commercial`, `digital`, `microfinance`.
+
+## Customers and accounts
+
+```bash
+printf '%s' 'PASSWORD' | beerus customer create --bank bank-a --name "Ada Obi" --phone 08031234567 --dob 1990-05-14 --username ada --password-stdin
+beerus account open --bank bank-a --customer CUSTOMER_ID --type current
+beerus customers --bank bank-a
+beerus accounts --bank bank-a
+```
+
+`--username` gives the customer an online banking login. Leave it and `--password-stdin` out if you don't need one.
+
+Skip `--bank` on every command:
+
+```bash
+beerus use bank-a
+```
+
+## Cash
+
+```bash
+beerus deposit NUBAN --bank bank-a --amount 50000
+beerus withdraw NUBAN --bank bank-a --amount 1500.50
+beerus statement NUBAN --bank bank-a
+```
+
+Amounts are in naira.
+
+## Transfers
+
+See the charges first:
+
+```bash
+beerus transfer --from NUBAN --from-bank bank-a --to NUBAN --to-bank bank-b --amount 10000 --dry-run
+```
 
 ```text
-Session 000001261119115733719221795118: success at Thu 19 Nov 2026 11:57 WAT
-Settled 1 session at Thu 19 Nov 2026 11:57 WAT.
+Charges: fee ₦10.00, VAT ₦0.75 and stamp duty ₦50.00. Total debit ₦10,060.75.
 ```
 
-## What runs
+Send it:
 
-| Participant | What it does |
-| --- | --- |
-| CBN | Holds each bank's settlement account; root of trust |
-| NIBSS | NIP switch, BVNs, settlement sessions, consent ledger |
-| Banks | Own database, ledger, online banking, open banking API |
-| Connect | Open banking aggregator with a partner API for your app |
-| core | Starts participants, adds banks, serves the control API |
+```bash
+beerus transfer --from NUBAN --from-bank bank-a --to NUBAN --to-bank bank-b --amount 10000 --narration "Rent"
+beerus nip status SESSION_ID
+beerus nip name-enquiry 000002 NUBAN
+```
 
-## Documentation
+| Amount | Fee | VAT | Stamp duty |
+| --- | --- | --- | --- |
+| Up to ₦5,000 | ₦0 | ₦0 | ₦0 |
+| ₦5,001 to ₦9,999 | ₦10 | ₦0.75 | ₦0 |
+| ₦10,000 to ₦50,000 | ₦10 | ₦0.75 | ₦50 |
+| Above ₦50,000 | ₦50 | ₦3.75 | ₦50 |
 
-- [All documentation](docs/README.md)
-- Start: [get started](docs/get-started.md)
-- Do: [banks](docs/banks.md), [customers and accounts](docs/customers-and-accounts.md), [transfers](docs/transfers.md), [connect an app](docs/open-banking.md), [setup files](docs/setup-file.md), [failures](docs/faults.md), [Docker Compose](docs/docker.md), [reset and clean up](docs/housekeeping.md)
-- Look up: [commands](docs/commands.md), [setup file reference](docs/setup-reference.md), [partner API](docs/partner-api.md), [charges and limits](docs/charges-and-limits.md)
-- Understand: [how Beerus works](docs/how-beerus-works.md)
+Sources: CBN 2026 draft Guide to Charges, Nigeria Tax Act 2025.
 
-## Limits
+## Settlement
 
-- Some figures have no public source, such as net debit caps, daily limits and CBN opening balances. The docs list them as [placeholders](docs/charges-and-limits.md#placeholders).
-- Only banks in your setup exist. A transfer to any other bank fails.
-- Beerus runs on real Lagos time. Nothing is backdated, and no history is generated. Money moves only when you, your app or a settlement cutoff moves it.
+The receiver is credited at once. Banks settle with each other later, through their CBN accounts, at 06:00, 12:00, 18:00 and 24:00 on business days.
+
+```bash
+beerus nip positions
+beerus nip settle-now
+beerus nip settlement
+```
+
+## Connect an app (open banking)
+
+Register your app:
+
+```bash
+beerus partner add myapp --redirect-uri http://localhost:3000/callback --webhook-url http://localhost:3000/webhooks
+```
+
+Credentials land in `.beerus/partners/myapp`. Set up a helper for the Partner API:
+
+```bash
+P=.beerus/partners/myapp
+api() { curl -sS --cert $P/client.crt --key $P/client.key --cacert $P/ca.crt -H "X-Api-Key: $(cat $P/api-key)" -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "https://connect.localhost:7443$1" "${@:2}"; echo; }
+```
+
+Create a link session:
+
+```bash
+api /v1/link_sessions -d '{"start_date":"2026-11-01","workspace_id":"ws_1","redirect_uri":"http://localhost:3000/callback"}'
+```
+
+Open its `widget_url` in a browser. Pick the bank, log in as the customer and approve. The browser lands on your redirect URI with a `code`. Exchange it within 10 minutes:
+
+```bash
+api /v1/connections/exchange -d '{"code":"CODE","link_session_id":"LINK_SESSION_ID"}'
+```
+
+Read the data:
+
+```bash
+api /v1/connections/CONNECTION_ID/accounts
+api /v1/accounts/ACCOUNT_ID/balance
+api /v1/accounts/ACCOUNT_ID/transactions/sync
+```
+
+Manage connections:
+
+```bash
+beerus connections
+beerus sync
+beerus webhooks
+beerus revoke CONNECTION_ID
+beerus partner list
+beerus partner rotate-key myapp
+beerus partner remove myapp
+```
+
+Full API: [api/partner/openapi.yaml](api/partner/openapi.yaml).
+
+## Make a bank fail
+
+```bash
+beerus fault down --bank bank-b --for 10m
+beerus fault timeout --bank bank-b --outcome credited
+beerus fault list
+beerus fault clear --bank bank-b
+```
+
+Timeout outcomes: `credited`, `failed`, `unknown`. Check a timed-out transfer with `beerus nip status`.
+
+## Close a bank
+
+Choose what happens to customers' money: `transfer` to another bank, `payout` in cash, or `leave` it frozen.
+
+```bash
+beerus bank close bank-b --money transfer --to bank-a --yes
+beerus bank purge bank-b --yes
+```
+
+Purge deletes the bank's database. It cannot be undone.
+
+## Setup file
+
+Save the running setup, edit it, then apply it:
+
+```bash
+beerus export -o my-setup.yaml
+beerus diff -f my-setup.yaml
+beerus apply -f my-setup.yaml
+```
+
+```yaml
+apiVersion: beerus.dev/v1
+kind: Setup
+metadata:
+  name: beerus
+spec:
+  nip:
+    sessions: 4
+    tsq_after: 2m
+  banks:
+    - id: bank-a
+      name: Bank A
+      type: commercial
+```
+
+Start a new Beerus from a file with `beerus init -f my-setup.yaml`.
+
+## Clean up
+
+```bash
+beerus doctor
+beerus reset beerus
+```
+
+`reset` drops the setup's databases and keys. It cannot be undone.
+
+## More
+
+- `beerus help` lists every command. `beerus <command> --help` shows its flags.
+- State lives in `.beerus`. Use another folder with `BEERUS_DIR=path`.
+- Docker: `beerus compose > compose.yaml` prints a Compose file for your setup.
+- Placeholders: net debit caps, daily limits and CBN opening balances are invented figures, not CBN or NIBSS values.
 
 ## License
 
