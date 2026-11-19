@@ -116,7 +116,7 @@ func pinCodes(spec setup.Spec, plan setup.Plan) setup.Spec {
 }
 
 func allocateCBN(cfg *config.Config, st *setup.Status) error {
-	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true, cfg.Connect.NIBSSPort: true, cfg.Connect.CBNPort: true}
+	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true, cfg.Connect.NIBSSPort: true, cfg.Connect.CBNPort: true, cfg.Connect.ConnectControlPort: true}
 	for _, r := range st.Resources {
 		used[r.Allocated.Port], used[r.Allocated.APIPort] = true, true
 	}
@@ -133,7 +133,7 @@ func allocateCBN(cfg *config.Config, st *setup.Status) error {
 func anyPort(int) bool { return true }
 
 func allocateBanks(cfg *config.Config, st *setup.Status) error {
-	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true, cfg.Connect.NIBSSPort: true, cfg.Connect.CBNPort: true, cfg.Connect.CBNControlPort: true}
+	used := map[int]bool{cfg.Connect.PartnerPort: true, cfg.Connect.WidgetPort: true, cfg.Connect.ControlPort: true, cfg.Connect.HealthPort: true, cfg.Connect.NIBSSPort: true, cfg.Connect.CBNPort: true, cfg.Connect.CBNControlPort: true, cfg.Connect.ConnectControlPort: true}
 	next := cfg.Connect.PartnerPort
 	for _, b := range st.Applied.Spec.Banks {
 		port, err := cfg.AllocatePort(next, used, anyPort)

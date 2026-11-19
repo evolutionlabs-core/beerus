@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/aggregator"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/install"
@@ -75,7 +76,7 @@ type run struct {
 
 func runOnce(t *testing.T, cfg *config.Config) run {
 	t.Helper()
-	ns, err := startNodes(cfg, connect.Options{})
+	ns, err := startNodes(cfg, aggregator.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

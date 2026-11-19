@@ -13,17 +13,22 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 )
 
 func TestPageNumbersAreBoundedBeforeTheyAreUsed(t *testing.T) {
-	st := newState()
-	st.Deliveries = []*Delivery{{ID: "dlv_1"}, {ID: "dlv_2"}, {ID: "dlv_3"}}
+	const deliveries = 3
+	connectBase := serveFor(t, map[string]http.HandlerFunc{
+		"/v1/status":                      func(w http.ResponseWriter, r *http.Request) { fmt.Fprintf(w, `{"deliveries":%d}`, deliveries) },
+		"/v1/control/webhooks/deliveries": func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"data":[]}`) },
+	})
 	a := &App{
 		cfg:   &config.Config{},
-		st:    st,
+		st:    newState(),
 		log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		clock: clock.New(),
+		agg:   control.ConnectControl{Link: control.NewLink("token", ""), Base: connectBase},
 	}
 	cases := []struct {
 		page        string
@@ -43,7 +48,7 @@ func TestPageNumbersAreBoundedBeforeTheyAreUsed(t *testing.T) {
 		{"abc", 0, http.StatusUnprocessableEntity, http.StatusUnprocessableEntity},
 	}
 	paged := func(w http.ResponseWriter, r *http.Request) {
-		page, ok := view.PageParam(w, r, "webhook list", view.PagesOf(len(st.Deliveries), pageSize))
+		page, ok := view.PageParam(w, r, "webhook list", view.PagesOf(deliveries, pageSize))
 		if ok {
 			fmt.Fprint(w, page)
 		}

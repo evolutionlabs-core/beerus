@@ -205,3 +205,9 @@ func TestEnsuredRecently(t *testing.T) {
 		}
 	}
 }
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}

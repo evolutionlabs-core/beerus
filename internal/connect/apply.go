@@ -153,6 +153,7 @@ func (a *App) applyLocked(ctx context.Context, next func(setup.Status) (setup.Sp
 	}
 	a.requestSettleNow(opt, settling)
 	a.startAdmitted(ad)
+	a.reloadConnect(ctx)
 	a.poke()
 	plan := pl.plan
 	plan.Actions = append(slices.Clone(plan.Actions), retargetActions(pl.st, retarget, opt.Money)...)
@@ -429,25 +430,16 @@ func (a *App) fillImpact(ctx context.Context, pl *planned) error {
 		case setup.KindBank:
 			err = a.bankImpact(ctx, act)
 		case setup.KindPartner:
-			act.Impact.Connections = a.partnerConnections(act.ID)
+			var imp control.ConnectImpact
+			if imp, err = a.agg.Impact(ctx, "partner", act.ID); err == nil {
+				act.Impact.Connections = len(imp.Open)
+			}
 		}
 		if err != nil {
 			return fmt.Errorf("read the impact on %s %s: %w", strings.ToLower(act.Kind), act.ID, err)
 		}
 	}
 	return nil
-}
-
-func (a *App) partnerConnections(id string) int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	n := 0
-	for _, c := range a.st.Connections {
-		if c.PartnerID == id && c.Status != "revoked" && c.Status != "expired" {
-			n++
-		}
-	}
-	return n
 }
 
 func (a *App) bankImpact(ctx context.Context, act *setup.Action) error {
@@ -525,7 +517,7 @@ func (a *App) allocatePorts(ctx context.Context, ad *admission) error {
 		return applyFail(http.StatusUnprocessableEntity, codeInvalidSpec, "%s", strings.TrimPrefix(err.Error(), control.ErrInvalid.Error()+": "))
 	}
 	c := a.cfg.Connect
-	used := map[int]bool{c.PartnerPort: true, c.WidgetPort: true, c.ControlPort: true, c.HealthPort: true, c.NIBSSPort: true, c.NIBSSControlPort: true, c.CBNControlPort: true, c.CBNPort: true}
+	used := map[int]bool{c.PartnerPort: true, c.WidgetPort: true, c.ControlPort: true, c.HealthPort: true, c.NIBSSPort: true, c.NIBSSControlPort: true, c.CBNControlPort: true, c.CBNPort: true, c.ConnectControlPort: true}
 	top := c.PartnerPort
 	for _, r := range ad.pl.st.Resources {
 		for _, p := range []int{r.Allocated.Port, r.Allocated.APIPort} {

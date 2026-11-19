@@ -52,7 +52,7 @@ func (a *App) AddPartner(ctx context.Context, req PartnerRequest) (string, error
 	return key, nil
 }
 
-func (a *App) RotatePartner(id string) (key string, err error) {
+func (a *App) RotatePartner(ctx context.Context, id string) (key string, err error) {
 	if !a.partnerMu.TryLock() {
 		return "", errPartnerBusy
 	}
@@ -92,6 +92,7 @@ func (a *App) RotatePartner(id string) (key string, err error) {
 		return "", err
 	}
 	a.replacePartner(id, &p)
+	a.reloadConnect(ctx)
 	return key, nil
 }
 
@@ -215,7 +216,7 @@ func (a *App) ctlAddPartner(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ctlRotatePartner(w http.ResponseWriter, r *http.Request) {
-	key, err := a.RotatePartner(r.PathValue("id"))
+	key, err := a.RotatePartner(r.Context(), r.PathValue("id"))
 	if err != nil {
 		a.partnerError(w, r, err)
 		return

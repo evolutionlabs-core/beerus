@@ -18,9 +18,10 @@ const (
 	SpecFile    = "setup.yaml"
 	OldSpecFile = "beerus.yaml"
 
-	DefaultConnectHost = "connect.localhost"
-	DefaultNIBSSPort   = 7481
-	DefaultCBNPort     = 7446
+	DefaultConnectHost        = "connect.localhost"
+	DefaultNIBSSPort          = 7481
+	DefaultCBNPort            = 7446
+	DefaultConnectControlPort = 7482
 
 	defaultLegalName  = "Beerus Connect Limited"
 	defaultBrandName  = "Beerus Connect"
@@ -67,6 +68,9 @@ func SpecSum(s Spec) (string, error) {
 
 func portHolders(ln LocalConnect, st Status) map[int]string {
 	holders := map[int]string{ln.PartnerPort: "connect.partner_port", ln.WidgetPort: "connect.widget_port", ln.ControlPort: "connect.control_port", ln.HealthPort: "connect.health_port"}
+	if ln.ConnectControlPort != 0 {
+		holders[ln.ConnectControlPort] = "connect.connect_control_port"
+	}
 	for _, r := range st.Resources {
 		if r.Kind == KindSystem {
 			holders[r.Allocated.Port] = r.ID + " control API"
@@ -116,6 +120,30 @@ func cbnPort(ln LocalConnect, nibss int, st Status) (int, error) {
 	}
 }
 
+func connectPort(ln LocalConnect, nibss, cbn int, st Status) (int, error) {
+	own := Status{Resources: slices.DeleteFunc(slices.Clone(st.Resources), func(r Resource) bool {
+		return r.Kind == KindSystem && r.ID == SystemConnect
+	})}
+	holders := portHolders(ln, own)
+	holders[nibss], holders[cbn] = "connect.nibss_port", "connect.cbn_port"
+	if ln.ConnectControlPort != 0 {
+		if holder, taken := holders[ln.ConnectControlPort]; taken && holder != "connect.connect_control_port" {
+			return 0, fmt.Errorf("Connect control port %d is already used by %s; set connect.connect_control_port in %s to a free port", ln.ConnectControlPort, holder, LocalFile)
+		}
+		return ln.ConnectControlPort, nil
+	}
+	if r := FindResource(&st, KindSystem, SystemConnect); r != nil && r.Allocated.Port != 0 {
+		return r.Allocated.Port, nil
+	}
+	port := DefaultConnectControlPort
+	for {
+		if _, taken := holders[port]; !taken {
+			return port, nil
+		}
+		port++
+	}
+}
+
 func LoadConfig(dir string) (*config.Config, error) {
 	if err := refuseOld(dir); err != nil {
 		return nil, err
@@ -150,6 +178,10 @@ func BuildConfig(dir string, st Status, local Local) (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	connect, err := connectPort(ln, nibss, cbn, st)
+	if err != nil {
+		return nil, err
+	}
 	c := &config.Config{
 		Dir:         dir,
 		DatabaseURL: local.DatabaseURL,
@@ -158,20 +190,21 @@ func BuildConfig(dir string, st Status, local Local) (*config.Config, error) {
 		SetupKey:    st.SetupKey,
 		Ports:       config.Ports{APIOffset: local.Ports.APIOffset, Window: local.Ports.Window},
 		Connect: config.Connect{
-			Host:         cmp.Or(ln.Host, DefaultConnectHost),
-			PartnerPort:  ln.PartnerPort,
-			WidgetPort:   ln.WidgetPort,
-			WidgetTLS:    ln.WidgetTLS,
-			ControlPort:  ln.ControlPort,
-			HealthPort:   ln.HealthPort,
-			NIBSSPort:    nibss,
-			CBNPort:      cbn,
-			SyncInterval: ln.SyncInterval,
-			RefreshEvery: ln.RefreshEvery,
-			LegalName:    cmp.Or(spec.Connect.LegalName, defaultLegalName),
-			BrandName:    cmp.Or(spec.Connect.BrandName, defaultBrandName),
-			RegistryID:   cmp.Or(spec.Connect.RegistryID, defaultRegistryID),
-			CACNumber:    cmp.Or(spec.Connect.CACNumber, defaultCACNumber),
+			Host:               cmp.Or(ln.Host, DefaultConnectHost),
+			PartnerPort:        ln.PartnerPort,
+			WidgetPort:         ln.WidgetPort,
+			WidgetTLS:          ln.WidgetTLS,
+			ControlPort:        ln.ControlPort,
+			HealthPort:         ln.HealthPort,
+			NIBSSPort:          nibss,
+			CBNPort:            cbn,
+			ConnectControlPort: connect,
+			SyncInterval:       ln.SyncInterval,
+			RefreshEvery:       ln.RefreshEvery,
+			LegalName:          cmp.Or(spec.Connect.LegalName, defaultLegalName),
+			BrandName:          cmp.Or(spec.Connect.BrandName, defaultBrandName),
+			RegistryID:         cmp.Or(spec.Connect.RegistryID, defaultRegistryID),
+			CACNumber:          cmp.Or(spec.Connect.CACNumber, defaultCACNumber),
 		},
 	}
 	if r := FindResource(&st, KindSystem, SystemNIBSS); r != nil {

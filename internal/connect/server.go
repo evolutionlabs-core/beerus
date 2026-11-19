@@ -8,41 +8,9 @@ import (
 	"net"
 	"net/http"
 	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
-func (a *App) PartnerTLS() (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(a.cfg.Path("connect", "server.crt"), a.cfg.Path("connect", "server.key"))
-	if err != nil {
-		return nil, err
-	}
-	pool, err := pki.LoadPool(a.cfg.Path("ca", "connect-partners.crt"))
-	if err != nil {
-		return nil, err
-	}
-	return &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12}, nil
-}
-
-func (a *App) WidgetTLS() (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(a.cfg.Path("connect", "server.crt"), a.cfg.Path("connect", "server.key"))
-	if err != nil {
-		return nil, err
-	}
-	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
-}
-
 func (a *App) Serve(ctx context.Context) error {
-	ptls, err := a.PartnerTLS()
-	if err != nil {
-		return err
-	}
-	var wtls *tls.Config
-	if a.cfg.Connect.WidgetTLS {
-		if wtls, err = a.WidgetTLS(); err != nil {
-			return err
-		}
-	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	errc := make(chan error, 8)
@@ -56,8 +24,6 @@ func (a *App) Serve(ctx context.Context) error {
 		h    http.Handler
 		tls  *tls.Config
 	}{
-		{a.cfg.Connect.PartnerPort, a.PartnerHandler(), ptls},
-		{a.cfg.Connect.WidgetPort, a.WidgetHandler(), wtls},
 		{a.cfg.Connect.ControlPort, a.ControlHandler(), nil},
 	}
 	servers := []srv{}

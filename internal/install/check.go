@@ -43,7 +43,7 @@ func systemPhase(st setup.Status, id string) string {
 
 func CheckPorts(c *config.Config) error {
 	ports := []int{c.Connect.PartnerPort, c.Connect.WidgetPort, c.Connect.ControlPort, c.Connect.HealthPort, c.Connect.NIBSSPort}
-	for _, p := range []int{c.Connect.NIBSSControlPort, c.Connect.CBNControlPort, c.Connect.CBNPort} {
+	for _, p := range []int{c.Connect.ConnectControlPort, c.Connect.NIBSSControlPort, c.Connect.CBNControlPort, c.Connect.CBNPort} {
 		if p != 0 {
 			ports = append(ports, p)
 		}

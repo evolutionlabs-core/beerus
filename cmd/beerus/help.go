@@ -102,7 +102,7 @@ func commands() []command {
 		{"fault list", "", "List active faults", "fault list [options]", nil},
 		{"fault clear", "", "Clear active faults", "fault clear [options]", nil},
 
-		{"run", groupRunning, "Run one participant: cbn, core, nibss or a bank", "run --participant cbn|core|nibss|<bank-id> [options]", cmdRun},
+		{"run", groupRunning, "Run one participant: cbn, core, nibss, connect or a bank", "run --participant cbn|core|nibss|connect|<bank-id> [options]", cmdRun},
 		{"compose", groupRunning, "Print a Docker Compose file for the setup", "compose [options]", cmdCompose},
 		{"info", groupRunning, "Show addresses and partner apps", "info [options]", cmdInfo},
 		{"doctor", groupRunning, "Find and clean up leftovers", "doctor [options]", cmdDoctor},

@@ -89,22 +89,19 @@ func (a *App) CloseImpact(ctx context.Context, id string) (CloseImpact, error) {
 			out.Blockers = append(out.Blockers, other.Name+" settles through this bank; close it first")
 		}
 	}
-	a.mu.Lock()
+	imp, err := a.agg.Impact(ctx, "bank", id)
+	if err != nil {
+		return CloseImpact{}, err
+	}
 	connected := map[string]bool{}
 	partners := map[string]bool{}
-	for _, c := range a.st.Connections {
-		if c.Institution != id || c.Status == "revoked" || c.Status == "expired" {
-			continue
-		}
-		out.Connections = append(out.Connections, ImpactConnection{ID: c.ID, Partner: c.PartnerID, Customer: c.CustomerID, Status: c.Status})
-		partners[c.PartnerID] = true
+	for _, c := range imp.Open {
+		out.Connections = append(out.Connections, ImpactConnection{ID: c.ID, Partner: c.Partner, Customer: c.Customer, Status: c.Status})
+		partners[c.Partner] = true
 	}
-	for _, rec := range a.st.Accounts {
-		if c := a.st.Connections[rec.ConnectionID]; c != nil && c.Institution == id && c.Status != "revoked" && c.Status != "expired" {
-			connected[rec.Key] = true
-		}
+	for _, key := range imp.Connected {
+		connected[key] = true
 	}
-	a.mu.Unlock()
 	books := a.booksOf(id)
 	if books == nil && st.Phase == PhaseClosed {
 		return sortedImpact(out, partners), nil
@@ -645,7 +642,11 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 	line := func(nuban, outcome string, amount int64) setup.ClosureLine {
 		return setup.ClosureLine{Customer: owner[nuban], Name: holder[owner[nuban]], NUBAN: nuban, Outcome: outcome, AmountMinor: amount}
 	}
-	res := CloseResult{Moves: []Move{}, Lines: []setup.ClosureLine{}, ClosedAt: a.clock.Now(), Revoked: a.revokedConnections(func(c *Connection) bool { return c.Institution == id })}
+	revoked, err := a.revokedConnections(ctx, id)
+	if err != nil {
+		return CloseResult{}, fmt.Errorf("read the revoked connections of %s: %w", id, err)
+	}
+	res := CloseResult{Moves: []Move{}, Lines: []setup.ClosureLine{}, ClosedAt: a.clock.Now(), Revoked: revoked}
 	for _, x := range sent {
 		if _, ok := owner[x.FromAccount]; !ok {
 			continue

@@ -1,4 +1,4 @@
-package connect
+package aggregator
 
 import (
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"

@@ -1,4 +1,4 @@
-package connect
+package aggregator
 
 import (
 	"fmt"
@@ -87,7 +87,7 @@ type bankPull struct {
 }
 
 func (a *App) bankPullPlanLocked(c *Connection, acct *AccountRec) (bankPull, error) {
-	b := a.cfg.Bank(c.Institution)
+	b := a.bank(c.Institution)
 	if b == nil {
 		return bankPull{}, &bankDown{fmt.Errorf("%s is not configured", c.Institution)}
 	}

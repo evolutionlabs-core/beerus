@@ -1,4 +1,4 @@
-package connect
+package aggregator
 
 import (
 	"context"
@@ -463,7 +463,7 @@ func (a *App) revokeConnectionAtBank(connID string) error {
 	var b *config.Bank
 	consent := ""
 	if c := a.st.Connections[connID]; c != nil {
-		b, consent = a.cfg.Bank(c.Institution), c.ConsentID
+		b, consent = a.bank(c.Institution), c.ConsentID
 	}
 	a.mu.Unlock()
 	if b != nil && consent != "" {
@@ -505,7 +505,7 @@ func (a *App) dueRevokesLocked() []dueRevoke {
 	var due []dueRevoke
 	kept := make([]PendingRevoke, 0, len(a.st.Revokes))
 	for _, p := range a.st.Revokes {
-		b := a.cfg.Bank(p.Bank)
+		b := a.bank(p.Bank)
 		if b == nil {
 			a.log.Warn("pending revoke dropped because the bank is gone", "bank", p.Bank, "consent", p.ConsentID)
 			continue
@@ -575,7 +575,7 @@ func (a *App) refreshConnectionToken(id string) {
 		return
 	}
 	e := a.st.Vault[id]
-	b := a.cfg.Bank(c.Institution)
+	b := a.bank(c.Institution)
 	if e == nil || b == nil || e.AccessExpires.After(a.clock.Real().Add(refreshAhead)) {
 		a.mu.Unlock()
 		return

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/aggregator"
 	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -48,7 +49,7 @@ func envNumber(key string, positive bool) (int64, error) {
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
-	which := fs.String("participant", "", "what to run: cbn, core, nibss or a bank ID")
+	which := fs.String("participant", "", "what to run: cbn, core, nibss, connect or a bank ID")
 	bind := fs.String("bind", envOr("BEERUS_BIND", "127.0.0.1"), "`address` to listen on")
 	supervised := fs.Bool("supervised", false, "stop when standard input closes")
 	core := fs.String("core", os.Getenv("BEERUS_CORE_URL"), "`URL` of the core participant's control API, for banks")
@@ -82,15 +83,15 @@ func cmdRun(args []string) error {
 		return app.Serve(ctx)
 	case "nibss":
 		return nibssparticipant.Run(ctx, *dir, nibssparticipant.Options{Logger: log, Bind: *bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
-	case "connect":
-		return fmt.Errorf("%s runs inside the core participant; start --participant core", *which)
+	case connectID:
+		return aggregator.Run(ctx, *dir, aggregator.Options{Logger: log, Bind: *bind})
 	}
 	return participant.Run(ctx, *dir, participant.Options{Logger: log, BankID: *which, CoreURL: *core, Bind: *bind, DatabaseURL: os.Getenv(config.DatabaseURLEnv)})
 }
 
 func initFromEnv(dir string) error {
 	local := setup.DefaultLocal()
-	for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &local.Connect.PartnerPort, "BEERUS_WIDGET_PORT": &local.Connect.WidgetPort, "BEERUS_CONTROL_PORT": &local.Connect.ControlPort, "BEERUS_HEALTH_PORT": &local.Connect.HealthPort, "BEERUS_NIBSS_PORT": &local.Connect.NIBSSPort, "BEERUS_CBN_PORT": &local.Connect.CBNPort} {
+	for key, dst := range map[string]*int{"BEERUS_PARTNER_PORT": &local.Connect.PartnerPort, "BEERUS_WIDGET_PORT": &local.Connect.WidgetPort, "BEERUS_CONTROL_PORT": &local.Connect.ControlPort, "BEERUS_CONNECT_CONTROL_PORT": &local.Connect.ConnectControlPort, "BEERUS_HEALTH_PORT": &local.Connect.HealthPort, "BEERUS_NIBSS_PORT": &local.Connect.NIBSSPort, "BEERUS_CBN_PORT": &local.Connect.CBNPort} {
 		n, err := envNumber(key, true)
 		if err != nil {
 			return err

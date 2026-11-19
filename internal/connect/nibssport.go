@@ -18,7 +18,7 @@ func (a *App) ensureNIBSSPort() error {
 			return false, nil
 		}
 		c := a.cfg.Connect
-		used := map[int]bool{c.PartnerPort: true, c.WidgetPort: true, c.ControlPort: true, c.HealthPort: true, c.NIBSSPort: true}
+		used := map[int]bool{c.PartnerPort: true, c.WidgetPort: true, c.ControlPort: true, c.HealthPort: true, c.NIBSSPort: true, c.ConnectControlPort: true}
 		for _, x := range st.Resources {
 			used[x.Allocated.Port], used[x.Allocated.APIPort] = true, true
 		}
