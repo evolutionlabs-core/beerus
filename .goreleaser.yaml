@@ -1,0 +1,53 @@
+version: 2
+
+project_name: beerus
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - main: ./cmd/beerus
+    binary: beerus
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
+
+homebrew_casks:
+  - name: beerus
+    repository:
+      owner: evolutionlabs-core
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/evolutionlabs-core/beerus
+    description: Nigeria's banking infrastructure on your machine
+    license: AGPL-3.0-only
+    caveats: Beerus needs a running Postgres server. Set BEERUS_DATABASE_URL if it is not at postgres:///postgres.
+    hooks:
+      post:
+        install_steps: |
+          run "/bin/sh", args: ["-c", "[ ! -x /usr/bin/xattr ] || /usr/bin/xattr -dr com.apple.quarantine \"$0\"", "{{ .StagedPath }}/beerus"]
