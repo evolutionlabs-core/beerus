@@ -85,8 +85,6 @@ func TestSoloBankServesItsAdminRoutes(t *testing.T) {
 		{"totals", "GET", "/v1/books/totals", "", "", 200, false, fmt.Sprintf(`{"customers":1,"accounts":1,"deposits_minor":%d}`, soloDeposit)},
 		{"entries", "GET", "/v1/books/accounts/" + nuban + "/entries", "", "", 200, false, ""},
 		{"the ledger check", "GET", "/v1/ledger/check", "", "", 200, false, `{"ok":true,"trial_balance_minor":0,"balance_mismatches":[],"event_mismatches":[],"unbalanced_entries":[]}`},
-		{"a right login", "POST", "/v1/logins", `{"username":"ada","password":"` + soloPassword + `"}`, "", 200, false, fmt.Sprintf(`{"customer_id":%q}`, owner)},
-		{"a wrong login", "POST", "/v1/logins", `{"username":"ada","password":"wrong-password"}`, "", 422, false, errBody("invalid_login", "The username or password is wrong.")},
 		{"payout while active", "POST", "/v1/closure-payouts", payout(paid), "pay-1", 409, false, notClosing("active")},
 		{"freeze while active", "POST", "/v1/accounts/" + nuban + "/freeze", "", "freeze-1", 409, false, notClosing("active")},
 		{"the bank starts closing", "PUT", "/v1/phase", `{"phase":"closing","reason":"Licence revoked.","generation":1,"world_id":"wld_solo"}`, "", 200, false, ""},

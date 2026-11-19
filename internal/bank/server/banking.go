@@ -297,8 +297,6 @@ func WriteBankingError(w http.ResponseWriter, r *http.Request, log *slog.Logger,
 		web.WriteError(w, r, http.StatusConflict, "bank_not_active", web.Sentence(err.Error()))
 	case errors.Is(err, errBankNotClosing):
 		web.WriteError(w, r, http.StatusConflict, "bank_not_closing", web.Sentence(err.Error()))
-	case errors.Is(err, bank.ErrBadLogin):
-		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_login", "The username or password is wrong.")
 	case errors.Is(err, bank.ErrUnknownLine):
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such entry.")
 	case errors.Is(err, bank.ErrUnknownCustomer):

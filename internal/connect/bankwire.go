@@ -13,7 +13,6 @@ const customerActive = "active"
 
 var (
 	errUnknownCustomer = errors.New("bank: unknown customer")
-	errBadLogin        = errors.New("bank: wrong username or password")
 	errBankCursor      = errors.New("bank: invalid cursor")
 	errUnknownLine     = errors.New("bank: unknown statement line")
 	errUnknownAccount  = errors.New("ledger: unknown account")

@@ -276,11 +276,6 @@ func TestBookRoutes(t *testing.T) {
 		{"a session the bank never saw", "GET", "/v1/books/sessions/" + banktest.Session("000015", 8), "", 200, `{"data":[]}`},
 		{"a session ID of letters", "GET", "/v1/books/sessions/abc", "", 400, apiError("invalid_request", "session_id must have 30 digits.")},
 		{"the ledger check", "GET", "/v1/ledger/check", "", 200, `{"ok":true,"trial_balance_minor":0,"balance_mismatches":[],"event_mismatches":[],"unbalanced_entries":[]}`},
-		{"a right login", "POST", "/v1/logins", `{"username":"ada","password":"` + adminPassword + `"}`, 200, `{"customer_id":"` + a.adaID + `"}`},
-		{"a wrong password", "POST", "/v1/logins", `{"username":"ada","password":"wrong-password-here"}`, 422, apiError("invalid_login", "The username or password is wrong.")},
-		{"an unknown username", "POST", "/v1/logins", `{"username":"nobody","password":"` + adminPassword + `"}`, 422, apiError("invalid_login", "The username or password is wrong.")},
-		{"an empty login", "POST", "/v1/logins", `{"username":"","password":""}`, 422, apiError("invalid_login", "The username or password is wrong.")},
-		{"a login with a bad body", "POST", "/v1/logins", `{"user":"ada"}`, 400, apiError("invalid_request", `Send {"username":"ada","password":"..."}.`)},
 	}
 	for _, r := range rows {
 		got := a.call(r.method, r.path, r.body, "")
@@ -296,9 +291,6 @@ func TestBookRoutes(t *testing.T) {
 		if got := a.call("GET", path, "", ""); got.status != 503 || got.body != notReady {
 			t.Fatalf("%s before the books open: got %d %s", path, got.status, got.body)
 		}
-	}
-	if got := a.call("POST", "/v1/logins", `{"username":"ada","password":"x"}`, ""); got.status != 503 || got.body != notReady {
-		t.Fatalf("login before the books open: got %d %s", got.status, got.body)
 	}
 	for _, path := range []string{"/v1/closure-payouts", "/v1/accounts/" + a.ada + "/freeze"} {
 		if got := a.call("POST", path, `{"account_number":"`+a.ada+`","amount_minor":5}`, "k1"); got.status != 503 || got.body != notReady {

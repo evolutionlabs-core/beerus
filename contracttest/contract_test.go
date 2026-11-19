@@ -463,20 +463,3 @@ func TestOwnAccountTransferMatchesBySessionID(t *testing.T) {
 		t.Fatal("no Bank B credit matched the Bank A debit by session ID")
 	}
 }
-
-func TestCustomerPageRevokes(t *testing.T) {
-	s := newStack(t)
-	conn := s.connect("chidi", "bank-b", s.today().AddDays(-5))
-	p := s.persona("chidi")
-	b := s.browser()
-	b.get(s.cfg.WidgetURL() + "/customer")
-	b.post("/customer/login", map[string][]string{"bank": {p.Bank}, "username": {p.Username}, "password": {p.Password}})
-	if !strings.Contains(b.last, conn.ConnectionID) {
-		t.Fatalf("customer page does not list the connection: %.300s", b.last)
-	}
-	b.post("/customer/revoke", map[string][]string{"connection": {conn.ConnectionID}})
-	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
-	if c.JSON["status"] != "revoked" {
-		t.Fatalf("status after customer revoke: %v", c.JSON["status"])
-	}
-}

@@ -140,7 +140,6 @@ func printInfo(c *config.Config) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintf(w, "Partner API\t%s\t(mTLS + X-Api-Key)\n", c.PartnerURL())
 	fmt.Fprintf(w, "Connect widget\t%s\n", c.WidgetURL())
-	fmt.Fprintf(w, "Customer page\t%s/customer\n", c.WidgetURL())
 	for _, b := range c.Banks {
 		fmt.Fprintf(w, "%s online banking\t%s\t(database %s)\n", b.Name, b.URL(), b.Database)
 		if b.APIPort != 0 {
