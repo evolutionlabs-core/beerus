@@ -113,62 +113,7 @@ beerus nip settle-now
 beerus nip settlement
 ```
 
-## Beerus Connect
-
-Connect your existing app to Beerus, the way you would connect it to Mono or Okra. Your customers link their bank accounts through Beerus Connect. Your app then reads their accounts, balances and transactions, and gets webhooks when something changes.
-
-**1. Register your app**
-
-```bash
-beerus partner add myapp --redirect-uri http://localhost:3000/callback --webhook-url http://localhost:3000/webhooks
-```
-
-Your app's API key and mTLS certificates land in `.beerus/partners/myapp`. Every call to the Partner API at `https://connect.localhost:7443` uses them. To try calls from a terminal:
-
-```bash
-P=.beerus/partners/myapp
-api() { curl -sS --cert $P/client.crt --key $P/client.key --cacert $P/ca.crt -H "X-Api-Key: $(cat $P/api-key)" -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "https://connect.localhost:7443$1" "${@:2}"; echo; }
-```
-
-**2. Let a customer link their bank**
-
-Your app creates a link session:
-
-```bash
-api /v1/link_sessions -d '{"start_date":"2026-11-01","workspace_id":"ws_1","redirect_uri":"http://localhost:3000/callback"}'
-```
-
-Send the customer to its `widget_url`. They pick their bank, log in with their online banking details and approve. Beerus Connect then sends them to your redirect URI with a `code`.
-
-**3. Get the connection**
-
-Exchange the code within 10 minutes:
-
-```bash
-api /v1/connections/exchange -d '{"code":"CODE","link_session_id":"LINK_SESSION_ID"}'
-```
-
-**4. Read customer data**
-
-```bash
-api /v1/connections/CONNECTION_ID/accounts
-api /v1/accounts/ACCOUNT_ID/balance
-api /v1/accounts/ACCOUNT_ID/transactions/sync
-```
-
-**Manage it**
-
-```bash
-beerus connections
-beerus sync
-beerus webhooks
-beerus revoke CONNECTION_ID
-beerus partner rotate-key myapp
-```
-
-The customer needs an online banking login: create them with `--username`. Full API: [api/partner/openapi.yaml](api/partner/openapi.yaml).
-
-## Make a bank fail
+## Create faults
 
 ```bash
 beerus fault down --bank bank-b --for 10m
@@ -225,6 +170,63 @@ beerus reset beerus
 ```
 
 `reset` drops the setup's databases and keys. It cannot be undone.
+
+---
+
+## Beerus Connect
+
+Connect your existing app to Beerus, the way you would connect it to Mono or Okra. Your customers link their bank accounts through Beerus Connect. Your app then reads their accounts, balances and transactions, and gets webhooks when something changes.
+
+**1. Register your app**
+
+```bash
+beerus partner add myapp --redirect-uri http://localhost:3000/callback --webhook-url http://localhost:3000/webhooks
+```
+
+Your app's API key and mTLS certificates land in `.beerus/partners/myapp`. Every call to the Partner API at `https://connect.localhost:7443` uses them. To try calls from a terminal:
+
+```bash
+P=.beerus/partners/myapp
+api() { curl -sS --cert $P/client.crt --key $P/client.key --cacert $P/ca.crt -H "X-Api-Key: $(cat $P/api-key)" -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "https://connect.localhost:7443$1" "${@:2}"; echo; }
+```
+
+**2. Let a customer link their bank**
+
+Your app creates a link session:
+
+```bash
+api /v1/link_sessions -d '{"start_date":"2026-11-01","workspace_id":"ws_1","redirect_uri":"http://localhost:3000/callback"}'
+```
+
+Send the customer to its `widget_url`. They pick their bank, log in with their online banking details and approve. Beerus Connect then sends them to your redirect URI with a `code`.
+
+**3. Get the connection**
+
+Exchange the code within 10 minutes:
+
+```bash
+api /v1/connections/exchange -d '{"code":"CODE","link_session_id":"LINK_SESSION_ID"}'
+```
+
+**4. Read customer data**
+
+```bash
+api /v1/connections/CONNECTION_ID/accounts
+api /v1/accounts/ACCOUNT_ID/balance
+api /v1/accounts/ACCOUNT_ID/transactions/sync
+```
+
+**Manage it**
+
+```bash
+beerus connections
+beerus sync
+beerus webhooks
+beerus revoke CONNECTION_ID
+beerus partner rotate-key myapp
+```
+
+The customer needs an online banking login: create them with `--username`. Full API: [api/partner/openapi.yaml](api/partner/openapi.yaml).
 
 ## More
 
