@@ -239,4 +239,4 @@ The customer needs an online banking login: create them with `--username`. Full 
 
 ## License
 
-Beerus is distributed under the terms in [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
+AGPL-3.0. See [LICENSE](LICENSE).
