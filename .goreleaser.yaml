@@ -50,4 +50,4 @@ homebrew_casks:
     hooks:
       post:
         install_steps: |
-          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/beerus"]
+          run "/bin/sh", args: ["-c", "[ ! -x /usr/bin/xattr ] || /usr/bin/xattr -dr com.apple.quarantine \"$0\"", "{{ .StagedPath }}/beerus"]
