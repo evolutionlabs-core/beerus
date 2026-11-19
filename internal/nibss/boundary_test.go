@@ -12,7 +12,7 @@ const modulePath = "github.com/evolutionlabs-core/beerus"
 
 var forbidden = []string{
 	modulePath + "/internal/bank",
-	modulePath + "/internal/connect",
+	modulePath + "/internal/core",
 	modulePath + "/internal/setup",
 	modulePath + "/cmd",
 }

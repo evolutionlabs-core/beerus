@@ -12,7 +12,7 @@ import (
 	"syscall"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/core"
 )
 
 const (
@@ -107,7 +107,7 @@ func noBankError() error {
 	if err != nil {
 		return err
 	}
-	banks, err := decodeList[connect.BankStatus](out)
+	banks, err := decodeList[core.BankStatus](out)
 	if err != nil {
 		return err
 	}
@@ -147,17 +147,17 @@ func cmdUse(args []string) error {
 	return runSession(id, banner)
 }
 
-func bankStatus(c *ctl, id string) (connect.BankStatus, error) {
+func bankStatus(c *ctl, id string) (core.BankStatus, error) {
 	out, err := c.do("GET", "/banks", nil)
 	if err != nil {
-		return connect.BankStatus{}, err
+		return core.BankStatus{}, err
 	}
-	banks, err := decodeList[connect.BankStatus](out)
+	banks, err := decodeList[core.BankStatus](out)
 	if err != nil {
-		return connect.BankStatus{}, err
+		return core.BankStatus{}, err
 	}
 	if len(banks) == 0 {
-		return connect.BankStatus{}, errors.New(control.NoBanksMessage)
+		return core.BankStatus{}, errors.New(control.NoBanksMessage)
 	}
 	ids := make([]string, 0, len(banks))
 	for _, b := range banks {
@@ -166,10 +166,10 @@ func bankStatus(c *ctl, id string) (connect.BankStatus, error) {
 		}
 		ids = append(ids, b.ID)
 	}
-	return connect.BankStatus{}, fmt.Errorf("bank %q is not in this setup; the banks are %s", id, strings.Join(ids, ", "))
+	return core.BankStatus{}, fmt.Errorf("bank %q is not in this setup; the banks are %s", id, strings.Join(ids, ", "))
 }
 
-func sessionBanner(c *ctl, st connect.BankStatus) (string, error) {
+func sessionBanner(c *ctl, st core.BankStatus) (string, error) {
 	out, err := c.do("GET", "/faults", nil)
 	if err != nil {
 		return "", err

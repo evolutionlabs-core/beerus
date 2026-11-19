@@ -40,7 +40,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/connect"
+	"github.com/evolutionlabs-core/beerus/internal/core"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -76,7 +76,7 @@ func (s *sink) all() []hook {
 type Stack struct {
 	t          *testing.T
 	cfg        *config.Config
-	app        *connect.App
+	app        *core.App
 	agg        *aggregator.App
 	api        *http.Client
 	raw        *http.Client
