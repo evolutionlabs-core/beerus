@@ -93,7 +93,7 @@ func commands() []command {
 		{"revoke", groupOpen, "Revoke a connection at the bank", "revoke <connection-id>", cmdRevoke},
 		{"sync", groupOpen, "Sync all connections now", "sync", cmdSync},
 		{"webhooks", groupOpen, "List webhook deliveries and replay one", "", cmdWebhooks},
-		{"webhooks list", "", "List recent webhook deliveries", "webhooks list", nil},
+		{"webhooks list", "", "List recent webhook deliveries", "webhooks list [options]", nil},
 		{"webhooks replay", "", "Send a webhook delivery again", "webhooks replay <delivery-id>", nil},
 
 		{"fault", groupFaults, "Make a bank go down or time out", "", cmdFault},

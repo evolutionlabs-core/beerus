@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+)
+
+const (
+	reasonRetrying = "Retrying"
+	quietAttempts  = 4
 )
 
 type ApplyOptions struct {
@@ -83,6 +89,14 @@ func setCondition(r *setup.Resource, c setup.Condition) bool {
 	return true
 }
 
+func noteRetry(r *setup.Resource, step string, err error, now time.Time) {
+	if r.Attempts > quietAttempts {
+		setCondition(r, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: setup.ReasonStepFailed, Message: fmt.Sprintf("%s: %v", step, err), ChangedAt: now})
+		return
+	}
+	setCondition(r, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: reasonRetrying, Message: fmt.Sprintf("%s is not done yet; trying again (attempt %d)", step, r.Attempts), ChangedAt: now})
+}
+
 func clearCondition(r *setup.Resource, kind string) bool {
 	n := len(r.Conditions)
 	r.Conditions = slices.DeleteFunc(r.Conditions, func(c setup.Condition) bool { return c.Type == kind })
@@ -125,7 +139,8 @@ func (a *App) advanceFinalizers(ctx context.Context, lists map[string][]finalize
 				cur.Attempts++
 				next := now.Add(clock.Backoff(cur.Attempts))
 				cur.NextAttemptAt = &next
-				setCondition(cur, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: setup.ReasonStepFailed, Message: fmt.Sprintf("%s: %v", name, err), ChangedAt: now})
+				a.log.Warn("step failed; retrying", "resource", kind+"/"+id, "step", name, "attempt", cur.Attempts, "err", err)
+				noteRetry(cur, name, err, now)
 			case cond != nil:
 				changed := cur.Attempts != 0 || cur.NextAttemptAt != nil
 				cur.Attempts, cur.NextAttemptAt = 0, nil

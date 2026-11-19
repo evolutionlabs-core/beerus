@@ -2,8 +2,6 @@ package core
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -62,7 +60,7 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	a.lifeMu.Unlock()
 	if renamed || restate || relimit {
 		a.markStale(r.ID, r.Generation)
-		a.updateFailed(r.ID, errors.New("waiting for NIBSS to take the change"))
+		a.updateWaiting(r.ID)
 	}
 	phase := current.RunningPhase()
 	a.lifeMu.Lock()
@@ -80,13 +78,20 @@ func (a *App) updateBank(applied setup.Spec, r setup.Resource) {
 	a.recordPhase(r.ID, phase, r.Generation)
 }
 
+func (a *App) updateWaiting(id string) {
+	now := a.clock.Real()
+	a.recordBank(id, func(r *setup.Resource) bool {
+		return setCondition(r, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: reasonRetrying, Message: "waiting for NIBSS to take the change", ChangedAt: now})
+	})
+}
+
 func (a *App) updateFailed(id string, err error) {
 	now := a.clock.Real()
 	a.recordBank(id, func(r *setup.Resource) bool {
 		r.Attempts++
 		next := now.Add(clock.Backoff(r.Attempts))
 		r.NextAttemptAt = &next
-		setCondition(r, setup.Condition{Type: setup.ConditionDegraded, Status: "True", Reason: setup.ReasonStepFailed, Message: fmt.Sprintf("update: %v", err), ChangedAt: now})
+		noteRetry(r, "update", err, now)
 		return true
 	})
 }

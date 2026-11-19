@@ -1,8 +1,10 @@
 package install
 
 import (
+	"os"
 	"path/filepath"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -13,7 +15,11 @@ func FreshLocal(dir string) (setup.Local, error) {
 		return setup.Local{}, err
 	}
 	if !found {
-		return setup.DefaultLocal(), nil
+		local = setup.DefaultLocal()
+		if u := os.Getenv(config.DatabaseURLEnv); u != "" {
+			local.DatabaseURL = u
+		}
+		return local, nil
 	}
 	return local, nil
 }

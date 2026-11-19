@@ -6,6 +6,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/control"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -54,6 +55,7 @@ func (a *App) CheckSettlement(ctx context.Context) (SettlementCheck, error) {
 	if _, err := a.settleRun(ctx, false); err != nil {
 		return out, err
 	}
+	after := a.clock.Real()
 	posted, problems, err := a.nibssCtl.status(ctx)
 	if err != nil {
 		return out, err
@@ -65,25 +67,48 @@ func (a *App) CheckSettlement(ctx context.Context) (SettlementCheck, error) {
 		return out, err
 	}
 	out.Problems = append(out.Problems, cbnProblems...)
+	live := ids[:0:0]
 	for _, id := range ids {
-		if a.bankGone(id) {
-			continue
+		if !a.bankGone(id) {
+			live = append(live, id)
 		}
-		theirs, err := a.bankSettlementProblems(ctx, id)
-		if err != nil {
-			return out, err
+	}
+	theirs, err := a.banksSettlementProblems(ctx, live, after)
+	if err != nil {
+		return out, err
+	}
+	out.Problems = append(out.Problems, theirs...)
+	return out, nil
+}
+
+func (a *App) banksSettlementProblems(ctx context.Context, ids []string, after time.Time) ([]string, error) {
+	problems := make([][]string, len(ids))
+	errs := make([]error, len(ids))
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			problems[i], errs[i] = a.bankSettlementProblems(ctx, id, after)
+		}()
+	}
+	wg.Wait()
+	out := []string{}
+	for i := range ids {
+		if errs[i] != nil {
+			return nil, errs[i]
 		}
-		out.Problems = append(out.Problems, theirs...)
+		out = append(out, problems[i]...)
 	}
 	return out, nil
 }
 
-func (a *App) bankSettlementProblems(ctx context.Context, id string) ([]string, error) {
+func (a *App) bankSettlementProblems(ctx context.Context, id string, after time.Time) ([]string, error) {
 	b := a.bankByID(id)
 	if b == nil {
 		return nil, fmt.Errorf("%s is not in the setup", id)
 	}
-	return a.freshBankProblems(ctx, b)
+	return a.freshBankProblems(ctx, b, after)
 }
 
 type uncheckedError struct {
@@ -104,17 +129,23 @@ func (e *uncheckedError) Unwrap() error {
 	return e.Err
 }
 
-func (a *App) freshBankProblems(ctx context.Context, b *config.Bank) ([]string, error) {
-	after := a.clock.Real()
+func unreadable(b *config.Bank, err error) error {
+	if control.Unreachable(err) {
+		return &uncheckedError{Name: b.Name, Why: "is not answering, so its books were not checked", Err: err}
+	}
+	return fmt.Errorf("read the status of %s: %w", b.ID, err)
+}
+
+func (a *App) freshBankProblems(ctx context.Context, b *config.Bank, after time.Time) ([]string, error) {
 	deadline := time.NewTimer(bankCheckWait)
 	defer deadline.Stop()
+	if _, err := a.link.Do(ctx, b.URL(), http.MethodPost, "/v1/settlement/check", nil, nil); err != nil {
+		return nil, unreadable(b, err)
+	}
 	for {
 		var state control.State
 		if _, err := a.link.Do(ctx, b.URL(), http.MethodGet, "/v1/status", nil, &state); err != nil {
-			if control.Unreachable(err) {
-				return nil, &uncheckedError{Name: b.Name, Why: "is not answering, so its books were not checked", Err: err}
-			}
-			return nil, fmt.Errorf("read the status of %s: %w", b.ID, err)
+			return nil, unreadable(b, err)
 		}
 		if at := state.SettlementCheckedAt; at != nil && at.After(after) {
 			return state.SettlementProblems, nil

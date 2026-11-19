@@ -207,6 +207,7 @@ func (p *Participant) checkSettlements(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+		case <-p.srv.CheckRequests():
 		}
 		err := p.srv.CheckSettlement(ctx)
 		switch {

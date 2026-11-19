@@ -999,7 +999,12 @@ func cmdExport(e *cli, args []string) error {
 		}
 		return e.printJSON(raw)
 	}
-	raw, err := setup.Export(st.Applied)
+	portable := st.Applied
+	portable.Spec.Banks = slices.Clone(st.Applied.Spec.Banks)
+	for i := range portable.Spec.Banks {
+		portable.Spec.Banks[i].NIPCode, portable.Spec.Banks[i].NUBANCode = "", ""
+	}
+	raw, err := setup.Export(portable)
 	if err != nil {
 		return err
 	}

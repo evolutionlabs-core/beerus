@@ -52,6 +52,7 @@ type Server struct {
 	problems            []string
 	settlementProblems  []string
 	settlementCheckedAt *time.Time
+	checkRequests       chan struct{}
 
 	dirMu      sync.Mutex
 	dirBanks   []*config.Bank
@@ -93,6 +94,8 @@ func New(c Config) *Server {
 		bank:      c.Bank,
 		worldID:   web.NewID("wld"),
 		replays:   map[string]*web.Record{},
+
+		checkRequests: make(chan struct{}, 1),
 	}
 	if c.Books != nil {
 		s.books.Store(c.Books)
