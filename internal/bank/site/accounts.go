@@ -28,7 +28,7 @@ type line struct {
 }
 
 func newLine(l bank.FeedLine, href bool) line {
-	v := line{FeedLine: l, Description: bank.Normalise(l.Narration)}
+	v := line{FeedLine: l, Description: view.Normalise(l.Narration)}
 	if href {
 		v.Href = "/accounts/" + l.NUBAN + "/tx/" + url.PathEscape(l.Key)
 	}
@@ -154,5 +154,5 @@ func (s *site) tx(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.render(w, "bank_tx", http.StatusOK, sess, data{"Title": bank.Normalise(l.Narration), "Nav": "accounts", "A": acc, "L": newLine(l, false), "Related": related})
+	s.render(w, "bank_tx", http.StatusOK, sess, data{"Title": view.Normalise(l.Narration), "Nav": "accounts", "A": acc, "L": newLine(l, false), "Related": related})
 }

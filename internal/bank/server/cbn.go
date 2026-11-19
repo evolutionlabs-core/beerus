@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"maps"
 	"math"
 	"net"
@@ -69,7 +70,7 @@ func (c CBNClient) Balance(ctx context.Context, id string) (int64, error) {
 }
 
 func (c CBNClient) sessionNets(ctx context.Context, id string) (map[string]int64, error) {
-	list, err := AllPages(ctx, func(ctx context.Context, cursor string) ([]cbnPosting, string, error) {
+	list, err := control.AllPages(ctx, func(ctx context.Context, cursor string) ([]cbnPosting, string, error) {
 		q := url.Values{"limit": {strconv.Itoa(cbnPage)}}
 		if cursor != "" {
 			q.Set("cursor", cursor)

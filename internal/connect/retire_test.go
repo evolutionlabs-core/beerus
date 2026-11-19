@@ -2,7 +2,7 @@ package connect
 
 import (
 	"errors"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"log/slog"
 	"net"
@@ -38,7 +38,7 @@ func TestRetiringABankNeedsItsAcknowledgement(t *testing.T) {
 	}
 	setBankPhase(a, b.ID, PhaseTerminating)
 	err := a.retireBank(ctx, b)
-	if err == nil || !server.Unreachable(err) {
+	if err == nil || !control.Unreachable(err) {
 		t.Fatalf("an unreachable live bank was retired: %v", err)
 	}
 	if !a.bankRetired(b.ID) {

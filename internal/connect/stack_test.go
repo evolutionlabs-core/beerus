@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -14,8 +16,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/participant"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -133,9 +133,9 @@ func newTestApp(t *testing.T, o Options) *App {
 func dropTestDatabases(t *testing.T, cfg *config.Config) {
 	t.Helper()
 	ctx := context.WithoutCancel(t.Context())
-	names, err := store.List(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, ""))
+	names, err := postgres.List(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, ""))
 	if err == nil {
-		err = store.DropDatabases(ctx, cfg.DatabaseURL, names)
+		err = postgres.DropDatabases(ctx, cfg.DatabaseURL, names)
 	}
 	if err != nil {
 		t.Errorf("drop databases: %v", err)
@@ -255,7 +255,7 @@ func participantsAnswer(ctx context.Context, a *App) bool {
 	return answers(ctx, a.nibssCtl.Link, a.nibssCtl.Base) && answers(ctx, a.cbnCtl.link, a.cbnCtl.base)
 }
 
-func answers(ctx context.Context, link server.Link, base string) bool {
+func answers(ctx context.Context, link control.Link, base string) bool {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/health", nil)
 	if err != nil {
 		return false

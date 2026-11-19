@@ -4,14 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"io"
 	"net/http"
 	"os"
 	"slices"
 	"strings"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
@@ -145,14 +145,14 @@ func (a *App) dropBankRows(id string) {
 		}
 	}
 	a.st.Revokes = slices.DeleteFunc(a.st.Revokes, func(p PendingRevoke) bool { return p.Bank == id })
-	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *server.Fault) bool { return f.Bank == id })
+	a.st.Faults = slices.DeleteFunc(a.st.Faults, func(f *control.Fault) bool { return f.Bank == id })
 	a.dirty()
 }
 
 func (a *App) readBackPurge(ctx context.Context, r setup.Resource) (nip.Institution, error) {
 	id := r.ID
 	if r.Allocated.Database != "" {
-		left, err := store.List(ctx, a.cfg.DatabaseURL, r.Allocated.Database)
+		left, err := postgres.List(ctx, a.cfg.DatabaseURL, r.Allocated.Database)
 		if err != nil {
 			return nip.Institution{}, fmt.Errorf("read back the databases of %s: %w", id, err)
 		}
@@ -247,12 +247,12 @@ func (a *App) ctlPurgeBank(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) dropBankDatabase(ctx context.Context, name string) error {
-	all, err := store.List(ctx, a.cfg.DatabaseURL, name)
+	all, err := postgres.List(ctx, a.cfg.DatabaseURL, name)
 	if err != nil {
 		return fmt.Errorf("list the databases of %s: %w", name, err)
 	}
 	owned := slices.DeleteFunc(all, func(n string) bool { return n != name && !strings.HasPrefix(n, name+snapshotInfix) })
-	if err := store.DropDatabases(ctx, a.cfg.DatabaseURL, owned); err != nil {
+	if err := postgres.DropDatabases(ctx, a.cfg.DatabaseURL, owned); err != nil {
 		return fmt.Errorf("drop database %s: %w", name, err)
 	}
 	return a.ctl.Release(setup.Owned{Kind: state.OwnedDatabase, Name: name})
@@ -283,7 +283,7 @@ func (a *App) retireBank(ctx context.Context, b *config.Bank) error {
 		return fmt.Errorf("retire %s: the retirement was not saved", b.ID)
 	}
 	err := a.closeAtBank(ctx, b)
-	if err != nil && server.Unreachable(err) && !a.mustRetireLive(b.ID) {
+	if err != nil && control.Unreachable(err) && !a.mustRetireLive(b.ID) {
 		return nil
 	}
 	if err != nil {

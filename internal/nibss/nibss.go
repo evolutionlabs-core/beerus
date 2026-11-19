@@ -2,12 +2,13 @@ package nibss
 
 import (
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"time"
 )
 
 const (
-	SessionPending = "pending"
-	SessionOK      = "00"
+	SessionPending = control.SessionPending
+	SessionOK      = control.SessionOK
 )
 
 var (

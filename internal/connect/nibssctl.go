@@ -4,20 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 )
 
 const (
-	nibssBanksPath     = server.NIBSSDirectoryPath + "/"
+	nibssBanksPath     = control.NIBSSDirectoryPath + "/"
 	nibssSessionsPath  = "/v1/control/sessions/"
 	nibssClosureSuffix = "/closure-sessions"
 	nibssEnquiriesPath = "/v1/control/name-enquiries"
@@ -31,7 +30,7 @@ const (
 )
 
 type nibssAdmin struct {
-	server.NIBSSControl
+	control.NIBSSControl
 }
 
 type registerBody struct {
@@ -63,14 +62,14 @@ func (n *nibssAdmin) enquire(ctx context.Context, code, nuban string) (nip.NameE
 	var out nip.NameEnquiry
 	q := url.Values{"bank_code": {code}, "account_number": {nuban}}
 	_, err := n.Link.Do(ctx, n.Base, http.MethodGet, nibssEnquiriesPath+"?"+q.Encode(), nil, &out)
-	var peer *server.PeerError
+	var peer *control.PeerError
 	switch {
 	case err == nil || errors.Is(err, context.Canceled):
 		return out, err
 	case errors.As(err, &peer) && peer.Status != http.StatusServiceUnavailable:
 		return out, err
 	}
-	return out, &server.UnavailableError{Msg: nibssAway, Err: err}
+	return out, &control.UnavailableError{Msg: nibssAway, Err: err}
 }
 
 func (n *nibssAdmin) register(ctx context.Context, b config.Bank) (nip.Institution, error) {
@@ -94,19 +93,19 @@ func (n *nibssAdmin) ensureClient(ctx context.Context, c openbanking.RegistryCli
 }
 
 func (n *nibssAdmin) clients(ctx context.Context) ([]openbanking.RegistryClient, error) {
-	return server.AllPages(ctx, func(ctx context.Context, cursor string) ([]openbanking.RegistryClient, string, error) {
+	return control.AllPages(ctx, func(ctx context.Context, cursor string) ([]openbanking.RegistryClient, string, error) {
 		var page struct {
 			Data       []openbanking.RegistryClient `json:"data"`
 			NextCursor string                       `json:"next_cursor"`
 		}
-		err := n.Call(ctx, http.MethodGet, nibssClientsPath+"?"+server.PageQuery(cursor), nil, nil, &page)
+		err := n.Call(ctx, http.MethodGet, nibssClientsPath+"?"+control.PageQuery(cursor), nil, nil, &page)
 		return page.Data, page.NextCursor, err
 	})
 }
 
 type consentPage struct {
-	Data       []nibss.ConsentEvent `json:"data"`
-	NextCursor string               `json:"next_cursor"`
+	Data       []ConsentEvent `json:"data"`
+	NextCursor string         `json:"next_cursor"`
 }
 
 func (n *nibssAdmin) consents(ctx context.Context, q url.Values) (consentPage, error) {
@@ -175,30 +174,30 @@ func (n *nibssAdmin) openSessions(ctx context.Context, id string) (openSessions,
 func (n *nibssAdmin) member(ctx context.Context, id string) (nip.Institution, error) {
 	var in nip.Institution
 	err := n.Call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id), nil, nil, &in)
-	var peer *server.PeerError
+	var peer *control.PeerError
 	if errors.As(err, &peer) && peer.Status == http.StatusNotFound {
 		return nip.Institution{}, fmt.Errorf("bank id %s is %w", id, nip.ErrUnknownInstitution)
 	}
 	return in, err
 }
 
-func (n *nibssAdmin) session(ctx context.Context, id string) (nibss.Session, error) {
-	var x nibss.Session
+func (n *nibssAdmin) session(ctx context.Context, id string) (control.NIPSession, error) {
+	var x control.NIPSession
 	err := n.Call(ctx, http.MethodGet, nibssSessionsPath+url.PathEscape(id), nil, nil, &x)
-	var peer *server.PeerError
+	var peer *control.PeerError
 	if errors.As(err, &peer) && peer.Status == http.StatusNotFound {
-		return nibss.Session{}, fmt.Errorf("session %s: %w", id, nip.ErrNoRecord)
+		return control.NIPSession{}, fmt.Errorf("session %s: %w", id, nip.ErrNoRecord)
 	}
 	return x, err
 }
 
-func (n *nibssAdmin) closureSessions(ctx context.Context, id string) ([]nibss.ClosureSession, error) {
-	return server.AllPages(ctx, func(ctx context.Context, cursor string) ([]nibss.ClosureSession, string, error) {
+func (n *nibssAdmin) closureSessions(ctx context.Context, id string) ([]ClosureSession, error) {
+	return control.AllPages(ctx, func(ctx context.Context, cursor string) ([]ClosureSession, string, error) {
 		var page struct {
-			Data       []nibss.ClosureSession `json:"data"`
-			NextCursor string                 `json:"next_cursor"`
+			Data       []ClosureSession `json:"data"`
+			NextCursor string           `json:"next_cursor"`
 		}
-		err := n.Call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id)+nibssClosureSuffix+"?"+server.PageQuery(cursor), nil, nil, &page)
+		err := n.Call(ctx, http.MethodGet, nibssBanksPath+url.PathEscape(id)+nibssClosureSuffix+"?"+control.PageQuery(cursor), nil, nil, &page)
 		return page.Data, page.NextCursor, err
 	})
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"maps"
 	"math"
 	"net/http"
@@ -69,7 +70,7 @@ func inwardLessOutward(inward, outward int64) (int64, bool) {
 }
 
 func (c NIBSSClient) SettlementReports(ctx context.Context, after string) ([]SettlementReport, error) {
-	out, err := AllPages(ctx, func(ctx context.Context, cursor string) ([]SettlementReport, string, error) {
+	out, err := control.AllPages(ctx, func(ctx context.Context, cursor string) ([]SettlementReport, string, error) {
 		q := url.Values{"limit": {strconv.Itoa(reportsPage)}}
 		switch {
 		case cursor != "":

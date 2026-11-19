@@ -3,12 +3,12 @@ package site
 import (
 	"context"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"net/http"
 	"net/url"
 	"strings"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/view"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -22,7 +22,7 @@ var (
 )
 
 func userFixable(err error) bool {
-	var te *server.TransferError
+	var te *control.TransferError
 	return errors.As(err, &te) || errors.Is(err, view.ErrBadAmount) || errors.Is(err, errChooseAccount) || errors.Is(err, errChooseOwn) || errors.Is(err, errTenDigits)
 }
 
@@ -37,7 +37,7 @@ func (s *site) transferPage(ctx context.Context, sess *session, d data) (data, e
 	d["Title"] = "Send money"
 	d["Nav"] = "transfer"
 	d["Accounts"] = accts
-	d["Banks"] = server.OpenBanks(s.Host.Directory())
+	d["Banks"] = control.OpenBanks(s.Host.Directory())
 	return d, nil
 }
 
@@ -54,19 +54,19 @@ func (s *site) transferForm(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "bank_transfer", http.StatusOK, sess, d)
 }
 
-func (s *site) transferRequest(ctx context.Context, sess *session, f url.Values) (server.TransferRequest, error) {
+func (s *site) transferRequest(ctx context.Context, sess *session, f url.Values) (control.TransferRequest, error) {
 	_, acc, ok, err := s.one(ctx, sess.Customer, f.Get("from"))
 	if err != nil {
-		return server.TransferRequest{}, err
+		return control.TransferRequest{}, err
 	}
 	if !ok {
-		return server.TransferRequest{}, errChooseAccount
+		return control.TransferRequest{}, errChooseAccount
 	}
-	amount, err := bank.ParseNaira(f.Get("amount"))
+	amount, err := money.ParseNaira(f.Get("amount"))
 	if err != nil {
-		return server.TransferRequest{}, view.ErrBadAmount
+		return control.TransferRequest{}, view.ErrBadAmount
 	}
-	req := server.TransferRequest{FromBank: s.id, From: acc.NUBAN, Amount: amount, Narration: strings.TrimSpace(f.Get("narration"))}
+	req := control.TransferRequest{FromBank: s.id, From: acc.NUBAN, Amount: amount, Narration: strings.TrimSpace(f.Get("narration"))}
 	if f.Get("mode") == "own" {
 		req.ToBank, req.To = s.id, f.Get("own")
 		if req.To == "" {
@@ -103,7 +103,7 @@ func (s *site) transferReview(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = s.Host.RefreshBanks(r.Context())
 	}
-	var q server.TransferResult
+	var q control.TransferResult
 	if err == nil {
 		q, err = s.Host.Quote(r.Context(), req)
 	}
@@ -124,7 +124,7 @@ func (s *site) transferConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req, err := s.transferRequest(r.Context(), sess, r.PostForm)
-	var res server.TransferResult
+	var res control.TransferResult
 	if err == nil {
 		res, err = s.Host.Transfer(r.Context(), req)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 	"slices"
 	"sort"
@@ -31,23 +32,12 @@ func (NotClosingError) Is(target error) bool {
 	return target == errBankNotClosing
 }
 
-type ClosurePayoutRequest struct {
-	Account string `json:"account_number"`
-	Amount  int64  `json:"amount_minor"`
-	Key     string `json:"-"`
-}
-
 type ClosurePayoutResult struct {
 	Account  string    `json:"account_number"`
 	Amount   int64     `json:"amount_minor"`
 	Balance  int64     `json:"balance_minor"`
 	Replayed bool      `json:"replayed"`
 	PostedAt time.Time `json:"posted_at"`
-}
-
-type ClosurePaid struct {
-	Account string `json:"account_number"`
-	Paid    int64  `json:"paid_minor"`
 }
 
 func (s *Banking) closingBook(id string) (Book, error) {
@@ -61,7 +51,7 @@ func (s *Banking) closingBook(id string) (Book, error) {
 	return bk, nil
 }
 
-func (s *Banking) ClosurePayout(ctx context.Context, bankID string, req ClosurePayoutRequest) (ClosurePayoutResult, error) {
+func (s *Banking) ClosurePayout(ctx context.Context, bankID string, req control.ClosurePayoutRequest) (ClosurePayoutResult, error) {
 	bk, err := s.closingBook(bankID)
 	if err != nil {
 		return ClosurePayoutResult{}, err
@@ -83,7 +73,7 @@ func (s *Banking) ClosurePayout(ctx context.Context, bankID string, req ClosureP
 	return ClosurePayoutResult{Account: req.Account, Amount: req.Amount, Balance: bal, Replayed: p.Replayed, PostedAt: p.PostedAt.In(clock.Lagos)}, nil
 }
 
-func (s *Banking) ClosurePayouts(ctx context.Context, bankID string, limit int, cursor string) ([]ClosurePaid, string, error) {
+func (s *Banking) ClosurePayouts(ctx context.Context, bankID string, limit int, cursor string) ([]control.ClosurePaid, string, error) {
 	bk, err := s.bankBook(bankID)
 	if err != nil {
 		return nil, "", err
@@ -106,9 +96,9 @@ func (s *Banking) ClosurePayouts(ctx context.Context, bankID string, limit int, 
 		start = i + 1
 	}
 	end := min(start+limit, len(nubans))
-	data := make([]ClosurePaid, 0, end-start)
+	data := make([]control.ClosurePaid, 0, end-start)
 	for _, nuban := range nubans[start:end] {
-		data = append(data, ClosurePaid{Account: nuban, Paid: paid[nuban]})
+		data = append(data, control.ClosurePaid{Account: nuban, Paid: paid[nuban]})
 	}
 	if end < len(nubans) {
 		return data, nubans[end-1], nil
@@ -116,21 +106,21 @@ func (s *Banking) ClosurePayouts(ctx context.Context, bankID string, limit int, 
 	return data, "", nil
 }
 
-func (s *Banking) Freeze(ctx context.Context, bankID, nuban string) (AccountJSON, error) {
+func (s *Banking) Freeze(ctx context.Context, bankID, nuban string) (control.AccountJSON, error) {
 	bk, err := s.closingBook(bankID)
 	if err != nil {
-		return AccountJSON{}, err
+		return control.AccountJSON{}, err
 	}
 	b := bk.Bank
 	acc, err := s.customerAccount(ctx, b, nuban)
 	if err != nil {
-		return AccountJSON{}, err
+		return control.AccountJSON{}, err
 	}
 	if acc.Status == "closed" {
-		return AccountJSON{}, ledger.ErrAccountClosed
+		return control.AccountJSON{}, ledger.ErrAccountClosed
 	}
 	if err := b.FreezeAccount(ctx, nuban); err != nil {
-		return AccountJSON{}, err
+		return control.AccountJSON{}, err
 	}
 	acc.Status = "frozen"
 	return accountJSON(ctx, b, acc)
@@ -141,7 +131,7 @@ func (s *Banking) HandleClosurePayout(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var req ClosurePayoutRequest
+	var req control.ClosurePayoutRequest
 	if err := web.DecodeBody(r, &req); err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"account_number":"0123456789","amount_minor":500000}.`)
 		return

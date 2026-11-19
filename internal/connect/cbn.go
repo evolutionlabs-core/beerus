@@ -3,8 +3,8 @@ package connect
 import (
 	"context"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
@@ -27,7 +27,7 @@ func (a *App) cbnDue(ctx context.Context) {
 }
 
 func (a *App) openCBNAccount(ctx context.Context, id string) error {
-	if err := a.cbnCtl.openAccount(ctx, id, bank.GenesisSettlement, bank.GenesisVault); err != nil {
+	if err := a.cbnCtl.openAccount(ctx, id, control.GenesisSettlement, control.GenesisVault); err != nil {
 		return fmt.Errorf("open the CBN settlement account of %s: %w", id, err)
 	}
 	return nil

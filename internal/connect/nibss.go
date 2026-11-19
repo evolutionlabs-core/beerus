@@ -4,12 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
@@ -37,7 +36,7 @@ func (a *App) syncDirectoryDue(ctx context.Context) {
 }
 
 func (a *App) logNIBSS(msg string, err error) {
-	var down *server.NIBSSDownError
+	var down *control.NIBSSDownError
 	if errors.As(err, &down) {
 		a.log.Warn(msg, "err", err)
 		return
@@ -193,12 +192,12 @@ func (a *App) closingCallsDue(ctx context.Context) {
 
 const removedSuffix = " (removed)"
 
-func (a *App) markRemoved(ctx context.Context, lines []bank.FeedLine) error {
-	if !slices.ContainsFunc(lines, func(l bank.FeedLine) bool { return l.Counterparty != nil }) {
+func (a *App) markRemoved(ctx context.Context, lines []FeedLine) error {
+	if !slices.ContainsFunc(lines, func(l FeedLine) bool { return l.Counterparty != nil }) {
 		return nil
 	}
 	directory, err := a.nibssCtl.Directory(ctx)
-	var down *server.NIBSSDownError
+	var down *control.NIBSSDownError
 	if errors.As(err, &down) {
 		a.logNIBSS("removed banks not marked", err)
 		return nil

@@ -4,17 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"maps"
 	"net/http"
 	"slices"
 	"sort"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/view"
@@ -151,11 +150,11 @@ func sortedImpact(out CloseImpact, partners map[string]bool) CloseImpact {
 	return out
 }
 
-func accountsByOwner(ctx context.Context, books bankBooks) (map[string][]server.AccountJSON, error) {
-	out := map[string][]server.AccountJSON{}
+func accountsByOwner(ctx context.Context, books bankBooks) (map[string][]control.AccountJSON, error) {
+	out := map[string][]control.AccountJSON{}
 	cursor := ""
 	for {
-		page, next, err := books.accounts(ctx, "", bank.MaxPage, cursor)
+		page, next, err := books.accounts(ctx, "", control.MaxPage, cursor)
 		if err != nil {
 			return nil, err
 		}
@@ -169,11 +168,11 @@ func accountsByOwner(ctx context.Context, books bankBooks) (map[string][]server.
 	}
 }
 
-func accountsOf(ctx context.Context, books bankBooks, customer string) ([]server.AccountJSON, error) {
-	out := []server.AccountJSON{}
+func accountsOf(ctx context.Context, books bankBooks, customer string) ([]control.AccountJSON, error) {
+	out := []control.AccountJSON{}
 	cursor := ""
 	for {
-		page, next, err := books.accounts(ctx, customer, bank.MaxPage, cursor)
+		page, next, err := books.accounts(ctx, customer, control.MaxPage, cursor)
 		if err != nil {
 			return nil, err
 		}
@@ -227,7 +226,7 @@ func (a *App) bankLocked(id string) *config.Bank {
 }
 
 func (a *App) openInstitutions() []*config.Bank {
-	return server.OpenBanks(a.banksLocked())
+	return control.OpenBanks(a.banksLocked())
 }
 
 type CloseRequest struct {
@@ -265,7 +264,7 @@ func (a *App) CloseBank(ctx context.Context, id string, req CloseRequest) (setup
 		}
 		b := &sp.Spec.Banks[i]
 		if b.State == setup.StateClosed {
-			return server.Invalid("%s is already closed", b.Name)
+			return control.Invalid("%s is already closed", b.Name)
 		}
 		b.State = setup.StateClosed
 		if req.Money != "" || req.To != "" || len(req.Customers) > 0 {
@@ -454,7 +453,7 @@ func (a *App) closeChoices(ctx context.Context, r setup.Resource, imp CloseImpac
 		if total == 0 {
 			return choice, "", nil
 		}
-		return nil, "", a.blocked(setup.ReasonMoneyDecisionNeeded, "%s holds %s for %s. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.", imp.Bank.Name, bank.Naira(total), view.Plural(held, "customer", "customers"))
+		return nil, "", a.blocked(setup.ReasonMoneyDecisionNeeded, "%s holds %s for %s. Choose --money transfer --to <bank>, --money payout or --money leave. Nothing moves until you do.", imp.Bank.Name, money.Naira(total), view.Plural(held, "customer", "customers"))
 	}
 	for _, cu := range imp.Customers {
 		choice[cu.ID] = rm.Money
@@ -522,7 +521,7 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 	for _, acc := range imp.Accounts {
 		paid[acc.Owner] += payouts[acc.NUBAN]
 	}
-	holders := map[string]bank.Customer{}
+	holders := map[string]Customer{}
 	if to != "" {
 		all, err := from.customers(ctx)
 		if err != nil {
@@ -549,7 +548,7 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 				continue
 			}
 			if err := from.payout(ctx, key, acc.NUBAN, amount); err != nil {
-				return CloseResult{}, fmt.Errorf("pay out %s from %s: %w", bank.Naira(amount), acc.NUBAN, err)
+				return CloseResult{}, fmt.Errorf("pay out %s from %s: %w", money.Naira(amount), acc.NUBAN, err)
 			}
 			paid[acc.Owner] += amount
 			continue
@@ -569,12 +568,12 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 		if err != nil {
 			return CloseResult{}, err
 		}
-		tr, err := a.transfer(ctx, server.TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: moveKey, Closure: true})
+		tr, err := a.transfer(ctx, control.TransferRequest{FromBank: id, From: acc.NUBAN, ToBank: to, To: nuban, Amount: bal, Narration: "Closure of " + imp.Bank.Name, Key: moveKey, Closure: true})
 		if err != nil {
-			return CloseResult{}, fmt.Errorf("move %s from %s: %w", bank.Naira(bal), acc.NUBAN, err)
+			return CloseResult{}, fmt.Errorf("move %s from %s: %w", money.Naira(bal), acc.NUBAN, err)
 		}
 		if tr.Status != nip.Success {
-			return CloseResult{}, fmt.Errorf("move %s from %s: session %s is %s", bank.Naira(bal), acc.NUBAN, tr.SessionID, tr.Status)
+			return CloseResult{}, fmt.Errorf("move %s from %s: session %s is %s", money.Naira(bal), acc.NUBAN, tr.SessionID, tr.Status)
 		}
 	}
 	for _, acc := range imp.Accounts {
@@ -594,10 +593,10 @@ func (a *App) closeBooks(ctx context.Context, id string, imp CloseImpact, choice
 	return a.closeOutcome(ctx, id, imp, choice, from)
 }
 
-func holderOf(holders map[string]bank.Customer, owner string) (bank.Customer, error) {
+func holderOf(holders map[string]Customer, owner string) (Customer, error) {
 	c, ok := holders[owner]
 	if !ok {
-		return bank.Customer{}, fmt.Errorf("read customer %s: %w", owner, bank.ErrUnknownCustomer)
+		return Customer{}, fmt.Errorf("read customer %s: %w", owner, errUnknownCustomer)
 	}
 	return c, nil
 }
@@ -609,7 +608,7 @@ func (a *App) closureKey(ctx context.Context, id, nuban, key string) (string, er
 	}
 	failed := 0
 	for _, x := range all {
-		if x.FromAccount == nuban && x.Status != nibss.SessionOK && x.Status != nibss.SessionPending {
+		if x.FromAccount == nuban && x.Status != control.SessionOK && x.Status != control.SessionPending {
 			failed++
 		}
 	}
@@ -624,8 +623,8 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 	if err != nil {
 		return CloseResult{}, fmt.Errorf("read back closure moves: %w", err)
 	}
-	sent := slices.DeleteFunc(all, func(x nibss.ClosureSession) bool {
-		return x.Status != nibss.SessionOK && x.Status != nibss.SessionPending
+	sent := slices.DeleteFunc(all, func(x ClosureSession) bool {
+		return x.Status != control.SessionOK && x.Status != control.SessionPending
 	})
 	payouts, err := from.payouts(ctx)
 	if err != nil {
@@ -651,8 +650,8 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 		if _, ok := owner[x.FromAccount]; !ok {
 			continue
 		}
-		if x.Status != nibss.SessionOK {
-			return CloseResult{}, fmt.Errorf("closure session %s from %s is %s, not %s", x.ID, x.FromAccount, x.Status, nibss.SessionOK)
+		if x.Status != control.SessionOK {
+			return CloseResult{}, fmt.Errorf("closure session %s from %s is %s, not %s", x.ID, x.FromAccount, x.Status, control.SessionOK)
 		}
 		dest := targets[x.ToBankCode]
 		if dest == nil {
@@ -690,31 +689,31 @@ func (a *App) closeOutcome(ctx context.Context, id string, imp CloseImpact, choi
 			res.Left += bal
 		case setup.MoneyPayout:
 			if live.Status != "frozen" {
-				return CloseResult{}, fmt.Errorf("%s keeps %s as an NDIC claim but is %s, not frozen", acc.NUBAN, bank.Naira(bal), live.Status)
+				return CloseResult{}, fmt.Errorf("%s keeps %s as an NDIC claim but is %s, not frozen", acc.NUBAN, money.Naira(bal), live.Status)
 			}
 			res.Lines = append(res.Lines, line(acc.NUBAN, setup.OutcomeClaim, bal))
 			res.Claims += bal
 		default:
-			return CloseResult{}, fmt.Errorf("%s still holds %s after its money was moved", acc.NUBAN, bank.Naira(bal))
+			return CloseResult{}, fmt.Errorf("%s still holds %s after its money was moved", acc.NUBAN, money.Naira(bal))
 		}
 	}
 	for o, c := range choice {
 		if c == setup.MoneyPayout {
 			if want := min(paid[o]+held[o], imp.InsuredLimit); paid[o] != want {
-				return CloseResult{}, fmt.Errorf("customer %s was paid out %s, but the insured amount is %s", o, bank.Naira(paid[o]), bank.Naira(want))
+				return CloseResult{}, fmt.Errorf("customer %s was paid out %s, but the insured amount is %s", o, money.Naira(paid[o]), money.Naira(want))
 			}
 		}
 	}
 	return res, nil
 }
 
-func (a *App) closureAccount(ctx context.Context, fromID string, dest bankBooks, to *config.Bank, cust bank.Customer, acc ImpactAccount) (string, error) {
+func (a *App) closureAccount(ctx context.Context, fromID string, dest bankBooks, to *config.Bank, cust Customer, acc ImpactAccount) (string, error) {
 	found, err := dest.customersByBVN(ctx, cust.BVN)
 	if err != nil {
 		return "", fmt.Errorf("find %s at %s: %w", cust.Name, to.Name, err)
 	}
 	holder := ""
-	if i := slices.IndexFunc(found, func(c bank.Customer) bool { return c.Status == bank.CustomerActive }); i >= 0 {
+	if i := slices.IndexFunc(found, func(c Customer) bool { return c.Status == customerActive }); i >= 0 {
 		holder = found[i].ID
 	} else {
 		created, err := dest.createCustomer(ctx, "close:"+fromID+":"+cust.ID, cust)

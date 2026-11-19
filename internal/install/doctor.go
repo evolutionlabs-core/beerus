@@ -3,12 +3,12 @@ package install
 import (
 	"context"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"os"
 	"slices"
 	"sort"
 	"strings"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
@@ -56,7 +56,7 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 		byID[b.ID] = b
 	}
 	prefix := config.DatabaseName(c.Dir, "")
-	all, err := store.List(ctx, c.DatabaseURL, "beerus_")
+	all, err := postgres.List(ctx, c.DatabaseURL, "beerus_")
 	if err != nil {
 		return rep, err
 	}
@@ -98,7 +98,7 @@ func Doctor(ctx context.Context, c *config.Config, fix bool) (DoctorReport, erro
 			return rep, err
 		}
 	}
-	if err := store.DropDatabases(ctx, c.DatabaseURL, rep.Orphans); err != nil {
+	if err := postgres.DropDatabases(ctx, c.DatabaseURL, rep.Orphans); err != nil {
 		return rep, err
 	}
 	for _, bank := range rep.StaleOwned {

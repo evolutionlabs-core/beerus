@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"net/http"
 	"slices"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -20,7 +19,7 @@ import (
 
 func (a *App) NameEnquiry(ctx context.Context, code, nuban string) (nip.NameEnquiry, error) {
 	if a.nibssCtl == nil {
-		return nip.NameEnquiry{}, &server.UnavailableError{Msg: nibssAway}
+		return nip.NameEnquiry{}, &control.UnavailableError{Msg: nibssAway}
 	}
 	return a.nibssCtl.enquire(ctx, code, nuban)
 }
@@ -32,7 +31,7 @@ func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := a.NameEnquiry(r.Context(), code, nuban)
-	var refused *server.PeerError
+	var refused *control.PeerError
 	if errors.As(err, &refused) && refused.Status == http.StatusBadRequest {
 		web.WriteError(w, r, http.StatusBadRequest, refused.Code, refused.Message)
 		return
@@ -47,7 +46,7 @@ func (a *App) ctlNameEnquiry(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) ctlNIPParticipants(w http.ResponseWriter, r *http.Request) {
 	list, err := a.nibssCtl.Directory(r.Context())
-	var away *server.NIBSSDownError
+	var away *control.NIBSSDownError
 	if errors.As(err, &away) {
 		a.log.Warn("NIBSS directory", "err", err)
 		web.WriteError(w, r, http.StatusServiceUnavailable, "nibss_unavailable", "NIBSS is not available right now.")
@@ -82,7 +81,7 @@ func (a *App) position(ctx context.Context, b *config.Bank, next time.Time) (map
 	if !ok {
 		return nil, fmt.Errorf("the open sessions of %s add up to more than 64 bits", b.ID)
 	}
-	open := nibss.Position{Outward: sessions.Outward, Inward: inward}
+	open := position{Outward: sessions.Outward, Inward: inward}
 	pos := open.NetDebit()
 	source := "configured"
 	if b.CapIsDefault() {
@@ -130,10 +129,10 @@ func (a *App) ctlNIPSettlement(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) settlementFailed(w http.ResponseWriter, r *http.Request, msg string, err error) {
 	var cbnDown *cbnDownError
-	var nibssDown *server.NIBSSDownError
-	var peer *server.PeerError
+	var nibssDown *control.NIBSSDownError
+	var peer *control.PeerError
 	var unchecked *uncheckedError
-	var away *server.UnavailableError
+	var away *control.UnavailableError
 	switch {
 	case errors.As(err, &unchecked):
 		a.log.Warn(msg, "err", err)
@@ -216,14 +215,14 @@ func (a *App) ctlNetDebitCap(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"cap":"5000000","collateral":"5000000"}.`)
 		return
 	}
-	capMinor, err := bank.ParseNaira(body.Cap)
+	capMinor, err := money.ParseNaira(body.Cap)
 	if err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "cap: "+err.Error())
 		return
 	}
 	var collateral int64
 	if body.Collateral != "" {
-		if collateral, err = bank.ParseNaira(body.Collateral); err != nil {
+		if collateral, err = money.ParseNaira(body.Collateral); err != nil {
 			web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "collateral: "+err.Error())
 			return
 		}

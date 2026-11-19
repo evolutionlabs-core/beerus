@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -10,7 +11,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 )
@@ -112,7 +112,7 @@ func noBankError() error {
 		return err
 	}
 	if len(banks) == 0 {
-		return errors.New(server.NoBanksMessage)
+		return errors.New(control.NoBanksMessage)
 	}
 	return errors.New(noBankMessage)
 }
@@ -157,7 +157,7 @@ func bankStatus(c *ctl, id string) (connect.BankStatus, error) {
 		return connect.BankStatus{}, err
 	}
 	if len(banks) == 0 {
-		return connect.BankStatus{}, errors.New(server.NoBanksMessage)
+		return connect.BankStatus{}, errors.New(control.NoBanksMessage)
 	}
 	ids := make([]string, 0, len(banks))
 	for _, b := range banks {
@@ -174,7 +174,7 @@ func sessionBanner(c *ctl, st connect.BankStatus) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	faults, err := decodeList[server.Fault](out)
+	faults, err := decodeList[control.Fault](out)
 	if err != nil {
 		return "", err
 	}

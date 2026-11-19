@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 	"net/url"
 	"slices"
@@ -14,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
@@ -31,12 +31,12 @@ type bankWish struct {
 	phase  string
 	reason string
 	config string
-	downs  []server.Fault
+	downs  []control.Fault
 }
 
 type remoteFaults struct {
-	Data       []server.FaultView `json:"data"`
-	NextCursor string             `json:"next_cursor"`
+	Data       []control.FaultView `json:"data"`
+	NextCursor string              `json:"next_cursor"`
 }
 
 func (a *App) pokePush() {
@@ -178,7 +178,7 @@ func (a *App) pushBank(ctx context.Context, id, base string, wake <-chan struct{
 func (a *App) syncBank(ctx context.Context, id, base string, gen int64, w bankWish) error {
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
-	var state server.State
+	var state control.State
 	if _, err := a.link.Request(ctx, base, http.MethodGet, "/v1/status", nil, nil, &state); err != nil {
 		return fmt.Errorf("read status of %s: %w", id, err)
 	}
@@ -189,7 +189,7 @@ func (a *App) syncBank(ctx context.Context, id, base string, gen int64, w bankWi
 	if err := a.syncFaults(ctx, id, base, w.downs); err != nil {
 		return err
 	}
-	body := server.PhaseRequest{Phase: w.phase, Reason: w.reason, Generation: gen, WorldID: a.WorldID()}
+	body := control.PhaseRequest{Phase: w.phase, Reason: w.reason, Generation: gen, WorldID: a.WorldID()}
 	if _, err := a.link.Request(ctx, base, http.MethodPut, "/v1/phase", nil, body, nil); err != nil {
 		return fmt.Errorf("send the phase of %s: %w", id, err)
 	}
@@ -200,7 +200,7 @@ func (a *App) heldFaults(ctx context.Context, base string) ([]string, error) {
 	held := []string{}
 	cursor := ""
 	for {
-		path := "/v1/faults?limit=" + strconv.Itoa(server.FaultPageMax)
+		path := "/v1/faults?limit=" + strconv.Itoa(control.FaultPageMax)
 		if cursor != "" {
 			path += "&cursor=" + url.QueryEscape(cursor)
 		}
@@ -209,7 +209,7 @@ func (a *App) heldFaults(ctx context.Context, base string) ([]string, error) {
 			return nil, err
 		}
 		for _, f := range page.Data {
-			if f.Kind == server.FaultDown {
+			if f.Kind == control.FaultDown {
 				held = append(held, f.ID)
 			}
 		}
@@ -220,14 +220,14 @@ func (a *App) heldFaults(ctx context.Context, base string) ([]string, error) {
 	}
 }
 
-func (a *App) syncFaults(ctx context.Context, id, base string, downs []server.Fault) error {
+func (a *App) syncFaults(ctx context.Context, id, base string, downs []control.Fault) error {
 	held, err := a.heldFaults(ctx, base)
 	if err != nil {
 		return fmt.Errorf("list faults of %s: %w", id, err)
 	}
 	wanted := make([]string, 0, len(downs))
 	for _, f := range downs {
-		wanted = append(wanted, server.FaultID(f.ID))
+		wanted = append(wanted, control.FaultID(f.ID))
 	}
 	if slices.ContainsFunc(held, func(h string) bool { return !slices.Contains(wanted, h) }) {
 		if _, err := a.link.Request(ctx, base, http.MethodDelete, "/v1/faults", nil, nil, nil); err != nil {
@@ -240,17 +240,17 @@ func (a *App) syncFaults(ctx context.Context, id, base string, downs []server.Fa
 		if slices.Contains(held, wanted[i]) {
 			continue
 		}
-		req := server.FaultRequest{Kind: server.FaultDown}
+		req := control.FaultRequest{Kind: control.FaultDown}
 		if f.Until != nil {
 			left := f.Until.Sub(now).Round(time.Second)
 			if left <= 0 {
 				continue
 			}
-			req.For = min(left, server.MaxFaultFor).String()
+			req.For = min(left, control.MaxFaultFor).String()
 		}
 		header := http.Header{"Idempotency-Key": {f.ID}}
 		_, err := a.link.Request(ctx, base, http.MethodPost, "/v1/faults", header, req, nil)
-		var pe *server.PeerError
+		var pe *control.PeerError
 		if errors.As(err, &pe) && pe.Code == "idempotency_key_reused" {
 			continue
 		}

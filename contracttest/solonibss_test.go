@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"io"
 	"net/http"
 	"os"
@@ -127,7 +128,7 @@ func startSoloNIBSS(t *testing.T, tsqAfter time.Duration, withBanks ...string) (
 	if err := store.Create(ctx, dbURL, name); err != nil {
 		t.Skipf("no Postgres for the solo NIBSS test (%v); set BEERUS_TEST_DATABASE_URL", err)
 	}
-	t.Cleanup(func() { _ = store.DropDatabases(ctx, dbURL, []string{name}) })
+	t.Cleanup(func() { _ = postgres.DropDatabases(ctx, dbURL, []string{name}) })
 	clients := map[string]*http.Client{}
 	clientDir := t.TempDir()
 	copyBankFiles(t, stage, clientDir, "ca/root.crt")

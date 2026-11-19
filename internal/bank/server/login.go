@@ -2,34 +2,26 @@ package server
 
 import (
 	"context"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type LoginResult struct {
-	Customer string `json:"customer_id"`
-}
-
-func (s *Banking) Login(ctx context.Context, bankID string, req LoginRequest) (LoginResult, error) {
+func (s *Banking) Login(ctx context.Context, bankID string, req control.LoginRequest) (control.LoginResult, error) {
 	bk, err := s.bankBook(bankID)
 	if err != nil {
-		return LoginResult{}, err
+		return control.LoginResult{}, err
 	}
 	c, err := bk.Bank.Authenticate(ctx, req.Username, req.Password)
 	if err != nil {
-		return LoginResult{}, err
+		return control.LoginResult{}, err
 	}
-	return LoginResult{Customer: c.ID}, nil
+	return control.LoginResult{Customer: c.ID}, nil
 }
 
 func (s *Banking) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	var req LoginRequest
+	var req control.LoginRequest
 	if err := web.DecodeBody(r, &req); err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", `Send {"username":"ada","password":"..."}.`)
 		return

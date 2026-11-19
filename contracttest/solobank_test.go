@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"io"
 	"io/fs"
 	"net/http"
@@ -102,7 +104,7 @@ func seedSoloBank(t *testing.T, ctx context.Context, dbURL, stage string, own *c
 	if err := books.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := books.Genesis(ctx, bank.GenesisSettlement, bank.GenesisVault, now); err != nil {
+	if err := books.Genesis(ctx, control.GenesisSettlement, control.GenesisVault, now); err != nil {
 		t.Fatal(err)
 	}
 	hash, err := bank.HashPassword(soloPassword)
@@ -176,7 +178,7 @@ func startSoloBank(t *testing.T, state string) soloBank {
 	if err := store.Create(ctx, dbURL, other); err != nil {
 		t.Skipf("no Postgres for the solo bank test (%v); set BEERUS_TEST_DATABASE_URL", err)
 	}
-	t.Cleanup(func() { _ = store.DropDatabases(ctx, dbURL, []string{other}) })
+	t.Cleanup(func() { _ = postgres.DropDatabases(ctx, dbURL, []string{other}) })
 	books, account := seedSoloBank(t, ctx, dbURL, stage, own, now)
 
 	clientDir := t.TempDir()

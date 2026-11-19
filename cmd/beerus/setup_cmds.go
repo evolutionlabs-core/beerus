@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"io"
 	"net"
 	"net/http"
@@ -24,7 +25,6 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
@@ -389,7 +389,7 @@ func writeClosure(w io.Writer, c setup.Closure) error {
 	fmt.Fprintf(w, "Money of %s on %s:\n", c.Name, stamp(c.ClosedAt))
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	for _, l := range c.Lines {
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", l.Name, l.NUBAN, bank.FormatNaira(l.AmountMinor), outcomeText(l))
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", l.Name, l.NUBAN, money.FormatNaira(l.AmountMinor), outcomeText(l))
 	}
 	return tw.Flush()
 }

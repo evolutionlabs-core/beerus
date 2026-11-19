@@ -1,18 +1,18 @@
 package participant
 
 import (
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 )
 
-func initialSteps(b *config.Bank) []server.Step {
-	steps := []server.Step{}
+func initialSteps(b *config.Bank) []control.Step {
+	steps := []control.Step{}
 	for _, s := range config.BankSteps() {
 		name := s.Name
 		if s.ID == config.StepAllocate && b.NIPCode != "" {
 			name += " (NIP " + b.NIPCode + ", NUBAN " + b.NUBANCode + ")"
 		}
-		steps = append(steps, server.Step{ID: s.ID, Name: name, Done: !ensured(s.ID)})
+		steps = append(steps, control.Step{ID: s.ID, Name: name, Done: !ensured(s.ID)})
 	}
 	return steps
 }

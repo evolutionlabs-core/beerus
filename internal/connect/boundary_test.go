@@ -21,19 +21,7 @@ var participantPackages = []string{
 	modulePath + "/internal/cbn/participant",
 }
 
-var limitedImports = map[string][]string{
-	modulePath + "/internal/bank/consent": {"Backoff"},
-	modulePath + "/internal/bank/store":   {"DropDatabases", "List"},
-	modulePath + "/internal/bank/ledger":  {"Check", "ErrUnknownAccount"},
-	modulePath + "/internal/nibss":        {"ClosureSession", "ConsentEvent", "Position", "Session", "SessionOK", "SessionPending"},
-	modulePath + "/internal/bank":         {"AddMinor", "Customer", "CustomerActive", "ErrBadCursor", "ErrBadLogin", "ErrUnknownCustomer", "ErrUnknownLine", "FeedLine", "GenesisSettlement", "GenesisVault", "MaxPage", "Naira", "Normalise", "ParseNaira", "Totals"},
-	modulePath + "/internal/bank/server": {
-		"AccountJSON", "AccountRequest", "AllPages", "ClosurePaid", "ClosurePayoutRequest", "CustomerRequest", "Entry", "ErrInvalid", "ErrNoSend", "ErrorLog",
-		"Fault", "FaultDown", "FaultID", "FaultPageMax", "FaultRequest", "FaultTimeout", "FaultView", "Invalid", "LedgerCheck", "Link", "ListParams", "LoginRequest",
-		"LoginResult", "MaxFaultFor", "MaxPeerBody", "NIBSSControl", "NIBSSDirectoryPath", "NIBSSDownError", "NIPSession", "NewFault", "NewLink", "NewNIBSSControl", "NoBanksMessage", "NotActiveError", "OpenBanks", "OpenSends", "PageQuery", "PeerError",
-		"PhaseRequest", "Refused", "State", "Step", "Totals", "TransferBody", "TransferError", "TransferRequest", "TransferResult", "UnavailableError", "Unreachable", "WriteBankingError",
-	},
-}
+var limitedImports = map[string][]string{}
 
 func TestNoParticipantInCore(t *testing.T) {
 	out, err := exec.Command("go", "list", "-f", `{{join .Deps " "}}`, ".").Output()

@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"os"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 	conn.Close(context.Background())
 	name := config.DatabaseName(t.TempDir(), "bank-g")
 	t.Cleanup(func() {
-		if err := store.DropDatabases(context.WithoutCancel(t.Context()), url, []string{name}); err != nil {
+		if err := postgres.DropDatabases(context.WithoutCancel(t.Context()), url, []string{name}); err != nil {
 			t.Errorf("drop database: %v", err)
 		}
 	})

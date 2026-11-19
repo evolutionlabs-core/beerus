@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"maps"
 	"net/http"
 	"os"
@@ -14,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
@@ -57,7 +58,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	}
 	s.ctl("POST", "/nip/sessions/"+fmt.Sprint(sent["session_id"])+"/status", nil)
 	databases := func() []string {
-		names, err := store.List(context.Background(), s.cfg.DatabaseURL, bank.Database)
+		names, err := postgres.List(context.Background(), s.cfg.DatabaseURL, bank.Database)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,8 +238,8 @@ func TestPurgeRules(t *testing.T) {
 	if fresh.Allocated.NIPCode == oldCode {
 		t.Fatalf("the recreated bank reused the code %s", oldCode)
 	}
-	if got := cbnBalance(t, s.cfg, "acme-bank-2"); got != bank.GenesisSettlement {
-		t.Fatalf("the recreated bank has %d at the CBN, want %d", got, bank.GenesisSettlement)
+	if got := cbnBalance(t, s.cfg, "acme-bank-2"); got != control.GenesisSettlement {
+		t.Fatalf("the recreated bank has %d at the CBN, want %d", got, control.GenesisSettlement)
 	}
 	if got := cbnBalance(t, s.cfg, "acme-bank"); got != oldBalance {
 		t.Fatalf("the purged bank's CBN account holds %d, want %d", got, oldBalance)
@@ -355,8 +356,8 @@ func TestRemovalResumesAfterRestarts(t *testing.T) {
 		return true
 	})
 	open := func(bank, name, phone, dob, username, naira string) string {
-		c := postControl(t, cfg, "/banks/"+bank+"/customers", bank+"-customer-"+username, server.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
-		acc := postControl(t, cfg, "/banks/"+bank+"/accounts", bank+"-account-"+username, server.AccountRequest{Customer: c["id"].(string), Type: "current"})
+		c := postControl(t, cfg, "/banks/"+bank+"/customers", bank+"-customer-"+username, control.CustomerRequest{Name: name, Phone: phone, DOB: dob, Username: username, Password: "beerus-test-" + username})
+		acc := postControl(t, cfg, "/banks/"+bank+"/accounts", bank+"-account-"+username, control.AccountRequest{Customer: c["id"].(string), Type: "current"})
 		nuban := acc["nuban"].(string)
 		postControl(t, cfg, "/banks/"+bank+"/deposits", bank+"-deposit-"+username, server.CashRequest{Account: nuban, Amount: naira})
 		r.app.SyncAll(t.Context())

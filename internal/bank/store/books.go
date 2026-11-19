@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,7 +29,7 @@ func OpenBooks(ctx context.Context, url, name string, inst bank.Profile, fees *c
 		st.Close()
 		return nil, err
 	}
-	if err := b.Genesis(ctx, bank.GenesisSettlement, bank.GenesisVault, genesisAt); err != nil {
+	if err := b.Genesis(ctx, control.GenesisSettlement, control.GenesisVault, genesisAt); err != nil {
 		st.Close()
 		return nil, err
 	}

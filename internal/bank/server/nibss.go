@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"net/http"
 	"net/url"
@@ -52,15 +53,15 @@ func (c NIBSSClient) Do(ctx context.Context, method, path string, query url.Valu
 		if errors.Is(err, context.Canceled) {
 			return 0, err
 		}
-		return 0, &UnavailableError{Msg: c.Away, Err: err}
+		return 0, &control.UnavailableError{Msg: c.Away, Err: err}
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxPeerBody+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, control.MaxPeerBody+1))
 	if err != nil {
-		return resp.StatusCode, &UnavailableError{Msg: c.Away, Err: fmt.Errorf("read the answer to %s: %w", path, err)}
+		return resp.StatusCode, &control.UnavailableError{Msg: c.Away, Err: fmt.Errorf("read the answer to %s: %w", path, err)}
 	}
-	if len(raw) > MaxPeerBody {
-		return resp.StatusCode, fmt.Errorf("the answer to %s is larger than %d MiB", path, MaxPeerBody>>20)
+	if len(raw) > control.MaxPeerBody {
+		return resp.StatusCode, fmt.Errorf("the answer to %s is larger than %d MiB", path, control.MaxPeerBody>>20)
 	}
 	if resp.StatusCode >= http.StatusMultipleChoices {
 		return resp.StatusCode, peerFailure(resp, raw)
@@ -85,9 +86,9 @@ func peerFailure(resp *http.Response, raw []byte) error {
 	if msg == "" {
 		msg = resp.Status
 	}
-	pe := &PeerError{Status: resp.StatusCode, Code: e.Error.Code, Message: msg}
+	pe := &control.PeerError{Status: resp.StatusCode, Code: e.Error.Code, Message: msg}
 	if resp.StatusCode == http.StatusServiceUnavailable {
-		return &UnavailableError{Msg: msg, Err: pe}
+		return &control.UnavailableError{Msg: msg, Err: pe}
 	}
 	return pe
 }
@@ -95,7 +96,7 @@ func peerFailure(resp *http.Response, raw []byte) error {
 func (c NIBSSClient) Enrol(ctx context.Context, name, phone string, dob clock.Date) (nip.BVNReply, error) {
 	var out nip.BVNReply
 	_, err := c.Do(ctx, http.MethodPost, nibssBVNsPath, nil, nip.BVNRequest{Name: name, Phone: phone, DOB: dob.String()}, &out)
-	var pe *PeerError
+	var pe *control.PeerError
 	if errors.As(err, &pe) && pe.Status == http.StatusUnprocessableEntity {
 		return out, fmt.Errorf("%w: %s", ledger.ErrInvalid, pe.Message)
 	}
@@ -131,7 +132,7 @@ func (s *Server) coreAway(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
-	return &UnavailableError{Msg: s.Bank().Name + " cannot reach NIBSS right now. Try again in a minute.", Err: err}
+	return &control.UnavailableError{Msg: s.Bank().Name + " cannot reach NIBSS right now. Try again in a minute.", Err: err}
 }
 
 func (s *Server) Enrol(ctx context.Context, name, phone string, dob clock.Date) (string, string, error) {

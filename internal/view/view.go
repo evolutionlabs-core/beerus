@@ -6,13 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/money"
 	"html/template"
 	"io/fs"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
@@ -95,9 +95,9 @@ func TransferOutcome(status string) string {
 
 func signedNaira(minor int64) string {
 	if minor > 0 {
-		return "+" + bank.FormatNaira(minor)
+		return "+" + money.FormatNaira(minor)
 	}
-	return bank.FormatNaira(minor)
+	return money.FormatNaira(minor)
 }
 
 const themeToggleHTML = `<button type="button" class="theme-toggle" aria-label="Switch theme"><svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true" class="theme-sun"><circle cx="8" cy="8" r="2.8" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true" class="theme-moon"><path d="M13.2 9.4A5.6 5.6 0 0 1 6.6 2.8a5.6 5.6 0 1 0 6.6 6.6Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></button>`
@@ -106,7 +106,7 @@ func Funcs() template.FuncMap {
 	return template.FuncMap{
 		"count":       Plural,
 		"themeToggle": func() template.HTML { return template.HTML(themeToggleHTML) },
-		"naira":       bank.FormatNaira,
+		"naira":       money.FormatNaira,
 		"signed":      signedNaira,
 		"when": func(t time.Time) string {
 			if t.IsZero() {

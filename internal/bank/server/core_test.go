@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,7 +25,7 @@ func registryServer(transport roundTrip) *Server {
 	return New(Config{
 		Bank:    config.Bank{ID: "bank-a", Name: "Bank A"},
 		CoreURL: "http://core.invalid",
-		Link:    Link{Client: &http.Client{Transport: transport}},
+		Link:    control.Link{Client: &http.Client{Transport: transport}},
 		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:   clock.New(),
 	})
@@ -208,4 +209,14 @@ func TestDirectoryOffersOnlyBanksThatTakeTransfers(t *testing.T) {
 	if own := s.Lookup("bank-a"); own == nil || own.Name != "Bank A" {
 		t.Fatalf("a bank's own entry must come from its own config, got %+v", own)
 	}
+}
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func stubReply(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": {"application/json"}}}
 }

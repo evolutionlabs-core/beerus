@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"io"
 	mrand "math/rand/v2"
@@ -753,9 +754,9 @@ func (b *browser) postTo(base, path string, form url.Values) int {
 func dropDatabases(t *testing.T, cfg *config.Config) {
 	t.Helper()
 	ctx := context.WithoutCancel(t.Context())
-	names, err := store.List(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, ""))
+	names, err := postgres.List(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, ""))
 	if err == nil {
-		err = store.DropDatabases(ctx, cfg.DatabaseURL, names)
+		err = postgres.DropDatabases(ctx, cfg.DatabaseURL, names)
 	}
 	if err != nil {
 		t.Errorf("drop databases: %v", err)

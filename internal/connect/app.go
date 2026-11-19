@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,7 +18,6 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/pki"
@@ -79,7 +79,7 @@ type App struct {
 	obHTTP       *http.Client
 	coreURL      string
 	pushWake     chan struct{}
-	link         server.Link
+	link         control.Link
 	probeHTTP    *http.Client
 	obKey        *ecdsa.PrivateKey
 	bankWrap     func(http.RoundTripper) http.RoundTripper
@@ -108,7 +108,7 @@ func New(cfg *config.Config, o Options) (*App, error) {
 		key:       key,
 		log:       o.Logger,
 		limiters:  map[string]*rate.Limiter{},
-		link:      server.NewLink(token, o.Bind),
+		link:      control.NewLink(token, o.Bind),
 		pushWake:  make(chan struct{}, 1),
 		probeHTTP: &http.Client{Timeout: probeTimeout},
 		coreURL:   o.CoreURL,

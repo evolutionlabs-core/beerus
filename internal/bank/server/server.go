@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -18,22 +19,13 @@ import (
 
 const sweepEvery = time.Minute
 
-type Step struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	Done        bool       `json:"done"`
-	Error       string     `json:"error,omitempty"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-}
-
 type Server struct {
 	id        string
 	dir       string
 	coreURL   string
 	nibssPort int
 	cbnPort   int
-	link      Link
+	link      control.Link
 	log       *slog.Logger
 	clock     *clock.Clock
 	fees      *charges.Schedule
@@ -41,14 +33,14 @@ type Server struct {
 	banking   *Banking
 	sender    *Sender
 	idem      web.Idempotency
-	faults    Faults
+	faults    control.Faults
 	phaseGen  atomic.Int64
 	stale     atomic.Bool
 
 	lifeMu sync.Mutex
 	phase  string
 	reason string
-	steps  []Step
+	steps  []control.Step
 
 	mu      sync.Mutex
 	bank    config.Bank
@@ -77,12 +69,12 @@ type Config struct {
 	NIBSSPort int
 	CBNPort   int
 	CoreURL   string
-	Link      Link
+	Link      control.Link
 	Log       *slog.Logger
 	Clock     *clock.Clock
 	SetupKey  uint64
 	Phase     string
-	Steps     []Step
+	Steps     []control.Step
 }
 
 func New(c Config) *Server {
@@ -138,14 +130,14 @@ func (s *Server) SetBooks(b *bank.Bank) {
 	s.books.Store(b)
 }
 
-func (s *Server) Provision(steps []Step, running, reason string) {
+func (s *Server) Provision(steps []control.Step, running, reason string) {
 	s.lifeMu.Lock()
 	defer s.lifeMu.Unlock()
 	s.steps = slices.Clone(steps)
 	if s.phase != config.PhaseProvisioning {
 		return
 	}
-	if slices.ContainsFunc(steps, func(st Step) bool { return !st.Done }) {
+	if slices.ContainsFunc(steps, func(st control.Step) bool { return !st.Done }) {
 		s.reason = reason
 		return
 	}
@@ -241,10 +233,10 @@ func (s *Server) Lookup(id string) *config.Bank {
 	return nil
 }
 
-func (s *Server) Quote(ctx context.Context, req TransferRequest) (TransferResult, error) {
+func (s *Server) Quote(ctx context.Context, req control.TransferRequest) (control.TransferResult, error) {
 	return s.sender.Quote(ctx, req)
 }
 
-func (s *Server) Transfer(ctx context.Context, req TransferRequest) (TransferResult, error) {
+func (s *Server) Transfer(ctx context.Context, req control.TransferRequest) (control.TransferResult, error) {
 	return s.sender.Transfer(ctx, req)
 }

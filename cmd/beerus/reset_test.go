@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"os"
 	"path/filepath"
@@ -13,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/install"
@@ -185,7 +185,7 @@ func TestResetDropsOwnedDatabasesOutsideThePrefix(t *testing.T) {
 	if err := cmdReset([]string{defaultSetupName, "--dir", dir}, &out); err != nil {
 		t.Fatal(err)
 	}
-	left, err := store.List(context.Background(), url, custom)
+	left, err := postgres.List(context.Background(), url, custom)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestResetDropsALeftoverNIBSSSnapshotDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := store.DropDatabases(ctx, url, []string{leftover, live}); err != nil {
+		if err := postgres.DropDatabases(ctx, url, []string{leftover, live}); err != nil {
 			t.Error(err)
 		}
 	})
@@ -233,7 +233,7 @@ func TestResetDropsALeftoverNIBSSSnapshotDatabase(t *testing.T) {
 	if out.String() != want {
 		t.Fatalf("output: %q, want %q", out.String(), want)
 	}
-	left, err := store.List(ctx, url, strings.TrimSuffix(config.DatabaseName(dir, "x"), "x"))
+	left, err := postgres.List(ctx, url, strings.TrimSuffix(config.DatabaseName(dir, "x"), "x"))
 	if err != nil || len(left) != 0 {
 		t.Fatalf("databases left after reset: %v %v", left, err)
 	}

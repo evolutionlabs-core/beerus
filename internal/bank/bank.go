@@ -85,11 +85,6 @@ func via(l ledger.Line, channel string, cp *Counterparty) ledger.Line {
 	return l
 }
 
-const (
-	GenesisSettlement int64 = 1_000_000_000_000
-	GenesisVault      int64 = 200_000_000_000
-)
-
 func (b *Bank) Genesis(ctx context.Context, settlement, vault int64, at time.Time) error {
 	_, err := b.L.Post(ctx, entry("genesis", "genesis", at, "Genesis capital",
 		dr(Settlement, settlement, "Genesis settlement funding"),

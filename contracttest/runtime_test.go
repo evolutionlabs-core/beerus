@@ -3,13 +3,13 @@ package contracttest
 import (
 	"context"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"os"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/connect"
 	"github.com/evolutionlabs-core/beerus/internal/install"
@@ -176,7 +176,7 @@ func TestResetDropsEveryDatabase(t *testing.T) {
 		}
 	}
 	prefix := strings.TrimSuffix(config.DatabaseName(cfg.Dir, "x"), "x")
-	left, err := store.List(context.Background(), cfg.DatabaseURL, prefix)
+	left, err := postgres.List(context.Background(), cfg.DatabaseURL, prefix)
 	if err != nil {
 		t.Fatal(err)
 	}

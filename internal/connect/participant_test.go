@@ -3,6 +3,7 @@ package connect
 import (
 	"bytes"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"log/slog"
 	"net"
@@ -119,7 +120,7 @@ func TestParticipantControlContract(t *testing.T) {
 	srv := server.New(server.Config{
 		Dir:   cfg.Dir,
 		Bank:  *cfg.Bank("bank-a"),
-		Link:  server.Link{Token: participantTok},
+		Link:  control.Link{Token: participantTok},
 		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock: clock.New(),
 		Phase: PhaseActive,
@@ -128,7 +129,7 @@ func TestParticipantControlContract(t *testing.T) {
 	bankFile := config.BankFilePath(cfg.Dir, "bank-a")
 	renamed := *cfg.Bank("bank-a")
 	renamed.Name, renamed.State = "Bank A Renamed", "suspended"
-	first, second := server.FaultID("flt_one"), server.FaultID("flt_two")
+	first, second := control.FaultID("flt_one"), control.FaultID("flt_two")
 	down := `{"kind":"down","for":"1h"}`
 	timeout := `{"kind":"timeout","outcome":"credited","count":2}`
 	downFault := fmt.Sprintf(`{"id":%q,"kind":"down","until_at":"T","created_at":"T"}`, first)

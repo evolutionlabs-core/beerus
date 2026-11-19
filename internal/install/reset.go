@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,7 +13,6 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
@@ -117,7 +117,7 @@ func Reset(ctx context.Context, dir, databaseURL string) ([]string, error) {
 		return nil, fmt.Errorf("reset %s: %w", dir, ErrRunning)
 	}
 	prefix := databasePrefix(dir)
-	found, err := store.List(ctx, databaseURL, prefix)
+	found, err := postgres.List(ctx, databaseURL, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("list databases of %s: %w", dir, err)
 	}
@@ -137,7 +137,7 @@ func Reset(ctx context.Context, dir, databaseURL string) ([]string, error) {
 		}
 	}
 	sort.Strings(names)
-	if err := store.DropDatabases(ctx, databaseURL, names); err != nil {
+	if err := postgres.DropDatabases(ctx, databaseURL, names); err != nil {
 		return nil, fmt.Errorf("drop databases of %s: %w", dir, err)
 	}
 	entries, err := os.ReadDir(dir)

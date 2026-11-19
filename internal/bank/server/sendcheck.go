@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 	"net/url"
 	"time"
@@ -50,32 +51,32 @@ func (s *Sender) Tick(ctx context.Context) error {
 	return nil
 }
 
-func (s *Sender) check(ctx context.Context, b *bank.Bank, row bank.Send) (NIPSession, error) {
+func (s *Sender) check(ctx context.Context, b *bank.Bank, row bank.Send) (control.NIPSession, error) {
 	sess, err := s.ask(ctx, row.SessionID, row.Request)
 	if errors.Is(err, ErrSendRefused) {
 		if rerr := s.undo(ctx, b, row.SessionID); rerr != nil {
-			return NIPSession{}, fmt.Errorf("reverse refused send %s: %w", row.SessionID, rerr)
+			return control.NIPSession{}, fmt.Errorf("reverse refused send %s: %w", row.SessionID, rerr)
 		}
-		return NIPSession{}, fmt.Errorf("reverse session %s: %w", row.SessionID, err)
+		return control.NIPSession{}, fmt.Errorf("reverse session %s: %w", row.SessionID, err)
 	}
 	if err != nil {
 		if rerr := b.RescheduleSend(ctx, row.SessionID, s.Clock.Real().Add(clock.Backoff(row.Attempts+1))); rerr != nil {
-			return NIPSession{}, errors.Join(err, rerr)
+			return control.NIPSession{}, errors.Join(err, rerr)
 		}
-		return NIPSession{}, err
+		return control.NIPSession{}, err
 	}
-	res := TransferResult{}
+	res := control.TransferResult{}
 	return sess, s.conclude(ctx, b, row.SessionID, sess, row.Attempts, &res)
 }
 
-func (s *Sender) ask(ctx context.Context, sid string, request json.RawMessage) (NIPSession, error) {
+func (s *Sender) ask(ctx context.Context, sid string, request json.RawMessage) (control.NIPSession, error) {
 	c, err := s.NIBSS()
 	if err != nil {
-		return NIPSession{}, err
+		return control.NIPSession{}, err
 	}
-	var sess NIPSession
+	var sess control.NIPSession
 	_, err = c.Do(ctx, http.MethodPost, transfersPath+"/"+url.PathEscape(sid)+"/status-queries", nil, nil, &sess)
-	var peer *PeerError
+	var peer *control.PeerError
 	if !errors.As(err, &peer) || peer.Status != http.StatusNotFound || len(request) == 0 {
 		return sess, err
 	}
@@ -86,22 +87,22 @@ func (s *Sender) ask(ctx context.Context, sid string, request json.RawMessage) (
 	return sess, err
 }
 
-func (s *Sender) StatusQuery(ctx context.Context, sid string) (NIPSession, error) {
+func (s *Sender) StatusQuery(ctx context.Context, sid string) (control.NIPSession, error) {
 	b := s.Books()
 	if b == nil {
-		return NIPSession{}, fmt.Errorf("the books of %s are not open yet", s.Own().Name)
+		return control.NIPSession{}, fmt.Errorf("the books of %s are not open yet", s.Own().Name)
 	}
 	row, open, err := b.OpenSend(ctx, sid)
 	if err != nil {
-		return NIPSession{}, err
+		return control.NIPSession{}, err
 	}
 	if open {
 		return s.check(ctx, b, row)
 	}
 	sess, err := s.ask(ctx, sid, nil)
-	var gone *PeerError
+	var gone *control.PeerError
 	if errors.As(err, &gone) && gone.Status == http.StatusNotFound {
-		return NIPSession{}, fmt.Errorf("%s has no send %s: %w", s.Own().Name, sid, ErrNoSend)
+		return control.NIPSession{}, fmt.Errorf("%s has no send %s: %w", s.Own().Name, sid, control.ErrNoSend)
 	}
 	return sess, err
 }

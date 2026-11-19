@@ -3,6 +3,7 @@ package participant
 import (
 	"context"
 	"crypto/tls"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -113,7 +114,7 @@ func (p *Participant) start(ctx context.Context) error {
 	}
 	l := &listeners{
 		site: &http.Server{Handler: p.handler(ob), ReadHeaderTimeout: headerTimeout},
-		api:  &http.Server{Handler: server.OpenAPI(p.srv, ob, p.log), ReadHeaderTimeout: headerTimeout, ReadTimeout: apiReadLimit, WriteTimeout: apiWriteLimit, IdleTimeout: apiIdle, ErrorLog: server.ErrorLog(p.log)},
+		api:  &http.Server{Handler: server.OpenAPI(p.srv, ob, p.log), ReadHeaderTimeout: headerTimeout, ReadTimeout: apiReadLimit, WriteTimeout: apiWriteLimit, IdleTimeout: apiIdle, ErrorLog: control.ErrorLog(p.log)},
 	}
 	l.serve(l.site, siteLn, nil)
 	l.serve(l.api, apiLn, tc)

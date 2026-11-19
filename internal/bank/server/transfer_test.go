@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 	"strings"
 	"testing"
@@ -13,10 +14,10 @@ import (
 func TestTransferRequestsAndRoutes(t *testing.T) {
 	a := &config.Bank{ID: "bank-a", Name: "Bank A", NIPCode: "999001"}
 	b := &config.Bank{ID: "bank-b", Name: "Bank B", NIPCode: "999002"}
-	req := TransferRequest{FromBank: "bank-a", ToBank: "bank-b", Amount: 100}
+	req := control.TransferRequest{FromBank: "bank-a", ToBank: "bank-b", Amount: 100}
 	rows := []struct {
 		name       string
-		req        TransferRequest
+		req        control.TransferRequest
 		from, to   *config.Bank
 		fromPhase  string
 		toPhase    string
@@ -30,7 +31,7 @@ func TestTransferRequestsAndRoutes(t *testing.T) {
 		{name: "unknown sender", req: req, to: b, toPhase: config.PhaseActive, status: http.StatusNotFound, errCode: "not_found", message: `no bank "bank-a"`},
 		{name: "unknown receiver", req: req, from: a, fromPhase: config.PhaseActive, status: http.StatusUnprocessableEntity, errCode: "unknown_bank", message: `find bank "bank-b": not in the NIBSS directory`},
 		{name: "sender not active", req: req, from: a, to: b, fromPhase: config.PhaseSuspended, toPhase: config.PhaseActive, status: http.StatusConflict, errCode: "bank_not_active", message: "Bank A is suspended, so it cannot do this now"},
-		{name: "closure ignores the sender phase", req: TransferRequest{FromBank: "bank-a", ToBank: "bank-b", Amount: 100, Closure: true}, from: a, to: b, fromPhase: config.PhaseClosing, toPhase: config.PhaseActive, wantToCode: "999002"},
+		{name: "closure ignores the sender phase", req: control.TransferRequest{FromBank: "bank-a", ToBank: "bank-b", Amount: 100, Closure: true}, from: a, to: b, fromPhase: config.PhaseClosing, toPhase: config.PhaseActive, wantToCode: "999002"},
 		{name: "receiver closed", req: req, from: a, to: b, fromPhase: config.PhaseActive, toPhase: config.PhaseClosed, status: http.StatusUnprocessableEntity, errCode: "bank_closed", message: "Bank B is closed and takes no more transfers. Nothing was debited"},
 	}
 	for _, r := range rows {
@@ -42,7 +43,7 @@ func TestTransferRequestsAndRoutes(t *testing.T) {
 				}
 				return
 			}
-			var te *TransferError
+			var te *control.TransferError
 			if !errors.As(err, &te) || te.Status != r.status || te.ErrCode != r.errCode || te.Error() != r.message {
 				t.Fatalf("error %v, want %d %s %q", err, r.status, r.errCode, r.message)
 			}
@@ -65,8 +66,8 @@ func TestTransferRequestsAndRoutes(t *testing.T) {
 		{"fine", 1, strings.Repeat("a", 100), "0000000012", "", 0},
 	}
 	for _, c := range checks {
-		err := CheckRequest(TransferRequest{Amount: c.amount, Narration: c.narration, To: c.to})
-		var te *TransferError
+		err := CheckRequest(control.TransferRequest{Amount: c.amount, Narration: c.narration, To: c.to})
+		var te *control.TransferError
 		switch {
 		case c.message == "" && err != nil:
 			t.Errorf("%s: %v", c.name, err)

@@ -3,11 +3,11 @@ package connect
 import (
 	"context"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 	"net/http"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
@@ -49,7 +49,7 @@ func (a *App) CheckSettlement(ctx context.Context) (SettlementCheck, error) {
 		return out, nil
 	}
 	if a.nibssCtl == nil {
-		return out, &server.UnavailableError{Msg: nibssAway}
+		return out, &control.UnavailableError{Msg: nibssAway}
 	}
 	if _, err := a.settleRun(ctx, false); err != nil {
 		return out, err
@@ -109,9 +109,9 @@ func (a *App) freshBankProblems(ctx context.Context, b *config.Bank) ([]string, 
 	deadline := time.NewTimer(bankCheckWait)
 	defer deadline.Stop()
 	for {
-		var state server.State
+		var state control.State
 		if _, err := a.link.Do(ctx, b.URL(), http.MethodGet, "/v1/status", nil, &state); err != nil {
-			if server.Unreachable(err) {
+			if control.Unreachable(err) {
 				return nil, &uncheckedError{Name: b.Name, Why: "is not answering, so its books were not checked", Err: err}
 			}
 			return nil, fmt.Errorf("read the status of %s: %w", b.ID, err)

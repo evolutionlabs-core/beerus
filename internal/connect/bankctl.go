@@ -4,19 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net/http"
 	"net/url"
 	"strconv"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank"
-	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 const (
 	bankAway      = "%s is not running or cannot be reached. Run beerus get banks to see its state, then try again."
-	bankPage      = bank.MaxPage
+	bankPage      = control.MaxPage
 	bankAccounts  = "/v1/accounts"
 	bankCustomers = "/v1/customers"
 	bankPayouts   = "/v1/closure-payouts"
@@ -46,25 +44,25 @@ func (e *bankDownError) Unwrap() error {
 }
 
 type bankBooks interface {
-	customers(ctx context.Context) ([]bank.Customer, error)
-	customersByBVN(ctx context.Context, bvn string) ([]bank.Customer, error)
-	createCustomer(ctx context.Context, key string, c bank.Customer) (bank.Customer, error)
-	accounts(ctx context.Context, customer string, limit int, cursor string) ([]server.AccountJSON, string, error)
-	account(ctx context.Context, nuban string) (server.AccountJSON, error)
-	openAccount(ctx context.Context, key, customer, product string) (server.AccountJSON, error)
+	customers(ctx context.Context) ([]Customer, error)
+	customersByBVN(ctx context.Context, bvn string) ([]Customer, error)
+	createCustomer(ctx context.Context, key string, c Customer) (Customer, error)
+	accounts(ctx context.Context, customer string, limit int, cursor string) ([]control.AccountJSON, string, error)
+	account(ctx context.Context, nuban string) (control.AccountJSON, error)
+	openAccount(ctx context.Context, key, customer, product string) (control.AccountJSON, error)
 	payouts(ctx context.Context) (map[string]int64, error)
 	payout(ctx context.Context, key, nuban string, amount int64) error
 	freeze(ctx context.Context, key, nuban string) error
-	totals(ctx context.Context) (bank.Totals, error)
-	recent(ctx context.Context, nuban string, limit int, cursor string) ([]bank.FeedLine, string, error)
-	line(ctx context.Context, nuban, id string) (bank.FeedLine, error)
-	sessionLines(ctx context.Context, sessionID string) ([]bank.FeedLine, error)
+	totals(ctx context.Context) (Totals, error)
+	recent(ctx context.Context, nuban string, limit int, cursor string) ([]FeedLine, string, error)
+	line(ctx context.Context, nuban, id string) (FeedLine, error)
+	sessionLines(ctx context.Context, sessionID string) ([]FeedLine, error)
 	login(ctx context.Context, username, password string) (string, error)
-	check(ctx context.Context) (ledger.Check, error)
+	check(ctx context.Context) (Check, error)
 }
 
 type bankAdmin struct {
-	link server.Link
+	link control.Link
 	id   string
 	name string
 	base string
@@ -89,14 +87,14 @@ func (c *bankAdmin) call(ctx context.Context, method, path string, key string, i
 		header = http.Header{"Idempotency-Key": {key}}
 	}
 	_, err := c.link.Request(ctx, c.base, method, path, header, in, out)
-	var peer *server.PeerError
+	var peer *control.PeerError
 	if errors.As(err, &peer) && peer.Status == http.StatusServiceUnavailable {
 		return &bankDownError{ID: c.id, Name: c.name, Err: err}
 	}
 	if err == nil || errors.As(err, &peer) || ctx.Err() != nil {
 		return err
 	}
-	if server.Unreachable(err) {
+	if control.Unreachable(err) {
 		return &bankDownError{ID: c.id, Name: c.name, Err: err}
 	}
 	return fmt.Errorf("call %s: %w", c.id, err)
@@ -122,28 +120,28 @@ func listAll[T any](ctx context.Context, c *bankAdmin, path string, q url.Values
 	}
 }
 
-func (c *bankAdmin) state(ctx context.Context) (server.State, error) {
-	var out server.State
+func (c *bankAdmin) state(ctx context.Context) (control.State, error) {
+	var out control.State
 	err := c.call(ctx, http.MethodGet, "/v1/status", "", nil, &out)
 	return out, err
 }
 
-func (c *bankAdmin) customers(ctx context.Context) ([]bank.Customer, error) {
-	return listAll[bank.Customer](ctx, c, bankCustomers, url.Values{})
+func (c *bankAdmin) customers(ctx context.Context) ([]Customer, error) {
+	return listAll[Customer](ctx, c, bankCustomers, url.Values{})
 }
 
-func (c *bankAdmin) customersByBVN(ctx context.Context, bvn string) ([]bank.Customer, error) {
-	return listAll[bank.Customer](ctx, c, bankCustomers, url.Values{"bvn": {bvn}})
+func (c *bankAdmin) customersByBVN(ctx context.Context, bvn string) ([]Customer, error) {
+	return listAll[Customer](ctx, c, bankCustomers, url.Values{"bvn": {bvn}})
 }
 
-func (c *bankAdmin) createCustomer(ctx context.Context, key string, cust bank.Customer) (bank.Customer, error) {
-	var out bank.Customer
-	req := server.CustomerRequest{Name: cust.Name, Phone: cust.Phone, DOB: cust.DOB.String()}
+func (c *bankAdmin) createCustomer(ctx context.Context, key string, cust Customer) (Customer, error) {
+	var out Customer
+	req := control.CustomerRequest{Name: cust.Name, Phone: cust.Phone, DOB: cust.DOB.String()}
 	err := c.call(ctx, http.MethodPost, bankCustomers, key, req, &out)
 	return out, err
 }
 
-func (c *bankAdmin) accounts(ctx context.Context, customer string, limit int, cursor string) ([]server.AccountJSON, string, error) {
+func (c *bankAdmin) accounts(ctx context.Context, customer string, limit int, cursor string) ([]control.AccountJSON, string, error) {
 	q := url.Values{"limit": {strconv.Itoa(limit)}}
 	if customer != "" {
 		q.Set("customer", customer)
@@ -151,33 +149,33 @@ func (c *bankAdmin) accounts(ctx context.Context, customer string, limit int, cu
 	if cursor != "" {
 		q.Set("cursor", cursor)
 	}
-	var page pageOf[server.AccountJSON]
+	var page pageOf[control.AccountJSON]
 	err := c.call(ctx, http.MethodGet, bankAccounts+"?"+q.Encode(), "", nil, &page)
-	var peer *server.PeerError
+	var peer *control.PeerError
 	if errors.As(err, &peer) && peer.Code == "invalid_cursor" {
-		return nil, "", fmt.Errorf("%w: %q", bank.ErrBadCursor, cursor)
+		return nil, "", fmt.Errorf("%w: %q", errBankCursor, cursor)
 	}
 	return page.Data, page.Next, err
 }
 
-func (c *bankAdmin) account(ctx context.Context, nuban string) (server.AccountJSON, error) {
-	var out server.AccountJSON
+func (c *bankAdmin) account(ctx context.Context, nuban string) (control.AccountJSON, error) {
+	var out control.AccountJSON
 	err := c.call(ctx, http.MethodGet, bankAccounts+"/"+url.PathEscape(nuban), "", nil, &out)
-	var peer *server.PeerError
+	var peer *control.PeerError
 	if errors.As(err, &peer) && peer.Status == http.StatusNotFound {
-		return out, fmt.Errorf("%w: %s", ledger.ErrUnknownAccount, nuban)
+		return out, fmt.Errorf("%w: %s", errUnknownAccount, nuban)
 	}
 	return out, err
 }
 
-func (c *bankAdmin) openAccount(ctx context.Context, key, customer, product string) (server.AccountJSON, error) {
-	var out server.AccountJSON
-	err := c.call(ctx, http.MethodPost, bankAccounts, key, server.AccountRequest{Customer: customer, Type: product}, &out)
+func (c *bankAdmin) openAccount(ctx context.Context, key, customer, product string) (control.AccountJSON, error) {
+	var out control.AccountJSON
+	err := c.call(ctx, http.MethodPost, bankAccounts, key, control.AccountRequest{Customer: customer, Type: product}, &out)
 	return out, err
 }
 
 func (c *bankAdmin) payouts(ctx context.Context) (map[string]int64, error) {
-	paid, err := listAll[server.ClosurePaid](ctx, c, bankPayouts, url.Values{})
+	paid, err := listAll[control.ClosurePaid](ctx, c, bankPayouts, url.Values{})
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +187,7 @@ func (c *bankAdmin) payouts(ctx context.Context) (map[string]int64, error) {
 }
 
 func (c *bankAdmin) payout(ctx context.Context, key, nuban string, amount int64) error {
-	req := server.ClosurePayoutRequest{Account: nuban, Amount: amount}
+	req := control.ClosurePayoutRequest{Account: nuban, Amount: amount}
 	return c.call(ctx, http.MethodPost, bankPayouts, key, req, nil)
 }
 
@@ -197,22 +195,22 @@ func (c *bankAdmin) freeze(ctx context.Context, key, nuban string) error {
 	return c.call(ctx, http.MethodPost, bankAccounts+"/"+url.PathEscape(nuban)+"/freeze", key, nil, nil)
 }
 
-func (c *bankAdmin) totals(ctx context.Context) (bank.Totals, error) {
-	var out server.Totals
+func (c *bankAdmin) totals(ctx context.Context) (Totals, error) {
+	var out control.Totals
 	err := c.call(ctx, http.MethodGet, bankBookRoot+"totals", "", nil, &out)
-	return bank.Totals{Customers: out.Customers, Accounts: out.Accounts, Deposits: out.Deposits}, err
+	return Totals{Customers: out.Customers, Accounts: out.Accounts, Deposits: out.Deposits}, err
 }
 
-func (c *bankAdmin) recent(ctx context.Context, nuban string, limit int, cursor string) ([]bank.FeedLine, string, error) {
+func (c *bankAdmin) recent(ctx context.Context, nuban string, limit int, cursor string) ([]FeedLine, string, error) {
 	q := url.Values{"limit": {strconv.Itoa(limit)}}
 	if cursor != "" {
 		q.Set("cursor", cursor)
 	}
-	var page pageOf[server.Entry]
+	var page pageOf[control.Entry]
 	err := c.call(ctx, http.MethodGet, bankBookRoot+"accounts/"+url.PathEscape(nuban)+"/entries?"+q.Encode(), "", nil, &page)
-	var peer *server.PeerError
+	var peer *control.PeerError
 	if errors.As(err, &peer) && peer.Code == "invalid_cursor" {
-		return nil, "", fmt.Errorf("%w: %q", bank.ErrBadCursor, cursor)
+		return nil, "", fmt.Errorf("%w: %q", errBankCursor, cursor)
 	}
 	if err != nil {
 		return nil, "", err
@@ -221,26 +219,26 @@ func (c *bankAdmin) recent(ctx context.Context, nuban string, limit int, cursor 
 	return lines, page.Next, err
 }
 
-func (c *bankAdmin) line(ctx context.Context, nuban, id string) (bank.FeedLine, error) {
-	var out server.Entry
+func (c *bankAdmin) line(ctx context.Context, nuban, id string) (FeedLine, error) {
+	var out control.Entry
 	err := c.call(ctx, http.MethodGet, bankBookRoot+"accounts/"+url.PathEscape(nuban)+"/entries/"+url.PathEscape(id), "", nil, &out)
-	var peer *server.PeerError
+	var peer *control.PeerError
 	if errors.As(err, &peer) && peer.Status == http.StatusNotFound {
-		return bank.FeedLine{}, fmt.Errorf("%w: %s", bank.ErrUnknownLine, id)
+		return FeedLine{}, fmt.Errorf("%w: %s", errUnknownLine, id)
 	}
 	if err != nil {
-		return bank.FeedLine{}, err
+		return FeedLine{}, err
 	}
-	lines, err := feedLines([]server.Entry{out})
+	lines, err := feedLines([]control.Entry{out})
 	if err != nil {
-		return bank.FeedLine{}, err
+		return FeedLine{}, err
 	}
 	return lines[0], nil
 }
 
-func (c *bankAdmin) sessionLines(ctx context.Context, sessionID string) ([]bank.FeedLine, error) {
+func (c *bankAdmin) sessionLines(ctx context.Context, sessionID string) ([]FeedLine, error) {
 	var out struct {
-		Data []server.Entry `json:"data"`
+		Data []control.Entry `json:"data"`
 	}
 	if err := c.call(ctx, http.MethodGet, bankBookRoot+"sessions/"+url.PathEscape(sessionID), "", nil, &out); err != nil {
 		return nil, err
@@ -249,31 +247,31 @@ func (c *bankAdmin) sessionLines(ctx context.Context, sessionID string) ([]bank.
 }
 
 func (c *bankAdmin) login(ctx context.Context, username, password string) (string, error) {
-	var out server.LoginResult
-	err := c.call(ctx, http.MethodPost, "/v1/logins", "", server.LoginRequest{Username: username, Password: password}, &out)
-	var peer *server.PeerError
+	var out control.LoginResult
+	err := c.call(ctx, http.MethodPost, "/v1/logins", "", control.LoginRequest{Username: username, Password: password}, &out)
+	var peer *control.PeerError
 	if errors.As(err, &peer) && peer.Code == "invalid_login" {
-		return "", bank.ErrBadLogin
+		return "", errBadLogin
 	}
 	return out.Customer, err
 }
 
-func (c *bankAdmin) check(ctx context.Context) (ledger.Check, error) {
-	var out server.LedgerCheck
+func (c *bankAdmin) check(ctx context.Context) (Check, error) {
+	var out control.LedgerCheck
 	if err := c.call(ctx, http.MethodGet, "/v1/ledger/check", "", nil, &out); err != nil {
-		return ledger.Check{}, err
+		return Check{}, err
 	}
-	return ledger.Check{TrialBalance: out.TrialBalance, BalanceMismatch: out.BalanceMismatches, EventMismatch: out.EventMismatches, UnbalancedEntries: out.UnbalancedEntries}, nil
+	return Check{TrialBalance: out.TrialBalance, BalanceMismatch: out.BalanceMismatches, EventMismatch: out.EventMismatches, UnbalancedEntries: out.UnbalancedEntries}, nil
 }
 
-func feedLines(entries []server.Entry) ([]bank.FeedLine, error) {
-	out := make([]bank.FeedLine, 0, len(entries))
+func feedLines(entries []control.Entry) ([]FeedLine, error) {
+	out := make([]FeedLine, 0, len(entries))
 	for _, e := range entries {
 		value, err := clock.ParseDate(e.ValueDate)
 		if err != nil {
 			return nil, fmt.Errorf("read entry %s: %w", e.ID, err)
 		}
-		out = append(out, bank.FeedLine{Key: e.ID, NUBAN: e.Account, Amount: e.Amount, BookedAt: e.PostedAt, ValueDate: value, Narration: e.Narration, Counterparty: e.Counterparty, SessionID: e.SessionID, BankRef: e.Reference, Channel: e.Channel, BalanceAfter: e.BalanceAfter, Seq: e.Seq})
+		out = append(out, FeedLine{Key: e.ID, NUBAN: e.Account, Amount: e.Amount, BookedAt: e.PostedAt, ValueDate: value, Narration: e.Narration, Counterparty: e.Counterparty, SessionID: e.SessionID, BankRef: e.Reference, Channel: e.Channel, BalanceAfter: e.BalanceAfter, Seq: e.Seq})
 	}
 	return out, nil
 }

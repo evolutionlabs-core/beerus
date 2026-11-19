@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"math"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -30,7 +30,7 @@ func TestNIBSSAdminReadsWhatNIBSSKeeps(t *testing.T) {
 	}{
 		{
 			name:   "the register in one page",
-			routes: map[string]string{server.NIBSSDirectoryPath: `{"data":[` + bank("bank-a", "000011", "active") + `,` + bank("bank-b", "000012", "removed") + `]}`},
+			routes: map[string]string{control.NIBSSDirectoryPath: `{"data":[` + bank("bank-a", "000011", "active") + `,` + bank("bank-b", "000012", "removed") + `]}`},
 			call: func(ctx context.Context, n *nibssAdmin) (string, error) {
 				list, err := n.Directory(ctx)
 				out := []string{}
@@ -43,7 +43,7 @@ func TestNIBSSAdminReadsWhatNIBSSKeeps(t *testing.T) {
 		},
 		{
 			name:   "an empty register",
-			routes: map[string]string{server.NIBSSDirectoryPath: `{"data":[]}`},
+			routes: map[string]string{control.NIBSSDirectoryPath: `{"data":[]}`},
 			call: func(ctx context.Context, n *nibssAdmin) (string, error) {
 				list, err := n.Directory(ctx)
 				return fmt.Sprint(len(list)), err
@@ -52,7 +52,7 @@ func TestNIBSSAdminReadsWhatNIBSSKeeps(t *testing.T) {
 		},
 		{
 			name:   "a cursor that does not move",
-			routes: map[string]string{server.NIBSSDirectoryPath: `{"data":[` + bank("bank-a", "000011", "active") + `],"next_cursor":"000011"}`},
+			routes: map[string]string{control.NIBSSDirectoryPath: `{"data":[` + bank("bank-a", "000011", "active") + `],"next_cursor":"000011"}`},
 			call: func(ctx context.Context, n *nibssAdmin) (string, error) {
 				_, err := n.Directory(ctx)
 				return "", err
@@ -171,8 +171,8 @@ func TestPlanReadsTheRegisterOnlyToAddABank(t *testing.T) {
 		return s
 	}
 	register := `{"data":[{"id":"bank-x","name":"Bank X","nip_code":"000019","nuban_code":"019","type":"commercial","status":"removed"}]}`
-	live := controlAt(t, map[string]string{server.NIBSSDirectoryPath: register})
-	away := &nibssAdmin{server.NewNIBSSControl(server.NewLink("", ""), 1)}
+	live := controlAt(t, map[string]string{control.NIBSSDirectoryPath: register})
+	away := &nibssAdmin{control.NewNIBSSControl(control.NewLink("", ""), 1)}
 	rows := []struct {
 		name    string
 		ctl     *nibssAdmin
@@ -204,7 +204,7 @@ func TestPlanReadsTheRegisterOnlyToAddABank(t *testing.T) {
 }
 
 func TestOpenTransfersWhenNIBSSIsDown(t *testing.T) {
-	a := &App{nibssCtl: &nibssAdmin{server.NewNIBSSControl(server.NewLink("", ""), 1)}}
+	a := &App{nibssCtl: &nibssAdmin{control.NewNIBSSControl(control.NewLink("", ""), 1)}}
 	_, _, err := a.openTransfers(t.Context(), "bank-a")
 	want := "NIBSS is not answering, so the open transfers of bank-a cannot be counted. Try again soon."
 	if err == nil || err.Error() != want {

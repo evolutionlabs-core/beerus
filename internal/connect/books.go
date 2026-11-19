@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
@@ -26,8 +25,8 @@ func (a *App) booksReady(id string) bool {
 	return st != nil && st.Phase != PhaseClosed && st.Steps[stepIndex(config.StepOpenBankingSchema)].Done
 }
 
-func (a *App) VerifyBank(ctx context.Context) (ledger.Check, error) {
-	var out ledger.Check
+func (a *App) VerifyBank(ctx context.Context) (Check, error) {
+	var out Check
 	for _, b := range a.bankList() {
 		books := a.booksOf(b.ID)
 		if books == nil {

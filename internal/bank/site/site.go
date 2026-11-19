@@ -2,6 +2,7 @@ package site
 
 import (
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -21,7 +22,7 @@ type Config struct {
 	Host   server.Host
 	Open   *openbanking.Server
 	Sender *consent.Sender
-	Link   server.Link
+	Link   control.Link
 	Clock  *clock.Clock
 	Log    *slog.Logger
 	Brand  string
@@ -127,7 +128,7 @@ func (s *site) render(w http.ResponseWriter, name string, status int, sess *sess
 }
 
 func (s *site) fail(w http.ResponseWriter, r *http.Request, err error) {
-	var ue *server.UnavailableError
+	var ue *control.UnavailableError
 	if errors.As(err, &ue) {
 		s.Log.Warn("online banking unavailable", "bank", s.id, "path", r.URL.Path, "err", ue.Err)
 		http.Error(w, ue.Msg, http.StatusServiceUnavailable)

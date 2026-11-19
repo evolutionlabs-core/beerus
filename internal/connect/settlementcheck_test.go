@@ -3,6 +3,7 @@ package connect
 import (
 	"encoding/json"
 	"errors"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"log/slog"
 	"math"
 	"net"
@@ -12,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -48,7 +48,7 @@ func controlAt(t *testing.T, routes map[string]string) *nibssAdmin {
 		<-done
 	})
 	port := l.Addr().(*net.TCPAddr).Port
-	return &nibssAdmin{server.NewNIBSSControl(server.NewLink("", ""), port)}
+	return &nibssAdmin{control.NewNIBSSControl(control.NewLink("", ""), port)}
 }
 
 func TestNIBSSStatusNeedsTheCountOfPostedSessions(t *testing.T) {
@@ -135,7 +135,7 @@ func TestOpenSessionsDecideWhatClosingWaitsFor(t *testing.T) {
 }
 
 func TestUncheckedBankAnswersUnavailable(t *testing.T) {
-	a := &App{log: slog.New(slog.DiscardHandler), link: server.NewLink("", ""), clock: clock.New()}
+	a := &App{log: slog.New(slog.DiscardHandler), link: control.NewLink("", ""), clock: clock.New()}
 	down := &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1}
 	_, err := a.freshBankProblems(t.Context(), down)
 	var unchecked *uncheckedError
@@ -151,7 +151,7 @@ func TestUncheckedBankAnswersUnavailable(t *testing.T) {
 	}{
 		{"not answering", &uncheckedError{Name: "Bank A", Why: "is not answering, so its books were not checked"}, http.StatusServiceUnavailable, "unavailable", "Bank A is not answering, so its books were not checked. Try again soon."},
 		{"not compared yet", &uncheckedError{Name: "Bank B", Why: "has not compared its books with the CBN yet"}, http.StatusServiceUnavailable, "unavailable", "Bank B has not compared its books with the CBN yet. Try again soon."},
-		{"NIBSS not open", &server.UnavailableError{Msg: nibssAway}, http.StatusServiceUnavailable, "unavailable", nibssAway},
+		{"NIBSS not open", &control.UnavailableError{Msg: nibssAway}, http.StatusServiceUnavailable, "unavailable", nibssAway},
 		{"something else", errors.New("disk full"), http.StatusInternalServerError, "internal_error", web.SomethingWentWrong},
 	}
 	for _, r := range rows {

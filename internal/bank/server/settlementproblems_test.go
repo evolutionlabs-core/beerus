@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	"slices"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ func fundedBank(t *testing.T) (*bank.Bank, string) {
 	ctx := t.Context()
 	at := time.Date(2026, 11, 4, 9, 0, 0, 0, clock.Lagos)
 	b := reportBank(t)
-	if err := b.Genesis(ctx, bank.GenesisSettlement, 200000000000, at); err != nil {
+	if err := b.Genesis(ctx, control.GenesisSettlement, 200000000000, at); err != nil {
 		t.Fatal(err)
 	}
 	c, err := b.CreateCustomer(ctx, "c0", "Ada Obi", "+2348030000001", clock.Date{Y: 1990, M: 1, D: 1}, "22912345678", "", "", at)
@@ -52,7 +53,7 @@ func TestSettlementProblems(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	const funded = bank.GenesisSettlement
+	const funded = control.GenesisSettlement
 	paid := []SettlementReport{report("k1", 100, 0)}
 	steps := []struct {
 		name     string
