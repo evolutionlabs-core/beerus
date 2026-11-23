@@ -21,6 +21,8 @@ brew install evolutionlabs-core/tap/beerus
 
 Update with `brew upgrade beerus`.
 
+If you ran `beerus trust` on v0.1.0, remove the old root: `security delete-certificate -c "Beerus CBN Trust Anchor" ~/Library/Keychains/login.keychain-db`.
+
 Without Homebrew, download the archive for your system from [Releases](https://github.com/evolutionlabs-core/beerus/releases), unpack it and put `beerus` on your `PATH`.
 
 ## Start
@@ -188,11 +190,11 @@ Connect your existing app to Beerus, the way you would connect it to Mono or Okr
 beerus partner add myapp --redirect-uri http://localhost:3000/callback --webhook-url http://localhost:3000/webhooks
 ```
 
-Your app's API key and mTLS certificates land in `.beerus/partners/myapp`. Every call to the Partner API at `https://connect.localhost:7443` uses them. To try calls from a terminal:
+Your app's API key lands in `.beerus/partners/myapp`. Every call to the Partner API at `http://connect.localhost:7443` sends it in the `X-Api-Key` header. To try calls from a terminal:
 
 ```bash
 P=.beerus/partners/myapp
-api() { curl -sS --cert $P/client.crt --key $P/client.key --cacert $P/ca.crt -H "X-Api-Key: $(cat $P/api-key)" -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "https://connect.localhost:7443$1" "${@:2}"; echo; }
+api() { curl -sS -H "X-Api-Key: $(cat $P/api-key)" -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "http://connect.localhost:7443$1" "${@:2}"; echo; }
 ```
 
 ## 2. Let a customer link their bank
