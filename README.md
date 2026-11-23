@@ -211,7 +211,24 @@ Your app creates a link token. `user_id` is your own ID for the customer. `insti
 api /v1/link/token/create -d '{"user_id":"user_1","institution_id":"bank-a","redirect_uri":"http://localhost:3000/callback"}'
 ```
 
-The response holds a `link_token` and its `expiration`. Open Connect for the customer at `http://connect.localhost:7444/link?token=LINK_TOKEN`. Connect shares history from 90 days before today, or less if the bank keeps less. They pick their bank if you gave none, log in with their online banking details and approve. Beerus Connect then sends them to your redirect URI with a `code` and a `link_session_id`.
+The response holds a `link_token` and its `expiration`. Open Connect over your page with one script tag and one call:
+
+```html
+<script src="http://connect.localhost:7444/connect.js"></script>
+<script>BeerusConnect.open(LINK_TOKEN, {
+  onSuccess: (publicToken, metadata) => fetch('/exchange', {method: 'POST', body: JSON.stringify({code: publicToken, link_session_id: metadata.link_session_id})}),
+  onExit: error => {}
+})</script>
+```
+
+Connect opens on the bank list, or goes straight to the bank when the link token has an `institution_id`. The customer logs in on the bank's own page in a popup and approves. Then:
+
+- `onSuccess(publicToken, metadata)` runs when they finish. `publicToken` is the one-time `code` to exchange within 10 minutes. `metadata` holds `link_session_id`, `institution` and `accounts`.
+- `onExit(error)` runs when they close Connect (`error` is `null`) or it fails (`error` has a `code` and `message`).
+
+The page that calls `open` must be served from the origin of the `redirect_uri` you registered with `beerus partner add --redirect-uri`. Connect only lets that origin frame it, and sends results only to it. To keep the handle, use `const connect = BeerusConnect.create({token, onSuccess, onExit}); connect.open();`.
+
+Without the script, send the customer to `http://connect.localhost:7444/link?token=LINK_TOKEN`. Beerus Connect then redirects them to your redirect URI with a `code` and a `link_session_id`. Connect shares history from 90 days before today, or less if the bank keeps less.
 
 ## 3. Get the connection
 

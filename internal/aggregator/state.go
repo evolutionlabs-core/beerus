@@ -27,6 +27,8 @@ type LinkSession struct {
 	TokenExpires  time.Time     `json:"token_expires"`
 	TokenUsed     bool          `json:"token_used"`
 	Institution   string        `json:"institution"`
+	Fixed         bool          `json:"fixed,omitempty"`
+	Overlay       bool          `json:"overlay,omitempty"`
 	CustomerID    string        `json:"customer_id"`
 	Accounts      []string      `json:"accounts"`
 	Analytics     bool          `json:"analytics"`

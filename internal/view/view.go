@@ -41,15 +41,36 @@ func Assets() http.Handler {
 	}))
 }
 
-const csp = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; form-action 'self' http: https:; frame-ancestors 'none'; base-uri 'none'"
+const cspFormat = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; form-action 'self' http: https:; frame-ancestors %s; base-uri 'none'"
 
 func SetHeaders(h http.Header) {
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Content-Security-Policy", csp)
+	h.Set("Content-Security-Policy", fmt.Sprintf(cspFormat, "'none'"))
 	h.Set("Referrer-Policy", "same-origin")
+}
+
+func AllowFrame(h http.Header, origin string) {
+	h.Del("X-Frame-Options")
+	h.Set("Content-Security-Policy", fmt.Sprintf(cspFormat, origin))
+}
+
+func Script(name string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, err := assetFS.ReadFile("assets/" + name)
+		if err != nil {
+			http.Error(w, "script not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if _, err := w.Write(b); err != nil {
+			return
+		}
+	})
 }
 
 func Plural(n int, one, many string) string {
@@ -165,8 +186,7 @@ func Funcs() template.FuncMap {
 			}
 			return string(s[0]-32) + s[1:]
 		},
-		"add":   func(a, b int) int { return a + b },
-		"css":   func() string { return cssURL },
-		"steps": func() []int { return []int{0, 1, 2, 3} },
+		"add": func(a, b int) int { return a + b },
+		"css": func() string { return cssURL },
 	}
 }
