@@ -10,14 +10,13 @@ var pages = template.Must(template.New("").Funcs(view.Funcs()).Funcs(template.Fu
 	"logo": func() template.HTML { return template.HTML(view.LogoSVG) },
 }).Parse(`
 {{define "head"}}<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <title>{{.Title}}</title>
 <link rel="stylesheet" href="{{css}}">
-<script src="/assets/theme.js"></script>
 <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
 </head>
 <body class="min-h-screen">
@@ -44,7 +43,7 @@ var pages = template.Must(template.New("").Funcs(view.Funcs()).Funcs(template.Fu
 {{define "error"}}{{if .Error}}<p class="mt-4 rounded-[10px] border border-neg/30 bg-neg/10 px-3 py-2.5 text-[13px] text-neg" role="alert">{{.Error}}</p>{{end}}{{end}}
 
 {{define "choose"}}<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -142,7 +141,7 @@ var pages = template.Must(template.New("").Funcs(view.Funcs()).Funcs(template.Fu
 </html>{{end}}
 
 {{define "relay"}}<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
