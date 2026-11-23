@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"sort"
 	"strconv"
 	"time"
 
@@ -25,6 +26,7 @@ func (a *App) PartnerHandler() http.Handler {
 	mux.HandleFunc("POST /v1/link_sessions", a.registered(a.idempotent(a.createLinkSession)))
 	mux.HandleFunc("GET /v1/link_sessions/{id}", a.getLinkSession)
 	mux.HandleFunc("GET /v1/webhook_keys", a.listWebhookKeys)
+	mux.HandleFunc("GET /v1/institutions", a.listInstitutions)
 	mux.HandleFunc("POST /v1/connections/exchange", a.idempotent(a.exchange))
 	mux.HandleFunc("GET /v1/connections/{id}", a.getConnection)
 	mux.HandleFunc("DELETE /v1/connections/{id}", a.idempotent(a.deleteConnection))
@@ -169,6 +171,38 @@ func (a *App) expireSession(ls *LinkSession) {
 
 func (a *App) listWebhookKeys(w http.ResponseWriter, r *http.Request) {
 	web.WriteJSON(w, http.StatusOK, map[string]any{"data": []map[string]string{{"key_id": a.key.ID, "public_key": a.key.PublicWH(), "status": "active"}}})
+}
+
+func (a *App) listInstitutions(w http.ResponseWriter, r *http.Request) {
+	limit, cursor, ok := pageParams(w, r)
+	if !ok {
+		return
+	}
+	banks := a.openInstitutions()
+	sort.Slice(banks, func(i, j int) bool { return banks[i].ID < banks[j].ID })
+	from := 0
+	if cursor != "" {
+		i := slices.IndexFunc(banks, func(b *config.Bank) bool { return b.ID == cursor })
+		if i < 0 {
+			badCursor(w, r)
+			return
+		}
+		from = i + 1
+	}
+	out := []map[string]string{}
+	next := ""
+	for _, b := range banks[from:] {
+		if len(out) == limit {
+			next = out[len(out)-1]["institution_id"]
+			break
+		}
+		out = append(out, map[string]string{"institution_id": b.ID, "name": b.Name})
+	}
+	body := map[string]any{"institutions": out}
+	if next != "" {
+		body["next_cursor"] = next
+	}
+	web.WriteJSON(w, http.StatusOK, body)
 }
 
 func historyStart(start, today clock.Date, days int) (clock.Date, bool) {

@@ -49,6 +49,33 @@ func TestAuthentication(t *testing.T) {
 	}
 }
 
+func TestInstitutions(t *testing.T) {
+	s := newStack(t)
+	for _, c := range []struct{ name, path, want string }{
+		{"full list", "/v1/institutions", `{"institutions":[{"institution_id":"bank-a","name":"Bank A"},{"institution_id":"bank-b","name":"Bank B"}]}`},
+		{"first page", "/v1/institutions?limit=1", `{"institutions":[{"institution_id":"bank-a","name":"Bank A"}],"next_cursor":"bank-a"}`},
+		{"second page", "/v1/institutions?limit=1&cursor=bank-a", `{"institutions":[{"institution_id":"bank-b","name":"Bank B"}]}`},
+	} {
+		r := s.must(s.call("GET", c.path, nil), 200)
+		if string(bytes.TrimSpace(r.Body)) != c.want {
+			t.Fatalf("%s: %s, want %s", c.name, r.Body, c.want)
+		}
+	}
+	for _, c := range []struct{ name, path, code, message string }{
+		{"bad limit", "/v1/institutions?limit=0", "invalid_request", "limit must be a number from 1 to 500."},
+		{"bad cursor", "/v1/institutions?cursor=nope", "invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page."},
+	} {
+		r := s.call("GET", c.path, nil)
+		if r.Status != 400 || r.Code() != c.code || !strings.Contains(string(r.Body), c.message) {
+			t.Fatalf("%s: %d %s, want 400 %s %q", c.name, r.Status, r.Body, c.code, c.message)
+		}
+	}
+	r := s.call("GET", "/v1/institutions", nil, credentials("", ""), skipValidation())
+	if r.Status != 401 || r.Code() != "unauthenticated" {
+		t.Fatalf("no credentials: %d %s", r.Status, r.Body)
+	}
+}
+
 func TestLinkSessionValidation(t *testing.T) {
 	s := newStack(t)
 	today := s.today()

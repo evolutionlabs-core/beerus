@@ -197,6 +197,12 @@ P=.beerus/partners/myapp
 api() { curl -sS -H "Beerus-Client-ID: myapp" -H "Beerus-Secret: $(cat $P/secret)" -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "http://connect.localhost:7443$1" "${@:2}"; echo; }
 ```
 
+To list the banks your customers can link, for your own bank picker:
+
+```bash
+api "/v1/institutions?limit=50"
+```
+
 ## 2. Let a customer link their bank
 
 Your app creates a link session:
