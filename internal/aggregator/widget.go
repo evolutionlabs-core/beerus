@@ -66,6 +66,8 @@ func (a *App) WidgetHandler() http.Handler {
 	mux.HandleFunc("GET /link", a.widgetOpen)
 	mux.HandleFunc("GET /link/start", a.registered(a.widgetStart))
 	mux.HandleFunc("POST /link/institution", a.registered(a.widgetInstitution))
+	mux.HandleFunc("GET "+pickPath, a.pickOpen)
+	mux.HandleFunc("POST "+pickPath, a.pickSubmit)
 	mux.HandleFunc("POST /link/cancel", a.widgetCancel)
 	mux.HandleFunc("GET /bank/callback", a.bankCallback)
 	mux.HandleFunc("POST /consent-events", a.consentEvents)
@@ -172,13 +174,14 @@ type overlayError struct {
 }
 
 type overlayAccount struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Currency string `json:"currency"`
+	AccountID string `json:"account_id"`
+	Name      string `json:"name"`
+	Mask      string `json:"mask"`
 }
 
 type overlayResult struct {
 	PublicToken   string            `json:"public_token,omitempty"`
+	Picking       bool              `json:"picking,omitempty"`
 	LinkSessionID string            `json:"link_session_id"`
 	Institution   map[string]string `json:"institution"`
 	Accounts      []overlayAccount  `json:"accounts"`
@@ -197,9 +200,10 @@ func overlayMessage(code string) string {
 	return "Something went wrong. Try again."
 }
 
-func (a *App) relayLocked(w http.ResponseWriter, ls *LinkSession, params url.Values) {
+func (a *App) resultLocked(w http.ResponseWriter, name string, ls *LinkSession, params url.Values) {
 	res := overlayResult{
 		PublicToken:   params.Get("code"),
+		Picking:       params.Get("picking") != "",
 		LinkSessionID: ls.ID,
 		Institution:   a.institutionJSON(ls.Institution),
 		Accounts:      []overlayAccount{},
@@ -207,16 +211,25 @@ func (a *App) relayLocked(w http.ResponseWriter, ls *LinkSession, params url.Val
 	if code := params.Get("error"); code != "" {
 		res.Error = &overlayError{Code: code, Message: overlayMessage(code)}
 	}
-	for _, ba := range ls.BankAccounts {
-		res.Accounts = append(res.Accounts, overlayAccount{Name: ba.Name, Type: ba.Type, Currency: ba.Currency})
+	if res.PublicToken != "" {
+		res.Accounts = a.pickedLocked(ls)
 	}
 	raw, err := json.Marshal(res)
 	if err != nil {
-		a.log.Error("relay result", "err", err)
+		a.log.Error("link result", "err", err)
 		a.message(w, http.StatusInternalServerError, "Something went wrong", "Try again.")
 		return
 	}
-	a.render(w, "relay", http.StatusOK, page{"Result": string(raw), "Parent": partnerOrigin(ls.RedirectURI)})
+	d := page{"Result": string(raw), "Parent": partnerOrigin(ls.RedirectURI)}
+	if b := a.bank(ls.Institution); b != nil {
+		d["Bank"] = b.Name
+	}
+	d["PartnerName"] = a.partnerOf(ls.PartnerID).Name
+	a.render(w, name, http.StatusOK, d)
+}
+
+func (a *App) relayLocked(w http.ResponseWriter, ls *LinkSession, params url.Values) {
+	a.resultLocked(w, "relay", ls, params)
 }
 
 func (a *App) redirectPartner(w http.ResponseWriter, r *http.Request, ls *LinkSession, params url.Values) {
@@ -380,11 +393,26 @@ func (a *App) widgetInstitution(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) widgetCancel(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	_, ls := a.session(w, r)
 	if ls == nil {
+		a.mu.Unlock()
 		return
 	}
+	if ls.Status != "picking" {
+		defer a.mu.Unlock()
+		a.failSession(w, r, ls, "access_denied")
+		return
+	}
+	b, consent := a.bank(ls.Institution), ls.BankConsentID
+	a.vaultDrop(linkVaultPrefix + ls.ID)
+	ls.Status = "expired"
+	a.dirty()
+	a.mu.Unlock()
+	if b != nil {
+		a.revokeOrQueue(b, consent)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.failSession(w, r, ls, "access_denied")
 }
 

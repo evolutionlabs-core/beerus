@@ -71,13 +71,7 @@ var pages = template.Must(template.New("").Funcs(view.Funcs()).Funcs(template.Fu
 <div id="none" hidden class="pt-8 text-center"><p class="text-[16px] font-medium">No banks match “<span id="query"></span>”</p><p class="mt-1.5 text-[14px] text-muted">Only banks in this setup are listed.</p></div>
 <p id="blocked" hidden class="mt-4 text-[14px] text-muted" role="alert">Allow pop-ups to sign in at your bank.</p>
 </div>
-{{if .Overlay}}<div id="success" hidden class="flex flex-1 flex-col items-center justify-center text-center">
-<span class="grid size-14 place-items-center rounded-full bg-primary text-on-primary"><svg viewBox="0 0 16 16" class="size-6" fill="none" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-<h1 class="mt-6 text-[24px] leading-tight font-semibold">Connected</h1>
-<p class="mt-2 text-[14px] text-muted"><span id="bank-ok"></span> is now connected to {{.PartnerName}}.</p>
-<button type="button" id="done" class="mt-8 h-12 w-full cursor-pointer rounded-[10px] bg-primary text-[15px] font-medium text-on-primary hover:opacity-90">Done</button>
-</div>
-<div id="down" hidden class="flex flex-1 flex-col items-center justify-center text-center">
+{{if .Overlay}}<div id="down" hidden class="flex flex-1 flex-col items-center justify-center text-center">
 <span class="grid size-14 place-items-center rounded-full bg-hover text-[24px] font-semibold">!</span>
 <h1 class="mt-6 text-[24px] leading-tight font-semibold"><span id="bank-down"></span> isn't responding</h1>
 <p class="mt-2 text-[14px] text-muted">Try again in a moment, or pick another bank.</p>
@@ -86,6 +80,64 @@ var pages = template.Must(template.New("").Funcs(view.Funcs()).Funcs(template.Fu
 </div>{{end}}
 </main>
 <script src="/assets/connect-frame.js"></script>
+</body>
+</html>{{end}}
+
+{{define "pick"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>{{.Title}}</title>
+<link rel="stylesheet" href="{{css}}">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+</head>
+<body class="min-h-screen">
+<form method="post" action="/link/cancel"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit" class="absolute top-3 right-3 grid size-11 cursor-pointer place-items-center rounded-full text-muted hover:bg-hover hover:text-ink" aria-label="Close"><svg viewBox="0 0 16 16" class="size-4" fill="none" aria-hidden="true"><path d="m3.5 3.5 9 9m0-9-9 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></form>
+<main class="mx-auto flex min-h-screen max-w-[420px] flex-col p-6">
+<div class="flex items-center gap-3 pt-1">
+<span class="grid size-10 shrink-0 place-items-center rounded-[10px] bg-hover text-[15px] font-medium">{{initial .Bank}}</span>
+<span class="text-[16px] font-medium">{{.Bank}}</span>
+</div>
+<form method="post" action="/link/accounts" class="flex flex-1 flex-col pt-8">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<h1 class="text-[24px] leading-tight font-semibold">Pick accounts</h1>
+<p class="mt-2 text-[14px] text-muted">{{.PartnerName}} will see the accounts you pick.</p>
+<div class="mt-6 overflow-hidden rounded-xl border border-line bg-panel">
+{{range .Rows}}<label class="flex h-[68px] cursor-pointer items-center gap-3.5 border-b border-line px-4 last:border-b-0">
+<span class="relative size-5 shrink-0"><input type="checkbox" name="account" value="{{.NUBAN}}" class="peer absolute inset-0 size-5 cursor-pointer appearance-none rounded-md border border-line-strong checked:border-primary checked:bg-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-line-strong"{{if .Checked}} checked{{end}}>
+<svg viewBox="0 0 16 16" class="pointer-events-none absolute inset-0 m-auto size-3.5 text-on-primary opacity-0 peer-checked:opacity-100" fill="none" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+<span class="flex flex-col"><span class="text-[16px] font-medium">{{.Name}}</span><span class="font-mono text-[13px] text-muted">•••• {{.Mask}}</span></span>
+</label>{{end}}
+</div>
+{{template "error" .}}
+<div class="mt-auto pt-8"><button type="submit" id="continue" class="h-12 w-full cursor-pointer rounded-[10px] bg-primary text-[15px] font-medium text-on-primary hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"{{if not .Ticked}} disabled{{end}}>Continue</button></div>
+</form>
+</main>
+<script src="/assets/connect-pick.js"></script>
+</body>
+</html>{{end}}
+
+{{define "connected"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Connected</title>
+<link rel="stylesheet" href="{{css}}">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+</head>
+<body class="min-h-screen" data-result="{{.Result}}" data-parent="{{.Parent}}">
+<button type="button" id="close" class="absolute top-3 right-3 grid size-11 cursor-pointer place-items-center rounded-full text-muted hover:bg-hover hover:text-ink" aria-label="Close"><svg viewBox="0 0 16 16" class="size-4" fill="none" aria-hidden="true"><path d="m3.5 3.5 9 9m0-9-9 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+<main class="mx-auto flex min-h-screen max-w-[420px] flex-col items-center justify-center p-6 text-center">
+<span class="grid size-14 place-items-center rounded-full bg-primary text-on-primary"><svg viewBox="0 0 16 16" class="size-6" fill="none" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+<h1 class="mt-6 text-[24px] leading-tight font-semibold">Connected</h1>
+<p class="mt-2 text-[14px] text-muted">{{.Bank}} is now connected to {{.PartnerName}}.</p>
+<button type="button" id="done" class="mt-8 h-12 w-full cursor-pointer rounded-[10px] bg-primary text-[15px] font-medium text-on-primary hover:opacity-90">Done</button>
+</main>
+<script src="/assets/connect-done.js"></script>
 </body>
 </html>{{end}}
 
