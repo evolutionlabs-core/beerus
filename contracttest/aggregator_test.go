@@ -226,18 +226,26 @@ func TestConsentEventsNeedAKnownBank(t *testing.T) {
 	if err := s.bankDB("bank-a").QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
 		t.Fatal(err)
 	}
-	event := fmt.Sprintf(`{"iss":%q,"aud":%q,"jti":"known-bank","exp":%d,"consent_id":%q,"status":"Revoked"}`, s.cfg.Bank("bank-a").APIURL(), s.cfg.WidgetURL(), time.Now().Add(time.Minute).Unix(), consentID)
+	aURL, bURL, widget := s.cfg.Bank("bank-a").APIURL(), s.cfg.Bank("bank-b").APIURL(), s.cfg.WidgetURL()
+	event := func(iss, aud, jti string) string {
+		return fmt.Sprintf(`{"iss":%q,"aud":%q,"jti":%q,"exp":%d,"consent_id":%q,"status":"Revoked"}`, iss, aud, jti, time.Now().Add(time.Minute).Unix(), consentID)
+	}
+	invalid := `"code":"invalid_request","message":"The event is not valid."`
 	rows := []struct {
 		name   string
 		caller string
+		body   string
 		status int
 		want   string
 	}{
-		{"no caller", "", http.StatusUnauthorized, `"code":"unauthenticated","message":"Send your ID in the Beerus-Caller header."`},
-		{"an unknown bank", "bank-z", http.StatusForbidden, `"code":"forbidden","message":"bank-z is not a bank Connect knows."`},
+		{"no caller", "", event(aURL, widget, "j1"), http.StatusUnauthorized, `"code":"unauthenticated","message":"Send your ID in the Beerus-Caller header."`},
+		{"an unknown bank", "bank-z", event(aURL, widget, "j2"), http.StatusForbidden, `"code":"forbidden","message":"bank-z is not a bank Connect knows."`},
+		{"bank-a naming bank-b as issuer", "bank-a", event(bURL, widget, "j3"), http.StatusBadRequest, invalid},
+		{"bank-a naming another audience", "bank-a", event(aURL, "http://other.localhost", "j4"), http.StatusBadRequest, invalid},
+		{"bank-b reporting a consent of bank-a", "bank-b", event(bURL, widget, "j5"), http.StatusNoContent, ""},
 	}
 	for _, r := range rows {
-		req, err := http.NewRequest(http.MethodPost, s.cfg.WidgetURL()+"/consent-events", strings.NewReader(event))
+		req, err := http.NewRequest(http.MethodPost, widget+"/consent-events", strings.NewReader(r.body))
 		if err != nil {
 			t.Fatal(err)
 		}

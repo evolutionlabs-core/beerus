@@ -190,7 +190,7 @@ func startSoloBank(t *testing.T, state string) soloBank {
 		code, _ := probe.get(probe.plain, site+"/health", nil)
 		return code == http.StatusOK
 	})
-	nibss := callerClient(t, config.NIBSSCN)
+	nibss := callerClient(t, config.NIBSSID)
 	return soloBank{ctx, dbURL, stage, own, books, account, solo, site, api, probe, nibss}
 }
 

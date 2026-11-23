@@ -9,8 +9,10 @@ END
 $$;
 -- +goose StatementEnd
 UPDATE institutions SET credit_url = 'http://' || substr(credit_url, 9) WHERE credit_url LIKE 'https://%';
+UPDATE registry_clients SET cert_cn = 'connect' WHERE cert_cn = 'beerus-connect';
 
 -- +goose Down
+UPDATE registry_clients SET cert_cn = 'beerus-connect' WHERE cert_cn = 'connect';
 -- +goose StatementBegin
 DO $$
 BEGIN

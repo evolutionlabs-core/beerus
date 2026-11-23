@@ -57,12 +57,12 @@ func TestSoloRegistryAndConsents(t *testing.T) {
 		return fmt.Sprintf(`{"error":{"code":%q,"message":%q,"request_id":"req_ID"}}`, code, message)
 	}
 	cb := "http://connect.localhost/cb"
-	one := soloClientBody("Connect", "beerus-connect", cb)
+	one := soloClientBody("Connect", "connect", cb)
 	oneURL := s.control + "/v1/control/registry/clients/OBR-1"
 	twoURL := s.control + "/v1/control/registry/clients/OBR-2"
 	list := s.control + "/v1/control/registry/clients"
 	bankList := s.dirURL + "/v1/registry/clients"
-	both := `{"data":[` + soloClient("OBR-1", "Renamed", "beerus-connect", "https://new.localhost/cb") + `,` + soloClient("OBR-2", "Second", "second", cb) + `]}`
+	both := `{"data":[` + soloClient("OBR-1", "Renamed", "connect", "https://new.localhost/cb") + `,` + soloClient("OBR-2", "Second", "second", cb) + `]}`
 	rows := []struct {
 		name   string
 		client *http.Client
@@ -73,11 +73,11 @@ func TestSoloRegistryAndConsents(t *testing.T) {
 		status int
 		want   string
 	}{
-		{"register a client", s.plain, "PUT", oneURL, s.token, one, 200, soloClient("OBR-1", "Connect", "beerus-connect", cb)},
-		{"register it again", s.plain, "PUT", oneURL, s.token, one, 200, soloClient("OBR-1", "Connect", "beerus-connect", cb)},
-		{"rename it and move the redirect", s.plain, "PUT", oneURL, s.token, soloClientBody("Renamed", "beerus-connect", "https://new.localhost/cb"), 200, soloClient("OBR-1", "Renamed", "beerus-connect", "https://new.localhost/cb")},
-		{"another cert_cn", s.plain, "PUT", oneURL, s.token, soloClientBody("Renamed", "other", cb), 422, errBody("registration_conflict", "Client OBR-1 is registered with cert_cn beerus-connect, and this request has cert_cn other. Send the registered details.")},
-		{"a name another client holds", s.plain, "PUT", twoURL, s.token, soloClientBody("Second", "beerus-connect", cb), 422, errBody("registration_conflict", "The cert_cn beerus-connect already belongs to client OBR-1. Use another cert_cn.")},
+		{"register a client", s.plain, "PUT", oneURL, s.token, one, 200, soloClient("OBR-1", "Connect", "connect", cb)},
+		{"register it again", s.plain, "PUT", oneURL, s.token, one, 200, soloClient("OBR-1", "Connect", "connect", cb)},
+		{"rename it and move the redirect", s.plain, "PUT", oneURL, s.token, soloClientBody("Renamed", "connect", "https://new.localhost/cb"), 200, soloClient("OBR-1", "Renamed", "connect", "https://new.localhost/cb")},
+		{"another cert_cn", s.plain, "PUT", oneURL, s.token, soloClientBody("Renamed", "other", cb), 422, errBody("registration_conflict", "Client OBR-1 is registered with cert_cn connect, and this request has cert_cn other. Send the registered details.")},
+		{"a name another client holds", s.plain, "PUT", twoURL, s.token, soloClientBody("Second", "connect", cb), 422, errBody("registration_conflict", "Cert_cn connect already belongs to client OBR-1. Use another cert_cn.")},
 		{"without a token", s.plain, "PUT", oneURL, "", one, 401, errBody("unauthenticated", "A valid control token is required.")},
 		{"with a wrong token", s.plain, "PUT", oneURL, "ctl_wrong", one, 401, errBody("unauthenticated", "A valid control token is required.")},
 		{"an insecure redirect", s.plain, "PUT", twoURL, s.token, soloClientBody("Second", "second", "http://other.example.com/cb"), 422, errBody("invalid_request", `Redirect URI "http://other.example.com/cb" must be an https URL, or an http URL on localhost.`)},
@@ -86,12 +86,12 @@ func TestSoloRegistryAndConsents(t *testing.T) {
 		{"register a second client", s.plain, "PUT", twoURL, s.token, soloClientBody("Second", "second", cb), 200, soloClient("OBR-2", "Second", "second", cb)},
 		{"control list", s.plain, "GET", list, s.token, "", 200, both},
 		{"control list without a token", s.plain, "GET", list, "", "", 401, errBody("unauthenticated", "A valid control token is required.")},
-		{"control first page", s.plain, "GET", list + "?limit=1", s.token, "", 200, `{"data":[` + soloClient("OBR-1", "Renamed", "beerus-connect", "https://new.localhost/cb") + `],"next_cursor":"OBR-1"}`},
+		{"control first page", s.plain, "GET", list + "?limit=1", s.token, "", 200, `{"data":[` + soloClient("OBR-1", "Renamed", "connect", "https://new.localhost/cb") + `],"next_cursor":"OBR-1"}`},
 		{"control last page", s.plain, "GET", list + "?limit=1&cursor=OBR-1", s.token, "", 200, `{"data":[` + soloClient("OBR-2", "Second", "second", cb) + `]}`},
 		{"control bad cursor", s.plain, "GET", list + "?cursor=-bad", s.token, "", 400, errBody("invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")},
 		{"control bad limit", s.plain, "GET", list + "?limit=501", s.token, "", 400, errBody("invalid_request", "limit must be a number from 1 to 500.")},
 		{"bank list", banks["bank-a"], "GET", bankList, "", "", 200, both},
-		{"bank first page", banks["bank-b"], "GET", bankList + "?limit=1", "", "", 200, `{"data":[` + soloClient("OBR-1", "Renamed", "beerus-connect", "https://new.localhost/cb") + `],"next_cursor":"OBR-1"}`},
+		{"bank first page", banks["bank-b"], "GET", bankList + "?limit=1", "", "", 200, `{"data":[` + soloClient("OBR-1", "Renamed", "connect", "https://new.localhost/cb") + `],"next_cursor":"OBR-1"}`},
 		{"bank last page", banks["bank-b"], "GET", bankList + "?limit=1&cursor=OBR-1", "", "", 200, `{"data":[` + soloClient("OBR-2", "Second", "second", cb) + `]}`},
 		{"bank bad cursor", banks["bank-a"], "GET", bankList + "?cursor=-bad", "", "", 400, errBody("invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")},
 		{"bank reads one", banks["bank-a"], "GET", bankList + "/OBR-2", "", "", 200, soloClient("OBR-2", "Second", "second", cb)},

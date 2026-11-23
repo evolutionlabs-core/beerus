@@ -48,12 +48,28 @@ func identify(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return identity, identity != ""
 }
 
+func (p *Participant) knows(w http.ResponseWriter, r *http.Request, identity string) bool {
+	if identity == config.NIBSSID {
+		return true
+	}
+	_, err := p.books.Balance(r.Context(), identity)
+	if errors.Is(err, cbn.ErrNoAccount) {
+		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("%s is not a bank the CBN knows.", identity))
+		return false
+	}
+	if err != nil {
+		p.unavailable(w, r, "account not read", err)
+		return false
+	}
+	return true
+}
+
 func (p *Participant) postSession(w http.ResponseWriter, r *http.Request) {
 	identity, ok := identify(w, r)
 	if !ok {
 		return
 	}
-	if identity != config.NIBSSCN {
+	if identity != config.NIBSSID {
 		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not post a settlement session. Only NIBSS may.", identity))
 		return
 	}
@@ -131,6 +147,9 @@ func (p *Participant) balance(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !p.knows(w, r, identity) {
+		return
+	}
 	if identity != id {
 		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not read the balance of %s.", identity, id))
 		return
@@ -153,7 +172,10 @@ func (p *Participant) postings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if identity != config.NIBSSCN {
+	if !p.knows(w, r, identity) {
+		return
+	}
+	if identity != config.NIBSSID {
 		if bankID != "" && bankID != identity {
 			web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not read the postings of %s.", identity, bankID))
 			return

@@ -66,7 +66,7 @@ func (c *cbnCaller) post(ctx context.Context, key string, cutoff time.Time, nets
 		return fmt.Errorf("build settlement %s: %w", key, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(config.CallerHeader, config.NIBSSCN)
+	req.Header.Set(config.CallerHeader, config.NIBSSID)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("post settlement %s: %w: %w", key, errCBNAway, err)

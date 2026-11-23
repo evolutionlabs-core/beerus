@@ -114,7 +114,7 @@ func (s *server) guard(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", fmt.Sprintf("Send your ID in the %s header to call the NIP API of this bank.", config.CallerHeader))
 			return
 		}
-		if caller != config.NIBSSCN {
+		if caller != config.NIBSSID {
 			writeError(w, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not call the NIP API of this bank. Only NIBSS may.", caller))
 			return
 		}

@@ -21,7 +21,7 @@ brew install evolutionlabs-core/tap/beerus
 
 Update with `brew upgrade beerus`.
 
-If you ran `beerus trust` on v0.1.0, remove the old root: `security delete-certificate -c "Beerus CBN Trust Anchor" ~/Library/Keychains/login.keychain-db`.
+If you ran `beerus trust` on v0.1.0, remove the old root: `security delete-certificate -c "Beerus CBN Trust Anchor" ~/Library/Keychains/login.keychain-db`. You can also delete the old certificate files: `ca/` and the `*.crt` and `*.key` files under the Beerus directory.
 
 Without Homebrew, download the archive for your system from [Releases](https://github.com/evolutionlabs-core/beerus/releases), unpack it and put `beerus` on your `PATH`.
 

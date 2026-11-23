@@ -67,7 +67,7 @@ func (a *App) connectClient() (openbanking.RegistryClient, error) {
 		LegalName:    conn.LegalName,
 		CAC:          conn.CACNumber,
 		Role:         config.AggregatorRole,
-		CertCN:       config.AggregatorCN,
+		CertCN:       config.ConnectID,
 		JWK:          openbanking.JWKOf(&key.PublicKey, connectKeyID),
 		RedirectURIs: []string{callback},
 	}, nil

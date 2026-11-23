@@ -81,7 +81,7 @@ func TestOpenBanking(t *testing.T) {
 	}
 	s := newBankStack(t)
 	bank := s.cfg.Bank("bank-a")
-	o := &obClient{t: t, s: s, issuer: bank.APIURL(), c: callerClient(t, config.AggregatorCN)}
+	o := &obClient{t: t, s: s, issuer: bank.APIURL(), c: callerClient(t, config.ConnectID)}
 
 	status, meta := o.get("/discover", "")
 	if status != 200 || meta["issuer"] != o.issuer || meta["authorization_endpoint"] != bank.URL()+"/authorize" {

@@ -35,7 +35,7 @@ func TestEnsureClient(t *testing.T) {
 		want string
 	}{
 		{func() openbanking.RegistryClient { c := client("OBR-1", "other"); return c }(), "client OBR-1 is registered with cert_cn connect, and this request has cert_cn other"},
-		{client("OBR-2", "connect"), "The cert_cn connect already belongs to client OBR-1"},
+		{client("OBR-2", "connect"), "cert_cn connect already belongs to client OBR-1"},
 	} {
 		_, err := s.EnsureClient(ctx, c.c, false)
 		var conflict *RegistryConflictError
@@ -51,6 +51,8 @@ func TestEnsureClient(t *testing.T) {
 		{func(c *openbanking.RegistryClient) { c.ID = "-x" }, `client id "-x" must be letters, digits, dots, dashes and underscores, up to 40 characters`},
 		{func(c *openbanking.RegistryClient) { c.Name = "" }, "client OBR-3 needs a name and a legal_name"},
 		{func(c *openbanking.RegistryClient) { c.CertCN = "" }, "client OBR-3 needs a cert_cn: the ID it sends in the Beerus-Caller header"},
+		{func(c *openbanking.RegistryClient) { c.CertCN = "nibss" }, "client OBR-3 cert_cn nibss belongs to a Beerus participant. Use another cert_cn"},
+		{func(c *openbanking.RegistryClient) { c.CertCN = "cbn" }, "client OBR-3 cert_cn cbn belongs to a Beerus participant. Use another cert_cn"},
 		{func(c *openbanking.RegistryClient) { c.Role = "bank" }, `client OBR-3 role must be aggregator, not "bank"`},
 		{func(c *openbanking.RegistryClient) { c.RedirectURIs = nil }, "client OBR-3 needs at least one redirect URI"},
 		{func(c *openbanking.RegistryClient) { c.RedirectURIs = []string{"http://other.example.com/cb"} }, `redirect URI "http://other.example.com/cb" must be an https URL, or an http URL on localhost`},

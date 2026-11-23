@@ -157,7 +157,7 @@ func (a *App) bankCall(b *config.Bank, method, path string, form url.Values, tok
 	if err != nil {
 		return err
 	}
-	req.Header.Set(config.CallerHeader, config.AggregatorCN)
+	req.Header.Set(config.CallerHeader, config.ConnectID)
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}

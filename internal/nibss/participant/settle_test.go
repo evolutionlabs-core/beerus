@@ -32,7 +32,7 @@ type cbnLedger struct {
 }
 
 func (l *cbnLedger) post(w http.ResponseWriter, r *http.Request) {
-	if caller := r.Header.Get(config.CallerHeader); caller != config.NIBSSCN {
+	if caller := r.Header.Get(config.CallerHeader); caller != config.NIBSSID {
 		web.WriteError(w, r, http.StatusForbidden, "forbidden", caller+" may not post a settlement session. Only NIBSS may.")
 		return
 	}

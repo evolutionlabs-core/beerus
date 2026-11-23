@@ -517,7 +517,7 @@ func (s *Banking) NIP(id string) http.Handler {
 			return
 		}
 		h := serve(bk.Bank)
-		if holdsCredit(r) && r.Header.Get(config.CallerHeader) == config.NIBSSCN {
+		if holdsCredit(r) && r.Header.Get(config.CallerHeader) == config.NIBSSID {
 			if outcome, held := s.Src.TakeTimeout(id); held {
 				s.hold(w, r, h, outcome)
 				return

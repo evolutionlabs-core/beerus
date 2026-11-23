@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	forbidden   = `{"error":{"code":"forbidden","message":"beerus-connect may not call the NIP API of this bank. Only NIBSS may.","request_id":"req_ID"}}`
+	forbidden   = `{"error":{"code":"forbidden","message":"connect may not call the NIP API of this bank. Only NIBSS may.","request_id":"req_ID"}}`
 	anonymous   = `{"error":{"code":"unauthenticated","message":"Send your ID in the Beerus-Caller header to call the NIP API of this bank.","request_id":"req_ID"}}`
 	specFile    = "../../../api/nip/openapi.yaml"
 	nipCode     = "999001"
@@ -250,9 +250,9 @@ func TestNIPContract(t *testing.T) {
 		{name: "overflow", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(5), s.empty, 1, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"96"}`, session(5)), funded: startAmount + 2500000, empty: math.MaxInt64},
 		{name: "credit to unknown account", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(7), unknown, 1000000, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"07"}`, session(7)), funded: startAmount + 2500000, empty: math.MaxInt64},
 		{name: "credit to frozen account", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(8), s.frozen, 1000000, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"57"}`, session(8)), funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "wrong caller", client: config.AggregatorCN, method: "GET", path: "/v1/nip/account-names/" + s.funded, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "wrong caller unknown path", client: config.AggregatorCN, method: "GET", path: "/v1/nip/nothing", mode: checkNone, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "wrong caller wrong method", client: config.AggregatorCN, method: "DELETE", path: "/v1/nip/credits", mode: checkNone, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "wrong caller", client: config.ConnectID, method: "GET", path: "/v1/nip/account-names/" + s.funded, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "wrong caller unknown path", client: config.ConnectID, method: "GET", path: "/v1/nip/nothing", mode: checkNone, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "wrong caller wrong method", client: config.ConnectID, method: "DELETE", path: "/v1/nip/credits", mode: checkNone, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
 		{name: "no caller", client: "-", method: "GET", path: "/v1/nip/account-names/" + s.funded, mode: checkNone, status: 401, want: anonymous, funded: startAmount + 2500000, empty: math.MaxInt64},
 		{name: "unknown path", method: "GET", path: "/v1/nip/nothing", mode: checkNone, status: 404, want: `{"error":{"code":"not_found","message":"This path is not part of the NIP API of a bank.","request_id":"req_ID"}}`, funded: startAmount + 2500000, empty: math.MaxInt64},
 		{name: "wrong method", method: "DELETE", path: "/v1/nip/credits", mode: checkNone, status: 405, allow: "POST", want: `{"error":{"code":"method_not_allowed","message":"Use POST for this path.","request_id":"req_ID"}}`, funded: startAmount + 2500000, empty: math.MaxInt64},
@@ -264,7 +264,7 @@ func TestNIPContract(t *testing.T) {
 			caller := r.client
 			switch caller {
 			case "":
-				caller = config.NIBSSCN
+				caller = config.NIBSSID
 			case "-":
 				caller = ""
 			}
@@ -288,7 +288,7 @@ func TestNIPContract(t *testing.T) {
 	if ans, err := direct(session(10)); err != nil || ans.Code != nip.OK {
 		t.Fatalf("direct credit answered %q, %v", ans.Code, err)
 	}
-	if got := s.call(t, config.NIBSSCN, "GET", "/v1/nip/credits/"+session(10), "", checkBoth); got.body != fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(10)) {
+	if got := s.call(t, config.NIBSSID, "GET", "/v1/nip/credits/"+session(10), "", checkBoth); got.body != fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(10)) {
 		t.Fatalf("status of a direct credit: %s", got.body)
 	}
 	if got := s.balance(t, s.funded); got != startAmount+2500000+1000000 {
@@ -318,7 +318,7 @@ func TestCreditRacesStatus(t *testing.T) {
 		defer wg.Done()
 		gate <- struct{}{}
 		defer func() { <-gate }()
-		r, err := s.do(config.NIBSSCN, method, path, body, checkBoth)
+		r, err := s.do(config.NIBSSID, method, path, body, checkBoth)
 		if err != nil {
 			errs <- err
 			return

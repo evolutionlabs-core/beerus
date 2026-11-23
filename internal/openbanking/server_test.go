@@ -102,7 +102,8 @@ func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	}
 	e := &env{t: t, store: NewMemStore(), key: key}
 	var h http.Handler
-	e.ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
+	e.ts = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
+	e.ts.Start()
 	t.Cleanup(e.ts.Close)
 	client := &Client{ID: "OBR-1", Name: "Connect", Role: "aggregator", CertCN: "connect", Keys: []*ecdsa.PublicKey{&key.PublicKey}, RedirectURIs: []string{"http://connect.localhost/cb"}}
 	cfg := Config{

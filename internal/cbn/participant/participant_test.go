@@ -96,7 +96,7 @@ func TestCBNServesSettlement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callers := map[string]string{"nibss": config.NIBSSCN, "bank-a": "bank-a", "bank-b": "bank-b", "bank-c": "bank-c"}
+	callers := map[string]string{"nibss": config.NIBSSID, "bank-a": "bank-a", "bank-b": "bank-b", "bank-c": "bank-c"}
 	client := &http.Client{Timeout: testWait}
 	spec, err := os.ReadFile(specPath)
 	if err != nil {
@@ -186,14 +186,14 @@ func TestCBNServesSettlement(t *testing.T) {
 		{"bank-a", http.MethodPost, "/v1/settlement-sessions", session("s7", -5, 5), 403, `"code":"forbidden","message":"bank-a may not post a settlement session. Only NIBSS may."`, false},
 		{"bank-a", http.MethodGet, "/v1/banks/bank-a/settlement-balance", "", 200, `"bank_id":"bank-a","balance_minor":750,"read_at":`, false},
 		{"bank-a", http.MethodGet, "/v1/banks/bank-b/settlement-balance", "", 403, "bank-a may not read the balance of bank-b.", false},
-		{"nibss", http.MethodGet, "/v1/banks/bank-a/settlement-balance", "", 403, "beerus-nibss may not read the balance of bank-a.", false},
-		{"bank-c", http.MethodGet, "/v1/banks/bank-c/settlement-balance", "", 404, "No settlement account for that bank.", false},
+		{"nibss", http.MethodGet, "/v1/banks/bank-a/settlement-balance", "", 403, "nibss may not read the balance of bank-a.", false},
+		{"bank-c", http.MethodGet, "/v1/banks/bank-c/settlement-balance", "", 403, "bank-c is not a bank the CBN knows.", false},
 		{"bank-b", http.MethodGet, "/v1/banks/bank-b/settlement-balance", "", 200, `"balance_minor":1250`, false},
 		{"bank-a", http.MethodGet, "/v1/settlement-postings?limit=1", "", 200, `"next_cursor":"session:s1"`, false},
 		{"bank-a", http.MethodGet, "/v1/settlement-postings?limit=5&cursor=session:s1", "", 200, `"key":"genesis:bank-a","kind":"genesis"`, false},
 		{"bank-a", http.MethodGet, "/v1/settlement-postings?bank_id=bank-b", "", 403, "bank-a may not read the postings of bank-b.", false},
 		{"nobody", http.MethodGet, "/v1/settlement-postings", "", 401, `"code":"unauthenticated"`, false},
-		{"bank-c", http.MethodGet, "/v1/settlement-postings", "", 200, `"data":[]`, false},
+		{"bank-c", http.MethodGet, "/v1/settlement-postings", "", 403, "bank-c is not a bank the CBN knows.", false},
 		{"nibss", http.MethodGet, "/v1/settlement-postings?limit=2", "", 200, `"next_cursor":`, false},
 		{"nibss", http.MethodGet, "/v1/settlement-postings?bank_id=bank-b&limit=500", "", 200, `"key":"genesis:bank-b"`, false},
 		{"nibss", http.MethodGet, "/v1/settlement-postings?cursor=session:nope", "", 400, `"code":"invalid_cursor","message":"That cursor is not valid. Use the next_cursor value from the last page."`, false},

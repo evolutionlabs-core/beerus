@@ -92,7 +92,7 @@ func (c *bankCaller) call(ctx context.Context, m nibss.Member, method, path stri
 	if err != nil {
 		return 0, nil, fmt.Errorf("build the call to %s: %w", m.ID, err)
 	}
-	req.Header.Set(config.CallerHeader, config.NIBSSCN)
+	req.Header.Set(config.CallerHeader, config.NIBSSID)
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

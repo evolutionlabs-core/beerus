@@ -291,9 +291,8 @@ func WriteSecret(path, body string) error {
 }
 
 const (
-	AggregatorCN   = "beerus-connect"
+	ConnectID      = "connect"
 	AggregatorRole = "aggregator"
-	NIBSSCN        = "beerus-nibss"
 
 	CallerHeader = "Beerus-Caller"
 )

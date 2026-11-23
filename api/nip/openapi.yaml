@@ -755,7 +755,7 @@ paths:
                     registry_id: OBR-0001
                     cac: RC1234567
                     role: aggregator
-                    cert_cn: beerus-connect
+                    cert_cn: connect
                     jwk:
                       kty: EC
                       crv: P-256
@@ -798,7 +798,7 @@ paths:
                 registry_id: OBR-0001
                 cac: RC1234567
                 role: aggregator
-                cert_cn: beerus-connect
+                cert_cn: connect
                 jwk:
                   kty: EC
                   crv: P-256
@@ -1145,7 +1145,7 @@ paths:
                     registry_id: OBR-0001
                     cac: RC1234567
                     role: aggregator
-                    cert_cn: beerus-connect
+                    cert_cn: connect
                     jwk:
                       kty: EC
                       crv: P-256
@@ -1192,7 +1192,7 @@ paths:
               legal_name: Connect Ltd
               cac: RC1234567
               role: aggregator
-              cert_cn: beerus-connect
+              cert_cn: connect
               jwk:
                 kty: EC
                 crv: P-256
@@ -1215,7 +1215,7 @@ paths:
                 registry_id: OBR-0001
                 cac: RC1234567
                 role: aggregator
-                cert_cn: beerus-connect
+                cert_cn: connect
                 jwk:
                   kty: EC
                   crv: P-256
@@ -1243,7 +1243,7 @@ paths:
                   value:
                     error:
                       code: registration_conflict
-                      message: Client OBR-0001 is registered with cert_cn beerus-connect, and this request has cert_cn other. Send the registered details.
+                      message: Client OBR-0001 is registered with cert_cn connect, and this request has cert_cn other. Send the registered details.
                       request_id: req_01JBC8A5T3ZK
                 taken:
                   summary: Create only, and the client exists.

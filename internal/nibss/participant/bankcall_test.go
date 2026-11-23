@@ -68,8 +68,8 @@ func TestBankCallsAnswerWithTheRightCode(t *testing.T) {
 		m := member(r.identity)
 		sent.Store("")
 		name, err := callers.nameAt(context.Background(), m, "0000000014")
-		if got := sent.Load(); r.identity == "bank-a" && got != config.NIBSSCN {
-			t.Errorf("%s: sent %s %q, want %q", r.name, config.CallerHeader, got, config.NIBSSCN)
+		if got := sent.Load(); r.identity == "bank-a" && got != config.NIBSSID {
+			t.Errorf("%s: sent %s %q, want %q", r.name, config.CallerHeader, got, config.NIBSSID)
 		}
 		code := nip.OK
 		if err != nil {

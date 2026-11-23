@@ -147,8 +147,8 @@ func TestBankControlOnARealUp(t *testing.T) {
 		api:   fmt.Sprintf("http://127.0.0.1:%d", int(bank["api_port"].(float64))),
 		nuban: account,
 		token: token,
-		nibss: callerClient(t, config.NIBSSCN),
-		agg:   callerClient(t, config.AggregatorCN),
+		nibss: callerClient(t, config.NIBSSID),
+		agg:   callerClient(t, config.ConnectID),
 		plain: &http.Client{Timeout: controlProbeTimeout},
 	}
 	p.want("the bank to open once it has its phase", 200, 200, 404, "active")
