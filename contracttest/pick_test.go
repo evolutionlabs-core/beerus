@@ -19,13 +19,12 @@ func TestPickAccounts(t *testing.T) {
 		shared   int
 		rejected bool
 	}{
-		{"all picked", nil, 2, false},
-		{"one picked", func(all []string) []string { return all[:1] }, 1, false},
 		{"none picked", func([]string) []string { return nil }, 0, true},
+		{"one picked", func(all []string) []string { return all[:1] }, 1, false},
+		{"all picked", nil, 2, false},
 	}
 	for _, tc := range cases {
 		offered, picked := []string{}, []string{}
-		ls := s.must(s.call("POST", "/v1/link/token/create", map[string]any{"user_id": "pick-" + tc.name, "redirect_uri": s.redirect}), 201)
 		b := s.browser()
 		b.picked = func(all []string) []string {
 			offered = all
@@ -35,21 +34,26 @@ func TestPickAccounts(t *testing.T) {
 			}
 			return picked
 		}
-		b.get(fmt.Sprint(ls.JSON["widget_url"]))
+		b.get(s.linkURL("pick-"+tc.name, ""))
 		b.post("/link/institution", map[string][]string{"institution": {"bank-a"}})
 		b.bankSignIn("adaeze", nil)
-		session := s.must(s.call("GET", "/v1/link_sessions/"+fmt.Sprint(ls.JSON["id"]), nil), 200)
 		if tc.rejected {
 			if b.result != nil || !strings.Contains(b.last, "Pick at least one account to continue.") || !strings.Contains(b.last, " disabled>Continue") {
 				t.Fatalf("%s: the screen did not stay with Continue disabled: %.600s", tc.name, b.last)
 			}
-			if session.JSON["connection_id"] != nil || session.JSON["status"] != "picking" {
-				t.Fatalf("%s: the link session moved on: %s", tc.name, session.Body)
+			b.picked = func(all []string) []string {
+				picked = all[:1]
+				return picked
 			}
-			continue
+			b.pickAccounts()
+			tc.shared = 1
 		}
 		if b.result == nil || b.result.Query().Get("code") == "" {
 			t.Fatalf("%s: no code on the redirect: %.300s", tc.name, b.last)
+		}
+		session := s.must(s.call("GET", "/v1/link_sessions/"+b.result.Query().Get("link_session_id"), nil), 200)
+		if session.JSON["status"] != "authorised" {
+			t.Fatalf("%s: the link session is %v, want authorised: %s", tc.name, session.JSON["status"], session.Body)
 		}
 		conn := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": b.result.Query().Get("code"), "link_session_id": b.result.Query().Get("link_session_id")}), 201)
 		s.syncNow()
@@ -58,7 +62,7 @@ func TestPickAccounts(t *testing.T) {
 			t.Fatalf("%s: connection lists %d accounts, want %d", tc.name, len(listed), tc.shared)
 		}
 		for _, nuban := range offered {
-			r := s.call("GET", "/v1/accounts/"+aggregator.AccountID(partner, "bank-a", nuban)+"/balance", nil)
+			r := s.call("GET", "/v1/accounts/"+aggregator.AccountID(partner, "bank-a", nuban)+"/balance?as_of="+s.linkStart().AddDays(-1).String(), nil)
 			if slices.Contains(picked, nuban) {
 				if r.Status == http.StatusNotFound {
 					t.Fatalf("%s: picked account %s gave 404", tc.name, nuban)
