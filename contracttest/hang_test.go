@@ -42,7 +42,7 @@ func TestHungBankDoesNotStallPartnerAPI(t *testing.T) {
 			close(release)
 		}
 	})
-	conn := s.connect("ngozi", "bank-b", s.today().AddDays(-10))
+	conn := s.connect("ngozi", "bank-b")
 	id := fmt.Sprint(conn.Accounts[0]["id"])
 
 	hang.Store(true)
@@ -66,8 +66,8 @@ func TestHungBankDoesNotStallPartnerAPI(t *testing.T) {
 	fast("get connection", func() { s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200) })
 	fast("get account", func() { s.must(s.call("GET", "/v1/accounts/"+id, nil), 200) })
 	fast("sync feed", func() { s.must(s.call("GET", "/v1/accounts/"+id+"/transactions/sync", nil), 200) })
-	fast("new link session", func() {
-		s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
+	fast("new link token", func() {
+		s.linkURL("w", "")
 	})
 
 	hang.Store(false)

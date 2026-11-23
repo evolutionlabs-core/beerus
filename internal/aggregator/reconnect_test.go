@@ -67,11 +67,11 @@ func TestReconnectWithLaterStartKeepsTheEarlierFromAndTheBalanceInvariant(t *tes
 	key := acctKey("bank-a", "0123456789")
 	accID := AccountID("p1", "bank-a", "0123456789")
 	link := func(id string, start clock.Date) *LinkSession {
-		return &LinkSession{ID: id, PartnerID: "p1", WorkspaceID: "ws_1", Institution: "bank-a", StartDate: start, Accounts: []string{key}}
+		return &LinkSession{ID: id, PartnerID: "p1", UserID: "ws_1", Institution: "bank-a", StartDate: start, Accounts: []string{key}}
 	}
 	connect := func(id, consent string, ls *LinkSession) *Connection {
 		t.Helper()
-		c := &Connection{ID: id, PartnerID: "p1", WorkspaceID: "ws_1", Institution: "bank-a", StartDate: ls.StartDate, ConsentID: consent}
+		c := &Connection{ID: id, PartnerID: "p1", UserID: "ws_1", Institution: "bank-a", StartDate: ls.StartDate, ConsentID: consent}
 		a.mu.Lock()
 		a.st.Connections[id] = c
 		auth := a.authoriseLocked(c, ls)

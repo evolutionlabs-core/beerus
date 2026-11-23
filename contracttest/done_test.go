@@ -42,7 +42,7 @@ func TestDoneStory(t *testing.T) {
 		}
 	}
 	today := s.today()
-	start := today.AddDays(-365)
+	start := s.linkStart()
 	limited := start.Before(today.AddDays(-s.cfg.Bank("bank-a").HistoryDays))
 
 	step(1, "Adaeze's Bakery banks with Bank A and Bank B")
@@ -59,9 +59,8 @@ func TestDoneStory(t *testing.T) {
 	check(resolved["status"] == "25" && resolved["outcome"] == "failed" && resolved["resolved_at"] != nil, "the status check did not fail the transfer: %v", resolved)
 
 	step(2, "Connect bank, pick Bank A, redirect to the bank")
-	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": start.String(), "workspace_id": "ws_adaeze_bakery", "redirect_uri": s.redirect, "state": "st-done"}), 201)
 	b := s.browser()
-	b.get(fmt.Sprint(ls.JSON["widget_url"]))
+	b.get(s.linkURL("ws_adaeze_bakery", "st-done"))
 	check(strings.Contains(b.last, "Bank A") && strings.Contains(b.last, "Bank B"), "the widget does not offer both banks: %.300s", b.last)
 	b.post("/link/institution", url.Values{"institution": {"bank-a"}})
 	check(b.result == nil && b.atBank(), "the widget did not send her to the bank: %v %.200s", b.cur, b.last)
@@ -84,7 +83,7 @@ func TestDoneStory(t *testing.T) {
 	b.postTo(base, "/authorize/consent", url.Values{"account": {current}, "action": {"approve"}})
 	check(b.result != nil && b.result.Query().Get("code") != "", "no code on the redirect to Balance: %.300s", b.last)
 	q := b.result.Query()
-	check(q.Get("state") == "st-done" && q.Get("link_session_id") == ls.JSON["id"], "redirect: %v", b.result)
+	check(q.Get("state") == "st-done" && q.Get("link_session_id") != "", "redirect: %v", b.result)
 	conn := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": q.Get("code"), "link_session_id": q.Get("link_session_id")}), 201)
 	connA := fmt.Sprint(conn.JSON["id"])
 	s.syncNow()
@@ -127,7 +126,7 @@ func TestDoneStory(t *testing.T) {
 		checkSettled(t, s.app)
 	}
 
-	b2 := s.connect("adaeze", "bank-b", start)
+	b2 := s.connect("adaeze", "bank-b")
 	idB := fmt.Sprint(b2.Accounts[0]["id"])
 	connB := b2.ConnectionID
 	feedB, _ := s.syncAll(idB, "", 500)

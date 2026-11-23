@@ -8,8 +8,8 @@ info:
 
     ## Flow
 
-    1. The partner's server creates a link session with a start date and gets a short-lived link token.
-    2. The partner opens the Connect widget in the customer's browser with that link token.
+    1. The partner's server creates a link token with `POST /v1/link/token/create`, giving its own `user_id` for the customer.
+    2. The partner opens the Connect widget in the customer's browser at `/link?token=<link_token>`.
     3. The customer picks a bank, signs in at the bank with 2FA and chooses the accounts to share.
     4. The widget redirects the browser to the partner's `redirect_uri` with `code`, `link_session_id` and the partner's `state`. If the customer cancels or the session fails, it redirects with `error` (`access_denied`, `link_session_expired` or `institution_down`), `link_session_id` and `state` instead.
     5. The partner's server exchanges the code and the link session ID for a permanent connection ID. If the response is lost, `GET /v1/link_sessions/{id}` shows the `connection_id`.
@@ -73,12 +73,12 @@ security:
   - clientID: []
     secret: []
 paths:
-  /v1/link_sessions:
+  /v1/link/token/create:
     post:
       tags: [Link sessions]
-      operationId: createLinkSession
-      summary: Create a link session
-      description: Creates a link session and returns a short-lived link token for the Connect widget. The session moves through `created`, `bank_chosen`, `at_bank`, `authorised` and `exchanged`, or ends `expired`.
+      operationId: createLinkToken
+      summary: Create a link token
+      description: Starts a link and returns a short-lived `link_token`, like Plaid's `/link/token/create`. Open Connect for the customer at `{connect URL}/link?token=<link_token>`. Connect shares history from 90 days before today's Lagos date, or less if the bank keeps less. When Connect redirects the customer back, the redirect URI carries a `code` and the `link_session_id`; swap both for a connection at `/v1/connections/exchange`.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -86,19 +86,19 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/LinkSessionCreate'
+              $ref: '#/components/schemas/LinkTokenCreate'
             example:
-              start_date: '2026-07-01'
-              workspace_id: ws_adaeze_bakery
+              user_id: ws_adaeze_bakery
+              institution_id: bank-a
               redirect_uri: http://localhost:3000/bank_connections/callback
               state: 9f86d081884c7d65
       responses:
         '201':
-          description: The link session was created.
+          description: The link token was created.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LinkSession'
+                $ref: '#/components/schemas/LinkToken'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -711,7 +711,7 @@ components:
           example:
             error:
               code: invalid_request
-              message: start_date must be a date in YYYY-MM-DD form.
+              message: redirect_uri must exactly match a registered redirect URI.
               request_id: req_01JBC9X1
     Unauthenticated:
       description: The client ID or secret is missing or does not match.
@@ -859,7 +859,7 @@ components:
       description: |
         A stable error code. The list below is not closed; treat an unknown code as its HTTP status.
 
-        - `invalid_request` (400): the request is malformed.
+        - `invalid_request` (400 or 422): the request is malformed (400), or a value must change, such as a missing `user_id` or an unknown `institution_id` (422).
         - `invalid_cursor` (400): the cursor cannot be read.
         - `unauthenticated` (401): the client ID or secret is missing or does not match.
         - `forbidden` (403): the caller may not do this.
@@ -870,7 +870,7 @@ components:
         - `reauth_required` (409): the customer must consent again.
         - `account_not_shared` (409): the customer no longer shares this account. Ask them to reconnect and share it.
         - `link_session_expired` (409): the link session expired.
-        - `link_session_mismatch` (403): the code or session belongs to another partner or workspace.
+        - `link_session_mismatch` (403): the code or session belongs to another partner or user.
         - `idempotency_key_reused` (422): the key was used with a different body.
         - `as_of_out_of_range` (422): `as_of` is outside the dates Connect holds.
         - `rate_limited` (429): too many requests.
@@ -879,10 +879,18 @@ components:
         - `not_ready` (503): Connect has not finished registering with NIBSS.
       examples:
         - cursor_reset
-    LinkSessionCreate:
+    LinkTokenCreate:
       type: object
-      required: [start_date, workspace_id, redirect_uri]
+      required: [user_id, redirect_uri]
       properties:
+        user_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The partner's own ID for its customer, such as a Balance business. The code exchange is checked against it.
+        institution_id:
+          type: string
+          description: A bank to open Connect on, from `GET /v1/institutions`. Omit it to let the customer pick.
         redirect_uri:
           type: string
           format: uri
@@ -891,21 +899,26 @@ components:
           type: string
           maxLength: 512
           description: An opaque value returned unchanged on the redirect. Use it to protect against cross-site request forgery.
-        start_date:
+    LinkToken:
+      type: object
+      required: [link_token, expiration]
+      properties:
+        link_token:
           type: string
-          format: date
-          description: The first business date of history the partner wants. The bank's history limit may cut it.
-        workspace_id:
+          description: Opens the Connect widget at `/link?token=<link_token>`. Short-lived. It is swapped for a widget session on first use.
+        expiration:
           type: string
-          minLength: 1
-          maxLength: 128
-          description: The partner's own ID for the workspace, such as a Balance business. The code exchange is checked against it.
+          format: date-time
+          description: When the link token stops working.
+      example:
+        link_token: lt_7c1e9a2f5b8d4e60
+        expiration: '2026-10-28T12:30:00+01:00'
     LinkSessionStatus:
       type: string
       enum: [created, bank_chosen, at_bank, authorised, exchanged, expired]
     LinkSessionView:
       type: object
-      required: [id, status, start_date, workspace_id, connection_id, created_at]
+      required: [id, status, start_date, user_id, connection_id, created_at]
       properties:
         id:
           type: string
@@ -914,7 +927,7 @@ components:
         start_date:
           type: string
           format: date
-        workspace_id:
+        user_id:
           type: string
         connection_id:
           type: [string, 'null']
@@ -926,12 +939,12 @@ components:
         id: lks_01JBC7Q2W8M4
         status: exchanged
         start_date: '2026-07-01'
-        workspace_id: ws_adaeze_bakery
+        user_id: ws_adaeze_bakery
         connection_id: con_01JBC8A5T3ZK
         created_at: '2026-10-28T12:00:00+01:00'
     LinkSession:
       type: object
-      required: [id, status, link_token, link_token_expires_at, widget_url, start_date, workspace_id, connection_id, created_at]
+      required: [id, status, link_token, link_token_expires_at, widget_url, start_date, user_id, connection_id, created_at]
       properties:
         id:
           type: string
@@ -950,7 +963,7 @@ components:
         start_date:
           type: string
           format: date
-        workspace_id:
+        user_id:
           type: string
         connection_id:
           type: [string, 'null']
@@ -965,7 +978,7 @@ components:
         link_token_expires_at: '2026-10-28T12:30:00+01:00'
         widget_url: http://connect.localhost:7444/link?token=lt_7c1e9a2f5b8d4e60
         start_date: '2026-07-01'
-        workspace_id: ws_adaeze_bakery
+        user_id: ws_adaeze_bakery
         connection_id: null
         created_at: '2026-10-28T12:00:00+01:00'
     ListedInstitution:
@@ -1058,7 +1071,7 @@ components:
           type: string
     Connection:
       type: object
-      required: [id, status, institution, workspace_id, start_date, effective_start_date, consent_expires_at, last_synced_at, created_at]
+      required: [id, status, institution, user_id, start_date, effective_start_date, consent_expires_at, last_synced_at, created_at]
       properties:
         id:
           type: string
@@ -1066,7 +1079,7 @@ components:
           $ref: '#/components/schemas/ConnectionStatus'
         institution:
           $ref: '#/components/schemas/Institution'
-        workspace_id:
+        user_id:
           type: string
         start_date:
           type: string
@@ -1091,7 +1104,7 @@ components:
         institution:
           id: bank-a
           name: Bank A
-        workspace_id: ws_adaeze_bakery
+        user_id: ws_adaeze_bakery
         start_date: '2026-07-01'
         effective_start_date: null
         consent_expires_at: '2027-10-28T12:04:00+01:00'

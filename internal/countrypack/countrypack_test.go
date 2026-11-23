@@ -74,6 +74,9 @@ func TestPhone(t *testing.T) {
 	if p.Phone.CallingCode != "234" || p.Phone.TrunkPrefix != "0" || p.Phone.Source == "" {
 		t.Errorf("phone: %+v", p.Phone)
 	}
+	if p.Link.HistoryDays != 90 || p.Link.Source == "" {
+		t.Errorf("link: %+v", p.Link)
+	}
 }
 
 func TestDepositInsurance(t *testing.T) {

@@ -39,6 +39,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/core"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -817,14 +818,28 @@ type connected struct {
 	StartDate    clock.Date
 }
 
-func (s *Stack) connect(personaID, institution string, start clock.Date) connected {
+func (s *Stack) linkStart() clock.Date {
 	s.t.Helper()
-	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": start.String(), "workspace_id": "ws_" + personaID, "redirect_uri": s.redirect, "state": "st-" + personaID}), 201)
-	res := s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), institution, personaID, nil)
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return s.today().AddDays(-pack.Link.HistoryDays)
+}
+
+func (s *Stack) linkURL(userID, state string) string {
+	s.t.Helper()
+	lt := s.must(s.call("POST", "/v1/link/token/create", map[string]any{"user_id": userID, "redirect_uri": s.redirect, "state": state}), 201)
+	return s.cfg.WidgetURL() + "/link?token=" + fmt.Sprint(lt.JSON["link_token"])
+}
+
+func (s *Stack) connect(personaID, institution string) connected {
+	s.t.Helper()
+	res := s.completeLink(s.linkURL("ws_"+personaID, "st-"+personaID), institution, personaID, nil)
 	if res.Error != "" || res.Code == "" {
 		s.t.Fatalf("link failed: %+v", res)
 	}
-	if res.SessionID != ls.JSON["id"] || res.State != "st-"+personaID {
+	if res.SessionID == "" || res.State != "st-"+personaID {
 		s.t.Fatalf("redirect carried the wrong session or state: %+v", res)
 	}
 	conn := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 201)
@@ -835,7 +850,7 @@ func (s *Stack) connect(personaID, institution string, start clock.Date) connect
 		s.t.Fatalf("connection not active after sync: %s", got.Body)
 	}
 	accts := s.must(s.call("GET", "/v1/connections/"+id+"/accounts", nil), 200)
-	out := connected{ConnectionID: id, StartDate: start}
+	out := connected{ConnectionID: id, StartDate: s.linkStart()}
 	for _, a := range accts.JSON["data"].([]any) {
 		out.Accounts = append(out.Accounts, a.(map[string]any))
 	}

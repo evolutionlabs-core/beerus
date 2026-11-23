@@ -38,3 +38,6 @@ deposit_insurance:
   bank_types: {commercial: deposit_money_bank, digital: deposit_money_bank, microfinance: microfinance_bank}
   placeholder: Beerus maps the digital bank type to the deposit money bank limit. Many real digital banks hold microfinance licences, so this mapping is a placeholder until bank type means licence category.
   source: The NDIC raised maximum cover to 5,000,000 naira for deposit money banks and 2,000,000 naira for microfinance banks on 24-25 April 2024. https://guardian.ng/business-services/ndic-raises-maximum-bank-deposit-insurance-coverage-to-n5m/
+link:
+  history_days: 90
+  source: "Plaid's default days_requested for transactions is 90. https://plaid.com/docs/api/link/#link-token-create"

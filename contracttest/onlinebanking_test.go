@@ -83,7 +83,7 @@ func TestOnlineBanking(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newBankStack(t)
-	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-20))
+	conn := s.connect("adaeze", "bank-a")
 	current := fmt.Sprint(accountAt(t, conn, "current")["account_number"])
 	b := s.bankSignIn("adaeze")
 	if !strings.Contains(b.last, current) {

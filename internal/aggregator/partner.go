@@ -23,7 +23,7 @@ const (
 
 func (a *App) PartnerHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/link_sessions", a.registered(a.idempotent(a.createLinkSession)))
+	mux.HandleFunc("POST /v1/link/token/create", a.registered(a.idempotent(a.createLinkToken)))
 	mux.HandleFunc("GET /v1/link_sessions/{id}", a.getLinkSession)
 	mux.HandleFunc("GET /v1/webhook_keys", a.listWebhookKeys)
 	mux.HandleFunc("GET /v1/institutions", a.listInstitutions)
@@ -63,7 +63,7 @@ func (a *App) linkSessionJSON(ls *LinkSession, token string) map[string]any {
 		"id":            ls.ID,
 		"status":        ls.Status,
 		"start_date":    ls.StartDate.String(),
-		"workspace_id":  ls.WorkspaceID,
+		"user_id":       ls.UserID,
 		"connection_id": conn,
 		"created_at":    ts(ls.CreatedAt),
 	}
@@ -75,7 +75,7 @@ func (a *App) linkSessionJSON(ls *LinkSession, token string) map[string]any {
 	return m
 }
 
-func (a *App) newLinkSession(p *config.Partner, workspace string, start clock.Date, redirect, state, connectionID, institution string) (*LinkSession, string, error) {
+func (a *App) newLinkSession(p *config.Partner, user string, start clock.Date, redirect, state, connectionID, institution string) (*LinkSession, string, error) {
 	token, err := web.NewSecret("lt_", 20)
 	if err != nil {
 		return nil, "", err
@@ -84,7 +84,7 @@ func (a *App) newLinkSession(p *config.Partner, workspace string, start clock.Da
 	ls := &LinkSession{
 		ID:           web.NewID("lks"),
 		PartnerID:    p.ID,
-		WorkspaceID:  workspace,
+		UserID:       user,
 		Status:       "created",
 		StartDate:    start,
 		RedirectURI:  redirect,
@@ -101,25 +101,24 @@ func (a *App) newLinkSession(p *config.Partner, workspace string, start clock.Da
 	return ls, token, nil
 }
 
-func (a *App) createLinkSession(w http.ResponseWriter, r *http.Request) {
+func (a *App) createLinkToken(w http.ResponseWriter, r *http.Request) {
 	p := partnerFrom(r)
 	var body struct {
-		StartDate   string `json:"start_date"`
-		WorkspaceID string `json:"workspace_id"`
-		RedirectURI string `json:"redirect_uri"`
-		State       string `json:"state"`
+		UserID        string `json:"user_id"`
+		InstitutionID string `json:"institution_id"`
+		RedirectURI   string `json:"redirect_uri"`
+		State         string `json:"state"`
 	}
 	if err := web.DecodeBody(r, &body); err != nil {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object with start_date, workspace_id and redirect_uri.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object with user_id, an optional institution_id and redirect_uri.")
 		return
 	}
-	start, err := clock.ParseDate(body.StartDate)
-	if err != nil {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "start_date must be a date in YYYY-MM-DD form.")
+	if body.UserID == "" {
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", "user_id is required.")
 		return
 	}
-	if body.WorkspaceID == "" || len(body.WorkspaceID) > 128 {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "workspace_id must be 1 to 128 characters.")
+	if len(body.UserID) > 128 {
+		web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", "user_id must be at most 128 characters.")
 		return
 	}
 	if len(body.State) > 512 {
@@ -130,19 +129,22 @@ func (a *App) createLinkSession(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "redirect_uri must exactly match a registered redirect URI.")
 		return
 	}
+	if body.InstitutionID != "" {
+		if b := a.bank(body.InstitutionID); b == nil || b.Closed() {
+			web.WriteError(w, r, http.StatusUnprocessableEntity, "invalid_request", "There is no bank "+body.InstitutionID+" in this setup. Use an institution_id from GET /v1/institutions.")
+			return
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if start.After(a.clock.Today()) {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "start_date must not be in the future.")
-		return
-	}
-	ls, token, err := a.newLinkSession(p, body.WorkspaceID, start, body.RedirectURI, body.State, "", "")
+	start := a.clock.Today().AddDays(-a.linkDays)
+	ls, token, err := a.newLinkSession(p, body.UserID, start, body.RedirectURI, body.State, "", body.InstitutionID)
 	if err != nil {
 		a.log.Error("link session", "err", err)
-		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The link session could not be created. Try again.")
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The link token could not be created. Try again.")
 		return
 	}
-	web.WriteJSON(w, http.StatusCreated, a.linkSessionJSON(ls, token))
+	web.WriteJSON(w, http.StatusCreated, map[string]any{"link_token": token, "expiration": ts(ls.TokenExpires)})
 }
 
 func (a *App) getLinkSession(w http.ResponseWriter, r *http.Request) {
@@ -331,7 +333,7 @@ func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *con
 		}
 		status = http.StatusOK
 	} else {
-		c = &Connection{ID: web.NewID("con"), PartnerID: p.ID, WorkspaceID: ls.WorkspaceID, Institution: ls.Institution, CustomerID: ls.CustomerID, StartDate: ls.StartDate, CreatedAt: a.clock.Now()}
+		c = &Connection{ID: web.NewID("con"), PartnerID: p.ID, UserID: ls.UserID, Institution: ls.Institution, CustomerID: ls.CustomerID, StartDate: ls.StartDate, CreatedAt: a.clock.Now()}
 		a.st.Connections[c.ID] = c
 		ls.ConnectionID = c.ID
 	}
@@ -448,7 +450,7 @@ func (a *App) connectionJSON(c *Connection) map[string]any {
 		"id":                   c.ID,
 		"status":               c.Status,
 		"institution":          a.institutionJSON(c.Institution),
-		"workspace_id":         c.WorkspaceID,
+		"user_id":              c.UserID,
 		"start_date":           c.StartDate.String(),
 		"effective_start_date": eff,
 		"consent_expires_at":   exp,
@@ -594,7 +596,7 @@ func (a *App) reauth(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
 		return
 	}
-	ls, token, err := a.newLinkSession(p, c.WorkspaceID, c.StartDate, body.RedirectURI, body.State, c.ID, c.Institution)
+	ls, token, err := a.newLinkSession(p, c.UserID, c.StartDate, body.RedirectURI, body.State, c.ID, c.Institution)
 	if err != nil {
 		a.log.Error("link session", "err", err)
 		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The link session could not be created. Try again.")

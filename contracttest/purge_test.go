@@ -49,7 +49,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	home := s.persona("adaeze")
 	target := s.openAccount(s.join("adaeze", "abuja-digital"), "current")
 	s.pay("bank-a", home.Accounts[0], "abuja-digital", target, "25000")
-	conn := s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
+	conn := s.connect("adaeze", "abuja-digital")
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
 	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "abuja-digital", "outcome": "credited", "count": 1})
 	sent, _ := s.payTry("bank-a", home.Accounts[0], "abuja-digital", target, "100", nil)

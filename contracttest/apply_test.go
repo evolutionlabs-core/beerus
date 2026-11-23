@@ -265,7 +265,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 		}
 		return n
 	}
-	s.connect("adaeze", "bank-a", s.today().AddDays(-3))
+	s.connect("adaeze", "bank-a")
 	revokedBefore := revoked()
 	noBalance := applied()
 	noBalance.Spec.Partners = slices.DeleteFunc(noBalance.Spec.Partners, func(p setup.Partner) bool { return p.ID == "balance" })

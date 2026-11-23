@@ -225,7 +225,7 @@ func (a *App) toToken(r tokenReply) bankToken {
 func (a *App) bankFromLocked(ls *LinkSession) clock.Date {
 	from := ls.StartDate
 	for _, c := range a.st.Connections {
-		if c.PartnerID != ls.PartnerID || c.WorkspaceID != ls.WorkspaceID || c.Institution != ls.Institution {
+		if c.PartnerID != ls.PartnerID || c.UserID != ls.UserID || c.Institution != ls.Institution {
 			continue
 		}
 		for _, id := range c.AccountIDs {
