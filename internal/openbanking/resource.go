@@ -61,7 +61,7 @@ type granted struct {
 
 func (s *Server) resource(scope string, next func(http.ResponseWriter, *http.Request, granted)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		client, thumb, ok := s.caller(w, r)
+		client, ok := s.caller(w, r)
 		if !ok {
 			return
 		}
@@ -73,10 +73,6 @@ func (s *Server) resource(scope string, next func(http.ResponseWriter, *http.Req
 		tok, err := s.cfg.Store.Token(r.Context(), Hash(raw))
 		if err != nil || tok.Kind != "access" || tok.ClientID != client.ID {
 			fail(w, http.StatusUnauthorized, "invalid_token", "The access token is not valid.")
-			return
-		}
-		if tok.Thumbprint != thumb {
-			fail(w, http.StatusUnauthorized, "invalid_token", "The access token is bound to another certificate.")
 			return
 		}
 		c, err := s.live(r.Context(), tok.ConsentID)

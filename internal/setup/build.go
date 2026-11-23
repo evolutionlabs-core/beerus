@@ -193,7 +193,6 @@ func BuildConfig(dir string, st Status, local Local) (*config.Config, error) {
 			Host:               cmp.Or(ln.Host, DefaultConnectHost),
 			PartnerPort:        ln.PartnerPort,
 			WidgetPort:         ln.WidgetPort,
-			WidgetTLS:          ln.WidgetTLS,
 			ControlPort:        ln.ControlPort,
 			HealthPort:         ln.HealthPort,
 			NIBSSPort:          nibss,
@@ -270,7 +269,7 @@ func RuntimeBank(b Bank, r Resource) *config.Bank {
 }
 
 func RuntimePartner(p Partner, k PartnerKeys, l PartnerLocal) *config.Partner {
-	out := &config.Partner{ID: p.ID, Name: p.Name, LegalName: cmp.Or(p.LegalName, p.Name), Purpose: cmp.Or(p.Purpose, defaultPurpose), CertCN: k.CertCN, APIKeySHA256: k.APIKeySHA256, CertSHA256: k.CertSHA256, RedirectURIs: p.RedirectURIs, WebhookURL: p.WebhookURL}
+	out := &config.Partner{ID: p.ID, Name: p.Name, LegalName: cmp.Or(p.LegalName, p.Name), Purpose: cmp.Or(p.Purpose, defaultPurpose), APIKeySHA256: k.APIKeySHA256, RedirectURIs: p.RedirectURIs, WebhookURL: p.WebhookURL}
 	if len(l.RedirectURIs) > 0 {
 		out.RedirectURIs = l.RedirectURIs
 	}

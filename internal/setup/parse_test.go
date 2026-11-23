@@ -51,7 +51,7 @@ func TestParseGoodFixtures(t *testing.T) {
 	if !slices.Equal(three.Spec.Holidays.Add, []string{"2026-12-28"}) {
 		t.Fatalf("holidays: %v", three.Spec.Holidays.Add)
 	}
-	if p := three.Spec.Partners[0]; p.ID != "balance" || p.WebhookURL != "https://localhost:3000/webhooks" || len(p.RedirectURIs) != 1 {
+	if p := three.Spec.Partners[0]; p.ID != "balance" || p.WebhookURL != "http://localhost:3000/webhooks" || len(p.RedirectURIs) != 1 {
 		t.Fatalf("partner: %+v", p)
 	}
 }

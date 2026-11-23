@@ -21,7 +21,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/control"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/disk"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -81,10 +81,6 @@ func New(dir string, o Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := checkCertificates(cfg); err != nil {
-		return nil, err
-	}
-	readThumbprints(cfg)
 	key, err := config.WebhookKey(cfg)
 	if err != nil {
 		return nil, err
@@ -128,23 +124,6 @@ func New(dir string, o Options) (*App, error) {
 	}
 	a.nibssCtl = nibssAdmin{control.NewNIBSSControl(control.NewLink(nibssToken, ""), cfg.Connect.NIBSSControlPort)}
 	return a, nil
-}
-
-func checkCertificates(cfg *config.Config) error {
-	for _, p := range [][]string{{"ca", "root.crt"}, {"ca", "connect-partners.crt"}, {"connect", "server.crt"}, {"connect", "server.key"}, {"connect", "client.crt"}, {"connect", "client.key"}} {
-		if _, err := os.Stat(cfg.Path(p...)); err != nil {
-			return fmt.Errorf("%s cannot be read: %w. Start Beerus with beerus up first so core can issue the certificates", cfg.Path(p...), err)
-		}
-	}
-	return nil
-}
-
-func readThumbprints(c *config.Config) {
-	for _, p := range c.Partners {
-		if fp, err := pki.FileThumbprint(c.Path("partners", p.ID, "client.crt")); err == nil {
-			p.CertSHA256 = fp
-		}
-	}
 }
 
 func (a *App) runningPath() string {
@@ -200,7 +179,7 @@ func (a *App) WorldID() string {
 }
 
 func (a *App) Run(ctx context.Context) {
-	if err := pki.WriteFile(a.runningPath(), []byte(a.clock.Real().Format(time.RFC3339)), 0o600); err != nil {
+	if err := disk.Write(a.runningPath(), []byte(a.clock.Real().Format(time.RFC3339)), 0o600); err != nil {
 		a.log.Error("write run marker", "err", err)
 	}
 	defer os.Remove(a.runningPath())
@@ -329,7 +308,6 @@ func (a *App) Reload() error {
 	if err != nil {
 		return err
 	}
-	readThumbprints(c)
 	a.pmu.Lock()
 	a.cfg.Banks, a.cfg.Partners = c.Banks, c.Partners
 	a.pmu.Unlock()

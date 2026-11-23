@@ -563,10 +563,7 @@ func (a *App) makePartner(desired setup.Spec, id string) (*config.Partner, error
 	if err != nil {
 		return nil, err
 	}
-	p := setup.RuntimePartner(sp, setup.PartnerKeys{CertCN: id, APIKeySHA256: config.HashKey(key)}, setup.PartnerLocal{})
-	if err := a.issuePartnerCert(p); err != nil {
-		return nil, err
-	}
+	p := setup.RuntimePartner(sp, setup.PartnerKeys{APIKeySHA256: config.HashKey(key)}, setup.PartnerLocal{})
 	return p, nil
 }
 
@@ -739,7 +736,7 @@ func admitPartner(st *setup.Status, act setup.Action, ad *admission) {
 			Generation:         gen,
 			ObservedGeneration: gen,
 			Phase:              config.PhaseActive,
-			Partner:            &setup.PartnerKeys{CertCN: p.CertCN, APIKeySHA256: p.APIKeySHA256, CertSHA256: p.CertSHA256},
+			Partner:            &setup.PartnerKeys{APIKeySHA256: p.APIKeySHA256},
 			Owned:              []setup.Owned{{Kind: state.OwnedDir, Name: "partners/" + act.ID}},
 		}
 	case setup.OpUpdate:

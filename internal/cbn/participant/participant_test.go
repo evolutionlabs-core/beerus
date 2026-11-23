@@ -3,7 +3,6 @@ package participant
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"fmt"
 	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"io"
@@ -20,9 +19,7 @@ import (
 	"github.com/pb33f/libopenapi"
 	validator "github.com/pb33f/libopenapi-validator"
 
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 const (
@@ -59,21 +56,20 @@ func TestCBNServesSettlement(t *testing.T) {
 	if url == "" || testing.Short() {
 		t.Skip("needs Postgres; set BEERUS_TEST_DATABASE_URL and run without -short")
 	}
-	now := clock.New().Now()
 	stage := t.TempDir()
 	cfg := &config.Config{Dir: stage, SetupKey: 9, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: freePort(t), NIBSSControlPort: freePort(t), CBNPort: freePort(t), CBNControlPort: freePort(t)}}
-	if err := config.Prepare(cfg, now); err != nil {
+	if err := config.Prepare(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if err := cfg.EnsureCBNDir(now); err != nil {
+	if err := cfg.EnsureCBNDir(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cfg.EnsureNIBSSDir("wld_test", now); err != nil {
+	if err := cfg.EnsureNIBSSDir("wld_test"); err != nil {
 		t.Fatal(err)
 	}
 	for i, id := range []string{"bank-a", "bank-b", "bank-c"} {
 		b := &config.Bank{ID: id, Name: id, Type: "commercial", Port: 3 + 2*i, APIPort: 4 + 2*i, Database: config.DatabaseName(stage, id)}
-		if err := cfg.EnsureBankDir(b, now); err != nil {
+		if err := cfg.EnsureBankDir(b); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -100,23 +96,8 @@ func TestCBNServesSettlement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pool, err := pki.LoadPool(filepath.Join(config.CBNDir(stage), config.CBNCAFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	mutual := func(dir, name string) *http.Client {
-		pair, err := tls.LoadX509KeyPair(filepath.Join(dir, name+".crt"), filepath.Join(dir, name+".key"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return &http.Client{Timeout: testWait, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, Certificates: []tls.Certificate{pair}, ServerName: config.CBNHost, MinVersion: tls.VersionTLS12}}}
-	}
-	clients := map[string]*http.Client{
-		"nibss":  mutual(config.NIBSSDir(stage), "client"),
-		"bank-a": mutual(filepath.Join(stage, "banks", "bank-a"), "client"),
-		"bank-b": mutual(filepath.Join(stage, "banks", "bank-b"), "client"),
-		"bank-c": mutual(filepath.Join(stage, "banks", "bank-c"), "client"),
-	}
+	callers := map[string]string{"nibss": config.NIBSSCN, "bank-a": "bank-a", "bank-b": "bank-b", "bank-c": "bank-c"}
+	client := &http.Client{Timeout: testWait}
 	spec, err := os.ReadFile(specPath)
 	if err != nil {
 		t.Fatal(err)
@@ -130,12 +111,12 @@ func TestCBNServesSettlement(t *testing.T) {
 		t.Fatalf("validator: %v", errs)
 	}
 	control := "http://127.0.0.1:" + strconv.Itoa(cfg.Connect.CBNControlPort)
-	api := "https://127.0.0.1:" + strconv.Itoa(cfg.Connect.CBNPort)
+	api := "http://127.0.0.1:" + strconv.Itoa(cfg.Connect.CBNPort)
 	do := func(c call) (int, string, http.Header) {
 		t.Helper()
-		base, client := api, clients[c.who]
+		base := api
 		if c.who == "token" || c.who == "anonymous" {
-			base, client = control, &http.Client{Timeout: testWait}
+			base = control
 		}
 		req, err := http.NewRequestWithContext(ctx, c.method, base+c.path, strings.NewReader(c.body))
 		if err != nil {
@@ -143,6 +124,9 @@ func TestCBNServesSettlement(t *testing.T) {
 		}
 		if c.who == "token" {
 			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		if caller := callers[c.who]; caller != "" {
+			req.Header.Set(config.CallerHeader, caller)
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -198,15 +182,17 @@ func TestCBNServesSettlement(t *testing.T) {
 		{"nibss", http.MethodPost, "/v1/settlement-sessions", `{"session_id":"s5","cutoff_at":"2100-01-02T12:00:00+01:00","nets":[{"bank_id":"bank-a","net_minor":9223372036854775807},{"bank_id":"bank-b","net_minor":1}]}`, 422, `"code":"amount_too_large","message":"The nets of session s5 are too large to add up. The largest net is 9223372036854775807 kobo. Send smaller nets."`, false},
 		{"nibss", http.MethodPost, "/v1/settlement-sessions", `{"session_id":"s5b","cutoff_at":"2100-01-02T12:00:00+01:00","nets":[{"bank_id":"bank-a","net_minor":-9223372036854775807},{"bank_id":"bank-b","net_minor":9223372036854775807}]}`, 422, `"code":"amount_too_large","message":"Session s5b would take bank-b's settlement balance past the largest amount: 1250 + 9223372036854775807. Send smaller nets."`, false},
 		{"nibss", http.MethodPost, "/v1/settlement-sessions", `{"session_id":"s6","cutoff_at":"2100-01-02T12:00:00+01:00","nets":[{"bank_id":"bank-a","net_minor":0}]}`, 400, `"code":"invalid_request"`, false},
-		{"bank-a", http.MethodPost, "/v1/settlement-sessions", session("s7", -5, 5), 403, `"code":"forbidden"`, false},
+		{"nobody", http.MethodPost, "/v1/settlement-sessions", session("s7", -5, 5), 401, `"code":"unauthenticated","message":"Send your ID in the Beerus-Caller header."`, false},
+		{"bank-a", http.MethodPost, "/v1/settlement-sessions", session("s7", -5, 5), 403, `"code":"forbidden","message":"bank-a may not post a settlement session. Only NIBSS may."`, false},
 		{"bank-a", http.MethodGet, "/v1/banks/bank-a/settlement-balance", "", 200, `"bank_id":"bank-a","balance_minor":750,"read_at":`, false},
-		{"bank-a", http.MethodGet, "/v1/banks/bank-b/settlement-balance", "", 403, "This certificate may not read the balance of bank-b.", false},
-		{"nibss", http.MethodGet, "/v1/banks/bank-a/settlement-balance", "", 403, `"code":"forbidden"`, false},
+		{"bank-a", http.MethodGet, "/v1/banks/bank-b/settlement-balance", "", 403, "bank-a may not read the balance of bank-b.", false},
+		{"nibss", http.MethodGet, "/v1/banks/bank-a/settlement-balance", "", 403, "beerus-nibss may not read the balance of bank-a.", false},
 		{"bank-c", http.MethodGet, "/v1/banks/bank-c/settlement-balance", "", 404, "No settlement account for that bank.", false},
 		{"bank-b", http.MethodGet, "/v1/banks/bank-b/settlement-balance", "", 200, `"balance_minor":1250`, false},
 		{"bank-a", http.MethodGet, "/v1/settlement-postings?limit=1", "", 200, `"next_cursor":"session:s1"`, false},
 		{"bank-a", http.MethodGet, "/v1/settlement-postings?limit=5&cursor=session:s1", "", 200, `"key":"genesis:bank-a","kind":"genesis"`, false},
-		{"bank-a", http.MethodGet, "/v1/settlement-postings?bank_id=bank-b", "", 403, `"code":"forbidden"`, false},
+		{"bank-a", http.MethodGet, "/v1/settlement-postings?bank_id=bank-b", "", 403, "bank-a may not read the postings of bank-b.", false},
+		{"nobody", http.MethodGet, "/v1/settlement-postings", "", 401, `"code":"unauthenticated"`, false},
 		{"bank-c", http.MethodGet, "/v1/settlement-postings", "", 200, `"data":[]`, false},
 		{"nibss", http.MethodGet, "/v1/settlement-postings?limit=2", "", 200, `"next_cursor":`, false},
 		{"nibss", http.MethodGet, "/v1/settlement-postings?bank_id=bank-b&limit=500", "", 200, `"key":"genesis:bank-b"`, false},
@@ -238,11 +224,6 @@ func TestCBNServesSettlement(t *testing.T) {
 	p.end("s9")
 	if status, body, _ := do(call{who: "nibss", method: http.MethodPost, path: "/v1/settlement-sessions", body: session("s9", -5, 5)}); status != http.StatusOK {
 		t.Errorf("a session after its first post ended: %d %s", status, body)
-	}
-	anon := &http.Client{Timeout: testWait, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: config.CBNHost, MinVersion: tls.VersionTLS12}}}
-	if resp, err := anon.Get(api + "/v1/settlement-postings"); err == nil {
-		resp.Body.Close()
-		t.Errorf("a call without a client certificate got %d", resp.StatusCode)
 	}
 	if _, err := New(ctx, stage, Options{}); err == nil || err.Error() != config.DatabaseURLEnv+" is not set; set it to the Postgres URL of the CBN" {
 		t.Errorf("start without a database: %v", err)

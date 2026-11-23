@@ -15,7 +15,7 @@ func TestSettlementReportsListOnlyPostedSessionsOfTheCaller(t *testing.T) {
 	s := testStore(t)
 	for _, m := range []Member{member("bank-a", "Bank A", "999001", "901"), member("bank-b", "Bank B", "999002", "902"), member("bank-c", "Bank C", "999003", "903")} {
 		m.Limits = Limits{NetDebitCap: 100_000_000}
-		m.CertificateIdentity = m.ID
+		m.CallerID = m.ID
 		if err := s.Register(ctx, m); err != nil {
 			t.Fatal(err)
 		}

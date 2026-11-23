@@ -96,6 +96,8 @@ func New(c Config) *Server {
 		replays:   map[string]*web.Record{},
 
 		checkRequests: make(chan struct{}, 1),
+		dirClient:     NIBSSHTTP(),
+		cbnClient:     CBNHTTP(c.Link.Remote()),
 	}
 	if c.Books != nil {
 		s.books.Store(c.Books)

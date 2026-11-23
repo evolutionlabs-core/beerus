@@ -6,8 +6,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -18,7 +16,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 type fakeRegistry struct {
@@ -29,8 +27,8 @@ func (r fakeRegistry) Client(id string) (*Client, bool) {
 	return r.client, id == r.client.ID
 }
 
-func (r fakeRegistry) ClientByCert(cn string) (*Client, bool) {
-	return r.client, cn == r.client.CertCN
+func (r fakeRegistry) ClientByCaller(id string) (*Client, bool) {
+	return r.client, id == r.client.CertCN
 }
 
 type fakeData struct{}
@@ -70,9 +68,7 @@ type env struct {
 	ts    *httptest.Server
 	store *MemStore
 	key   *ecdsa.PrivateKey
-	ca    *pki.Authority
 	good  *http.Client
-	other *http.Client
 }
 
 func (e *env) lastLedger() ConsentEvent {
@@ -84,47 +80,31 @@ func (e *env) lastLedger() ConsentEvent {
 	return due[len(due)-1].ConsentEvent
 }
 
-func (e *env) clientFor(cn, role string) *http.Client {
-	leaf, err := e.ca.IssueClient(cn, role, time.Hour)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	pair, err := tls.X509KeyPair(leaf.CertPEM, leaf.KeyPEM)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(e.ca.PEM)
-	return &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{pair}, RootCAs: pool}}}
+type callerTransport struct {
+	id string
+}
+
+func (c callerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set(config.CallerHeader, c.id)
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+func clientFor(id string) *http.Client {
+	return &http.Client{Transport: callerTransport{id}}
 }
 
 func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	t.Helper()
-	ca, err := pki.NewAuthority("Test CA", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srvLeaf, err := ca.IssueServer([]string{"localhost"}, time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pair, err := tls.X509KeyPair(srvLeaf.CertPEM, srvLeaf.KeyPEM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(ca.PEM)
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &env{t: t, store: NewMemStore(), key: key, ca: ca}
+	e := &env{t: t, store: NewMemStore(), key: key}
 	var h http.Handler
-	e.ts = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
-	e.ts.TLS = &tls.Config{Certificates: []tls.Certificate{pair}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool}
-	e.ts.StartTLS()
+	e.ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
 	t.Cleanup(e.ts.Close)
-	client := &Client{ID: "OBR-1", Name: "Connect", Role: "aggregator", CertCN: "connect", Keys: []*ecdsa.PublicKey{&key.PublicKey}, RedirectURIs: []string{"https://connect.localhost/cb"}}
+	client := &Client{ID: "OBR-1", Name: "Connect", Role: "aggregator", CertCN: "connect", Keys: []*ecdsa.PublicKey{&key.PublicKey}, RedirectURIs: []string{"http://connect.localhost/cb"}}
 	cfg := Config{
 		BankID: "bank-a", Terms: Terms{BankName: "Bank A"}, Issuer: e.ts.URL, AuthorizeURL: "http://bank-a.localhost/authorize", HistoryDays: 90,
 		Store: e.store, Registry: fakeRegistry{client}, Data: fakeData{},
@@ -134,8 +114,7 @@ func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	}
 	e.srv = New(cfg)
 	h = e.srv.Handler()
-	e.good = e.clientFor("connect", "aggregator")
-	e.other = e.clientFor("connect", "aggregator")
+	e.good = clientFor("connect")
 	return e
 }
 
@@ -231,7 +210,7 @@ func (e *env) pushed() (string, string) {
 func (e *env) pushedFor(scope string) (string, string) {
 	e.t.Helper()
 	status, body := e.post(e.good, "/par", url.Values{
-		"response_type": {"code"}, "client_id": {"OBR-1"}, "redirect_uri": {"https://connect.localhost/cb"}, "state": {"st1"},
+		"response_type": {"code"}, "client_id": {"OBR-1"}, "redirect_uri": {"http://connect.localhost/cb"}, "state": {"st1"},
 		"code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}, "partner_id": {"balance"}, "partner_name": {"Balance"},
 		"transaction_from": {"2026-02-01"}, "scope": {scope},
 	})
@@ -260,7 +239,7 @@ func (e *env) codeFor(scope string) (string, string) {
 }
 
 func (e *env) exchange(c *http.Client, code, v string) (int, map[string]any) {
-	return e.post(c, "/token", url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {v}, "redirect_uri": {"https://connect.localhost/cb"}})
+	return e.post(c, "/token", url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {v}, "redirect_uri": {"http://connect.localhost/cb"}})
 }
 
 func (e *env) tokens() (map[string]any, string) {
@@ -294,7 +273,7 @@ func TestFullFlow(t *testing.T) {
 	if status, _ := e.get(e.good, "/accounts/0123456790/balances", access); status != http.StatusForbidden {
 		t.Fatalf("unshared account: %d", status)
 	}
-	if status, body := e.get(e.good, "/discover", ""); status != 200 || body["tls_client_certificate_bound_access_tokens"] != true {
+	if status, body := e.get(e.good, "/discover", ""); status != 200 || body["token_endpoint"] != e.ts.URL+"/token" {
 		t.Fatalf("discover: %d %v", status, body)
 	}
 	c, _ := e.srv.Consent(context.Background(), id)
@@ -316,12 +295,12 @@ func TestFullFlow(t *testing.T) {
 func TestPAR(t *testing.T) {
 	e := newEnv(t)
 	base := func() url.Values {
-		return url.Values{"response_type": {"code"}, "redirect_uri": {"https://connect.localhost/cb"}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}, "scope": {allScopes}}
+		return url.Values{"response_type": {"code"}, "redirect_uri": {"http://connect.localhost/cb"}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}, "scope": {allScopes}}
 	}
 	plain := base()
 	plain.Set("code_challenge_method", "plain")
 	wrongURI := base()
-	wrongURI.Set("redirect_uri", "https://connect.localhost/cb/")
+	wrongURI.Set("redirect_uri", "http://connect.localhost/cb/")
 	for name, f := range map[string]url.Values{"plain PKCE": plain, "redirect not an exact match": wrongURI} {
 		if status, body := e.post(e.good, "/par", f); status != http.StatusBadRequest {
 			t.Errorf("%s: %d %v", name, status, body)
@@ -420,15 +399,22 @@ func TestExpiredCode(t *testing.T) {
 	}
 }
 
-func TestWrongCertificate(t *testing.T) {
+func TestWrongCaller(t *testing.T) {
 	e := newEnv(t)
 	code, _ := e.code()
-	for name, c := range map[string]*http.Client{
-		"unregistered name": e.clientFor("stranger", "aggregator"),
-		"wrong role":        e.clientFor("connect", "partner"),
-	} {
-		if status, _ := e.exchange(c, code, verifier); status != http.StatusUnauthorized && status != http.StatusForbidden {
-			t.Errorf("%s: %d", name, status)
+	rows := []struct {
+		name   string
+		client *http.Client
+		status int
+		desc   string
+	}{
+		{"no caller", &http.Client{}, http.StatusUnauthorized, "Send your ID in the Beerus-Caller header."},
+		{"unregistered ID", clientFor("stranger"), http.StatusUnauthorized, "stranger is not registered at the Registry."},
+	}
+	for _, r := range rows {
+		status, body := e.exchange(r.client, code, verifier)
+		if status != r.status || body["error"] != "invalid_client" || body["error_description"] != r.desc {
+			t.Errorf("%s: %d %v, want %d invalid_client %q", r.name, status, body, r.status, r.desc)
 		}
 	}
 	status, body := e.exchange(e.good, code, verifier)
@@ -436,15 +422,11 @@ func TestWrongCertificate(t *testing.T) {
 		t.Fatalf("the real client was locked out: %d %v", status, body)
 	}
 	access := body["access_token"].(string)
-	if status, body := e.get(e.other, "/accounts", access); status != http.StatusUnauthorized || body["error"] != "invalid_token" {
-		t.Fatalf("token used with another certificate: %d %v", status, body)
+	if status, body := e.get(&http.Client{}, "/accounts", access); status != http.StatusUnauthorized || body["error"] != "invalid_client" {
+		t.Fatalf("token used with no caller: %d %v", status, body)
 	}
 	if status, _ := e.get(e.good, "/accounts", access); status != 200 {
-		t.Fatalf("bound certificate refused: %d", status)
-	}
-	refresh := body["refresh_token"].(string)
-	if status, _ := e.post(e.other, "/token", url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}}); status != http.StatusBadRequest {
-		t.Fatalf("refresh from another certificate: %d", status)
+		t.Fatalf("registered client refused: %d", status)
 	}
 }
 
@@ -597,7 +579,7 @@ func TestDormancyFollowsTheSetting(t *testing.T) {
 func TestScopeNarrowsWhatIsShared(t *testing.T) {
 	e := newEnv(t)
 	for name, scope := range map[string]string{"none": "", "unknown": "accounts payments"} {
-		status, body := e.post(e.good, "/par", url.Values{"response_type": {"code"}, "redirect_uri": {"https://connect.localhost/cb"}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}, "scope": {scope}})
+		status, body := e.post(e.good, "/par", url.Values{"response_type": {"code"}, "redirect_uri": {"http://connect.localhost/cb"}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}, "scope": {scope}})
 		if status != http.StatusBadRequest || body["error"] != "invalid_scope" {
 			t.Errorf("%s scope: %d %v", name, status, body)
 		}
@@ -694,7 +676,7 @@ func TestStaleRequestsAreDropped(t *testing.T) {
 		t.Fatalf("an abandoned request is %s", c.Status)
 	}
 	e.ageRequests(0, 11*time.Minute)
-	if status, _ := e.post(e.good, "/token", url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {"https://connect.localhost/cb"}}); status != http.StatusBadRequest {
+	if status, _ := e.post(e.good, "/token", url.Values{"grant_type": {"authorization_code"}, "code": {code}, "code_verifier": {verifier}, "redirect_uri": {"http://connect.localhost/cb"}}); status != http.StatusBadRequest {
 		t.Fatalf("expired code: %d", status)
 	}
 	e.srv.mu.Lock()
@@ -744,7 +726,7 @@ func TestAssertionRules(t *testing.T) {
 		return jwt
 	}
 	push := func(assertion string) int {
-		status, _ := e.post(e.good, "/par", url.Values{"response_type": {"code"}, "redirect_uri": {"https://connect.localhost/cb"}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}, "scope": {allScopes}, "client_assertion": {assertion}, "client_assertion_type": {assertionType}})
+		status, _ := e.post(e.good, "/par", url.Values{"response_type": {"code"}, "redirect_uri": {"http://connect.localhost/cb"}, "code_challenge": {challenge(verifier)}, "code_challenge_method": {"S256"}, "scope": {allScopes}, "client_assertion": {assertion}, "client_assertion_type": {assertionType}})
 		return status
 	}
 	if status := push(sign(e.ts.URL, 30*time.Second)); status != http.StatusCreated {

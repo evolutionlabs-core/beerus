@@ -42,7 +42,7 @@ spec:
       legal_name: Evolution Labs
       purpose: to keep your books in sync with this account
       redirect_uris:
-        - https://balance.localhost/bank_connections/callback
+        - http://balance.localhost/bank_connections/callback
       webhook_url: %s
 `
 

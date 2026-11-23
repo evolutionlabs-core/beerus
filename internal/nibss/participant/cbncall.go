@@ -3,20 +3,17 @@ package participant
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 const (
@@ -53,33 +50,10 @@ type sessionPost struct {
 	Nets      []nibss.BankNet `json:"nets"`
 }
 
-func newCBNCaller(own string, port int, remote bool) (*cbnCaller, error) {
-	pool, err := pki.LoadPool(filepath.Join(own, config.NIBSSCAFile))
-	if err != nil {
-		return nil, err
-	}
-	certPath, keyPath := filepath.Join(own, "client.crt"), filepath.Join(own, "client.key")
-	tc := &tls.Config{
-		RootCAs:    pool,
-		ServerName: config.CBNHost,
-		MinVersion: tls.VersionTLS12,
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 || cs.PeerCertificates[0].Subject.CommonName != config.CBNHost {
-				return errors.New("the server presented another certificate identity than the CBN")
-			}
-			return nil
-		},
-		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			pair, err := tls.LoadX509KeyPair(certPath, keyPath)
-			if err != nil {
-				return nil, fmt.Errorf("load NIBSS client certificate: %w", err)
-			}
-			return &pair, nil
-		},
-	}
-	tr := &http.Transport{TLSClientConfig: tc, IdleConnTimeout: cbnIdleTimeout, MaxIdleConnsPerHost: 1, DialContext: localDial(remote)}
+func newCBNCaller(port int, remote bool) *cbnCaller {
+	tr := &http.Transport{IdleConnTimeout: cbnIdleTimeout, MaxIdleConnsPerHost: 1, DialContext: localDial(remote)}
 	redirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &cbnCaller{client: &http.Client{Timeout: cbnCallTimeout, Transport: tr, CheckRedirect: redirect}, base: "https://" + net.JoinHostPort(config.CBNHost, strconv.Itoa(port))}, nil
+	return &cbnCaller{client: &http.Client{Timeout: cbnCallTimeout, Transport: tr, CheckRedirect: redirect}, base: "http://" + net.JoinHostPort(config.CBNHost, strconv.Itoa(port))}
 }
 
 func (c *cbnCaller) post(ctx context.Context, key string, cutoff time.Time, nets []nibss.BankNet) error {
@@ -92,6 +66,7 @@ func (c *cbnCaller) post(ctx context.Context, key string, cutoff time.Time, nets
 		return fmt.Errorf("build settlement %s: %w", key, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(config.CallerHeader, config.NIBSSCN)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("post settlement %s: %w: %w", key, errCBNAway, err)

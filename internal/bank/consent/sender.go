@@ -3,30 +3,23 @@ package consent
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
-	eventType        = "application/secevent+jwt"
 	eventBatch       = 50
 	eventLife        = 5 * time.Minute
 	eventIdleTimeout = 90 * time.Second
@@ -36,9 +29,7 @@ const (
 type Sender struct {
 	Log       *slog.Logger
 	Clock     *clock.Clock
-	Dir       string
 	WidgetURL string
-	CA        string
 	Servers   func() map[string]*openbanking.Server
 	Bank      func(id string) *config.Bank
 	Record    func(ctx context.Context, incarnation string, e openbanking.ConsentEvent) error
@@ -47,7 +38,7 @@ type Sender struct {
 	flushMu sync.Mutex
 	warned  map[string]string
 	mu      sync.Mutex
-	clients map[string]*http.Client
+	client  *http.Client
 }
 
 func (s *Sender) Events(ctx context.Context) {
@@ -169,55 +160,22 @@ func (s *Sender) cleared(key string) {
 	delete(s.warned, key)
 }
 
-func (s *Sender) signer(b *config.Bank) (*ecdsa.PrivateKey, error) {
-	raw, err := os.ReadFile(filepath.Join(s.Dir, "banks", b.ID, config.EventSignerName+".key"))
-	if err != nil {
-		return nil, err
-	}
-	block, _ := pem.Decode(raw)
-	if block == nil {
-		return nil, errors.New("the bank's event key is malformed")
-	}
-	k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	key, ok := k.(*ecdsa.PrivateKey)
-	if !ok {
-		return nil, errors.New("the bank's event key is not an EC key")
-	}
-	return key, nil
-}
-
-func (s *Sender) client(dest string) (*http.Client, error) {
+func (s *Sender) httpClient() *http.Client {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cl := s.clients[dest]; cl != nil {
-		return cl, nil
+	if s.client == nil {
+		s.client = &http.Client{Timeout: eventTimeout, Transport: &http.Transport{MaxIdleConnsPerHost: 2, IdleConnTimeout: eventIdleTimeout}}
 	}
-	pool, err := pki.LoadPool(s.CA)
-	if err != nil {
-		return nil, err
-	}
-	cl := &http.Client{Timeout: eventTimeout, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, MaxIdleConnsPerHost: 2, IdleConnTimeout: eventIdleTimeout}}
-	if s.clients == nil {
-		s.clients = map[string]*http.Client{}
-	}
-	s.clients[dest] = cl
-	return cl, nil
+	return s.client
 }
 
 func (s *Sender) send(ctx context.Context, b *config.Bank, e openbanking.Event) error {
-	key, err := s.signer(b)
-	if err != nil {
-		return err
-	}
 	now := s.Clock.Real()
 	jti, err := web.NewSecret("ev_", 12)
 	if err != nil {
 		return err
 	}
-	jwt, err := openbanking.Sign(key, b.ID, map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"iss":        b.APIURL(),
 		"aud":        s.WidgetURL,
 		"jti":        jti,
@@ -231,16 +189,13 @@ func (s *Sender) send(ctx context.Context, b *config.Bank, e openbanking.Event) 
 	if err != nil {
 		return err
 	}
-	cl, err := s.client(s.WidgetURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.WidgetURL+"/consent-events", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.WidgetURL+"/consent-events", bytes.NewReader([]byte(jwt)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", eventType)
-	resp, err := cl.Do(req)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(config.CallerHeader, b.ID)
+	resp, err := s.httpClient().Do(req)
 	if err != nil {
 		return err
 	}

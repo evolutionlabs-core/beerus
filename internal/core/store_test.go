@@ -75,19 +75,19 @@ func TestWriteFilesRestoresExactlyTheSavedSet(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{"api.key": "old", "client.key": "old", "stale.crt": "old"} {
+	for name, body := range map[string]string{"api.key": "old", "other.key": "old", "stale.txt": "old"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := writeFiles(dir, map[string][]byte{"api.key": []byte("new"), "client.crt": []byte("cert")}); err != nil {
+	if err := writeFiles(dir, map[string][]byte{"api.key": []byte("new"), "extra.txt": []byte("text")}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := readFiles(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || string(got["api.key"]) != "new" || string(got["client.crt"]) != "cert" {
+	if len(got) != 2 || string(got["api.key"]) != "new" || string(got["extra.txt"]) != "text" {
 		t.Fatalf("restored files: %v", got)
 	}
 	info, err := os.Stat(filepath.Join(dir, "api.key"))

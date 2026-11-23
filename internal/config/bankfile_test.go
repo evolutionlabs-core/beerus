@@ -4,21 +4,19 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestBankFileEnsureAndLoad(t *testing.T) {
-	now := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
 	c := &Config{Dir: t.TempDir(), Connect: Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, ControlPort: 9002, BrandName: "Connect"}, SetupKey: 1<<63 + 5}
-	if err := Prepare(c, now); err != nil {
+	if err := Prepare(c); err != nil {
 		t.Fatal(err)
 	}
 	b := &Bank{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: 8001, APIPort: 8011, Database: DatabaseName(c.Dir, "bank-a"), NetDebitCap: 5_000_000, State: "suspended"}
-	if err := c.EnsureBankDir(b, now); err != nil {
+	if err := c.EnsureBankDir(b); err != nil {
 		t.Fatal(err)
 	}
 	dir := BankDir(c.Dir, "bank-a")
-	modes := map[string]os.FileMode{BankFileName: 0o600, BankTokenFile: 0o600, BankCAFile: 0o644, "client.key": 0o600, "server.key": 0o600, "events.key": 0o600}
+	modes := map[string]os.FileMode{BankFileName: 0o600, BankTokenFile: 0o600}
 	for name, want := range modes {
 		fi, err := os.Stat(filepath.Join(dir, name))
 		if err != nil || fi.Mode().Perm() != want {
@@ -30,7 +28,7 @@ func TestBankFileEnsureAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.EnsureBankDir(b, now); err != nil {
+	if err := c.EnsureBankDir(b); err != nil {
 		t.Fatal(err)
 	}
 	if after, err := os.Stat(path); err != nil || !os.SameFile(before, after) {
@@ -69,7 +67,7 @@ func TestBankFileEnsureAndLoad(t *testing.T) {
 		t.Run(r.name, func(t *testing.T) {
 			if r.edit != nil {
 				r.edit(b)
-				if err := c.EnsureBankDir(b, now); err != nil {
+				if err := c.EnsureBankDir(b); err != nil {
 					t.Fatal(err)
 				}
 			}

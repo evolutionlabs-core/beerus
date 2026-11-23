@@ -76,12 +76,12 @@ func (s *Store) SettlementReports(ctx context.Context, identity, after string, l
 		return nil, "", fmt.Errorf("limit must be from 1 to %d, not %d", maxPage, limit)
 	}
 	var code string
-	err := s.pool.QueryRow(ctx, `SELECT nip_code FROM institutions WHERE certificate_identity = $1 AND status <> 'removed'`, identity).Scan(&code)
+	err := s.pool.QueryRow(ctx, `SELECT nip_code FROM institutions WHERE caller_id = $1 AND status <> 'removed'`, identity).Scan(&code)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, "", fmt.Errorf("settlement reports for %s: %w", identity, nip.ErrUnknownInstitution)
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("look up certificate identity %s: %w", identity, err)
+		return nil, "", fmt.Errorf("look up caller %s: %w", identity, err)
 	}
 	postedAfter, keyAfter, err := s.reportStart(ctx, after, cursor)
 	if err != nil {

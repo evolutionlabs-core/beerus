@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -21,7 +20,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -83,42 +81,18 @@ func isDown(err error) bool {
 	return errors.As(err, &bd)
 }
 
-func (a *App) bankClient() (*http.Client, error) {
-	a.mu.Lock()
-	cl := a.obHTTP
-	a.mu.Unlock()
-	if cl != nil {
-		return cl, nil
-	}
-	built, err := a.newBankClient()
-	if err != nil {
-		return nil, err
-	}
+func (a *App) bankClient() *http.Client {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.obHTTP == nil {
-		a.obHTTP = built
+		a.obHTTP = a.newBankClient()
 	}
-	return a.obHTTP, nil
+	return a.obHTTP
 }
 
-func (a *App) newBankClient() (*http.Client, error) {
-	pool, err := pki.LoadPool(a.cfg.Path("ca", "root.crt"))
-	if err != nil {
-		return nil, err
-	}
-	certPath, keyPath := a.cfg.Path("connect", "client.crt"), a.cfg.Path("connect", "client.key")
-	tc := &tls.Config{
-		RootCAs:    pool,
-		MinVersion: tls.VersionTLS12,
-		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			pair, err := tls.LoadX509KeyPair(certPath, keyPath)
-			return &pair, err
-		},
-	}
+func (a *App) newBankClient() *http.Client {
 	dialer := &net.Dialer{Timeout: bankDialTimeout}
 	var rt http.RoundTripper = &http.Transport{
-		TLSClientConfig:     tc,
 		IdleConnTimeout:     bankIdleTimeout,
 		MaxIdleConnsPerHost: bankIdleConnsPerHost,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -132,7 +106,7 @@ func (a *App) newBankClient() (*http.Client, error) {
 	if a.bankWrap != nil {
 		rt = a.bankWrap(rt)
 	}
-	return &http.Client{Timeout: bankCallBudget, Transport: rt}, nil
+	return &http.Client{Timeout: bankCallBudget, Transport: rt}
 }
 
 func (a *App) signingKey() (*ecdsa.PrivateKey, error) {
@@ -168,10 +142,6 @@ func (a *App) assertion(b *config.Bank) (string, error) {
 }
 
 func (a *App) bankCall(b *config.Bank, method, path string, form url.Values, token string, out any) error {
-	cl, err := a.bankClient()
-	if err != nil {
-		return err
-	}
 	var body io.Reader
 	if form != nil {
 		jwt, err := a.assertion(b)
@@ -187,13 +157,14 @@ func (a *App) bankCall(b *config.Bank, method, path string, form url.Values, tok
 	if err != nil {
 		return err
 	}
+	req.Header.Set(config.CallerHeader, config.AggregatorCN)
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := cl.Do(req)
+	resp, err := a.bankClient().Do(req)
 	if err != nil {
 		return &bankDown{err}
 	}

@@ -93,7 +93,7 @@ func TestNIPFaultWaitsForTheCaller(t *testing.T) {
 	}
 	w := &capture{header: http.Header{}}
 	b.NIP("bank-a").ServeHTTP(w, req)
-	if w.status != http.StatusForbidden || taken != 0 {
-		t.Fatalf("a caller without a certificate got %d and used up %d faults, want 403 and 0", w.status, taken)
+	if w.status != http.StatusUnauthorized || taken != 0 {
+		t.Fatalf("a caller without an ID got %d and used up %d faults, want 401 and 0", w.status, taken)
 	}
 }

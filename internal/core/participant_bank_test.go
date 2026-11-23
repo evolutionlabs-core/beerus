@@ -204,7 +204,7 @@ func TestParticipantBankContract(t *testing.T) {
 	for i := range 30 {
 		renamed := *core.cfg.Bank("bank-a")
 		renamed.Name = fmt.Sprintf("Bank A %d", i)
-		if err := core.cfg.EnsureBankDir(&renamed, participantNow); err != nil {
+		if err := core.cfg.EnsureBankDir(&renamed); err != nil {
 			t.Fatal(err)
 		}
 		if got := call("PUT", "/v1/phase", "", `{"phase":"active","generation":2,"world_id":"wld_1"}`, tok, false); got.status != 200 {

@@ -94,13 +94,13 @@ func cmdPartner(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Issued new credentials for %s. The old API key and certificate no longer work.\n\n", id)
+		fmt.Printf("Issued new credentials for %s. The old API key no longer works.\n\n", id)
 		return printCredentials(*dir, id, fmt.Sprint(out["api_key"]))
 	case "remove":
 		if _, err := ctl.do("DELETE", "/partners/"+url.PathEscape(id), nil); err != nil {
 			return err
 		}
-		fmt.Printf("Removed %s. Its key and certificate no longer work.\n", id)
+		fmt.Printf("Removed %s. Its API key no longer works.\n", id)
 		return nil
 	}
 	return usageError("partner")
@@ -122,9 +122,6 @@ func printCredentials(dir, id, key string) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintf(w, "API key\t%s\t(shown once; also in %s)\n", key, c.Path("partners", id, "api-key"))
 	fmt.Fprintf(w, "Partner API\t%s\n", c.PartnerURL())
-	fmt.Fprintf(w, "Client certificate\t%s\n", c.Path("partners", id, "client.crt"))
-	fmt.Fprintf(w, "Client key\t%s\n", c.Path("partners", id, "client.key"))
-	fmt.Fprintf(w, "Server CA\t%s\n", c.Path("partners", id, "ca.crt"))
 	fmt.Fprintf(w, "Redirect URIs\t%s\n", strings.Join(p.RedirectURIs, ", "))
 	fmt.Fprintf(w, "Webhook URL\t%s\n", p.WebhookURL)
 	fmt.Fprintf(w, "Webhook public key\t%s\n", k.PublicWH())

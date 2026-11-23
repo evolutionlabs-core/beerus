@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/disk"
 )
 
 const (
@@ -55,7 +55,7 @@ func loadVault(path string) (*vault, error) {
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("generate vault key: %w", err)
 	}
-	if err := pki.WriteFile(path, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
+	if err := disk.Write(path, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
 		return nil, fmt.Errorf("write vault key: %w", err)
 	}
 	return &vault{master: key}, nil

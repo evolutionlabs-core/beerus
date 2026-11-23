@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"crypto/tls"
 	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
 	"log/slog"
@@ -15,19 +14,10 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss/gateway"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 func TestBankDirectoryComesFromNIBSS(t *testing.T) {
 	cfg := bankDirConfig(t, &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1, APIPort: 2, Database: "db"})
-	cert, err := tls.LoadX509KeyPair(cfg.Path("nibss", "server.crt"), cfg.Path("nibss", "server.key"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool, err := pki.LoadPool(cfg.Path("ca", "root.crt"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +33,7 @@ func TestBankDirectoryComesFromNIBSS(t *testing.T) {
 	served := make(chan struct{})
 	go func() {
 		defer close(served)
-		_ = hs.Serve(tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12}))
+		_ = hs.Serve(ln)
 	}()
 	t.Cleanup(func() {
 		_ = hs.Close()

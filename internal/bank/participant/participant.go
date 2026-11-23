@@ -100,9 +100,7 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 	p.sender = &consent.Sender{
 		Log:       p.log,
 		Clock:     p.clock,
-		Dir:       dir,
 		WidgetURL: cfg.WidgetURL(),
-		CA:        filepath.Join(dir, "banks", p.id, config.BankCAFile),
 		Servers:   p.servers,
 		Bank:      p.bank,
 		Record: func(ctx context.Context, incarnation string, e openbanking.ConsentEvent) error {

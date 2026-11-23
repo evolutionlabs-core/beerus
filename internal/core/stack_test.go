@@ -110,11 +110,7 @@ func prepareTestCore(t *testing.T, o Options) (*App, *config.Config) {
 		o.Logger = slog.New(slog.DiscardHandler)
 	}
 	cfg := initTestConfig(t, clock.Date{Y: 2026, M: 11, D: 3})
-	now := time.Now()
-	if err := cfg.EnsureCertificates(now); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.EnsureCBNDir(now); err != nil {
+	if err := cfg.EnsureCBNDir(); err != nil {
 		t.Fatal(err)
 	}
 	a, err := New(cfg, o)

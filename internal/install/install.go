@@ -25,7 +25,7 @@ const (
 	stepNamePostgres = "Checking Postgres"
 	stepNameConfig   = "Writing config"
 	stepNameClaims   = "Reserving CBN and NIBSS database names"
-	stepNameCBN      = "Preparing CBN ports and certificates"
+	stepNameCBN      = "Preparing CBN ports"
 	detailWritten    = "already written"
 )
 
@@ -97,7 +97,7 @@ func Install(ctx context.Context, dir string, spec setup.Spec, local setup.Local
 	if err != nil {
 		return err
 	}
-	err = in.run(ctx, stepNameCBN, func() (string, error) { return "", prepareCBN(ctl, cfg, in.clock.Real()) })
+	err = in.run(ctx, stepNameCBN, func() (string, error) { return "", prepareCBN(ctl, cfg) })
 	if err != nil {
 		return err
 	}
@@ -137,11 +137,11 @@ func claimSystems(ctl *state.Store, cfg *config.Config) error {
 	return nil
 }
 
-func prepareCBN(ctl *state.Store, cfg *config.Config, now time.Time) error {
+func prepareCBN(ctl *state.Store, cfg *config.Config) error {
 	if err := state.EnsureCBNPorts(ctl, cfg); err != nil {
 		return err
 	}
-	if err := cfg.EnsureCBNDir(now); err != nil {
+	if err := cfg.EnsureCBNDir(); err != nil {
 		return fmt.Errorf("ensure the CBN directory: %w", err)
 	}
 	return nil

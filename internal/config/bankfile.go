@@ -8,15 +8,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/disk"
 )
 
 const (
 	BankFileName  = "bank.json"
 	BankTokenFile = "control-token"
-	BankCAFile    = "ca.crt"
 	stateActive   = "active"
 	maxBankFile   = 1 << 20
 )
@@ -38,7 +36,6 @@ type BankFile struct {
 	API              BankFileAPI `json:"open_banking"`
 	Host             string      `json:"host"`
 	WidgetPort       int         `json:"widget_port"`
-	WidgetTLS        bool        `json:"widget_tls"`
 	NIBSSPort        int         `json:"nibss_port"`
 	CBNPort          int         `json:"cbn_port"`
 	BrandName        string      `json:"brand_name"`
@@ -92,7 +89,6 @@ func (c *Config) bankFile(b *Bank) BankFile {
 		API:              BankFileAPI(b.API),
 		Host:             c.Connect.Host,
 		WidgetPort:       c.Connect.WidgetPort,
-		WidgetTLS:        c.Connect.WidgetTLS,
 		NIBSSPort:        c.Connect.NIBSSPort,
 		CBNPort:          c.Connect.CBNPort,
 		BrandName:        c.Connect.BrandName,
@@ -179,7 +175,7 @@ func (f BankFile) Config(dir, databaseURL string) *Config {
 		DatabaseURL: databaseURL,
 		Banks:       []*Bank{f.Bank()},
 		SetupKey:    f.SetupKey,
-		Connect:     Connect{Host: f.Host, WidgetPort: f.WidgetPort, WidgetTLS: f.WidgetTLS, NIBSSPort: f.NIBSSPort, CBNPort: f.CBNPort, BrandName: f.BrandName},
+		Connect:     Connect{Host: f.Host, WidgetPort: f.WidgetPort, NIBSSPort: f.NIBSSPort, CBNPort: f.CBNPort, BrandName: f.BrandName},
 	}
 }
 
@@ -199,15 +195,11 @@ func (c *Config) BankFileDigest(b *Bank) (string, error) {
 	return HashKey(string(raw)), nil
 }
 
-func (c *Config) EnsureBankDir(b *Bank, now time.Time) error {
-	root, err := pki.LoadAuthority(c.Path("ca"), "root")
-	if err != nil {
-		return fmt.Errorf("load root authority: %w", err)
-	}
-	if err := c.ensureBankCerts(root, b, now); err != nil {
-		return err
-	}
+func (c *Config) EnsureBankDir(b *Bank) error {
 	dir := BankDir(c.Dir, b.ID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create bank dir %s: %w", dir, err)
+	}
 	token, err := os.ReadFile(c.Path(BankTokenFile))
 	if err != nil {
 		return fmt.Errorf("read control token: %w", err)
@@ -221,7 +213,6 @@ func (c *Config) EnsureBankDir(b *Bank, now time.Time) error {
 		body []byte
 		mode os.FileMode
 	}{
-		{BankCAFile, root.PEM, 0o644},
 		{BankTokenFile, token, 0o600},
 		{BankFileName, raw, 0o600},
 	}
@@ -241,5 +232,5 @@ func writeIfChanged(path string, body []byte, mode os.FileMode) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return pki.WriteFile(path, body, mode)
+	return disk.Write(path, body, mode)
 }

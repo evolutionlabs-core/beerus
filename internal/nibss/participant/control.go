@@ -39,14 +39,14 @@ type state struct {
 }
 
 type registerRequest struct {
-	NIPCode             string `json:"nip_code"`
-	NUBANCode           string `json:"nuban_code"`
-	Name                string `json:"name"`
-	Type                string `json:"type"`
-	CreditURL           string `json:"credit_url"`
-	CertificateIdentity string `json:"certificate_identity"`
-	NetDebitCap         *int64 `json:"net_debit_cap_minor"`
-	Collateral          *int64 `json:"collateral_minor"`
+	NIPCode     string `json:"nip_code"`
+	NUBANCode   string `json:"nuban_code"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	CreditURL   string `json:"credit_url"`
+	CallerID    string `json:"caller_id"`
+	NetDebitCap *int64 `json:"net_debit_cap_minor"`
+	Collateral  *int64 `json:"collateral_minor"`
 }
 
 type statusRequest struct {
@@ -225,22 +225,22 @@ func (p *Participant) register(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("bank_id")
 	var req registerRequest
 	if err := web.DecodeBody(r, &req); err != nil {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send the nip_code, nuban_code, name, type, credit_url, certificate_identity, net_debit_cap_minor and collateral_minor of the bank.")
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send the nip_code, nuban_code, name, type, credit_url, caller_id, net_debit_cap_minor and collateral_minor of the bank.")
 		return
 	}
 	if req.NetDebitCap == nil || req.Collateral == nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send the net_debit_cap_minor and the collateral_minor of the bank, in kobo.")
 		return
 	}
-	if u, err := url.Parse(req.CreditURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || req.CertificateIdentity == "" {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send a credit_url that starts with http:// or https:// and a certificate_identity.")
+	if u, err := url.Parse(req.CreditURL); err != nil || u.Scheme != "http" || u.Host == "" || req.CallerID == "" {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send a credit_url that starts with http:// and a caller_id.")
 		return
 	}
 	m := nibss.Member{
-		Institution:         nip.Institution{ID: id, Name: req.Name, NIPCode: req.NIPCode, NUBANCode: req.NUBANCode, Type: req.Type},
-		CreditURL:           req.CreditURL,
-		CertificateIdentity: req.CertificateIdentity,
-		Limits:              nibss.Limits{NetDebitCap: *req.NetDebitCap, Collateral: *req.Collateral},
+		Institution: nip.Institution{ID: id, Name: req.Name, NIPCode: req.NIPCode, NUBANCode: req.NUBANCode, Type: req.Type},
+		CreditURL:   req.CreditURL,
+		CallerID:    req.CallerID,
+		Limits:      nibss.Limits{NetDebitCap: *req.NetDebitCap, Collateral: *req.Collateral},
 	}
 	if err := p.store.Register(r.Context(), m); err != nil {
 		p.registerFailed(w, r, err)

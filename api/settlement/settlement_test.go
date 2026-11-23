@@ -117,7 +117,7 @@ func buildRequest(t *testing.T, f found) *http.Request {
 		body = bytes.NewReader(exampleJSON(t, mediaExamples(t, f.op.OperationId, mt)[0]))
 		header.Set("Content-Type", "application/json")
 	}
-	target := "https://example.localhost" + path
+	target := "http://example.localhost" + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
@@ -130,6 +130,9 @@ func buildRequest(t *testing.T, f found) *http.Request {
 		for _, sec := range f.doc.Security {
 			if _, ok := sec.Requirements.Get("bearerAuth"); ok {
 				header.Set("Authorization", "Bearer control-token")
+			}
+			if _, ok := sec.Requirements.Get("callerHeader"); ok {
+				header.Set("Beerus-Caller", "bank-a")
 			}
 		}
 	}

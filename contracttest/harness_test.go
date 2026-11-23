@@ -5,8 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -78,6 +76,8 @@ type Stack struct {
 	cfg        *config.Config
 	app        *core.App
 	agg        *aggregator.App
+	nodes      *nodes
+	aggOpts    aggregator.Options
 	api        *http.Client
 	raw        *http.Client
 	apiKey     string
@@ -183,7 +183,7 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 		Name:         "Balance",
 		LegalName:    "Evolution Labs",
 		Purpose:      "to keep your books in sync with this account",
-		RedirectURIs: []string{"https://balance.localhost/bank_connections/callback"},
+		RedirectURIs: []string{"http://balance.localhost/bank_connections/callback"},
 		WebhookURL:   webhookURL,
 	}}
 	dir := t.TempDir()
@@ -234,7 +234,7 @@ func startStackWith(t *testing.T, opts aggregator.Options, edits ...func(*config
 				dropDatabases(t, cfg)
 				continue
 			}
-			s.cfg, s.app, s.agg = cfg, ns.app, ns.agg
+			s.cfg, s.app, s.agg, s.nodes, s.aggOpts = cfg, ns.app, ns.agg, ns, opts
 			t.Cleanup(func() {
 				if err := ns.halt(); err != nil {
 					t.Errorf("stop the stack: %v", err)
@@ -268,13 +268,8 @@ func startStackWith(t *testing.T, opts aggregator.Options, edits ...func(*config
 		t.Fatalf("validator: %v", errs)
 	}
 	s.validator = v
-	cert, err := tls.LoadX509KeyPair(s.cfg.Path("partners", "balance", "client.crt"), s.cfg.Path("partners", "balance", "client.key"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool := s.rootPool()
-	s.api = &http.Client{Timeout: 30 * time.Second, Transport: &validating{s: s, base: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: pool}}}}
-	s.raw = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
+	s.api = &http.Client{Timeout: 30 * time.Second, Transport: &validating{s: s, base: &http.Transport{IdleConnTimeout: time.Minute}}}
+	s.raw = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{IdleConnTimeout: time.Minute}}
 	s.waitHealthy()
 	t.Cleanup(func() {
 		s.vmu.Lock()
@@ -307,16 +302,6 @@ func (s *Stack) owned(kind, id string) []setup.Owned {
 		}
 	}
 	return nil
-}
-
-func (s *Stack) rootPool() *x509.CertPool {
-	pool := x509.NewCertPool()
-	b, err := os.ReadFile(s.cfg.Path("partners", "balance", "ca.crt"))
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	pool.AppendCertsFromPEM(b)
-	return pool
 }
 
 const healthyWithin = 30 * time.Second
@@ -1048,4 +1033,22 @@ func (s *Stack) spend(p persona, n int) {
 	for range n {
 		s.pay(p.Bank, p.Accounts[0], to.Bank, to.Accounts[0], "10000")
 	}
+}
+
+type callerTransport struct {
+	id   string
+	base *http.Transport
+}
+
+func (c callerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set(config.CallerHeader, c.id)
+	return c.base.RoundTrip(r)
+}
+
+func callerClient(t *testing.T, id string) *http.Client {
+	t.Helper()
+	base := &http.Transport{IdleConnTimeout: 30 * time.Second}
+	t.Cleanup(base.CloseIdleConnections)
+	return &http.Client{Timeout: 30 * time.Second, Transport: callerTransport{id: id, base: base}}
 }

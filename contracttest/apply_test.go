@@ -207,10 +207,10 @@ func TestApplyFromTheSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	pr := settled("partner", "ledgerly")["partner"].(map[string]any)
-	if pr["api_key_sha256"] != config.HashKey(key) || pr["cert_cn"] != "ledgerly" || strings.Contains(fmt.Sprint(pr), key) {
+	if pr["api_key_sha256"] != config.HashKey(key) || strings.Contains(fmt.Sprint(pr), key) {
 		t.Fatalf("partner status: %v", pr)
 	}
-	if code := rawGet(t, s, partnerClient(t, s, "ledgerly"), key, "/v1/webhook_keys"); code != 200 {
+	if code := rawGet(t, s, key, "/v1/webhook_keys"); code != 200 {
 		t.Fatalf("the partner made from the spec got %d", code)
 	}
 	withP.Spec.Partners[len(withP.Spec.Partners)-1].WebhookURL = "https://ledgerly.localhost/hook"

@@ -71,12 +71,12 @@ func minor(n pgtype.Numeric) (int64, bool) {
 
 func (s *Store) SettlementPosition(ctx context.Context, identity, after string) (SettlementPosition, error) {
 	var code string
-	err := s.pool.QueryRow(ctx, `SELECT nip_code FROM institutions WHERE certificate_identity = $1 AND status <> 'removed'`, identity).Scan(&code)
+	err := s.pool.QueryRow(ctx, `SELECT nip_code FROM institutions WHERE caller_id = $1 AND status <> 'removed'`, identity).Scan(&code)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SettlementPosition{}, fmt.Errorf("settlement position for %s: %w", identity, nip.ErrUnknownInstitution)
 	}
 	if err != nil {
-		return SettlementPosition{}, fmt.Errorf("look up certificate identity %s: %w", identity, err)
+		return SettlementPosition{}, fmt.Errorf("look up caller %s: %w", identity, err)
 	}
 	posted, key, err := s.reportStart(ctx, after, "")
 	if err != nil {

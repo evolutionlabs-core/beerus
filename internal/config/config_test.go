@@ -1,9 +1,6 @@
 package config
 
 import (
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
 	"os"
 	"strings"
 	"testing"
@@ -80,82 +77,55 @@ func TestPortAllocation(t *testing.T) {
 	}
 }
 
-func TestNIBSSClientCertificate(t *testing.T) {
-	c, err := finish(Config{})
+func TestPrepareIsIdempotentAndPlain(t *testing.T) {
+	c, err := finish(Config{Connect: Connect{Host: "connect.localhost", PartnerPort: 7443, WidgetPort: 7444}, Banks: []*Bank{{ID: "bank-a", APIPort: 7451}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.Dir = t.TempDir()
-	now := time.Now()
-	if err := Prepare(c, now); err != nil {
-		t.Fatal(err)
+	rows := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"partner API", c.PartnerURL(), "http://connect.localhost:7443"},
+		{"widget", c.WidgetURL(), "http://connect.localhost:7444"},
+		{"bank API", c.Banks[0].APIURL(), "http://bank-a.localhost:7451"},
 	}
-	crt, key := c.Path("nibss", "client.crt"), c.Path("nibss", "client.key")
-	pair, err := tls.LoadX509KeyPair(crt, key)
-	if err != nil {
-		t.Fatal(err)
+	for _, r := range rows {
+		if r.got != r.want {
+			t.Errorf("%s URL = %q, want %q", r.name, r.got, r.want)
+		}
 	}
-	leaf, err := x509.ParseCertificate(pair.Certificate[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if leaf.Subject.CommonName != "beerus-nibss" || len(leaf.Subject.OrganizationalUnit) != 1 || leaf.Subject.OrganizationalUnit[0] != "nibss" {
-		t.Fatalf("subject %v, want CN beerus-nibss and role nibss", leaf.Subject)
-	}
-	if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
-		t.Fatalf("usage %v, want client auth only", leaf.ExtKeyUsage)
-	}
-	info, err := os.Stat(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("key mode %v, want 0600", info.Mode().Perm())
-	}
-	if err := Prepare(c, now); err != nil {
-		t.Fatal(err)
-	}
-	again, err := os.ReadFile(crt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(again) != string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pair.Certificate[0]})) {
-		t.Fatal("a second prepare replaced the certificate")
-	}
-}
-
-func TestBankClientAndNIBSSServerCertificates(t *testing.T) {
-	c, err := finish(Config{Banks: []*Bank{{ID: "bank-a"}, {ID: "bank-b"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Dir = t.TempDir()
-	if err := Prepare(c, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	read := func(dir, name string) *x509.Certificate {
-		t.Helper()
-		pair, err := tls.LoadX509KeyPair(c.Path(dir, name+".crt"), c.Path(dir, name+".key"))
-		if err != nil {
+	files := []string{c.Path("connect", "ob-signing.key"), c.Path("webhook", "signing.key"), c.Path("control-token")}
+	var first []string
+	for i := 0; i < 2; i++ {
+		if err := Prepare(c); err != nil {
 			t.Fatal(err)
 		}
-		leaf, err := x509.ParseCertificate(pair.Certificate[0])
-		if err != nil {
-			t.Fatal(err)
+		var got []string
+		for _, f := range files {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(f)
+			if err != nil || info.Mode().Perm() != 0o600 {
+				t.Fatalf("%s: mode %v, error %v, want 0600", f, info, err)
+			}
+			got = append(got, string(b))
 		}
-		return leaf
+		if i == 0 {
+			first = got
+			continue
+		}
+		for j := range got {
+			if got[j] != first[j] {
+				t.Errorf("a second prepare replaced %s", files[j])
+			}
+		}
 	}
-	for _, id := range []string{"bank-a", "bank-b"} {
-		leaf := read("banks/"+id, "client")
-		if leaf.Subject.CommonName != id || len(leaf.Subject.OrganizationalUnit) != 1 || leaf.Subject.OrganizationalUnit[0] != "bank" {
-			t.Fatalf("%s subject %v, want CN %s and role bank", id, leaf.Subject, id)
-		}
-		if len(leaf.ExtKeyUsage) != 1 || leaf.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
-			t.Fatalf("%s usage %v, want client auth only", id, leaf.ExtKeyUsage)
-		}
-	}
-	server := read("nibss", "server")
-	if len(server.DNSNames) != 2 || server.DNSNames[0] != "nibss.localhost" || server.DNSNames[1] != "localhost" {
-		t.Fatalf("NIBSS server names %v, want nibss.localhost and localhost", server.DNSNames)
+	if _, err := os.Stat(c.Path("ca")); !os.IsNotExist(err) {
+		t.Fatalf("prepare made a ca directory: %v", err)
 	}
 }

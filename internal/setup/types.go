@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"bytes"
 	"encoding/json"
 	"slices"
 	"time"
@@ -166,7 +167,6 @@ type LocalConnect struct {
 	Host               string `yaml:"host,omitempty"`
 	PartnerPort        int    `yaml:"partner_port,omitempty"`
 	WidgetPort         int    `yaml:"widget_port,omitempty"`
-	WidgetTLS          bool   `yaml:"widget_tls,omitempty"`
 	ControlPort        int    `yaml:"control_port,omitempty"`
 	HealthPort         int    `yaml:"health_port,omitempty"`
 	NIBSSPort          int    `yaml:"nibss_port,omitempty"`
@@ -245,9 +245,22 @@ type Owned struct {
 }
 
 type PartnerKeys struct {
-	CertCN       string `json:"cert_cn"`
 	APIKeySHA256 string `json:"api_key_sha256"`
-	CertSHA256   string `json:"cert_sha256,omitempty"`
+}
+
+func (k *PartnerKeys) UnmarshalJSON(raw []byte) error {
+	var v struct {
+		APIKeySHA256 string `json:"api_key_sha256"`
+		CertCN       string `json:"cert_cn"`
+		CertSHA256   string `json:"cert_sha256"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&v); err != nil {
+		return err
+	}
+	k.APIKeySHA256 = v.APIKeySHA256
+	return nil
 }
 
 type Condition struct {

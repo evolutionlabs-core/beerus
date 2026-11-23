@@ -160,17 +160,6 @@ func (l Link) Listen(port int) ([]net.Listener, error) {
 	return out, nil
 }
 
-type quietTLS struct {
-	log *slog.Logger
-}
-
-func (q quietTLS) Write(p []byte) (int, error) {
-	if !bytes.Contains(p, []byte("TLS handshake error")) {
-		q.log.Warn(string(bytes.TrimSpace(p)))
-	}
-	return len(p), nil
-}
-
 func ErrorLog(l *slog.Logger) *log.Logger {
-	return log.New(quietTLS{l}, "", 0)
+	return slog.NewLogLogger(l.Handler(), slog.LevelWarn)
 }

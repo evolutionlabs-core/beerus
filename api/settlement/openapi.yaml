@@ -8,7 +8,7 @@ info:
 
     ## Who calls it
 
-    The CBN participant serves these operations. NIBSS posts sessions over mTLS. A bank may read its own balance and postings over mTLS. The CBN authorises the caller by the identity in its client certificate, not only by a valid chain. The control plane opens a bank's settlement account with the control token, as it is the CBN that onboards a bank in the real world. That operation is tagged `control`.
+    The CBN participant serves these operations. NIBSS posts sessions. A bank may read its own balance and postings. Every caller sends its ID in the `Beerus-Caller` header, and the CBN decides what that ID may do. The control plane opens a bank's settlement account with the control token, as it is the CBN that onboards a bank in the real world. That operation is tagged `control`.
 
     ## Rules
 
@@ -34,7 +34,7 @@ info:
     name: GNU Affero General Public License v3.0 only
     identifier: AGPL-3.0-only
 servers:
-  - url: https://cbn.localhost:7446
+  - url: http://cbn.localhost:7446
     description: The CBN participant on the local machine
 tags:
   - name: settlement
@@ -42,7 +42,7 @@ tags:
   - name: control
     description: Calls the control plane makes to the CBN. It uses the control token.
 security:
-  - mutualTLS: []
+  - callerHeader: []
 paths:
   /v1/settlement-sessions:
     post:
@@ -87,6 +87,8 @@ paths:
                     net_minor: 2500000
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/NoCaller'
         '403':
           $ref: '#/components/responses/Forbidden'
         '409':
@@ -156,6 +158,8 @@ paths:
                 bank_id: bank-a
                 balance_minor: 997500000
                 read_at: '2026-11-14T10:00:06+01:00'
+        '401':
+          $ref: '#/components/responses/NoCaller'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
@@ -194,6 +198,8 @@ paths:
                 next_cursor: 'session:2026-11-14T10:00'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/NoCaller'
         '403':
           $ref: '#/components/responses/Forbidden'
         '503':
@@ -248,9 +254,11 @@ paths:
           $ref: '#/components/responses/Unavailable'
 components:
   securitySchemes:
-    mutualTLS:
-      type: mutualTLS
-      description: The caller presents a client certificate issued by the Beerus CA. The CBN authorises the caller by the certificate's identity, not only by a valid chain.
+    callerHeader:
+      type: apiKey
+      in: header
+      name: Beerus-Caller
+      description: The ID of the caller, such as a bank ID. The server works out who the caller is, and what it may do, from this ID.
     bearerAuth:
       type: http
       scheme: bearer
@@ -462,8 +470,19 @@ components:
               code: unauthenticated
               message: A valid control token is required.
               request_id: req_01JBC8A5T3ZK
+    NoCaller:
+      description: The `Beerus-Caller` header is missing. The code is `unauthenticated`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: unauthenticated
+              message: Send your ID in the Beerus-Caller header.
+              request_id: req_01JBC8A5T3ZK
     Forbidden:
-      description: The caller's certificate identity may not make this call. The code is `forbidden`.
+      description: The caller's ID may not make this call. The code is `forbidden`.
       content:
         application/json:
           schema:
@@ -471,7 +490,7 @@ components:
           example:
             error:
               code: forbidden
-              message: This certificate may not read the balance of bank-b.
+              message: bank-a may not read the balance of bank-b.
               request_id: req_01JBC8A5T3ZK
     NotFound:
       description: The bank has no settlement account. The code is `not_found`.

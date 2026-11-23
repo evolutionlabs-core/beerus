@@ -56,7 +56,7 @@ info:
     name: GNU Affero General Public License v3.0 only
     identifier: AGPL-3.0-only
 servers:
-  - url: https://connect.localhost:7443
+  - url: http://connect.localhost:7443
     description: Beerus Connect on the local machine
 tags:
   - name: Link sessions
@@ -68,8 +68,7 @@ tags:
   - name: Transactions
     description: The bank feed, read with a cursor.
 security:
-  - mutualTLS: []
-    apiKey: []
+  - apiKey: []
 paths:
   /v1/link_sessions:
     post:
@@ -597,14 +596,11 @@ webhooks:
           $ref: '#/components/responses/WebhookAccepted'
 components:
   securitySchemes:
-    mutualTLS:
-      type: mutualTLS
-      description: The partner presents a client certificate issued by the Connect CA. Connect authorises the caller by the certificate's identity, not only by a valid chain.
     apiKey:
       type: apiKey
       in: header
       name: X-Api-Key
-      description: The partner's secret API key. It must belong to the same partner as the client certificate.
+      description: The partner's secret API key. Connect finds the partner by it.
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
@@ -670,7 +666,7 @@ components:
               message: start_date must be a date in YYYY-MM-DD form.
               request_id: req_01JBC9X1
     Unauthenticated:
-      description: The client certificate or API key is missing or invalid.
+      description: The API key is missing or invalid.
       content:
         application/json:
           schema:
@@ -689,7 +685,7 @@ components:
           example:
             error:
               code: forbidden
-              message: The API key does not belong to the client certificate's partner.
+              message: The link session belongs to another partner.
               request_id: req_01JBC9X3
     NotFound:
       description: The resource does not exist or belongs to another partner.
@@ -817,7 +813,7 @@ components:
 
         - `invalid_request` (400): the request is malformed.
         - `invalid_cursor` (400): the cursor cannot be read.
-        - `unauthenticated` (401): the certificate or API key is missing or invalid.
+        - `unauthenticated` (401): the API key is missing or invalid.
         - `forbidden` (403): the caller may not do this.
         - `not_found` (404): the resource does not exist for this partner.
         - `invalid_code` (404): the one-time code is unknown, used or expired.
@@ -919,7 +915,7 @@ components:
         status: created
         link_token: lt_7c1e9a2f5b8d4e60
         link_token_expires_at: '2026-10-28T12:30:00+01:00'
-        widget_url: https://connect.localhost:7444/link?token=lt_7c1e9a2f5b8d4e60
+        widget_url: http://connect.localhost:7444/link?token=lt_7c1e9a2f5b8d4e60
         start_date: '2026-07-01'
         workspace_id: ws_adaeze_bakery
         connection_id: null

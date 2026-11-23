@@ -2,14 +2,12 @@ package participant
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"log/slog"
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -23,7 +21,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
@@ -35,6 +32,10 @@ type cbnLedger struct {
 }
 
 func (l *cbnLedger) post(w http.ResponseWriter, r *http.Request) {
+	if caller := r.Header.Get(config.CallerHeader); caller != config.NIBSSCN {
+		web.WriteError(w, r, http.StatusForbidden, "forbidden", caller+" may not post a settlement session. Only NIBSS may.")
+		return
+	}
 	var req sessionPost
 	if err := web.DecodeBody(r, &req); err != nil {
 		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send a session.")
@@ -61,18 +62,9 @@ func (l *cbnLedger) snapshot() (map[string]sessionPost, int) {
 	return out, l.replayed
 }
 
-func startFakeCBN(t *testing.T, stage string, port int) *cbnLedger {
+func startFakeCBN(t *testing.T, port int) *cbnLedger {
 	t.Helper()
-	own := config.CBNDir(stage)
-	cert, err := tls.LoadX509KeyPair(filepath.Join(own, "server.crt"), filepath.Join(own, "server.key"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool, err := pki.LoadPool(filepath.Join(own, config.CBNCAFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ln, err := tls.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12})
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,21 +126,20 @@ func TestScheduledCutoffPostsItsKeyToTheCBNOnce(t *testing.T) {
 	if url == "" || testing.Short() {
 		t.Skip("needs Postgres; set BEERUS_TEST_DATABASE_URL and run without -short")
 	}
-	now := clock.New().Now()
 	stage := t.TempDir()
 	cbnPort := freePortBelow32000(t)
 	cfg := &config.Config{Dir: stage, SetupKey: 9, TSQAfter: time.Minute, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: 1, NIBSSControlPort: 2, CBNPort: cbnPort, CBNControlPort: 3}}
-	if err := config.Prepare(cfg, now); err != nil {
+	if err := config.Prepare(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if err := cfg.EnsureCBNDir(now); err != nil {
+	if err := cfg.EnsureCBNDir(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cfg.EnsureNIBSSDir("wld_test", now); err != nil {
+	if err := cfg.EnsureNIBSSDir("wld_test"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { dropDatabase(t, url, config.DatabaseName(stage, config.NIBSSID)) })
-	cbn := startFakeCBN(t, stage, cbnPort)
+	cbn := startFakeCBN(t, cbnPort)
 	ctx := t.Context()
 	p, err := New(ctx, stage, Options{DatabaseURL: url, Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
@@ -157,7 +148,7 @@ func TestScheduledCutoffPostsItsKeyToTheCBNOnce(t *testing.T) {
 	t.Cleanup(p.Close)
 
 	for id, code := range map[string][2]string{"bank-a": {"000014", "014"}, "bank-b": {"000015", "015"}} {
-		m := nibss.Member{Institution: nip.Institution{ID: id, Name: id, NIPCode: code[0], NUBANCode: code[1], Type: "commercial"}, CreditURL: "https://" + id + ".localhost:18451", CertificateIdentity: id, Limits: nibss.Limits{NetDebitCap: 500_000_000}}
+		m := nibss.Member{Institution: nip.Institution{ID: id, Name: id, NIPCode: code[0], NUBANCode: code[1], Type: "commercial"}, CreditURL: "http://" + id + ".localhost:18451", CallerID: id, Limits: nibss.Limits{NetDebitCap: 500_000_000}}
 		if err := p.store.Register(ctx, m); err != nil {
 			t.Fatal(err)
 		}

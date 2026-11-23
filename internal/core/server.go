@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net"
@@ -15,16 +14,14 @@ func (a *App) Serve(ctx context.Context) error {
 	defer cancel()
 	errc := make(chan error, 8)
 	type srv struct {
-		s   *http.Server
-		tls *tls.Config
-		ls  []net.Listener
+		s  *http.Server
+		ls []net.Listener
 	}
 	specs := []struct {
 		port int
 		h    http.Handler
-		tls  *tls.Config
 	}{
-		{a.cfg.Connect.ControlPort, a.ControlHandler(), nil},
+		{a.cfg.Connect.ControlPort, a.ControlHandler()},
 	}
 	servers := []srv{}
 	for _, sp := range specs {
@@ -37,20 +34,16 @@ func (a *App) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		servers = append(servers, srv{s: &http.Server{Handler: sp.h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: control.ErrorLog(a.log)}, tls: sp.tls, ls: ls})
+		servers = append(servers, srv{s: &http.Server{Handler: sp.h, ReadHeaderTimeout: 10 * time.Second, ErrorLog: control.ErrorLog(a.log)}, ls: ls})
 	}
 	a.setServing(true)
 	for _, s := range servers {
 		for _, l := range s.ls {
-			ln := l
-			if s.tls != nil {
-				ln = tls.NewListener(l, s.tls)
-			}
 			go func(s *http.Server, l net.Listener) {
 				if err := s.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					errc <- err
 				}
-			}(s.s, ln)
+			}(s.s, l)
 		}
 	}
 	done := make(chan struct{})

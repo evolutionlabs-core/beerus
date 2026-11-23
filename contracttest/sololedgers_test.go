@@ -43,7 +43,7 @@ func soloConsent(seq int, bank string, source int, id, status string) string {
 
 func (s *soloNIBSS) registerBank(id, code, nuban, name string) {
 	s.t.Helper()
-	body := fmt.Sprintf(`{"nip_code":%q,"nuban_code":%q,"name":%q,"type":"commercial","credit_url":"https://%s.localhost:18451","certificate_identity":%q,"net_debit_cap_minor":500000000,"collateral_minor":0}`, code, nuban, name, id, id)
+	body := fmt.Sprintf(`{"nip_code":%q,"nuban_code":%q,"name":%q,"type":"commercial","credit_url":"http://%s.localhost:18451","caller_id":%q,"net_debit_cap_minor":500000000,"collateral_minor":0}`, code, nuban, name, id, id)
 	if status, got := s.call("nip", s.plain, http.MethodPut, s.control+"/v1/control/banks/"+id, s.token, body); status != http.StatusOK {
 		s.t.Fatalf("register %s: %d %s", id, status, got)
 	}
@@ -56,7 +56,7 @@ func TestSoloRegistryAndConsents(t *testing.T) {
 	errBody := func(code, message string) string {
 		return fmt.Sprintf(`{"error":{"code":%q,"message":%q,"request_id":"req_ID"}}`, code, message)
 	}
-	cb := "https://connect.localhost/cb"
+	cb := "http://connect.localhost/cb"
 	one := soloClientBody("Connect", "beerus-connect", cb)
 	oneURL := s.control + "/v1/control/registry/clients/OBR-1"
 	twoURL := s.control + "/v1/control/registry/clients/OBR-2"
@@ -76,8 +76,8 @@ func TestSoloRegistryAndConsents(t *testing.T) {
 		{"register a client", s.plain, "PUT", oneURL, s.token, one, 200, soloClient("OBR-1", "Connect", "beerus-connect", cb)},
 		{"register it again", s.plain, "PUT", oneURL, s.token, one, 200, soloClient("OBR-1", "Connect", "beerus-connect", cb)},
 		{"rename it and move the redirect", s.plain, "PUT", oneURL, s.token, soloClientBody("Renamed", "beerus-connect", "https://new.localhost/cb"), 200, soloClient("OBR-1", "Renamed", "beerus-connect", "https://new.localhost/cb")},
-		{"another certificate name", s.plain, "PUT", oneURL, s.token, soloClientBody("Renamed", "other", cb), 422, errBody("registration_conflict", "Client OBR-1 is registered with cert_cn beerus-connect, and this request has cert_cn other. Send the registered details.")},
-		{"a name another client holds", s.plain, "PUT", twoURL, s.token, soloClientBody("Second", "beerus-connect", cb), 422, errBody("registration_conflict", "Certificate name beerus-connect already belongs to client OBR-1. Use another cert_cn.")},
+		{"another cert_cn", s.plain, "PUT", oneURL, s.token, soloClientBody("Renamed", "other", cb), 422, errBody("registration_conflict", "Client OBR-1 is registered with cert_cn beerus-connect, and this request has cert_cn other. Send the registered details.")},
+		{"a name another client holds", s.plain, "PUT", twoURL, s.token, soloClientBody("Second", "beerus-connect", cb), 422, errBody("registration_conflict", "cert_cn beerus-connect already belongs to client OBR-1. Use another cert_cn.")},
 		{"without a token", s.plain, "PUT", oneURL, "", one, 401, errBody("unauthenticated", "A valid control token is required.")},
 		{"with a wrong token", s.plain, "PUT", oneURL, "ctl_wrong", one, 401, errBody("unauthenticated", "A valid control token is required.")},
 		{"an insecure redirect", s.plain, "PUT", twoURL, s.token, soloClientBody("Second", "second", "http://other.example.com/cb"), 422, errBody("invalid_request", `Redirect URI "http://other.example.com/cb" must be an https URL, or an http URL on localhost.`)},
@@ -96,8 +96,8 @@ func TestSoloRegistryAndConsents(t *testing.T) {
 		{"bank bad cursor", banks["bank-a"], "GET", bankList + "?cursor=-bad", "", "", 400, errBody("invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")},
 		{"bank reads one", banks["bank-a"], "GET", bankList + "/OBR-2", "", "", 200, soloClient("OBR-2", "Second", "second", cb)},
 		{"bank reads an unknown one", banks["bank-a"], "GET", bankList + "/OBR-9", "", "", 404, errBody("not_found", "Client OBR-9 is not in the registry.")},
-		{"stranger lists", banks["bank-z"], "GET", bankList, "", "", 403, errBody("forbidden", "This certificate may not read the registry. bank-z is not a bank NIBSS knows.")},
-		{"stranger reads one", banks["bank-z"], "GET", bankList + "/OBR-1", "", "", 403, errBody("forbidden", "This certificate may not read the registry. bank-z is not a bank NIBSS knows.")},
+		{"stranger lists", banks["bank-z"], "GET", bankList, "", "", 403, errBody("forbidden", "bank-z may not read the registry. It is not a bank NIBSS knows.")},
+		{"stranger reads one", banks["bank-z"], "GET", bankList + "/OBR-1", "", "", 403, errBody("forbidden", "bank-z may not read the registry. It is not a bank NIBSS knows.")},
 		{"bank records a consent", banks["bank-a"], "POST", s.dirURL + "/v1/consents", "", soloConsentBody(1, "obc_1", "Authorised"), 200, soloConsent(1, "bank-a", 1, "obc_1", "Authorised")},
 		{"another bank, same source seq", banks["bank-b"], "POST", s.dirURL + "/v1/consents", "", soloConsentBody(1, "obc_2", "Authorised"), 200, soloConsent(2, "bank-b", 1, "obc_2", "Authorised")},
 		{"the same bank, next source seq", banks["bank-a"], "POST", s.dirURL + "/v1/consents", "", soloConsentBody(2, "obc_1", "Revoked"), 200, soloConsent(3, "bank-a", 2, "obc_1", "Revoked")},
@@ -105,7 +105,7 @@ func TestSoloRegistryAndConsents(t *testing.T) {
 		{"the source seq with another consent and status", banks["bank-a"], "POST", s.dirURL + "/v1/consents", "", soloConsentBody(1, "obc_9", "Revoked"), 422, errBody("idempotency_key_reused", "Source sequence 1 of bank bank-a was first recorded with other consent_id and status. Send a new source_seq, or repeat the first request.")},
 		{"the source seq of a new incarnation", banks["bank-a"], "POST", s.dirURL + "/v1/consents", "", strings.Replace(soloConsentBody(1, "obc_3", "Authorised"), "db1", "db2", 1), 200, strings.Replace(soloConsent(4, "bank-a", 1, "obc_3", "Authorised"), "db1", "db2", 1)},
 		{"a consent without an incarnation", banks["bank-a"], "POST", s.dirURL + "/v1/consents", "", strings.Replace(soloConsentBody(5, "obc_1", "Revoked"), "db1", "", 1), 422, errBody("invalid_request", "Consent obc_1 event needs an incarnation.")},
-		{"a stranger records a consent", banks["bank-z"], "POST", s.dirURL + "/v1/consents", "", soloConsentBody(1, "obc_1", "Authorised"), 403, errBody("forbidden", "This certificate may not record consents. bank-z is not a bank NIBSS knows.")},
+		{"a stranger records a consent", banks["bank-z"], "POST", s.dirURL + "/v1/consents", "", soloConsentBody(1, "obc_1", "Authorised"), 403, errBody("forbidden", "bank-z may not record consents. It is not a bank NIBSS knows.")},
 		{"a consent that names its bank", banks["bank-a"], "POST", s.dirURL + "/v1/consents", "", `{"bank":"bank-b","source_seq":3}`, 400, errBody("invalid_request", "Send the incarnation, source_seq, consent_id, client_id, partner_id, status, via and changed_at of the consent event.")},
 		{"an unknown status", banks["bank-a"], "POST", s.dirURL + "/v1/consents", "", soloConsentBody(3, "obc_1", "Maybe"), 422, errBody("invalid_request", `Consent obc_1 event: status "Maybe" must be AwaitingAuthorisation, Authorised, Rejected, Revoked, Expired, Dormant, ReconsentRequired.`)},
 		{"a source seq of zero", banks["bank-a"], "POST", s.dirURL + "/v1/consents", "", soloConsentBody(0, "obc_1", "Revoked"), 422, errBody("invalid_request", "Consent obc_1 event: source seq 0 must be 1 or more.")},

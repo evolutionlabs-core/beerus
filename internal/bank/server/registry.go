@@ -113,11 +113,11 @@ func (r *RegistryCache) RegistryClient(id string) (*openbanking.RegistryClient, 
 	return c, c != nil
 }
 
-func (r *RegistryCache) RegistryClientByCert(cn string) (*openbanking.RegistryClient, bool) {
+func (r *RegistryCache) RegistryClientByCaller(id string) (*openbanking.RegistryClient, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, c := range r.clients {
-		if c.CertCN == cn {
+		if c.CertCN == id {
 			return c, true
 		}
 	}
@@ -140,6 +140,6 @@ func (s *Server) RegistryClient(id string) (*openbanking.RegistryClient, bool) {
 	return s.reg.RegistryClient(id)
 }
 
-func (s *Server) RegistryClientByCert(cn string) (*openbanking.RegistryClient, bool) {
-	return s.reg.RegistryClientByCert(cn)
+func (s *Server) RegistryClientByCaller(id string) (*openbanking.RegistryClient, bool) {
+	return s.reg.RegistryClientByCaller(id)
 }

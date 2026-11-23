@@ -111,16 +111,16 @@ func (s *PGStore) ConsentsFor(ctx context.Context, customer string) ([]*Consent,
 }
 
 func (s *PGStore) PutToken(ctx context.Context, t *Token) error {
-	_, err := s.Pool().Exec(ctx, `INSERT INTO ob_tokens (hash, kind, consent_id, client_id, thumbprint, family, parent, created_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		t.Hash, t.Kind, t.ConsentID, t.ClientID, t.Thumbprint, t.Family, t.Parent, t.CreatedAt, t.ExpiresAt)
+	_, err := s.Pool().Exec(ctx, `INSERT INTO ob_tokens (hash, kind, consent_id, client_id, family, parent, created_at, expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		t.Hash, t.Kind, t.ConsentID, t.ClientID, t.Family, t.Parent, t.CreatedAt, t.ExpiresAt)
 	return err
 }
 
 func (s *PGStore) Token(ctx context.Context, hash string) (*Token, error) {
 	var t Token
 	var rot, rev *time.Time
-	err := s.Pool().QueryRow(ctx, `SELECT hash, kind, consent_id, client_id, thumbprint, family, parent, created_at, expires_at, rotated_at, revoked_at FROM ob_tokens WHERE hash = $1`, hash).
-		Scan(&t.Hash, &t.Kind, &t.ConsentID, &t.ClientID, &t.Thumbprint, &t.Family, &t.Parent, &t.CreatedAt, &t.ExpiresAt, &rot, &rev)
+	err := s.Pool().QueryRow(ctx, `SELECT hash, kind, consent_id, client_id, family, parent, created_at, expires_at, rotated_at, revoked_at FROM ob_tokens WHERE hash = $1`, hash).
+		Scan(&t.Hash, &t.Kind, &t.ConsentID, &t.ClientID, &t.Family, &t.Parent, &t.CreatedAt, &t.ExpiresAt, &rot, &rev)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

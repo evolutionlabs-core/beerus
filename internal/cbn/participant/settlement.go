@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 	"time"
 
@@ -41,27 +40,21 @@ func (p *Participant) settlement() http.Handler {
 	return web.WithRequestID(mux)
 }
 
-func callerIdentity(r *http.Request) (string, []string, bool) {
-	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
-		return "", nil, false
+func identify(w http.ResponseWriter, r *http.Request) (string, bool) {
+	identity := r.Header.Get(config.CallerHeader)
+	if identity == "" {
+		web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", fmt.Sprintf("Send your ID in the %s header.", config.CallerHeader))
 	}
-	leaf := r.TLS.PeerCertificates[0]
-	return leaf.Subject.CommonName, leaf.Subject.OrganizationalUnit, true
-}
-
-func isNIBSS(r *http.Request) bool {
-	identity, roles, ok := callerIdentity(r)
-	return ok && identity == config.NIBSSCN && slices.Contains(roles, config.NIBSSRole)
-}
-
-func bankCaller(r *http.Request) (string, bool) {
-	identity, roles, ok := callerIdentity(r)
-	return identity, ok && slices.Contains(roles, config.BankRole)
+	return identity, identity != ""
 }
 
 func (p *Participant) postSession(w http.ResponseWriter, r *http.Request) {
-	if !isNIBSS(r) {
-		web.WriteError(w, r, http.StatusForbidden, "forbidden", "This certificate may not post a settlement session. Only NIBSS may.")
+	identity, ok := identify(w, r)
+	if !ok {
+		return
+	}
+	if identity != config.NIBSSCN {
+		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not post a settlement session. Only NIBSS may.", identity))
 		return
 	}
 	var req sessionRequest
@@ -134,8 +127,12 @@ func (p *Participant) refused(w http.ResponseWriter, r *http.Request, msg string
 
 func (p *Participant) balance(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("bank_id")
-	if who, ok := bankCaller(r); !ok || who != id {
-		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("This certificate may not read the balance of %s.", id))
+	identity, ok := identify(w, r)
+	if !ok {
+		return
+	}
+	if identity != id {
+		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not read the balance of %s.", identity, id))
 		return
 	}
 	bal, err := p.books.Balance(r.Context(), id)
@@ -152,15 +149,16 @@ func (p *Participant) balance(w http.ResponseWriter, r *http.Request) {
 
 func (p *Participant) postings(w http.ResponseWriter, r *http.Request) {
 	bankID := r.URL.Query().Get("bank_id")
-	if who, ok := bankCaller(r); ok {
-		if bankID != "" && bankID != who {
-			web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("This certificate may not read the postings of %s.", bankID))
+	identity, ok := identify(w, r)
+	if !ok {
+		return
+	}
+	if identity != config.NIBSSCN {
+		if bankID != "" && bankID != identity {
+			web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not read the postings of %s.", identity, bankID))
 			return
 		}
-		bankID = who
-	} else if !isNIBSS(r) {
-		web.WriteError(w, r, http.StatusForbidden, "forbidden", "This certificate may not read settlement postings.")
-		return
+		bankID = identity
 	}
 	limit := cbn.DefaultPage
 	if v := r.URL.Query().Get("limit"); v != "" {

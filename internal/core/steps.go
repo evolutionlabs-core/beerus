@@ -210,8 +210,8 @@ func (a *App) provision(ctx context.Context, b *config.Bank) {
 	a.lifeMu.Unlock()
 	ok := a.step(st, config.StepAllocate, func() error {
 		return a.claimBank(b)
-	}) && a.stepDone(st, config.StepDirectory) && a.step(st, config.StepCerts, func() error {
-		return a.bankCerts(b)
+	}) && a.stepDone(st, config.StepDirectory) && a.step(st, config.StepFiles, func() error {
+		return a.bankFiles(b)
 	}) && a.stepDone(st, config.StepCBN) && a.bankBooksReady(ctx, b, st) && a.step(st, config.StepSite, noError) && a.step(st, config.StepAPI, noError)
 	if !ok {
 		return
@@ -282,9 +282,9 @@ func (a *App) stepDone(st *BankStatus, id string) bool {
 	return st.Steps[stepIndex(id)].Done
 }
 
-func (a *App) bankCerts(b *config.Bank) error {
+func (a *App) bankFiles(b *config.Bank) error {
 	if _, err := a.ensureBankDir(b.ID, true); err != nil {
-		return fmt.Errorf("issue certificates for %s: %w", b.ID, err)
+		return fmt.Errorf("write bank files for %s: %w", b.ID, err)
 	}
 	return a.ctl.Claim(setup.KindBank, b.ID, setup.Owned{Kind: state.OwnedDir, Name: "banks/" + b.ID})
 }

@@ -9,12 +9,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
@@ -27,16 +27,10 @@ const (
 	requestIDChars = 12
 )
 
-type Caller struct {
-	CommonName string
-	Role       string
-}
-
 type server struct {
-	bank   *bank.Bank
-	clock  *clock.Clock
-	caller Caller
-	log    *slog.Logger
+	bank  *bank.Bank
+	clock *clock.Clock
+	log   *slog.Logger
 }
 
 type apiError struct {
@@ -56,8 +50,8 @@ type creditResult struct {
 	ResponseCode string `json:"response_code"`
 }
 
-func New(b *bank.Bank, clk *clock.Clock, caller Caller, log *slog.Logger) http.Handler {
-	s := &server{bank: b, clock: clk, caller: caller, log: log}
+func New(b *bank.Bank, clk *clock.Clock, log *slog.Logger) http.Handler {
+	s := &server{bank: b, clock: clk, log: log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/nip/account-names/{account_number}", only(http.MethodGet, s.nameEnquiry))
 	mux.HandleFunc("/v1/nip/credits", only(http.MethodPost, s.credit))
@@ -113,18 +107,15 @@ func (s *server) unavailable(w http.ResponseWriter, r *http.Request, err error) 
 	WriteUnavailable(w)
 }
 
-func (c Caller) Allows(r *http.Request) bool {
-	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
-		return false
-	}
-	leaf := r.TLS.PeerCertificates[0]
-	return leaf.Subject.CommonName == c.CommonName && slices.Contains(leaf.Subject.OrganizationalUnit, c.Role)
-}
-
 func (s *server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.caller.Allows(r) {
-			writeError(w, http.StatusForbidden, "forbidden", "This certificate may not call the NIP API of this bank. Only NIBSS may.")
+		caller := r.Header.Get(config.CallerHeader)
+		if caller == "" {
+			writeError(w, http.StatusUnauthorized, "unauthenticated", fmt.Sprintf("Send your ID in the %s header to call the NIP API of this bank.", config.CallerHeader))
+			return
+		}
+		if caller != config.NIBSSCN {
+			writeError(w, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not call the NIP API of this bank. Only NIBSS may.", caller))
 			return
 		}
 		next.ServeHTTP(w, r)

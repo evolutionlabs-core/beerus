@@ -48,17 +48,16 @@ type Consent struct {
 }
 
 type Token struct {
-	Hash       string
-	Kind       string
-	ConsentID  string
-	ClientID   string
-	Thumbprint string
-	Family     string
-	Parent     string
-	CreatedAt  time.Time
-	ExpiresAt  time.Time
-	RotatedAt  time.Time
-	Revoked    bool
+	Hash      string
+	Kind      string
+	ConsentID string
+	ClientID  string
+	Family    string
+	Parent    string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	RotatedAt time.Time
+	Revoked   bool
 }
 
 type Access struct {
@@ -109,7 +108,7 @@ type Client struct {
 
 type Registry interface {
 	Client(id string) (*Client, bool)
-	ClientByCert(cn string) (*Client, bool)
+	ClientByCaller(id string) (*Client, bool)
 }
 
 type ConsentEvent struct {

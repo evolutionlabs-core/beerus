@@ -44,9 +44,9 @@ type cbnPostingPage struct {
 	NextCursor string       `json:"next_cursor"`
 }
 
-func CBNHTTP(dir, id string, remote bool) (*http.Client, error) {
+func CBNHTTP(remote bool) *http.Client {
 	dialer := &net.Dialer{Timeout: cbnDialTimeout}
-	return peerHTTP(dir, id, config.CBNHost, func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return peerHTTP(func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err == nil && !remote && strings.HasSuffix(host, localhostHost) {
 			addr = net.JoinHostPort(loopback, port)
@@ -55,8 +55,8 @@ func CBNHTTP(dir, id string, remote bool) (*http.Client, error) {
 	})
 }
 
-func NewCBNClient(hc *http.Client, port int, name string) CBNClient {
-	return CBNClient{HTTP: hc, Base: "https://" + net.JoinHostPort(config.CBNHost, strconv.Itoa(port)), Away: name + " cannot reach the CBN right now. Try again in a minute."}
+func NewCBNClient(hc *http.Client, port int, id, name string) CBNClient {
+	return CBNClient{HTTP: hc, Base: "http://" + net.JoinHostPort(config.CBNHost, strconv.Itoa(port)), Away: name + " cannot reach the CBN right now. Try again in a minute.", ID: id}
 }
 
 func (c CBNClient) Balance(ctx context.Context, id string) (int64, error) {
@@ -193,33 +193,10 @@ func cbnDetail(ctx context.Context, c CBNClient, books *bank.Bank, id string) ([
 }
 
 func (s *Server) CBN() (CBNClient, error) {
-	hc, err := s.cbnHTTP()
-	if err != nil {
-		return CBNClient{}, s.coreAway(err)
-	}
 	if s.cbnPort == 0 {
 		return CBNClient{}, s.coreAway(fmt.Errorf("%s sets no cbn_port", config.BankFilePath(s.dir, s.id)))
 	}
-	return NewCBNClient(hc, s.cbnPort, s.Bank().Name), nil
-}
-
-func (s *Server) cbnHTTP() (*http.Client, error) {
-	s.dirMu.Lock()
-	have := s.cbnClient
-	s.dirMu.Unlock()
-	if have != nil {
-		return have, nil
-	}
-	built, err := CBNHTTP(s.dir, s.id, s.link.Remote())
-	if err != nil {
-		return nil, err
-	}
-	s.dirMu.Lock()
-	defer s.dirMu.Unlock()
-	if s.cbnClient == nil {
-		s.cbnClient = built
-	}
-	return s.cbnClient, nil
+	return NewCBNClient(s.cbnClient, s.cbnPort, s.id, s.Bank().Name), nil
 }
 
 func (s *Server) CheckSettlement(ctx context.Context) error {

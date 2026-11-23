@@ -1195,9 +1195,6 @@ func runUp(ctx context.Context, e *cli, exe string, args []string) error {
 	if err := install.CheckPorts(c); err != nil {
 		return err
 	}
-	if err := c.EnsureCertificates(time.Now()); err != nil {
-		return err
-	}
 	cl, err := newCtlFor(c)
 	if err != nil {
 		return err

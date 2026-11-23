@@ -14,7 +14,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/control"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/disk"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -113,9 +113,6 @@ func New(cfg *config.Config, o Options) (*App, error) {
 	}
 	a.st = st
 	a.clock = clock.New()
-	if err := cfg.EnsureCertificates(a.clock.Real()); err != nil {
-		return nil, err
-	}
 	for _, b := range cfg.Banks {
 		if _, err := a.ensureBankDir(b.ID, true); err != nil {
 			return nil, err
@@ -169,7 +166,7 @@ func (a *App) runningPath() string {
 }
 
 func (a *App) Run(ctx context.Context) {
-	if err := pki.WriteFile(a.runningPath(), []byte(a.clock.Real().Format(time.RFC3339)), 0o600); err != nil {
+	if err := disk.Write(a.runningPath(), []byte(a.clock.Real().Format(time.RFC3339)), 0o600); err != nil {
 		a.log.Error("write run marker", "err", err)
 	}
 	defer os.Remove(a.runningPath())

@@ -135,7 +135,7 @@ func TestRegisterContact(t *testing.T) {
 	register(t, s, "bank-a", "Member A", "999001", "901")
 	withContact := func(url, identity string) Member {
 		m := member("bank-a", "Member A", "999001", "901")
-		m.CreditURL, m.CertificateIdentity = url, identity
+		m.CreditURL, m.CallerID = url, identity
 		return m
 	}
 	steps := []struct {
@@ -143,10 +143,10 @@ func TestRegisterContact(t *testing.T) {
 		in   Member
 		want string
 	}{
-		{"fills in what was empty", withContact("https://a.localhost:1", "bank-a"), ""},
-		{"repeat", withContact("https://a.localhost:1", "bank-a"), ""},
-		{"other url", withContact("https://a.localhost:2", "bank-a"), "bank bank-a is registered with credit_url https://a.localhost:1, and this request has credit_url https://a.localhost:2"},
-		{"other identity and url", withContact("https://a.localhost:2", "bank-z"), "bank bank-a is registered with credit_url https://a.localhost:1 and certificate_identity bank-a, and this request has credit_url https://a.localhost:2 and certificate_identity bank-z"},
+		{"fills in what was empty", withContact("http://a.localhost:1", "bank-a"), ""},
+		{"repeat", withContact("http://a.localhost:1", "bank-a"), ""},
+		{"other url", withContact("http://a.localhost:2", "bank-a"), "bank bank-a is registered with credit_url http://a.localhost:1, and this request has credit_url http://a.localhost:2"},
+		{"other identity and url", withContact("http://a.localhost:2", "bank-z"), "bank bank-a is registered with credit_url http://a.localhost:1 and caller_id bank-a, and this request has credit_url http://a.localhost:2 and caller_id bank-z"},
 	}
 	for _, st := range steps {
 		err := s.Register(ctx, st.in)
@@ -162,7 +162,7 @@ func TestRegisterContact(t *testing.T) {
 		}
 	}
 	got, err := s.Member(ctx, "bank-a")
-	if err != nil || got.CreditURL != "https://a.localhost:1" || got.CertificateIdentity != "bank-a" {
+	if err != nil || got.CreditURL != "http://a.localhost:1" || got.CallerID != "bank-a" {
 		t.Fatalf("member: %+v, %v", got, err)
 	}
 	for _, c := range []struct {

@@ -2,7 +2,6 @@ package participant
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -54,11 +53,8 @@ func (p *Participant) Serve(ctx context.Context) error {
 	servers := []*http.Server{p.server(p.settlement()), p.server(p.handler())}
 	var wg sync.WaitGroup
 	failed := make(chan error, len(apiLn)+len(ctlLn))
-	serve := func(s *http.Server, ls []net.Listener, tc *tls.Config) {
+	serve := func(s *http.Server, ls []net.Listener) {
 		for _, ln := range ls {
-			if tc != nil {
-				ln = tls.NewListener(ln, tc)
-			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -68,8 +64,8 @@ func (p *Participant) Serve(ctx context.Context) error {
 			}()
 		}
 	}
-	serve(servers[0], apiLn, p.tls)
-	serve(servers[1], ctlLn, nil)
+	serve(servers[0], apiLn)
+	serve(servers[1], ctlLn)
 	var serr error
 	select {
 	case <-ctx.Done():

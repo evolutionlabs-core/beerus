@@ -347,7 +347,7 @@ func (c *specChecker) partners() {
 
 func (c *specChecker) webURL(path, name, raw string) {
 	if !specWebURL(raw) {
-		c.add(path, "%s %q is not an http or https URL. Use a full URL such as https://localhost:3000/callback", name, raw)
+		c.add(path, "%s %q is not an http or https URL. Use a full URL such as http://localhost:3000/callback", name, raw)
 	}
 }
 
