@@ -238,7 +238,7 @@ Exchange the `public_token` within 10 minutes:
 api /v1/public_token/exchange -d '{"public_token":"PUBLIC_TOKEN"}'
 ```
 
-The response holds an `access_token` and a `connection_id`. Keep the `access_token` on your server: Beerus shows it once and your app sends it in the `Beerus-Access-Token` header, never in a URL.
+The response holds an `access_token` and a `connection_id`. Keep the `access_token` on your server: Beerus shows it once and your app sends it in the `Beerus-Access-Token` header, never in a URL. After a reauth (`POST /v1/connection/reauth`), exchanging the new `public_token` returns only the `connection_id`, and the existing `access_token` keeps working.
 
 ## 4. Read customer data
 

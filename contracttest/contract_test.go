@@ -392,6 +392,9 @@ func TestReauthKeepsTheConnection(t *testing.T) {
 	if ex.JSON["connection_id"] != conn.ConnectionID {
 		t.Fatal("reauth created a new connection")
 	}
+	if _, ok := ex.JSON["access_token"]; ok {
+		t.Fatalf("reauth exchange issued an access_token: %s", ex.Body)
+	}
 	s.syncNow()
 	c := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 	if c.JSON["status"] != "active" {

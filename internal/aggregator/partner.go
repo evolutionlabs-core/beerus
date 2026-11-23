@@ -260,6 +260,10 @@ func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
 	if b != nil && ex.oldConsent != "" && ex.oldConsent != ex.consent {
 		a.revokeOrQueue(b, ex.oldConsent)
 	}
+	if !ex.issued {
+		web.WriteJSON(w, http.StatusOK, map[string]string{"connection_id": ex.conn.ID})
+		return
+	}
 	w.Header().Set(web.SecretReplyHeader, "This public_token was already used.")
 	web.WriteJSON(w, http.StatusOK, map[string]string{"access_token": access, "connection_id": ex.conn.ID})
 }
@@ -268,6 +272,7 @@ type exchangeGrant struct {
 	conn       *Connection
 	oldConsent string
 	consent    string
+	issued     bool
 	auth       authorisation
 }
 
@@ -321,7 +326,8 @@ func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *con
 	ls.PublicUsed = true
 	ls.Status = "exchanged"
 	var c *Connection
-	if ls.ConnectionID != "" {
+	issued := ls.ConnectionID == ""
+	if !issued {
 		c = a.st.Connections[ls.ConnectionID]
 		if c == nil {
 			web.WriteError(w, r, http.StatusNotFound, "not_found", "The connection no longer exists.")
@@ -334,7 +340,7 @@ func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *con
 			return exchangeGrant{}, false
 		}
 	} else {
-		c = &Connection{ID: web.NewID("con"), PartnerID: p.ID, UserID: ls.UserID, Institution: ls.Institution, CustomerID: ls.CustomerID, StartDate: ls.StartDate, CreatedAt: a.clock.Now()}
+		c = &Connection{ID: web.NewID("con"), AccessHash: accessHash, PartnerID: p.ID, UserID: ls.UserID, Institution: ls.Institution, CustomerID: ls.CustomerID, StartDate: ls.StartDate, CreatedAt: a.clock.Now()}
 		a.st.Connections[c.ID] = c
 		ls.ConnectionID = c.ID
 	}
@@ -344,9 +350,8 @@ func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *con
 		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The bank tokens could not be stored.")
 		return exchangeGrant{}, false
 	}
-	c.AccessHash = accessHash
 	auth := a.authoriseLocked(c, ls)
-	return exchangeGrant{conn: c, oldConsent: oldConsent, consent: c.ConsentID, auth: auth}, true
+	return exchangeGrant{conn: c, oldConsent: oldConsent, consent: c.ConsentID, issued: issued, auth: auth}, true
 }
 
 type authorisation struct {

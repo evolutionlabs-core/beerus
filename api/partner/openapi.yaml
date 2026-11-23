@@ -210,7 +210,7 @@ paths:
       tags: [Link sessions]
       operationId: exchangePublicToken
       summary: Exchange a public_token for an access_token
-      description: Swaps the `public_token` the widget returned for an `access_token` and a `connection_id`, like Plaid's `/item/public_token/exchange`. A `public_token` lasts 10 minutes and works once. The token finds its own link session, so the request carries nothing else. Keep the `access_token` on your server; Connect stores only its hash and never shows it again. Repeating the request with the same `Idempotency-Key` answers `409` instead of returning the `access_token` again, because Connect does not keep it. A reauthorised connection gets a new `access_token`.
+      description: Swaps the `public_token` the widget returned for an `access_token` and a `connection_id`, like Plaid's `/item/public_token/exchange`. A `public_token` lasts 10 minutes and works once. The token finds its own link session, so the request carries nothing else. Keep the `access_token` on your server; Connect stores only its hash and never shows it again. Repeating the request with the same `Idempotency-Key` answers `409` instead of returning the `access_token` again, because Connect does not keep it. Exchanging the `public_token` of a reauthorisation returns only the `connection_id`; the connection's existing `access_token` keeps working.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -331,7 +331,7 @@ paths:
       tags: [Connections]
       operationId: reauthConnection
       summary: Start reauthorisation
-      description: Creates a link session for the customer to consent again, for example after `reauth_required` or `expired`. The partner opens the Connect widget with its link token and exchanges the returned `public_token` as usual. The connection ID and account IDs stay the same, and the exchange returns a new `access_token` that replaces the old one. A revoked connection cannot be reauthorised; create a new link session instead.
+      description: Creates a link session for the customer to consent again, for example after `reauth_required` or `expired`. The partner opens the Connect widget with its link token and exchanges the returned `public_token` as usual. The connection ID and account IDs stay the same, and the exchange returns no new `access_token`, and the existing one keeps working. A revoked connection cannot be reauthorised; create a new link session instead.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       security:
@@ -1107,11 +1107,11 @@ components:
           description: The one-time `public_token` the widget returned.
     ExchangeResult:
       type: object
-      required: [access_token, connection_id]
+      required: [connection_id]
       properties:
         access_token:
           type: string
-          description: The secret for this connection. Keep it on your server. Connect shows it once.
+          description: The secret for this connection. Keep it on your server. Connect shows it once. A reauthorisation exchange omits it, and the connection's existing `access_token` keeps working.
         connection_id:
           type: string
     ConnectionStatus:
