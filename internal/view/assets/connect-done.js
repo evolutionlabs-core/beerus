@@ -8,7 +8,6 @@
         type: "success",
         public_token: result.public_token,
         metadata: {
-          link_session_id: result.link_session_id,
           institution: { institution_id: result.institution.id, name: result.institution.name },
           accounts: result.accounts,
         },

@@ -32,9 +32,9 @@ type LinkSession struct {
 	CustomerID    string        `json:"customer_id"`
 	Accounts      []string      `json:"accounts"`
 	Analytics     bool          `json:"analytics"`
-	CodeHash      string        `json:"code_hash"`
-	CodeExpires   time.Time     `json:"code_expires"`
-	CodeUsed      bool          `json:"code_used"`
+	PublicHash    string        `json:"public_token_hash"`
+	PublicExpires time.Time     `json:"public_token_expires"`
+	PublicUsed    bool          `json:"public_token_used"`
 	CreatedAt     time.Time     `json:"created_at"`
 	ExpiresReal   time.Time     `json:"expires_real"`
 	OTP           string        `json:"otp"`
@@ -82,6 +82,7 @@ type Connection struct {
 	EffectiveStart   *clock.Date `json:"effective_start"`
 	AccountIDs       []string    `json:"account_ids"`
 	ConsentID        string      `json:"consent_id"`
+	AccessHash       string      `json:"access_token_hash"`
 	AuthorisedAt     time.Time   `json:"authorised_at"`
 	ExpiresAt        time.Time   `json:"expires_at"`
 	LastSyncedAt     *time.Time  `json:"last_synced_at"`

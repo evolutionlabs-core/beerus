@@ -812,7 +812,7 @@ func (b *browser) pickAccounts() {
 }
 
 type linkResult struct {
-	Code, SessionID, State, Error string
+	PublicToken, SessionID, State, Error string
 }
 
 func (s *Stack) completeLink(widgetURL, institution, personaID string, accounts func([]string) []string) linkResult {
@@ -829,7 +829,7 @@ func (s *Stack) completeLink(widgetURL, institution, personaID string, accounts 
 		s.t.Fatalf("widget did not redirect to the partner: %.400s", b.last)
 	}
 	q := b.result.Query()
-	return linkResult{Code: q.Get("code"), SessionID: q.Get("link_session_id"), State: q.Get("state"), Error: q.Get("error")}
+	return linkResult{PublicToken: q.Get("public_token"), SessionID: q.Get("link_session_id"), State: q.Get("state"), Error: q.Get("error")}
 }
 
 type connected struct {
@@ -856,14 +856,14 @@ func (s *Stack) linkURL(userID, state string) string {
 func (s *Stack) connect(personaID, institution string) connected {
 	s.t.Helper()
 	res := s.completeLink(s.linkURL("ws_"+personaID, "st-"+personaID), institution, personaID, nil)
-	if res.Error != "" || res.Code == "" {
+	if res.Error != "" || res.PublicToken == "" {
 		s.t.Fatalf("link failed: %+v", res)
 	}
 	if res.SessionID == "" || res.State != "st-"+personaID {
 		s.t.Fatalf("redirect carried the wrong session or state: %+v", res)
 	}
-	conn := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 201)
-	id := fmt.Sprint(conn.JSON["id"])
+	conn := s.must(s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": res.PublicToken}), 200)
+	id := fmt.Sprint(conn.JSON["connection_id"])
 	s.syncNow()
 	got := s.must(s.call("GET", "/v1/connections/"+id, nil), 200)
 	if got.JSON["status"] != "active" {

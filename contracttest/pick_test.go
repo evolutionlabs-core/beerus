@@ -48,12 +48,12 @@ func TestPickAccounts(t *testing.T) {
 			}
 			continue
 		}
-		if b.result == nil || b.result.Query().Get("code") == "" {
-			t.Fatalf("%s: no code on the redirect: %.300s", tc.name, b.last)
+		if b.result == nil || b.result.Query().Get("public_token") == "" {
+			t.Fatalf("%s: no public_token on the redirect: %.300s", tc.name, b.last)
 		}
-		conn := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": b.result.Query().Get("code"), "link_session_id": b.result.Query().Get("link_session_id")}), 201)
+		conn := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"public_token": b.result.Query().Get("public_token")}), 200)
 		s.syncNow()
-		listed := s.must(s.call("GET", "/v1/connections/"+fmt.Sprint(conn.JSON["id"])+"/accounts", nil), 200).JSON["data"].([]any)
+		listed := s.must(s.call("GET", "/v1/connections/"+fmt.Sprint(conn.JSON["connection_id"])+"/accounts", nil), 200).JSON["data"].([]any)
 		if len(listed) != tc.shared {
 			t.Fatalf("%s: connection lists %d accounts, want %d", tc.name, len(listed), tc.shared)
 		}
