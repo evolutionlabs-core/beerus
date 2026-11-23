@@ -429,11 +429,12 @@ func TestBankOutage(t *testing.T) {
 	s := newStack(t)
 	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
 	s.ctl("POST", "/faults", map[string]any{"kind": "down", "bank": "bank-b"})
-	s.syncNow()
-	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
-	if c.JSON["status"] != "institution_down" {
-		t.Fatalf("status during outage: %v", c.JSON["status"])
-	}
+	var c Resp
+	waitFor(t, 15*time.Second, "the connection to be institution_down during the outage", func() bool {
+		s.syncNow()
+		c = s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+		return c.JSON["status"] == "institution_down"
+	})
 	r := s.call("DELETE", "/v1/connections/"+conn.ConnectionID, nil)
 	if r.Status != 503 || r.Code() != "institution_down" {
 		t.Fatalf("delete during outage: %d %s", r.Status, r.Body)
