@@ -71,7 +71,7 @@ func TestRealAggregator(t *testing.T) {
 	}
 	s.waitConsent("bank-a", consentID+" Authorised/bank")
 
-	st, _ := s.syncAll(id, "", 500)
+	st, _ := s.syncAll(conn.AccessToken, id, "", 500)
 	if len(st.lines) != 13 {
 		t.Fatalf("%d lines synced over the bank API, want a deposit and 3 transfers of 4 lines", len(st.lines))
 	}
@@ -113,10 +113,10 @@ func TestRealAggregator(t *testing.T) {
 	s.spend(s.persona("adaeze"), 1)
 	waitFor(t, waitLimit, "the refreshed access token to fetch the new transfer", func() bool {
 		s.syncNow()
-		st, _ := s.syncAll(id, "", 500)
+		st, _ := s.syncAll(conn.AccessToken, id, "", 500)
 		return len(st.lines) == 17
 	})
-	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "active" {
+	if got := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200); got.JSON["status"] != "active" {
 		t.Fatalf("status after refresh: %v", got.JSON["status"])
 	}
 
@@ -134,7 +134,7 @@ func TestRealAggregator(t *testing.T) {
 			t.Fatalf("an event not signed by the bank was accepted: %d", resp.StatusCode)
 		}
 	}
-	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "active" {
+	if got := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200); got.JSON["status"] != "active" {
 		t.Fatalf("forged event changed the connection to %v", got.JSON["status"])
 	}
 
@@ -148,14 +148,14 @@ func TestRealAggregator(t *testing.T) {
 	if !strings.Contains(b.last, "Access withdrawn") {
 		t.Fatalf("revoke page: %.300s", b.last)
 	}
-	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "revoked" {
+	if got := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200); got.JSON["status"] != "revoked" {
 		t.Fatalf("status after the customer revoked at the bank: %v", got.JSON["status"])
 	}
 	if !s.hasRevoked(conn.ConnectionID) {
 		t.Fatal("no reconnect-needed webhook after the bank's consent event")
 	}
 	s.waitConsent("bank-a", consentID+" Revoked/bank")
-	if r := s.call("GET", "/v1/accounts/"+id, nil); r.Status != 409 || r.Code() != "connection_revoked" {
+	if r := s.call("GET", "/v1/accounts/"+id, nil, withToken(conn.AccessToken)); r.Status != 409 || r.Code() != "connection_revoked" {
 		t.Fatalf("account after revoke: %d %s", r.Status, r.Body)
 	}
 
@@ -166,14 +166,14 @@ func TestRealAggregator(t *testing.T) {
 	if err := db.QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
 		t.Fatal(err)
 	}
-	s.must(s.call("DELETE", "/v1/connections/"+conn2.ConnectionID, nil), 204)
+	s.must(s.call("POST", "/v1/connections/remove", nil, withToken(conn2.AccessToken)), 204)
 	var status, via string
 	if err := db.QueryRow(context.Background(), `SELECT status, revoked_via FROM ob_consents WHERE id = $1`, consentID).Scan(&status, &via); err != nil || status != "Revoked" || via != "aggregator" {
 		t.Fatalf("consent at the bank after the partner disconnected: %s %s %v", status, via, err)
 	}
 	s.waitConsent("bank-a", consentID+" Revoked/aggregator")
-	if r := s.call("GET", "/v1/connections/"+conn2.ConnectionID, nil); r.JSON["status"] != "revoked" {
-		t.Fatalf("status after disconnect: %s", r.Body)
+	if r := s.call("GET", "/v1/connection", nil, withToken(conn2.AccessToken)); r.Status != 401 || r.Code() != "invalid_access_token" {
+		t.Fatalf("access_token after disconnect: %d %s", r.Status, r.Body)
 	}
 
 	conn4 := s.connect("adaeze", "bank-a")
@@ -184,7 +184,7 @@ func TestRealAggregator(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.syncNow()
-	if r := s.call("GET", "/v1/connections/"+conn4.ConnectionID, nil); r.JSON["status"] != "expired" {
+	if r := s.call("GET", "/v1/connection", nil, withToken(conn4.AccessToken)); r.JSON["status"] != "expired" {
 		t.Fatalf("a consent that expired at the bank must expire the connection: %s", r.Body)
 	}
 	if len(s.eventsOf("connection.status_changed", func(d map[string]any) bool {
@@ -199,7 +199,7 @@ func TestRealAggregator(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.syncNow()
-	if r := s.call("GET", "/v1/connections/"+conn3.ConnectionID, nil); r.JSON["status"] != "revoked" {
+	if r := s.call("GET", "/v1/connection", nil, withToken(conn3.AccessToken)); r.JSON["status"] != "revoked" {
 		t.Fatalf("a consent_revoked answer on a resource call must revoke the connection: %s", r.Body)
 	}
 	if !s.hasRevoked(conn3.ConnectionID) {
@@ -262,7 +262,7 @@ func TestConsentEventsNeedAKnownBank(t *testing.T) {
 			t.Fatalf("%s: %d %s %v, want %d containing %s", r.name, resp.StatusCode, body, err, r.status, r.want)
 		}
 	}
-	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "active" {
+	if got := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200); got.JSON["status"] != "active" {
 		t.Fatalf("status %v", got.JSON["status"])
 	}
 }
@@ -296,7 +296,7 @@ func TestConsentEventsAreKeptAndRetried(t *testing.T) {
 	if err != nil || left != 0 || delivered < 2 {
 		t.Fatalf("events after the retry: %d undelivered, %d delivered, %v", left, delivered, err)
 	}
-	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "revoked" {
+	if got := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200); got.JSON["status"] != "revoked" {
 		t.Fatalf("status after the retried event: %v", got.JSON["status"])
 	}
 }

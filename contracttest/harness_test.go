@@ -431,6 +431,10 @@ func withKey(k string) callOpt {
 	return func(r *http.Request) { r.Header.Set("Idempotency-Key", k) }
 }
 
+func withToken(token string) callOpt {
+	return func(r *http.Request) { r.Header.Set(config.AccessTokenHeader, token) }
+}
+
 func noIdem() callOpt {
 	return func(r *http.Request) { r.Header.Del("Idempotency-Key") }
 }
@@ -834,6 +838,7 @@ func (s *Stack) completeLink(widgetURL, institution, personaID string, accounts 
 
 type connected struct {
 	ConnectionID string
+	AccessToken  string
 	Accounts     []map[string]any
 	StartDate    clock.Date
 }
@@ -864,13 +869,14 @@ func (s *Stack) connect(personaID, institution string) connected {
 	}
 	conn := s.must(s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": res.PublicToken}), 200)
 	id := fmt.Sprint(conn.JSON["connection_id"])
+	token := fmt.Sprint(conn.JSON["access_token"])
 	s.syncNow()
-	got := s.must(s.call("GET", "/v1/connections/"+id, nil), 200)
+	got := s.must(s.call("GET", "/v1/connection", nil, withToken(token)), 200)
 	if got.JSON["status"] != "active" {
 		s.t.Fatalf("connection not active after sync: %s", got.Body)
 	}
-	accts := s.must(s.call("GET", "/v1/connections/"+id+"/accounts", nil), 200)
-	out := connected{ConnectionID: id, StartDate: s.linkStart()}
+	accts := s.must(s.call("GET", "/v1/accounts", nil, withToken(token)), 200)
+	out := connected{ConnectionID: id, AccessToken: token, StartDate: s.linkStart()}
 	for _, a := range accts.JSON["data"].([]any) {
 		out.Accounts = append(out.Accounts, a.(map[string]any))
 	}
@@ -886,20 +892,20 @@ type feedState struct {
 	pages    int
 }
 
-func (s *Stack) syncAll(accountID, cursor string, limit int) (*feedState, Resp) {
+func (s *Stack) syncAll(token, accountID, cursor string, limit int) (*feedState, Resp) {
 	s.t.Helper()
 	st := &feedState{lines: map[string]map[string]any{}, removed: map[string]bool{}, cursor: cursor}
-	return s.syncMore(accountID, st, limit)
+	return s.syncMore(token, accountID, st, limit)
 }
 
-func (s *Stack) syncMore(accountID string, st *feedState, limit int) (*feedState, Resp) {
+func (s *Stack) syncMore(token, accountID string, st *feedState, limit int) (*feedState, Resp) {
 	s.t.Helper()
 	for i := 0; i < 10000; i++ {
 		q := url.Values{"limit": {strconv.Itoa(limit)}}
 		if st.cursor != "" {
 			q.Set("cursor", st.cursor)
 		}
-		r := s.call("GET", "/v1/accounts/"+accountID+"/transactions/sync?"+q.Encode(), nil)
+		r := s.call("GET", "/v1/accounts/"+accountID+"/transactions/sync?"+q.Encode(), nil, withToken(token))
 		if r.Status != 200 {
 			return st, r
 		}

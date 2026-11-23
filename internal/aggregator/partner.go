@@ -31,14 +31,14 @@ func (a *App) PartnerHandler() http.Handler {
 	mux.HandleFunc("GET /v1/webhook_keys", a.listWebhookKeys)
 	mux.HandleFunc("GET /v1/institutions", a.listInstitutions)
 	mux.HandleFunc("POST /v1/public_token/exchange", a.idempotent(a.exchange))
-	mux.HandleFunc("GET /v1/connections/{id}", a.getConnection)
-	mux.HandleFunc("DELETE /v1/connections/{id}", a.idempotent(a.deleteConnection))
-	mux.HandleFunc("GET /v1/connections/{id}/accounts", a.listAccounts)
-	mux.HandleFunc("POST /v1/connections/{id}/reauth", a.idempotent(a.reauth))
+	mux.HandleFunc("GET /v1/connection", a.getConnection)
+	mux.HandleFunc("POST /v1/connections/remove", a.idempotentConnection(a.removeConnection))
+	mux.HandleFunc("POST /v1/connection/reauth", a.idempotentConnection(a.reauth))
+	mux.HandleFunc("GET /v1/accounts", a.listAccounts)
 	mux.HandleFunc("GET /v1/accounts/{id}", a.getAccount)
 	mux.HandleFunc("GET /v1/accounts/{id}/balance", a.getBalance)
 	mux.HandleFunc("GET /v1/accounts/{id}/transactions/sync", a.syncTransactions)
-	mux.HandleFunc("POST /v1/accounts/{id}/refresh", a.idempotent(a.refresh))
+	mux.HandleFunc("POST /v1/accounts/{id}/refresh", a.idempotentConnection(a.refresh))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such endpoint.")
 	})
@@ -462,13 +462,20 @@ func (a *App) connectionJSON(c *Connection) map[string]any {
 }
 
 func (a *App) connectionFor(w http.ResponseWriter, r *http.Request) *Connection {
-	p := partnerFrom(r)
-	c := a.st.Connections[r.PathValue("id")]
-	if c == nil || c.PartnerID != p.ID {
-		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such connection.")
+	token := r.Header.Get(config.AccessTokenHeader)
+	if token == "" {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "Send the connection's access_token in the "+config.AccessTokenHeader+" header.")
 		return nil
 	}
-	return c
+	p := partnerFrom(r)
+	hash := web.HashSecret(token)
+	for _, c := range a.st.Connections {
+		if c.AccessHash != "" && c.PartnerID == p.ID && subtle.ConstantTimeCompare([]byte(c.AccessHash), []byte(hash)) == 1 {
+			return c
+		}
+	}
+	web.WriteError(w, r, http.StatusUnauthorized, "invalid_access_token", "This access_token is not valid.")
+	return nil
 }
 
 func (a *App) getConnection(w http.ResponseWriter, r *http.Request) {
@@ -479,7 +486,7 @@ func (a *App) getConnection(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *App) deleteConnection(w http.ResponseWriter, r *http.Request) {
+func (a *App) removeConnection(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	c := a.connectionFor(w, r)
 	if c == nil {
@@ -488,22 +495,22 @@ func (a *App) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	revoked := c.Status == "revoked"
 	a.mu.Unlock()
-	if revoked {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if err := a.revokeConnectionAtBank(c.ID); err != nil {
-		w.Header().Set("Retry-After", "60")
-		if isDown(err) {
-			web.WriteError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached to revoke the consent.")
-		} else {
-			web.WriteError(w, r, http.StatusBadGateway, "bank_error", "The bank did not accept the revocation.")
+	if !revoked {
+		if err := a.revokeConnectionAtBank(c.ID); err != nil {
+			w.Header().Set("Retry-After", "60")
+			if isDown(err) {
+				web.WriteError(w, r, http.StatusServiceUnavailable, "institution_down", "The bank cannot be reached to revoke the consent.")
+			} else {
+				web.WriteError(w, r, http.StatusBadGateway, "bank_error", "The bank did not accept the revocation.")
+			}
+			return
 		}
-		return
 	}
 	a.mu.Lock()
 	if a.st.Connections[c.ID] == c {
 		a.setStatus(c, "revoked", "connection_revoked")
+		c.AccessHash = ""
+		a.dirty()
 	}
 	a.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
@@ -637,23 +644,21 @@ func (a *App) grantFor(rec *AccountRec) (*Connection, string) {
 }
 
 func (a *App) accountFor(w http.ResponseWriter, r *http.Request) (*AccountRec, *Connection) {
-	p := partnerFrom(r)
+	c := a.connectionFor(w, r)
+	if c == nil {
+		return nil, nil
+	}
 	rec := a.st.Accounts[r.PathValue("id")]
-	if rec == nil || rec.PartnerID != p.ID {
+	if rec == nil || !slices.Contains(c.AccountIDs, rec.ID) {
 		web.WriteError(w, r, http.StatusNotFound, "not_found", "No such account.")
 		return nil, nil
 	}
-	if rec.Removed {
-		web.WriteError(w, r, http.StatusConflict, "account_not_shared", "The customer no longer shares this account. Ask them to reconnect and share it.")
+	switch c.Status {
+	case "revoked":
+		web.WriteError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
 		return nil, nil
-	}
-	c, code := a.grantFor(rec)
-	if c == nil {
-		if code == "reauth_required" {
-			web.WriteError(w, r, http.StatusConflict, code, "The customer must consent again.")
-		} else {
-			web.WriteError(w, r, http.StatusConflict, code, "The connection was revoked. Create a new link session.")
-		}
+	case "expired", "reauth_required":
+		web.WriteError(w, r, http.StatusConflict, "reauth_required", "The customer must consent again.")
 		return nil, nil
 	}
 	return rec, c

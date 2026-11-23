@@ -205,7 +205,7 @@ func TestSuspendBank(t *testing.T) {
 		t.Fatalf("transfer into a suspended bank: %v", err)
 	}
 	s.syncNow()
-	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+	c := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 	if c.JSON["status"] != "institution_down" {
 		t.Fatalf("status while suspended: %v", c.JSON["status"])
 	}
@@ -227,7 +227,7 @@ func TestSuspendBank(t *testing.T) {
 	s.ctl("POST", "/banks/bank-b/resume", nil)
 	s.pay("bank-a", tunde, "bank-b", chidi, "1000")
 	s.syncNow()
-	c = s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+	c = s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 	if c.JSON["status"] != "active" {
 		t.Fatalf("status after resume: %v", c.JSON["status"])
 	}
@@ -296,7 +296,7 @@ func TestBankRepairsDrift(t *testing.T) {
 	}
 	checkProvisioned(t, activeBank(t, s.cfg.Dir, "bank-b"))
 	s.syncNow()
-	if r := s.call("GET", "/v1/accounts/"+acct+"/balance", nil); r.Status != 409 || r.Code() != "reauth_required" {
+	if r := s.call("GET", "/v1/accounts/"+acct+"/balance", nil, withToken(conn.AccessToken)); r.Status != 409 || r.Code() != "reauth_required" {
 		t.Fatalf("consents live in the bank database, so a rebuilt bank should ask for consent again: %d %s", r.Status, r.Body)
 	}
 	b := s.bankBrowser()
@@ -511,7 +511,7 @@ func TestCloseBank(t *testing.T) {
 	if got := s.eventsOf("account.removed", func(d map[string]any) bool { return d["account_id"] == acct }); len(got) != 1 {
 		t.Fatalf("account.removed webhooks: %v", got)
 	}
-	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil), 409)
+	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil, withToken(conn.AccessToken)), 409)
 	waitFor(t, waitLimit, "online banking to stop answering", func() bool {
 		resp, err := http.Get(s.cfg.Bank("abuja-digital").URL() + "/login")
 		if err == nil {

@@ -39,7 +39,7 @@ func TestAuthentication(t *testing.T) {
 			t.Fatalf("%s: %d %s, want 401 %q", c.name, r.Status, r.Body, c.message)
 		}
 	}
-	if code := rawGet(t, s, "balance", s.secret, "/v1/webhook_keys"); code != http.StatusOK {
+	if code := rawGet(t, s, "balance", s.secret, "", "/v1/webhook_keys"); code != http.StatusOK {
 		t.Fatalf("a call with the client ID and secret over plain HTTP got %d, want 200", code)
 	}
 	s.must(s.call("GET", "/v1/webhook_keys", nil), 200)
@@ -139,8 +139,8 @@ func TestConnectAndSync(t *testing.T) {
 	}
 	acct := accountAt(t, conn, "current")
 	id := fmt.Sprint(acct["id"])
-	small, _ := s.syncAll(id, "", 7)
-	big, last := s.syncAll(id, "", 500)
+	small, _ := s.syncAll(conn.AccessToken, id, "", 7)
+	big, last := s.syncAll(conn.AccessToken, id, "", 500)
 	if len(big.lines) != 17 {
 		t.Fatalf("%d lines, want a deposit and 4 transfers of 4 lines", len(big.lines))
 	}
@@ -155,7 +155,7 @@ func TestConnectAndSync(t *testing.T) {
 	if last.JSON["has_more"] != false || last.JSON["world_id"] == "" {
 		t.Fatalf("last page: %s", last.Body)
 	}
-	again, r := s.syncMore(id, big, 100)
+	again, r := s.syncMore(conn.AccessToken, id, big, 100)
 	if r.Status != 200 || len(r.JSON["added"].([]any))+len(r.JSON["modified"].([]any))+len(r.JSON["removed"].([]any)) != 0 || len(again.lines) != len(big.lines) {
 		t.Fatalf("a second sync with no changes returned data: %s", r.Body)
 	}
@@ -175,7 +175,7 @@ func TestConnectAndSync(t *testing.T) {
 	}
 	sort.Slice(posted, func(i, j int) bool { return num(posted[i]["sequence"]) < num(posted[j]["sequence"]) })
 	start := s.firstDate(id, conn.StartDate)
-	open := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, start.AddDays(-1)), nil), 200)
+	open := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, start.AddDays(-1)), nil, withToken(conn.AccessToken)), 200)
 	opening := num(open.JSON["ledger_balance"].(map[string]any)["amount_minor"])
 	run := opening
 	for _, l := range posted {
@@ -184,12 +184,12 @@ func TestConnectAndSync(t *testing.T) {
 			t.Fatalf("balance_after chain broken at %v", l["id"])
 		}
 	}
-	got := s.must(s.call("GET", "/v1/accounts/"+id, nil), 200)
+	got := s.must(s.call("GET", "/v1/accounts/"+id, nil, withToken(conn.AccessToken)), 200)
 	current := num(got.JSON["balances"].(map[string]any)["current"].(map[string]any)["amount_minor"])
 	if opening+sum != current {
 		t.Fatalf("opening %d + posted %d != current %d", opening, sum, current)
 	}
-	yesterday := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, today.AddDays(-1)), nil), 200)
+	yesterday := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, today.AddDays(-1)), nil, withToken(conn.AccessToken)), 200)
 	var upto int64 = opening
 	for _, l := range posted {
 		bt, _ := time.Parse(time.RFC3339, fmt.Sprint(l["booked_at"]))
@@ -251,21 +251,21 @@ func TestBalanceRange(t *testing.T) {
 	start := s.linkStart()
 	conn := s.connect("ngozi", "bank-b")
 	id := fmt.Sprint(conn.Accounts[0]["id"])
-	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+	c := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 	if c.JSON["effective_start_date"] != nil {
 		t.Fatalf("effective_start_date %v, want null", c.JSON["effective_start_date"])
 	}
-	ok := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, start.AddDays(-1)), nil), 200)
+	ok := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, start.AddDays(-1)), nil, withToken(conn.AccessToken)), 200)
 	if ok.JSON["effective_start_date"] != nil {
 		t.Fatalf("balance effective_start_date: %s", ok.Body)
 	}
 	for _, d := range []clock.Date{start.AddDays(-2), today} {
-		r := s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, d), nil)
+		r := s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, d), nil, withToken(conn.AccessToken))
 		if r.Status != 422 || r.Code() != "as_of_out_of_range" {
 			t.Errorf("as_of %s: %d %s", d, r.Status, r.Body)
 		}
 	}
-	r := s.call("GET", "/v1/accounts/"+id+"/balance?as_of=yesterday", nil)
+	r := s.call("GET", "/v1/accounts/"+id+"/balance?as_of=yesterday", nil, withToken(conn.AccessToken))
 	if r.Status != 400 {
 		t.Errorf("bad as_of: %d", r.Status)
 	}
@@ -320,7 +320,7 @@ func TestGarbageCursorIsRejected(t *testing.T) {
 	s := newStack(t)
 	conn := s.connect("tunde", "bank-a")
 	id := fmt.Sprint(conn.Accounts[0]["id"])
-	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync?cursor=cur_garbage", nil)
+	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync?cursor=cur_garbage", nil, withToken(conn.AccessToken))
 	if r.Status != 400 || r.Code() != "invalid_cursor" {
 		t.Fatalf("garbage cursor: %d %s", r.Status, r.Body)
 	}
@@ -333,17 +333,17 @@ func TestRevokeAndReconnectKeepsIDs(t *testing.T) {
 	s := newStack(t)
 	conn := s.connect("adaeze", "bank-a")
 	id := fmt.Sprint(accountAt(t, conn, "current")["id"])
-	before, _ := s.syncAll(id, "", 500)
+	before, _ := s.syncAll(conn.AccessToken, id, "", 500)
 	s.ctl("POST", "/connections/"+conn.ConnectionID+"/revoke", nil)
-	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+	c := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 	if c.JSON["status"] != "revoked" {
 		t.Fatalf("status after revoke: %v", c.JSON["status"])
 	}
-	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync", nil)
+	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync", nil, withToken(conn.AccessToken))
 	if r.Status != 409 || r.Code() != "connection_revoked" {
 		t.Fatalf("sync after revoke: %d %s", r.Status, r.Body)
 	}
-	r = s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", nil)
+	r = s.call("POST", "/v1/connection/reauth", nil, withToken(conn.AccessToken))
 	if r.Status != 409 || r.Code() != "connection_revoked" {
 		t.Fatalf("reauth after revoke: %d %s", r.Status, r.Body)
 	}
@@ -360,7 +360,7 @@ func TestRevokeAndReconnectKeepsIDs(t *testing.T) {
 	if id2 != id {
 		t.Fatalf("account ID changed across consents: %s vs %s", id, id2)
 	}
-	after, _ := s.syncAll(id2, before.cursor, 500)
+	after, _ := s.syncAll(again.AccessToken, id2, before.cursor, 500)
 	for lid, l := range after.lines {
 		if _, ok := before.lines[lid]; !ok && l["status"] == "posted" {
 			bt, _ := time.Parse(time.RFC3339, fmt.Sprint(l["booked_at"]))
@@ -369,12 +369,10 @@ func TestRevokeAndReconnectKeepsIDs(t *testing.T) {
 			}
 		}
 	}
-	d := s.call("DELETE", "/v1/connections/"+again.ConnectionID, nil)
+	d := s.call("POST", "/v1/connections/remove", nil, withToken(again.AccessToken))
 	s.must(d, 204)
-	s.must(s.call("DELETE", "/v1/connections/"+again.ConnectionID, nil), 204)
-	c = s.must(s.call("GET", "/v1/connections/"+again.ConnectionID, nil), 200)
-	if c.JSON["status"] != "revoked" {
-		t.Fatalf("status after delete: %v", c.JSON["status"])
+	if r := s.call("POST", "/v1/connections/remove", nil, withToken(again.AccessToken)); r.Status != 401 || r.Code() != "invalid_access_token" {
+		t.Fatalf("remove again: %d %s", r.Status, r.Body)
 	}
 }
 
@@ -382,7 +380,7 @@ func TestReauthKeepsTheConnection(t *testing.T) {
 	s := newStack(t)
 	conn := s.connect("tunde", "bank-a")
 	id := fmt.Sprint(conn.Accounts[0]["id"])
-	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", map[string]string{"state": "again"}), 201)
+	ls := s.must(s.call("POST", "/v1/connection/reauth", map[string]string{"state": "again"}, withToken(conn.AccessToken)), 201)
 	if ls.JSON["connection_id"] != conn.ConnectionID {
 		t.Fatalf("reauth session: %s", ls.Body)
 	}
@@ -395,24 +393,24 @@ func TestReauthKeepsTheConnection(t *testing.T) {
 		t.Fatal("reauth created a new connection")
 	}
 	s.syncNow()
-	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+	c := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 	if c.JSON["status"] != "active" {
 		t.Fatalf("status after reauth: %v", c.JSON["status"])
 	}
-	accts := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID+"/accounts", nil), 200)
+	accts := s.must(s.call("GET", "/v1/accounts", nil, withToken(conn.AccessToken)), 200)
 	if fmt.Sprint(accts.JSON["data"].([]any)[0].(map[string]any)["id"]) != id {
 		t.Fatal("account ID changed after reauth")
 	}
-	s.must(s.call("GET", "/v1/accounts/"+id+"/transactions/sync?limit=5", nil), 200)
+	s.must(s.call("GET", "/v1/accounts/"+id+"/transactions/sync?limit=5", nil, withToken(conn.AccessToken)), 200)
 }
 
 func TestRefreshAndRateLimit(t *testing.T) {
 	s := newStack(t)
 	conn := s.connect("ngozi", "bank-b")
 	id := fmt.Sprint(conn.Accounts[0]["id"])
-	r := s.must(s.call("POST", "/v1/accounts/"+id+"/refresh", nil), 202)
+	r := s.must(s.call("POST", "/v1/accounts/"+id+"/refresh", nil, withToken(conn.AccessToken)), 202)
 	ref := fmt.Sprint(r.JSON["id"])
-	r = s.call("POST", "/v1/accounts/"+id+"/refresh", nil)
+	r = s.call("POST", "/v1/accounts/"+id+"/refresh", nil, withToken(conn.AccessToken))
 	if r.Status != 429 || r.Code() != "rate_limited" || r.Header.Get("Retry-After") == "" {
 		t.Fatalf("second refresh: %d %s", r.Status, r.Body)
 	}
@@ -433,10 +431,10 @@ func TestBankOutage(t *testing.T) {
 	var c Resp
 	waitFor(t, 15*time.Second, "the connection to be institution_down during the outage", func() bool {
 		s.syncNow()
-		c = s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+		c = s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 		return c.JSON["status"] == "institution_down"
 	})
-	r := s.call("DELETE", "/v1/connections/"+conn.ConnectionID, nil)
+	r := s.call("POST", "/v1/connections/remove", nil, withToken(conn.AccessToken))
 	if r.Status != 503 || r.Code() != "institution_down" {
 		t.Fatalf("delete during outage: %d %s", r.Status, r.Body)
 	}
@@ -457,7 +455,7 @@ func TestBankOutage(t *testing.T) {
 	s.ctl("DELETE", "/faults?bank=bank-b", nil)
 	waitFor(t, 15*time.Second, "the connection to be active after the outage", func() bool {
 		s.syncNow()
-		c = s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+		c = s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 		return c.JSON["status"] == "active"
 	})
 }
@@ -472,8 +470,8 @@ func TestOwnAccountTransferMatchesBySessionID(t *testing.T) {
 	}
 	s.pay("bank-a", pa.Accounts[0], "bank-b", pb.Accounts[0], "100000")
 	s.syncNow()
-	fa, _ := s.syncAll(fmt.Sprint(accountAt(t, a, "current")["id"]), "", 500)
-	fb, _ := s.syncAll(fmt.Sprint(b.Accounts[0]["id"]), "", 500)
+	fa, _ := s.syncAll(a.AccessToken, fmt.Sprint(accountAt(t, a, "current")["id"]), "", 500)
+	fb, _ := s.syncAll(b.AccessToken, fmt.Sprint(b.Accounts[0]["id"]), "", 500)
 	sessions := map[string]int64{}
 	for _, l := range fa.lines {
 		if l["channel"] == "nip" && num(l["amount_minor"]) == -10000000 {

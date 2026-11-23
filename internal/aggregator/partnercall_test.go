@@ -12,6 +12,8 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
+const testToken = "access-test"
+
 type partnerReply struct {
 	code   int
 	header http.Header
@@ -33,11 +35,14 @@ func (r *partnerReply) WriteHeader(code int) {
 	r.code = code
 }
 
-func callPartner(t *testing.T, p *config.Partner, h http.HandlerFunc, method, target, body string, path map[string]string) (int, map[string]any) {
+func callPartner(t *testing.T, p *config.Partner, h http.HandlerFunc, method, target, body, token string, path map[string]string) (int, map[string]any) {
 	t.Helper()
 	r, err := http.NewRequestWithContext(context.WithValue(t.Context(), ctxPartner, p), method, "http://connect.localhost"+target, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if token != "" {
+		r.Header.Set(config.AccessTokenHeader, token)
 	}
 	for k, v := range path {
 		r.SetPathValue(k, v)
@@ -45,6 +50,9 @@ func callPartner(t *testing.T, p *config.Partner, h http.HandlerFunc, method, ta
 	w := &partnerReply{header: http.Header{}}
 	h(w, r)
 	out := map[string]any{}
+	if w.body.Len() == 0 {
+		return w.code, out
+	}
 	if err := json.Unmarshal(w.body.Bytes(), &out); err != nil {
 		t.Fatalf("reply %d is not JSON: %s", w.code, w.body.String())
 	}

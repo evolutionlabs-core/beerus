@@ -194,7 +194,7 @@ Your app's client ID and secret land in `.beerus/partners/myapp`. Every call to 
 
 ```bash
 P=.beerus/partners/myapp
-api() { curl -sS -H "Beerus-Client-ID: myapp" -H "Beerus-Secret: $(cat $P/secret)" -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "http://connect.localhost:7443$1" "${@:2}"; echo; }
+api() { curl -sS -H "Beerus-Client-ID: myapp" -H "Beerus-Secret: $(cat $P/secret)" ${TOKEN:+-H "Beerus-Access-Token: $TOKEN"} -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "http://connect.localhost:7443$1" "${@:2}"; echo; }
 ```
 
 To list the banks your customers can link, for your own bank picker:
@@ -238,15 +238,28 @@ Exchange the `public_token` within 10 minutes:
 api /v1/public_token/exchange -d '{"public_token":"PUBLIC_TOKEN"}'
 ```
 
-The response holds an `access_token` and a `connection_id`. Keep the `access_token` on your server.
+The response holds an `access_token` and a `connection_id`. Keep the `access_token` on your server: Beerus shows it once and your app sends it in the `Beerus-Access-Token` header, never in a URL.
 
 ## 4. Read customer data
 
+Set `TOKEN` to the `access_token`. `api` then sends it in the `Beerus-Access-Token` header.
+
 ```bash
-api /v1/connections/CONNECTION_ID/accounts
-api /v1/accounts/ACCOUNT_ID/balance
+TOKEN=ACCESS_TOKEN
+api /v1/accounts
+api "/v1/accounts/ACCOUNT_ID/balance?as_of=2026-01-31"
 api /v1/accounts/ACCOUNT_ID/transactions/sync
 ```
+
+An account outside the connection answers 404.
+
+## 5. Remove the connection
+
+```bash
+api /v1/connections/remove -X POST
+```
+
+The connection ends and its `access_token` stops working (401).
 
 ## Manage it
 

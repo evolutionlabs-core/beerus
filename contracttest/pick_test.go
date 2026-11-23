@@ -51,14 +51,15 @@ func TestPickAccounts(t *testing.T) {
 		if b.result == nil || b.result.Query().Get("public_token") == "" {
 			t.Fatalf("%s: no public_token on the redirect: %.300s", tc.name, b.last)
 		}
-		conn := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"public_token": b.result.Query().Get("public_token")}), 200)
+		conn := s.must(s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": b.result.Query().Get("public_token")}), 200)
+		token := fmt.Sprint(conn.JSON["access_token"])
 		s.syncNow()
-		listed := s.must(s.call("GET", "/v1/connections/"+fmt.Sprint(conn.JSON["connection_id"])+"/accounts", nil), 200).JSON["data"].([]any)
+		listed := s.must(s.call("GET", "/v1/accounts", nil, withToken(token)), 200).JSON["data"].([]any)
 		if len(listed) != tc.shared {
 			t.Fatalf("%s: connection lists %d accounts, want %d", tc.name, len(listed), tc.shared)
 		}
 		for _, nuban := range offered {
-			r := s.call("GET", "/v1/accounts/"+aggregator.AccountID(partner, "bank-a", nuban)+"/balance", nil)
+			r := s.call("GET", "/v1/accounts/"+aggregator.AccountID(partner, "bank-a", nuban)+"/balance", nil, withToken(token))
 			if slices.Contains(picked, nuban) {
 				if r.Status == http.StatusNotFound {
 					t.Fatalf("%s: picked account %s gave 404", tc.name, nuban)

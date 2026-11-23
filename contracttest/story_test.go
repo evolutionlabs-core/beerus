@@ -314,7 +314,7 @@ func TestStory(t *testing.T) {
 		})
 	}
 	waitFor(t, waitLimit, "one connection.revoked webhook", func() bool { return len(revoked()) == 1 })
-	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil), 409)
+	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil, withToken(conn.AccessToken)), 409)
 	if got := c.ok("get", "banks"); !regexp.MustCompile(`bank-b +Bank B +terminating +no +2 +bank bank-b: ` + quote(settlePending)).MatchString(got) {
 		t.Errorf("get banks while terminating: %q", got)
 	}

@@ -108,7 +108,7 @@ func TestOnlineBanking(t *testing.T) {
 	}
 	s.syncNow()
 	id := fmt.Sprint(accountAt(t, conn, "current")["id"])
-	st, _ := s.syncAll(id, "", 500)
+	st, _ := s.syncAll(conn.AccessToken, id, "", 500)
 	found := false
 	for _, l := range st.lines {
 		if strings.Contains(fmt.Sprint(l["description_raw"]), "Online test") && num(l["amount_minor"]) == -1200000 {
@@ -134,7 +134,7 @@ func TestOnlineBanking(t *testing.T) {
 	if !strings.Contains(b.last, "Access withdrawn") {
 		t.Fatalf("revoke page: %.300s", b.last)
 	}
-	got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+	got := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 	if got.JSON["status"] != "revoked" {
 		t.Fatalf("status after revoke in online banking: %v", got.JSON["status"])
 	}
