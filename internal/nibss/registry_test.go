@@ -35,7 +35,7 @@ func TestEnsureClient(t *testing.T) {
 		want string
 	}{
 		{func() openbanking.RegistryClient { c := client("OBR-1", "other"); return c }(), "client OBR-1 is registered with cert_cn connect, and this request has cert_cn other"},
-		{client("OBR-2", "connect"), "cert_cn connect already belongs to client OBR-1"},
+		{client("OBR-2", "connect"), "The cert_cn connect already belongs to client OBR-1"},
 	} {
 		_, err := s.EnsureClient(ctx, c.c, false)
 		var conflict *RegistryConflictError

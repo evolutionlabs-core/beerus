@@ -77,7 +77,7 @@ func TestSoloRegistryAndConsents(t *testing.T) {
 		{"register it again", s.plain, "PUT", oneURL, s.token, one, 200, soloClient("OBR-1", "Connect", "beerus-connect", cb)},
 		{"rename it and move the redirect", s.plain, "PUT", oneURL, s.token, soloClientBody("Renamed", "beerus-connect", "https://new.localhost/cb"), 200, soloClient("OBR-1", "Renamed", "beerus-connect", "https://new.localhost/cb")},
 		{"another cert_cn", s.plain, "PUT", oneURL, s.token, soloClientBody("Renamed", "other", cb), 422, errBody("registration_conflict", "Client OBR-1 is registered with cert_cn beerus-connect, and this request has cert_cn other. Send the registered details.")},
-		{"a name another client holds", s.plain, "PUT", twoURL, s.token, soloClientBody("Second", "beerus-connect", cb), 422, errBody("registration_conflict", "cert_cn beerus-connect already belongs to client OBR-1. Use another cert_cn.")},
+		{"a name another client holds", s.plain, "PUT", twoURL, s.token, soloClientBody("Second", "beerus-connect", cb), 422, errBody("registration_conflict", "The cert_cn beerus-connect already belongs to client OBR-1. Use another cert_cn.")},
 		{"without a token", s.plain, "PUT", oneURL, "", one, 401, errBody("unauthenticated", "A valid control token is required.")},
 		{"with a wrong token", s.plain, "PUT", oneURL, "ctl_wrong", one, 401, errBody("unauthenticated", "A valid control token is required.")},
 		{"an insecure redirect", s.plain, "PUT", twoURL, s.token, soloClientBody("Second", "second", "http://other.example.com/cb"), 422, errBody("invalid_request", `Redirect URI "http://other.example.com/cb" must be an https URL, or an http URL on localhost.`)},

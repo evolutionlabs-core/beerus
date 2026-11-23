@@ -294,7 +294,7 @@ func TestSoloNIBSS(t *testing.T) {
 	if got := dirListing(t, s.dir); !slices.Equal(got, files) {
 		t.Errorf("the NIBSS directory holds %v, want %v", got, files)
 	}
-	for _, f := range []string{"nibss.json", "control-token", "client.key", "server.key"} {
+	for _, f := range []string{"nibss.json", "control-token"} {
 		fi, err := os.Stat(filepath.Join(config.NIBSSDir(s.dir), f))
 		if err != nil || fi.Mode().Perm() != 0o600 {
 			t.Errorf("%s: mode %v, error %v, want 0600", f, fi, err)

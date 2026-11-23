@@ -138,7 +138,7 @@ func (s *Store) EnsureClient(ctx context.Context, c openbanking.RegistryClient, 
 		var holder string
 		err = tx.QueryRow(ctx, `SELECT client_id FROM registry_clients WHERE cert_cn = $1`, c.CertCN).Scan(&holder)
 		if err == nil {
-			return &RegistryConflictError{Message: fmt.Sprintf("cert_cn %s already belongs to client %s", c.CertCN, holder), Hint: "Use another cert_cn."}
+			return &RegistryConflictError{Message: fmt.Sprintf("The cert_cn %s already belongs to client %s", c.CertCN, holder), Hint: "Use another cert_cn."}
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("look up cert_cn %s: %w", c.CertCN, err)
