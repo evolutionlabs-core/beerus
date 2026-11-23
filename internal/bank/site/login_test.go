@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 )
@@ -25,13 +26,17 @@ func TestLoginShowsTestUsernames(t *testing.T) {
 		{"more than the limit", []string{"g", "f", "e", "d", "c", "b", "a"}, `Test usernames <span class="font-mono text-ink">a, b, c, d, e</span> and 2 more</p>`},
 		{"no customers", nil, ""},
 	}
+	hash, err := bank.HashPassword("pw")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
 			books := newBooks(t)
 			at := time.Date(2026, time.March, 2, 9, 0, 0, 0, time.UTC)
 			for i, u := range r.users {
 				bvn := fmt.Sprintf("2290000000%d", i)
-				if _, err := books.CreateCustomer(context.Background(), "key-"+u, u, "+2348030000001", clock.Date{Y: 1990, M: time.May, D: 14}, bvn, u, "hash", at); err != nil {
+				if _, err := books.CreateCustomer(context.Background(), "key-"+u, u, "+2348030000001", clock.Date{Y: 1990, M: time.May, D: 14}, bvn, u, hash, at); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -41,6 +46,7 @@ func TestLoginShowsTestUsernames(t *testing.T) {
 				t.Fatal(err)
 			}
 			req.Host = "bank-a.localhost:7000"
+			req.RemoteAddr = "127.0.0.1:50000"
 			w := &capture{header: http.Header{}}
 			h.ServeHTTP(w, req)
 			body := w.body.String()
