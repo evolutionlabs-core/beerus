@@ -192,7 +192,7 @@ type planReply struct {
 	Text     string         `json:"text"`
 	Changed  bool           `json:"changed"`
 	Actions  []setup.Action `json:"actions"`
-	KeyFiles []string       `json:"api_key_files"`
+	KeyFiles []string       `json:"secret_files"`
 	Warning  string         `json:"warning"`
 }
 
@@ -626,7 +626,7 @@ func (e *cli) runApply(ctx context.Context, c *ctl, req applyRequest, wait time.
 	} else {
 		fmt.Fprint(e.out, p.Text)
 		for _, f := range p.KeyFiles {
-			fmt.Fprintf(e.out, "API key written to %s\n", f)
+			fmt.Fprintf(e.out, "Secret written to %s\n", f)
 		}
 	}
 	if wait == 0 {
@@ -1138,7 +1138,7 @@ func (e *cli) startApply(ctx context.Context, c *ctl, req applyRequest, served <
 				fmt.Fprint(e.out, p.Text)
 			}
 			for _, f := range p.KeyFiles {
-				fmt.Fprintf(e.out, "API key written to %s\n", f)
+				fmt.Fprintf(e.out, "Secret written to %s\n", f)
 			}
 			return nil
 		}

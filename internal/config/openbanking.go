@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -73,18 +74,43 @@ func PortFree(p int) bool {
 	return true
 }
 
-func WriteAPIKey(dir, id string) (string, error) {
-	key, err := NewAPIKey()
+const (
+	PartnerSecretFile = "secret"
+	legacyPartnerFile = "api-key"
+)
+
+func IssueSecret(dir, id string) (string, error) {
+	secret, err := NewSecret()
 	if err != nil {
-		return "", fmt.Errorf("make API key for %s: %w", id, err)
+		return "", fmt.Errorf("make secret for %s: %w", id, err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "partners", id), 0o700); err != nil {
 		return "", fmt.Errorf("create partners/%s: %w", id, err)
 	}
-	if err := WriteSecret(filepath.Join(dir, "partners", id, "api-key"), key+"\n"); err != nil {
-		return "", fmt.Errorf("write API key for %s: %w", id, err)
+	if err := WriteSecret(filepath.Join(dir, "partners", id, PartnerSecretFile), secret+"\n"); err != nil {
+		return "", fmt.Errorf("write secret for %s: %w", id, err)
 	}
-	return key, nil
+	return secret, nil
+}
+
+func CarryOverSecret(dir, id string) error {
+	secretPath := filepath.Join(dir, "partners", id, PartnerSecretFile)
+	if _, err := os.Stat(secretPath); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("check secret for %s: %w", id, err)
+	}
+	old, err := ReadSecret(filepath.Join(dir, "partners", id, legacyPartnerFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read old key for %s: %w", id, err)
+	}
+	if err := WriteSecret(secretPath, old+"\n"); err != nil {
+		return fmt.Errorf("copy old key for %s: %w", id, err)
+	}
+	return nil
 }
 
 func (c *Config) validatePorts() error {

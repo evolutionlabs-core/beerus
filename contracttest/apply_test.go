@@ -198,19 +198,19 @@ func TestApplyFromTheSpec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyFile := s.cfg.Path("partners", "ledgerly", "api-key")
-	if files := fmt.Sprint(out["api_key_files"]); files != "["+keyFile+"]" {
-		t.Fatalf("where the key is: %v", out["api_key_files"])
+	keyFile := s.cfg.Path("partners", "ledgerly", config.PartnerSecretFile)
+	if files := fmt.Sprint(out["secret_files"]); files != "["+keyFile+"]" {
+		t.Fatalf("where the secret is: %v", out["secret_files"])
 	}
 	key, err := config.ReadSecret(keyFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pr := settled("partner", "ledgerly")["partner"].(map[string]any)
-	if pr["api_key_sha256"] != config.HashKey(key) || strings.Contains(fmt.Sprint(pr), key) {
+	if pr["secret_sha256"] != config.HashKey(key) || strings.Contains(fmt.Sprint(pr), key) {
 		t.Fatalf("partner status: %v", pr)
 	}
-	if code := rawGet(t, s, key, "/v1/webhook_keys"); code != 200 {
+	if code := rawGet(t, s, "ledgerly", key, "/v1/webhook_keys"); code != 200 {
 		t.Fatalf("the partner made from the spec got %d", code)
 	}
 	withP.Spec.Partners[len(withP.Spec.Partners)-1].WebhookURL = "https://ledgerly.localhost/hook"

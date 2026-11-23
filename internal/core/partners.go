@@ -37,7 +37,7 @@ func (a *App) AddPartner(ctx context.Context, req PartnerRequest) (string, error
 	}
 	err := a.applyEdit(ctx, func(sp *setup.Spec) error {
 		if _, ok := partnerIn(*sp, o.ID); ok {
-			return control.Invalid("partner %s already exists; use partner rotate-key to get new credentials", o.ID)
+			return control.Invalid("partner %s already exists; use partner rotate-key to get a new secret", o.ID)
 		}
 		sp.Spec.Partners = append(sp.Spec.Partners, setup.Partner{ID: o.ID, Name: cmp.Or(o.Name, o.ID), LegalName: o.LegalName, Purpose: o.Purpose, RedirectURIs: o.RedirectURIs, WebhookURL: o.WebhookURL})
 		return nil
@@ -45,11 +45,11 @@ func (a *App) AddPartner(ctx context.Context, req PartnerRequest) (string, error
 	if err != nil {
 		return "", err
 	}
-	key, err := config.ReadSecret(a.cfg.Path("partners", o.ID, partnerKeyFile))
+	secret, err := config.ReadSecret(a.cfg.Path("partners", o.ID, config.PartnerSecretFile))
 	if err != nil {
-		return "", fmt.Errorf("read the API key of %s: %w", o.ID, err)
+		return "", fmt.Errorf("read the secret of %s: %w", o.ID, err)
 	}
-	return key, nil
+	return secret, nil
 }
 
 func (a *App) RotatePartner(ctx context.Context, id string) (key string, err error) {
@@ -71,15 +71,15 @@ func (a *App) RotatePartner(ctx context.Context, id string) (key string, err err
 			err = errors.Join(err, writeFiles(dir, saved))
 		}
 	}()
-	key, err = config.WriteAPIKey(a.cfg.Dir, id)
+	key, err = config.IssueSecret(a.cfg.Dir, id)
 	if err != nil {
 		return "", err
 	}
 	p := *cur
-	p.APIKeySHA256 = config.HashKey(key)
+	p.SecretSHA256 = config.HashKey(key)
 	err = a.ctl.Update(func(st *setup.Status) (bool, error) {
 		r := state.EnsureResource(st, setup.KindPartner, id)
-		r.Partner = &setup.PartnerKeys{APIKeySHA256: p.APIKeySHA256}
+		r.Partner = &setup.PartnerKeys{SecretSHA256: p.SecretSHA256}
 		return true, nil
 	})
 	if err != nil {
@@ -198,7 +198,7 @@ func (a *App) ctlAddPartner(w http.ResponseWriter, r *http.Request) {
 		a.partnerError(w, r, err)
 		return
 	}
-	web.WriteJSON(w, http.StatusCreated, map[string]string{"id": req.ID, "api_key": key})
+	web.WriteJSON(w, http.StatusCreated, map[string]string{"client_id": req.ID, "secret": key})
 }
 
 func (a *App) ctlRotatePartner(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +207,7 @@ func (a *App) ctlRotatePartner(w http.ResponseWriter, r *http.Request) {
 		a.partnerError(w, r, err)
 		return
 	}
-	web.WriteJSON(w, http.StatusOK, map[string]string{"id": r.PathValue("id"), "api_key": key})
+	web.WriteJSON(w, http.StatusOK, map[string]string{"client_id": r.PathValue("id"), "secret": key})
 }
 
 func (a *App) ctlRemovePartner(w http.ResponseWriter, r *http.Request) {

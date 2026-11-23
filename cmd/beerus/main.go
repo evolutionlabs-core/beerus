@@ -147,7 +147,7 @@ func printInfo(c *config.Config) error {
 		return err
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintf(w, "Partner API\t%s\t(X-Api-Key)\n", c.PartnerURL())
+	fmt.Fprintf(w, "Partner API\t%s\t(Beerus-Client-ID, Beerus-Secret)\n", c.PartnerURL())
 	fmt.Fprintf(w, "Connect widget\t%s\n", c.WidgetURL())
 	for _, b := range c.Banks {
 		fmt.Fprintf(w, "%s online banking\t%s\t(database %s)\n", b.Name, b.URL(), b.Database)

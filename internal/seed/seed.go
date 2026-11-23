@@ -163,7 +163,7 @@ func allocateBanks(cfg *config.Config, st *setup.Status) error {
 func issuePartnerKeys(dir string, partners []setup.Partner) ([]setup.Resource, error) {
 	var out []setup.Resource
 	for _, p := range partners {
-		key, err := config.WriteAPIKey(dir, p.ID)
+		key, err := config.IssueSecret(dir, p.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -173,7 +173,7 @@ func issuePartnerKeys(dir string, partners []setup.Partner) ([]setup.Resource, e
 			Generation:         1,
 			ObservedGeneration: 1,
 			Phase:              config.PhaseActive,
-			Partner:            &setup.PartnerKeys{APIKeySHA256: config.HashKey(key)},
+			Partner:            &setup.PartnerKeys{SecretSHA256: config.HashKey(key)},
 			Owned:              []setup.Owned{{Kind: state.OwnedDir, Name: filepath.Join("partners", p.ID)}},
 		})
 	}
