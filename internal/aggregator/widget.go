@@ -147,7 +147,7 @@ func (a *App) linkByToken(token string) *LinkSession {
 }
 
 func (a *App) setCookie(w http.ResponseWriter, name, value string, maxAge int) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: maxAge})
+	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteNoneMode, MaxAge: maxAge})
 }
 
 func (a *App) endWidgetLocked(w http.ResponseWriter, ls *LinkSession) {
