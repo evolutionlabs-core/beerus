@@ -11,6 +11,9 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/evolutionlabs-core/beerus/internal/bank"
+	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
+	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
@@ -55,6 +58,20 @@ type fakeHost struct {
 	server.Host
 	phase      string
 	refreshErr error
+	books      *bank.Bank
+}
+
+func (f fakeHost) Books() (*bank.Bank, error) {
+	return f.books, nil
+}
+
+func newBooks(t *testing.T) *bank.Bank {
+	t.Helper()
+	books := bank.New(ledger.New(banktest.Schema(t), nil), bank.Profile{ID: "bank-a", Name: "Bank A", NIPCode: "000014", NUBANCode: "014"}, banktest.Fees(t))
+	if err := books.Setup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return books
 }
 
 func (f fakeHost) Bank() config.Bank {
@@ -99,7 +116,7 @@ func TestGuardOrder(t *testing.T) {
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
-			h := New(Config{Host: fakeHost{phase: r.phase, refreshErr: r.refresh}, Clock: clock.New(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+			h := New(Config{Host: fakeHost{phase: r.phase, refreshErr: r.refresh, books: newBooks(t)}, Clock: clock.New(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
 			ln, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
