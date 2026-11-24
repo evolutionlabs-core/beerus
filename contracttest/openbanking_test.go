@@ -76,10 +76,8 @@ func (o *obClient) get(path, token string) (int, map[string]any) {
 }
 
 func TestOpenBanking(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	s := newBankStack(t)
+	s := sharedStack(t)
+	s.needsNodes()
 	bank := s.cfg.Bank("bank-a")
 	o := &obClient{t: t, s: s, issuer: bank.APIURL(), c: callerClient(t, config.ConnectID)}
 
@@ -108,7 +106,7 @@ func TestOpenBanking(t *testing.T) {
 	}
 	par := push()
 
-	b := s.bankBrowser()
+	b := s.bankBrowserAt("bank-a")
 	b.c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if req.URL.Host != via[0].URL.Host {
 			return http.ErrUseLastResponse
@@ -162,7 +160,7 @@ func TestOpenBanking(t *testing.T) {
 		t.Fatalf("tokens from a reused code should be revoked: %d", status)
 	}
 
-	b2 := s.bankBrowser()
+	b2 := s.bankBrowserAt("bank-a")
 	b2.c.CheckRedirect = b.c.CheckRedirect
 	par = push()
 	b2.get("/login")
@@ -237,10 +235,7 @@ func TestOpenBanking(t *testing.T) {
 
 	s.waitConsent("bank-a", consentID+" Authorised/bank")
 	s.waitConsent("bank-a", consentID+" Revoked/bank")
-	clients := s.ctl("GET", "/registry/clients", nil)["data"].([]any)
-	if len(clients) != 1 || clients[0].(map[string]any)["id"] != s.cfg.Connect.RegistryID {
-		t.Fatalf("registry: %v", clients)
-	}
+	before := len(s.ctl("GET", "/registry/clients", nil)["data"].([]any))
 	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -249,8 +244,8 @@ func TestOpenBanking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.ctl("POST", "/registry/clients", map[string]any{"id": "OBR-T2-000002", "cert_cn": "stranger", "public_key_pem": string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub})), "redirect_uris": []string{"https://other.localhost/cb"}})
-	if got := s.ctl("GET", "/registry/clients", nil)["data"].([]any); len(got) != 2 {
+	s.ctl("POST", "/registry/clients", map[string]any{"id": "OBR-T2-" + s.flow + "-2", "cert_cn": "stranger", "public_key_pem": string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub})), "redirect_uris": []string{"https://other.localhost/cb"}})
+	if got := s.ctl("GET", "/registry/clients", nil)["data"].([]any); len(got) != before+1 {
 		t.Fatalf("registry after add-client: %v", got)
 	}
 	insecure := map[string]any{"id": "OBR-T2-000003", "cert_cn": "other", "public_key_pem": string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub})), "redirect_uris": []string{"http://other.example.com/cb"}}
@@ -265,6 +260,7 @@ func TestOpenBanking(t *testing.T) {
 	if !kept["Authorised/"+consentID] || !kept["Revoked/"+consentID] {
 		t.Fatalf("the consent ledger lost events: %v", kept)
 	}
+	openBankingTables(t, s)
 }
 
 func hasTable(t *testing.T, st *store.Store, name string) bool {
@@ -276,11 +272,7 @@ func hasTable(t *testing.T, st *store.Store, name string) bool {
 	return found != nil
 }
 
-func TestOpenBankingTablesStayOutOfTheCBN(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	s := newBankStack(t)
+func openBankingTables(t *testing.T, s *Stack) {
 	ctx := context.Background()
 	for id, want := range map[string]bool{"bank-a": true, "cbn": false} {
 		name := s.cfg.Bank("bank-a").Database

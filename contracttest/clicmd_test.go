@@ -1,150 +1,23 @@
 package contracttest
 
 import (
-	"bytes"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/creack/pty"
-
-	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/aggregator"
 )
-
-type cli struct {
-	t    *testing.T
-	bin  string
-	dir  string
-	home string
-	in   string
-}
-
-var (
-	binOnce sync.Once
-	binDir  string
-	binErr  error
-)
-
-func TestMain(m *testing.M) {
-	code := m.Run()
-	if binDir != "" {
-		_ = os.RemoveAll(binDir)
-	}
-	os.Exit(code)
-}
-
-func builtBinary(t *testing.T) string {
-	t.Helper()
-	binOnce.Do(func() {
-		if binDir, binErr = os.MkdirTemp("", "beerus-bin-"); binErr != nil {
-			return
-		}
-		_, file, _, _ := runtime.Caller(0)
-		build := exec.Command("go", "build", "-o", filepath.Join(binDir, "beerus"), "github.com/evolutionlabs-core/beerus/cmd/beerus")
-		build.Dir = filepath.Dir(file)
-		if out, err := build.CombinedOutput(); err != nil {
-			binErr = fmt.Errorf("build beerus: %w\n%s", err, out)
-		}
-	})
-	if binErr != nil {
-		t.Fatal(binErr)
-	}
-	return filepath.Join(binDir, "beerus")
-}
-
-func newCLI(t *testing.T, s *Stack) *cli {
-	t.Helper()
-	return newCLIAt(t, s.cfg.Dir)
-}
-
-func newCLIAt(t *testing.T, dir string) *cli {
-	t.Helper()
-	return &cli{t: t, bin: builtBinary(t), dir: dir, home: t.TempDir()}
-}
-
-func (c *cli) env(extra ...string) []string {
-	env := []string{"PATH=" + filepath.Dir(c.bin) + ":" + os.Getenv("PATH"), "HOME=" + c.home, "TMPDIR=" + os.TempDir(), "BEERUS_DIR=" + c.dir, "TERM=xterm", "LANG=en_US.UTF-8", "BASH_SILENCE_DEPRECATION_WARNING=1"}
-	for _, key := range []string{config.DatabaseURLEnv, "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD"} {
-		if v := os.Getenv(key); v != "" {
-			env = append(env, key+"="+v)
-		}
-	}
-	return append(env, extra...)
-}
-
-func (c *cli) run(args ...string) (string, string, int) {
-	c.t.Helper()
-	cmd := exec.Command(c.bin, args...)
-	cmd.Env = c.env()
-	cmd.Stdin = strings.NewReader(c.in)
-	var out, errOut bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errOut
-	err := cmd.Run()
-	code := 0
-	var exit *exec.ExitError
-	switch {
-	case errors.As(err, &exit):
-		code = exit.ExitCode()
-	case err != nil:
-		c.t.Fatalf("run beerus %v: %v", args, err)
-	}
-	return out.String(), strings.TrimSpace(errOut.String()), code
-}
-
-func (c *cli) ok(args ...string) string {
-	c.t.Helper()
-	out, errOut, code := c.run(args...)
-	if code != 0 {
-		c.t.Fatalf("beerus %v exited %d: %s", args, code, errOut)
-	}
-	return out
-}
-
-func (c *cli) fails(args ...string) string {
-	c.t.Helper()
-	out, errOut, code := c.run(args...)
-	if code != 1 || out != "" {
-		c.t.Fatalf("beerus %v: want exit 1 and no output, got exit %d, output %q, error %q", args, code, out, errOut)
-	}
-	return errOut
-}
-
-func (c *cli) json(args ...string) map[string]any {
-	c.t.Helper()
-	return c.printedJSON(append(args, "--json")...)
-}
-
-func (c *cli) printedJSON(args ...string) map[string]any {
-	c.t.Helper()
-	out := map[string]any{}
-	if err := json.Unmarshal([]byte(c.ok(args...)), &out); err != nil {
-		c.t.Fatalf("beerus %v is not JSON: %v", args, err)
-	}
-	return out
-}
-
-func (c *cli) capture(pattern string, args ...string) (string, string) {
-	c.t.Helper()
-	out := c.ok(args...)
-	m := regexp.MustCompile(pattern).FindStringSubmatch(out)
-	if m == nil {
-		c.t.Fatalf("beerus %v: no match for %s in %q", args, pattern, out)
-	}
-	return m[1], out
-}
 
 func TestBankCLI(t *testing.T) {
-	s := newBankStack(t)
+	s := ownStack(t, aggregator.Options{})
+	s.needsNodes()
 	c := newCLI(t, s)
+	bankSession(t, c)
 	const noBank = "beerus: No bank selected. Run beerus use <bank> or add --bank."
 	for _, args := range [][]string{{"customers"}, {"accounts"}, {"deposit", "0123456789", "--amount", "5"}, {"transfer", "--from", "1", "--to", "2", "--amount", "5"}, {"fault", "down"}} {
 		if got := c.fails(args...); got != noBank {
@@ -221,18 +94,6 @@ func TestBankCLI(t *testing.T) {
 	if lines := c.json("statement", a1, "--bank", "bank-a")["data"].([]any); len(lines) != 5 {
 		t.Errorf("a quote posted to the statement: %d lines, want 5", len(lines))
 	}
-	if help := c.ok("transfer", "--help"); !strings.HasPrefix(help, "Usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [options]\n") || !strings.Contains(help, "\n  --dry-run ") || strings.Contains(help, "beerus customer") {
-		t.Errorf("transfer --help: %q", help)
-	}
-	if help := c.ok("bank", "close", "-h"); !strings.HasPrefix(help, "Usage: beerus bank close <id> [options]\n") || !strings.Contains(help, "\n  --yes ") || strings.Contains(help, "beerus bank create") {
-		t.Errorf("bank close -h: %q", help)
-	}
-	if got := c.fails("bogus"); got != "beerus: unknown command \"bogus\". Run beerus help." {
-		t.Errorf("unknown command: %q", got)
-	}
-	if out, _, code := c.run("bogus", "--help"); code != 1 || out != "" {
-		t.Errorf("help for an unknown command: exit %d, output %q", code, out)
-	}
 
 	if out := c.ok("fault", "timeout", "--bank", "bank-b", "--outcome", "credited"); !regexp.MustCompile(`^Fault flt_\w+ on bank-b: the next transfer times out \(outcome credited\)\.\n`).MatchString(out) {
 		t.Errorf("fault timeout: %q", out)
@@ -277,6 +138,20 @@ func TestBankCLI(t *testing.T) {
 		t.Errorf("customer with a username: %q", out)
 	}
 	c.in = ""
+
+	api := s.ctl("GET", "/resources?kind=bank&limit=1", nil)
+	if got := c.json("get", "banks", "--limit", "1"); fmt.Sprint(got) != fmt.Sprint(api) || api["next_cursor"] == nil {
+		t.Errorf("get banks --json: %v, API %v", got, api)
+	}
+	if got := c.ok("get", "banks", "--limit", "1"); !strings.Contains(got, "More: run again with --cursor "+fmt.Sprint(api["next_cursor"])) {
+		t.Errorf("get banks --limit 1: %q", got)
+	}
+	if got, want := c.json("get", "banks", "--limit", "1", "--cursor", fmt.Sprint(api["next_cursor"])), s.ctl("GET", "/resources?kind=bank&limit=1&cursor="+fmt.Sprint(api["next_cursor"]), nil); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("get banks --cursor: %v, API %v", got, want)
+	}
+	if got, want := c.json("describe", "bank", "bank-a"), s.ctl("GET", "/resources/bank/bank-a", nil); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("describe bank --json: %v, API %v", got, want)
+	}
 
 	cases := []struct {
 		args []string
@@ -324,86 +199,7 @@ func TestBankCLI(t *testing.T) {
 	}
 }
 
-type console struct {
-	mu      sync.Mutex
-	buf     bytes.Buffer
-	changed chan struct{}
-	closed  bool
-}
-
-var ansi = regexp.MustCompile("\x1b\\[[0-9;?]*[a-zA-Z]|\x1b\\][^\a]*\a|\x1b[=>]|\r")
-
-func startConsole(t *testing.T, c *cli, shell string, extra []string, args ...string) (*console, *os.File, *exec.Cmd) {
-	t.Helper()
-	cmd := exec.Command(c.bin, args...)
-	cmd.Env = c.env(append([]string{"SHELL=" + shell}, extra...)...)
-	tty, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 40, Cols: 200})
-	if err != nil {
-		t.Fatalf("start beerus %v in a terminal: %v", args, err)
-	}
-	con := &console{changed: make(chan struct{}, 1)}
-	go func() {
-		chunk := make([]byte, 4096)
-		for {
-			n, err := tty.Read(chunk)
-			con.mu.Lock()
-			con.buf.Write(chunk[:n])
-			con.closed = err != nil
-			con.mu.Unlock()
-			select {
-			case con.changed <- struct{}{}:
-			default:
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = tty.Close()
-	})
-	return con, tty, cmd
-}
-
-func (c *console) text() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return ansi.ReplaceAllString(c.buf.String(), "")
-}
-
-func (c *console) waitFor(t *testing.T, from int, pattern string) string {
-	t.Helper()
-	re := regexp.MustCompile(pattern)
-	deadline := time.After(30 * time.Second)
-	for {
-		all := c.text()
-		if from <= len(all) {
-			if m := re.FindStringSubmatch(all[from:]); m != nil {
-				return m[len(m)-1]
-			}
-		}
-		select {
-		case <-c.changed:
-		case <-time.After(50 * time.Millisecond):
-		case <-deadline:
-			t.Fatalf("waited 30s for %q in the terminal output:\n%s", pattern, all)
-		}
-	}
-}
-
-func (c *console) send(t *testing.T, tty *os.File, s string) int {
-	t.Helper()
-	from := len(c.text())
-	if _, err := tty.WriteString(s); err != nil {
-		t.Fatalf("type %q: %v", s, err)
-	}
-	return from
-}
-
-func TestBankSession(t *testing.T) {
-	s := newBankStack(t)
-	c := newCLI(t, s)
+func bankSession(t *testing.T, c *cli) {
 	for _, name := range []string{"zsh", "bash"} {
 		t.Run(name, func(t *testing.T) {
 			shell, err := exec.LookPath(name)
@@ -482,12 +278,4 @@ func TestBankSession(t *testing.T) {
 			}
 		})
 	}
-}
-
-func watTime() string {
-	return `[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{4} \d\d:\d\d WAT`
-}
-
-func matches(pattern, got string) bool {
-	return regexp.MustCompile("^" + pattern + "$").MatchString(got)
 }

@@ -8,9 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/evolutionlabs-core/beerus/internal/postgres"
-	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"io"
 	mrand "math/rand/v2"
 	"net"
@@ -19,6 +18,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -40,7 +40,19 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/core"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
+	"github.com/evolutionlabs-core/beerus/internal/seed"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
+)
+
+const (
+	healthyWithin  = 30 * time.Second
+	readyPoll      = 20 * time.Millisecond
+	readyStreak    = 3
+	stackPortLow   = 20000
+	stackPortHigh  = 32000
+	stackAccessSec = 130
+	startAttempts  = 5
 )
 
 type hook struct {
@@ -72,8 +84,29 @@ func (s *sink) all() []hook {
 	return append([]hook(nil), s.hooks...)
 }
 
-type Stack struct {
-	t          *testing.T
+var spareBanks = []setup.Bank{
+	{ID: "close-digital", Name: "Close Digital", Type: "digital"},
+	{ID: "kano-microfinance", Name: "Kano Microfinance", Type: "microfinance", SettlesThrough: "bank-a"},
+	{ID: "purge-digital", Name: "Purge Digital", Type: "digital"},
+	{ID: "purge-leave", Name: "Purge Leave", Type: "digital"},
+	{ID: "repair-digital", Name: "Repair Digital", Type: "digital"},
+}
+
+func localTransport() *http.Transport {
+	d := &net.Dialer{}
+	return &http.Transport{IdleConnTimeout: time.Minute, DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		if strings.HasSuffix(host, ".localhost") {
+			host = "127.0.0.1"
+		}
+		return d.DialContext(ctx, network, net.JoinHostPort(host, port))
+	}}
+}
+
+type env struct {
 	cfg        *config.Config
 	app        *core.App
 	agg        *aggregator.App
@@ -90,6 +123,82 @@ type Stack struct {
 	vmu        sync.Mutex
 	violations []string
 	people     map[string]persona
+	dir        string
+}
+
+type Stack struct {
+	t    *testing.T
+	flow string
+	*env
+}
+
+var (
+	sharedOnce sync.Once
+	sharedEnv  *env
+	sharedErr  error
+
+	binOnce sync.Once
+	binDir  string
+	binErr  error
+	binDone = make(chan builtResult, 1)
+)
+
+func TestMain(m *testing.M) {
+	go buildBinary()
+	code := m.Run()
+	if sharedEnv != nil {
+		if err := sharedEnv.stop(); err != nil {
+			fmt.Fprintln(os.Stderr, "stop the shared stack:", err)
+			code = 1
+		}
+	}
+	if err := waitBinary(); err != nil && code == 0 {
+		fmt.Fprintln(os.Stderr, err)
+		code = 1
+	}
+	if binDir != "" {
+		if err := os.RemoveAll(binDir); err != nil {
+			fmt.Fprintln(os.Stderr, "remove the build directory:", err)
+		}
+	}
+	os.Exit(code)
+}
+
+type builtResult struct {
+	dir string
+	err error
+}
+
+func buildBinary() {
+	dir, err := os.MkdirTemp("", "beerus-bin-")
+	if err != nil {
+		binDone <- builtResult{err: fmt.Errorf("make build directory: %w", err)}
+		return
+	}
+	_, file, _, _ := runtime.Caller(0)
+	build := exec.Command("go", "build", "-o", filepath.Join(dir, "beerus"), "github.com/evolutionlabs-core/beerus/cmd/beerus")
+	build.Dir = filepath.Dir(file)
+	if out, err := build.CombinedOutput(); err != nil {
+		binDone <- builtResult{dir: dir, err: fmt.Errorf("build beerus: %w\n%s", err, out)}
+		return
+	}
+	binDone <- builtResult{dir: dir}
+}
+
+func waitBinary() error {
+	binOnce.Do(func() {
+		r := <-binDone
+		binDir, binErr = r.dir, r.err
+	})
+	return binErr
+}
+
+func builtBinary(t *testing.T) string {
+	t.Helper()
+	if err := waitBinary(); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(binDir, "beerus")
 }
 
 func specPath() string {
@@ -110,15 +219,7 @@ func freePorts(t *testing.T, n int) []int {
 	return ports
 }
 
-const stackAccessSeconds = 130
-
-const (
-	stackPortLow  = 20000
-	stackPortHigh = 32000
-)
-
-func stackPorts(t *testing.T, banks int) []int {
-	t.Helper()
+func pickPorts(banks int) ([]int, error) {
 	offset := config.DefaultAPIPortOffset
 	need := 8 + banks
 	for range 200 {
@@ -128,11 +229,19 @@ func stackPorts(t *testing.T, banks int) []int {
 			free = portOpen(p) && (p < base+8 || portOpen(p+offset))
 		}
 		if free {
-			return []int{base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7}
+			return []int{base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7}, nil
 		}
 	}
-	t.Fatal("no free block of ports for the stack")
-	return nil
+	return nil, errors.New("no free block of ports for the stack")
+}
+
+func stackPorts(t *testing.T, banks int) []int {
+	t.Helper()
+	ports, err := pickPorts(banks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ports
 }
 
 func portOpen(p int) bool {
@@ -144,40 +253,21 @@ func portOpen(p int) bool {
 	return true
 }
 
-func newStack(t *testing.T) *Stack {
-	t.Helper()
-	return startStack(t)
-}
-
-func newStubStack(t *testing.T) *Stack {
-	t.Helper()
-	if testingExternal() {
-		t.Skip("needs the in-process stub")
+func initStack(dir, webhookURL string, spares ...setup.Bank) (*config.Config, error) {
+	spec := banktest.Spec("contract")
+	spec.Spec.Banks = append(spec.Spec.Banks, spares...)
+	ports, err := pickPorts(len(spec.Spec.Banks))
+	if err != nil {
+		return nil, err
 	}
-	return startStack(t)
-}
-
-func newBankStackWith(t *testing.T, edit func(*config.Config)) *Stack {
-	t.Helper()
-	return startStack(t, edit)
-}
-
-func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
-	t.Helper()
-	if testing.Short() {
-		t.Skip("starts a full stack; run without -short")
-	}
-	ports := stackPorts(t, len(banktest.Spec("contract").Spec.Banks))
 	local := setup.DefaultLocal()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
 	}
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort, local.Connect.CBNPort, local.Connect.ConnectControlPort = ports[0], ports[1], ports[2], ports[3], ports[4], ports[5], ports[7]
-	today := clock.New().Today()
-	spec := banktest.Spec("contract")
 	spec.Spec.NIP.Sessions = 1
 	for i := range spec.Spec.Banks {
-		spec.Spec.Banks[i].OpenBanking.AccessSeconds = stackAccessSeconds
+		spec.Spec.Banks[i].OpenBanking.AccessSeconds = stackAccessSec
 	}
 	spec.Spec.Partners = []setup.Partner{{
 		ID:           "balance",
@@ -187,99 +277,235 @@ func initStack(t *testing.T, webhookURL string) (*config.Config, error) {
 		RedirectURIs: []string{"http://balance.localhost/bank_connections/callback"},
 		WebhookURL:   webhookURL,
 	}}
-	dir := t.TempDir()
-	if err := seed.Init(dir, spec, local, today); err != nil {
+	if err := seed.Init(dir, spec, local, clock.New().Today()); err != nil {
 		return nil, err
 	}
 	return setup.LoadConfig(dir)
 }
 
-func newBankStack(t *testing.T) *Stack {
-	t.Helper()
-	return startStack(t)
+var partnerValidator = sync.OnceValues(func() (validator.Validator, error) {
+	spec, err := os.ReadFile(specPath())
+	if err != nil {
+		return nil, err
+	}
+	doc, err := libopenapi.NewDocument(spec)
+	if err != nil {
+		return nil, err
+	}
+	v, errs := validator.NewValidator(doc)
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	return v, nil
+})
+
+func startEnv(opts aggregator.Options, spares []setup.Bank, edits ...func(*config.Config)) (*env, error) {
+	e := &env{people: map[string]persona{}, aggOpts: opts}
+	var err error
+	if e.validator, err = partnerValidator(); err != nil {
+		return nil, fmt.Errorf("load partner spec: %w", err)
+	}
+	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
+		if e.cfg, err = setup.LoadConfig(dir); err != nil {
+			return nil, err
+		}
+		e.external = true
+	} else if err := e.startNodes(opts, spares, edits); err != nil {
+		return nil, err
+	}
+	e.redirect = e.cfg.Partners[0].RedirectURIs[0]
+	if e.secret, err = config.ReadSecret(e.cfg.Path("partners", "balance", config.PartnerSecretFile)); err != nil {
+		return nil, errors.Join(err, e.stop())
+	}
+	if e.ctlToken, err = config.ReadSecret(e.cfg.Path("control-token")); err != nil {
+		return nil, errors.Join(err, e.stop())
+	}
+	e.api = &http.Client{Timeout: 30 * time.Second, Transport: &validating{e: e, base: localTransport()}}
+	e.raw = &http.Client{Timeout: 30 * time.Second, Transport: localTransport()}
+	if err := e.waitReady(); err != nil {
+		return nil, errors.Join(err, e.stop())
+	}
+	return e, nil
 }
 
-func startStack(t *testing.T, edits ...func(*config.Config)) *Stack {
-	t.Helper()
-	return startStackWith(t, aggregator.Options{}, edits...)
+func (e *env) startNodes(opts aggregator.Options, spares []setup.Bank, edits []func(*config.Config)) error {
+	e.sink = newSink()
+	var lastErr error
+	for range startAttempts {
+		dir, err := os.MkdirTemp("", "beerus-contract-")
+		if err != nil {
+			return err
+		}
+		e.dir = dir
+		cfg, err := initStack(dir, e.sink.srv.URL+"/webhooks", spares...)
+		if err != nil {
+			return errors.Join(err, os.RemoveAll(dir))
+		}
+		for _, edit := range edits {
+			edit(cfg)
+		}
+		ns, err := startNodes(cfg, opts)
+		if err != nil {
+			lastErr = err
+			err = errors.Join(dropDatabases(cfg), os.RemoveAll(dir))
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		e.cfg, e.app, e.agg, e.nodes = cfg, ns.app, ns.agg, ns
+		return nil
+	}
+	return fmt.Errorf("could not start the stack: %w", lastErr)
 }
 
-func startStackWith(t *testing.T, opts aggregator.Options, edits ...func(*config.Config)) *Stack {
+func (e *env) stop() error {
+	var errs []error
+	if e.nodes != nil {
+		errs = append(errs, e.nodes.halt(), dropDatabases(e.cfg))
+		e.nodes = nil
+	}
+	if e.sink != nil {
+		e.sink.srv.Close()
+	}
+	if e.dir != "" {
+		errs = append(errs, os.RemoveAll(e.dir))
+	}
+	return errors.Join(errs...)
+}
+
+func dropDatabases(cfg *config.Config) error {
+	ctx := context.Background()
+	names, err := postgres.List(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, ""))
+	if err != nil {
+		return fmt.Errorf("drop databases: %w", err)
+	}
+	if err := postgres.DropDatabases(ctx, cfg.DatabaseURL, names); err != nil {
+		return fmt.Errorf("drop databases: %w", err)
+	}
+	return nil
+}
+
+func (e *env) waitReady() error {
+	ctx, cancel := context.WithTimeout(context.Background(), healthyWithin)
+	defer cancel()
+	tick := time.NewTicker(readyPoll)
+	defer tick.Stop()
+	streak := 0
+	for {
+		if e.app != nil {
+			e.app.Step(ctx)
+		}
+		if e.ready() {
+			streak++
+		} else {
+			streak = 0
+		}
+		if streak == readyStreak {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			banks, err := e.ctlTry("GET", "/banks", nil)
+			return fmt.Errorf("stack did not become healthy within %s: %v %v", healthyWithin, banks, err)
+		case <-tick.C:
+		}
+	}
+}
+
+func (e *env) ready() bool {
+	if _, err := e.ctlTry("GET", "/health", nil); err != nil {
+		return false
+	}
+	out, err := e.ctlTry("GET", "/banks", nil)
+	if err != nil {
+		return false
+	}
+	rows, _ := out["data"].([]any)
+	if len(rows) == 0 {
+		return false
+	}
+	for _, r := range rows {
+		b, _ := r.(map[string]any)
+		if b["phase"] != config.PhaseActive || b["attempts"] != nil {
+			return false
+		}
+	}
+	for _, b := range e.cfg.Banks {
+		resp, err := e.raw.Get(b.URL() + "/login")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+	}
+	out, err = e.ctlTry("GET", "/registry/clients", nil)
+	if err != nil {
+		return false
+	}
+	list, _ := out["data"].([]any)
+	return len(list) > 0
+}
+
+func sharedStack(t *testing.T) *Stack {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}
-	s := &Stack{t: t, people: map[string]persona{}}
-	if dir := os.Getenv("BEERUS_CONTRACT_DIR"); dir != "" {
-		cfg, err := setup.LoadConfig(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		s.cfg = cfg
-		s.external = true
-	} else {
-		s.sink = newSink()
-		t.Cleanup(s.sink.srv.Close)
-		var lastErr error
-		for attempt := 0; attempt < 5 && s.app == nil; attempt++ {
-			cfg, err := initStack(t, s.sink.srv.URL+"/webhooks")
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, edit := range edits {
-				edit(cfg)
-			}
-			ns, err := startNodes(cfg, opts)
-			if err != nil {
-				lastErr = err
-				dropDatabases(t, cfg)
-				continue
-			}
-			s.cfg, s.app, s.agg, s.nodes, s.aggOpts = cfg, ns.app, ns.agg, ns, opts
-			t.Cleanup(func() {
-				if err := ns.halt(); err != nil {
-					t.Errorf("stop the stack: %v", err)
-				}
-				dropDatabases(t, cfg)
-			})
-		}
-		if s.app == nil {
-			t.Fatalf("could not start the stack: %v", lastErr)
-		}
+	sharedOnce.Do(func() { sharedEnv, sharedErr = startEnv(aggregator.Options{}, spareBanks) })
+	if sharedErr != nil {
+		t.Fatal(sharedErr)
 	}
-	s.redirect = s.cfg.Partners[0].RedirectURIs[0]
-	secret, err := config.ReadSecret(s.cfg.Path("partners", "balance", config.PartnerSecretFile))
+	return attach(t, sharedEnv)
+}
+
+func ownStack(t *testing.T, opts aggregator.Options, edits ...func(*config.Config)) *Stack {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("starts a full stack; run without -short")
+	}
+	e, err := startEnv(opts, nil, edits...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.secret = secret
-	if s.ctlToken, err = config.ReadSecret(s.cfg.Path("control-token")); err != nil {
-		t.Fatal(err)
-	}
-	spec, err := os.ReadFile(specPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	doc, err := libopenapi.NewDocument(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	v, errs := validator.NewValidator(doc)
-	if len(errs) > 0 {
-		t.Fatalf("validator: %v", errs)
-	}
-	s.validator = v
-	s.api = &http.Client{Timeout: 30 * time.Second, Transport: &validating{s: s, base: &http.Transport{IdleConnTimeout: time.Minute}}}
-	s.raw = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{IdleConnTimeout: time.Minute}}
-	s.waitHealthy()
 	t.Cleanup(func() {
-		s.vmu.Lock()
-		defer s.vmu.Unlock()
-		for _, v := range s.violations {
+		if err := e.stop(); err != nil {
+			t.Errorf("stop the stack: %v", err)
+		}
+	})
+	return attach(t, e)
+}
+
+func attach(t *testing.T, e *env) *Stack {
+	t.Helper()
+	top, _, _ := strings.Cut(t.Name(), "/")
+	s := &Stack{t: t, flow: strings.ToLower(strings.TrimPrefix(top, "Test")), env: e}
+	e.vmu.Lock()
+	seen := len(e.violations)
+	e.vmu.Unlock()
+	t.Cleanup(func() {
+		e.vmu.Lock()
+		defer e.vmu.Unlock()
+		for _, v := range e.violations[seen:] {
 			t.Errorf("contract violation: %s", v)
 		}
 	})
 	return s
+}
+
+func (s *Stack) needsNodes() {
+	s.t.Helper()
+	if s.external {
+		s.t.Skip("needs an in-process stack")
+	}
+}
+
+func (s *Stack) sub(t *testing.T) *Stack {
+	c := *s
+	c.t = t
+	return &c
 }
 
 func (s *Stack) loadConfig() *config.Config {
@@ -305,61 +531,8 @@ func (s *Stack) owned(kind, id string) []setup.Owned {
 	return nil
 }
 
-const healthyWithin = 30 * time.Second
-
-func (s *Stack) waitHealthy() {
-	deadline := time.Now().Add(healthyWithin)
-	for time.Now().Before(deadline) {
-		if _, err := s.ctlTry("GET", "/health", nil); err == nil && s.banksActive() && s.banksAnswer() && s.registrySeeded() {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	banks, err := s.ctlTry("GET", "/banks", nil)
-	s.t.Fatalf("stack did not become healthy within %s: %v %v", healthyWithin, banks, err)
-}
-
-func (s *Stack) registrySeeded() bool {
-	out, err := s.ctlTry("GET", "/registry/clients", nil)
-	if err != nil {
-		return false
-	}
-	list, _ := out["data"].([]any)
-	return len(list) > 0
-}
-
-func (s *Stack) banksActive() bool {
-	out, err := s.ctlTry("GET", "/banks", nil)
-	if err != nil {
-		return false
-	}
-	for _, b := range out["data"].([]any) {
-		if b.(map[string]any)["phase"] != "active" {
-			return false
-		}
-	}
-	return true
-}
-
-func (s *Stack) banksAnswer() bool {
-	if !s.external {
-		return true
-	}
-	for _, b := range s.cfg.Banks {
-		resp, err := http.Get(b.URL() + "/login")
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return false
-		}
-	}
-	return true
-}
-
 type validating struct {
-	s    *Stack
+	e    *env
 	base http.RoundTripper
 }
 
@@ -382,23 +555,23 @@ func (v *validating) RoundTrip(req *http.Request) (*http.Response, error) {
 	check.Body = io.NopCloser(bytes.NewReader(reqBody))
 	vresp := *resp
 	vresp.Body = io.NopCloser(bytes.NewReader(respBody))
-	v.s.vmu.Lock()
-	defer v.s.vmu.Unlock()
-	if ok, errs := v.s.validator.ValidateHttpResponse(check, &vresp); !ok {
+	v.e.vmu.Lock()
+	defer v.e.vmu.Unlock()
+	if ok, errs := v.e.validator.ValidateHttpResponse(check, &vresp); !ok {
 		for _, e := range errs {
 			detail := []string{}
 			for _, f := range e.SchemaValidationErrors {
 				detail = append(detail, f.FieldPath+": "+f.Reason)
 			}
-			v.s.violations = append(v.s.violations, fmt.Sprintf("%s %s -> %d: %s %s %v", req.Method, req.URL.Path, resp.StatusCode, e.Message, e.Reason, detail))
+			v.e.violations = append(v.e.violations, fmt.Sprintf("%s %s -> %d: %s %s %v", req.Method, req.URL.Path, resp.StatusCode, e.Message, e.Reason, detail))
 		}
 	}
 	if resp.StatusCode < 300 {
 		check2 := req.Clone(context.Background())
 		check2.Body = io.NopCloser(bytes.NewReader(reqBody))
-		if ok, errs := v.s.validator.ValidateHttpRequest(check2); !ok {
+		if ok, errs := v.e.validator.ValidateHttpRequest(check2); !ok {
 			for _, e := range errs {
-				v.s.violations = append(v.s.violations, fmt.Sprintf("request %s %s: %s %s", req.Method, req.URL.Path, e.Message, e.Reason))
+				v.e.violations = append(v.e.violations, fmt.Sprintf("request %s %s: %s %s", req.Method, req.URL.Path, e.Message, e.Reason))
 			}
 		}
 	}
@@ -504,12 +677,12 @@ func (s *Stack) must(r Resp, status int) Resp {
 	return r
 }
 
-func (s *Stack) ctlTry(method, path string, body any) (map[string]any, error) {
+func (s *env) ctlTry(method, path string, body any) (map[string]any, error) {
 	out, _, err := s.ctlWith(method, path, body, nil)
 	return out, err
 }
 
-func (s *Stack) ctlWith(method, path string, body any, header map[string]string) (map[string]any, *http.Response, error) {
+func (s *env) ctlWith(method, path string, body any, header map[string]string) (map[string]any, *http.Response, error) {
 	var rd io.Reader
 	if body != nil {
 		j, _ := json.Marshal(body)
@@ -577,6 +750,10 @@ var people = map[string]struct {
 	"chidi":  {"Chidi Okafor", "08034567890", "1995-05-30", map[string][]opening{"bank-b": {{"savings", "85000"}}}},
 }
 
+func (s *Stack) key(id, bank string) string {
+	return s.flow + "/" + id + "@" + bank
+}
+
 func (s *Stack) home(id string) string {
 	s.t.Helper()
 	p, ok := people[id]
@@ -596,7 +773,7 @@ func (s *Stack) persona(id string) persona {
 
 func (s *Stack) personaAt(id, bank string) persona {
 	s.t.Helper()
-	if p, ok := s.people[id+"@"+bank]; ok {
+	if p, ok := s.people[s.key(id, bank)]; ok {
 		return p
 	}
 	spec, ok := people[id]
@@ -608,7 +785,7 @@ func (s *Stack) personaAt(id, bank string) persona {
 		nuban := s.openAccount(p, o.typ)
 		s.ctl("POST", "/banks/"+bank+"/deposits", map[string]string{"account": nuban, "amount": o.naira})
 	}
-	return s.people[id+"@"+bank]
+	return s.people[s.key(id, bank)]
 }
 
 func (s *Stack) join(id, bank string) persona {
@@ -617,10 +794,10 @@ func (s *Stack) join(id, bank string) persona {
 	if !ok {
 		s.t.Fatalf("no test customer %s", id)
 	}
-	p := persona{ID: id, Bank: bank, Name: spec.name, Username: id, Password: "beerus-test-" + id}
+	p := persona{ID: id, Bank: bank, Name: spec.name, Username: id + "-" + s.flow, Password: "beerus-test-" + id}
 	c := s.ctl("POST", "/banks/"+bank+"/customers", map[string]string{"name": spec.name, "phone": spec.phone, "dob": spec.dob, "username": p.Username, "password": p.Password})
 	p.Customer, p.BVN = fmt.Sprint(c["id"]), fmt.Sprint(c["bvn"])
-	s.people[id+"@"+bank] = p
+	s.people[s.key(id, bank)] = p
 	return p
 }
 
@@ -628,9 +805,9 @@ func (s *Stack) openAccount(p persona, typ string) string {
 	s.t.Helper()
 	acc := s.ctl("POST", "/banks/"+p.Bank+"/accounts", map[string]string{"customer": p.Customer, "type": typ})
 	nuban := fmt.Sprint(acc["nuban"])
-	p = s.people[p.ID+"@"+p.Bank]
+	p = s.people[s.key(p.ID, p.Bank)]
 	p.Accounts = append(p.Accounts, nuban)
-	s.people[p.ID+"@"+p.Bank] = p
+	s.people[s.key(p.ID, p.Bank)] = p
 	return nuban
 }
 
@@ -746,18 +923,6 @@ func (b *browser) postTo(base, path string, form url.Values) int {
 	b.last = string(body)
 	b.cur = resp.Request.URL
 	return resp.StatusCode
-}
-
-func dropDatabases(t *testing.T, cfg *config.Config) {
-	t.Helper()
-	ctx := context.WithoutCancel(t.Context())
-	names, err := postgres.List(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, ""))
-	if err == nil {
-		err = postgres.DropDatabases(ctx, cfg.DatabaseURL, names)
-	}
-	if err != nil {
-		t.Errorf("drop databases: %v", err)
-	}
 }
 
 func (b *browser) atBank() bool {
@@ -1093,7 +1258,7 @@ func (c callerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func callerClient(t *testing.T, id string) *http.Client {
 	t.Helper()
-	base := &http.Transport{IdleConnTimeout: 30 * time.Second}
+	base := localTransport()
 	t.Cleanup(base.CloseIdleConnections)
 	return &http.Client{Timeout: 30 * time.Second, Transport: callerTransport{id: id, base: base}}
 }

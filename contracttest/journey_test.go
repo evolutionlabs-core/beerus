@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 func postedKeys(t *testing.T, st *feedState) map[string]string {
@@ -28,8 +30,8 @@ func postedKeys(t *testing.T, st *feedState) map[string]string {
 	return seen
 }
 
-func TestDoneStory(t *testing.T) {
-	s := newBankStack(t)
+func TestJourney(t *testing.T) {
+	s := sharedStack(t)
 	cur := ""
 	step := func(n int, what string) {
 		cur = fmt.Sprintf("step %d (%s)", n, what)
@@ -97,6 +99,13 @@ func TestDoneStory(t *testing.T) {
 
 	step(4, "opening balance and history up to the bank's limit")
 	feedA, _ := s.syncAll(tokA, idA, "", 500)
+	small, _ := s.syncAll(tokA, idA, "", 7)
+	check(small.pages >= 2 && len(small.lines) == len(feedA.lines), "paging changed the result: %d pages, %d vs %d lines", small.pages, len(small.lines), len(feedA.lines))
+	for lid, l := range feedA.lines {
+		check(fmt.Sprint(small.lines[lid]) == fmt.Sprint(l), "line %s differs between page sizes", lid)
+	}
+	again, quiet := s.syncMore(tokA, idA, feedA, 100)
+	check(quiet.Status == 200 && len(again.lines) == len(feedA.lines) && len(quiet.JSON["added"].([]any))+len(quiet.JSON["modified"].([]any))+len(quiet.JSON["removed"].([]any)) == 0, "a second sync with no changes returned data: %s", quiet.Body)
 	eff := s.firstDate(idA, start)
 	check(!limited || eff.After(start), "history was not limited: effective start %s, asked %s", eff, start)
 	opening := num(s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", idA, eff.AddDays(-1)), nil, withToken(tokA)), 200).JSON["ledger_balance"].(map[string]any)["amount_minor"])
@@ -121,6 +130,14 @@ func TestDoneStory(t *testing.T) {
 	}
 	now := num(s.must(s.call("GET", "/v1/accounts/"+idA, nil, withToken(tokA)), 200).JSON["balances"].(map[string]any)["current"].(map[string]any)["amount_minor"])
 	check(opening == 0 && opening+sum == now, "opening %d + history %d != current %d", opening, sum, now)
+	upto := opening
+	for _, l := range posted {
+		if bt, _ := time.Parse(time.RFC3339, fmt.Sprint(l["booked_at"])); clock.DateOf(bt).Before(today) {
+			upto += num(l["amount_minor"])
+		}
+	}
+	yesterday := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", idA, today.AddDays(-1)), nil, withToken(tokA)), 200)
+	check(num(yesterday.JSON["ledger_balance"].(map[string]any)["amount_minor"]) == upto, "as_of yesterday does not match the posted lines")
 	for _, want := range []string{"Transfer fee", "VAT on transfer fee", "Stamp duty"} {
 		check(kinds[want], "no %q line in the history", want)
 	}
@@ -222,13 +239,41 @@ func TestDoneStory(t *testing.T) {
 	check(r.Status == 409 && r.Code() == "connection_revoked", "sync after revoke: %d %s", r.Status, r.Body)
 	check(s.must(s.call("GET", "/v1/connection", nil, withToken(b2.AccessToken)), 200).JSON["status"] == "active", "the revoke touched the other bank")
 
-	step(8, "every response so far matched the OpenAPI contract the stub is held to")
-	s.vmu.Lock()
-	n := len(s.violations)
-	s.vmu.Unlock()
-	check(n == 0, "%d contract violations", n)
+	if !s.external {
+		step(8, "a first consent has no effective start date and as_of stays inside the window")
+		fresh := s.connect("chidi", "bank-b")
+		idF := fmt.Sprint(fresh.Accounts[0]["id"])
+		cF := s.must(s.call("GET", "/v1/connection", nil, withToken(fresh.AccessToken)), 200)
+		check(cF.JSON["effective_start_date"] == nil, "effective_start_date %v, want null", cF.JSON["effective_start_date"])
+		for _, d := range []clock.Date{start.AddDays(-2), today} {
+			r := s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", idF, d), nil, withToken(fresh.AccessToken))
+			check(r.Status == 422 && r.Code() == "as_of_out_of_range", "as_of %s: %d %s", d, r.Status, r.Body)
+		}
+		check(s.call("GET", "/v1/accounts/"+idF+"/balance?as_of=yesterday", nil, withToken(fresh.AccessToken)).Status == 400, "a bad as_of was accepted")
+	}
 
-	step(9, "the settlement and the bank ledgers still balance")
+	if s.sink != nil {
+		step(9, "every webhook is signed, matches the spec and carries its headers")
+		pub := s.publicKey()
+		seen := map[string]bool{}
+		for _, h := range s.sink.all() {
+			check(verifyV1a(pub, h, time.Now()) == nil, "webhook signature")
+			var ev struct {
+				Type string `json:"type"`
+			}
+			check(json.Unmarshal(h.Body, &ev) == nil, "webhook body: %s", h.Body)
+			seen[ev.Type] = true
+			validateWebhook(t, ev.Type, h.Body)
+			for _, name := range []string{"webhook-id", "webhook-timestamp", "webhook-signature"} {
+				check(h.Header.Get(name) != "", "webhook %s has no %s header", ev.Type, name)
+			}
+		}
+		for _, want := range []string{"account.added", "historical_sync.completed", "sync.available", "connection.status_changed"} {
+			check(seen[want], "no %s webhook", want)
+		}
+	}
+
+	step(10, "the settlement and the bank ledgers still balance")
 	if s.app != nil {
 		checkSettled(t, s.app)
 		if c, err := s.app.VerifyBank(context.Background()); err != nil || !c.OK() {

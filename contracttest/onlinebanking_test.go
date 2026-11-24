@@ -3,86 +3,15 @@ package contracttest
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-type bankBrowser struct {
-	t    *testing.T
-	base string
-	c    *http.Client
-	last string
-	loc  string
-	next string
-}
-
-func (s *Stack) bankBrowser() *bankBrowser {
-	jar, _ := cookiejar.New(nil)
-	return &bankBrowser{t: s.t, base: s.cfg.Bank("bank-a").URL(), c: &http.Client{Jar: jar, Timeout: 30 * time.Second}}
-}
-
-func (b *bankBrowser) do(req *http.Request) {
-	b.t.Helper()
-	resp, err := b.c.Do(req)
-	if err != nil {
-		b.t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	b.last = string(body)
-	b.loc = resp.Request.URL.Path
-	b.next = resp.Header.Get("Location")
-}
-
-func (b *bankBrowser) get(path string) {
-	b.t.Helper()
-	req, _ := http.NewRequest("GET", b.base+path, nil)
-	b.do(req)
-}
-
-var reBankCSRF = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
-
-func (b *bankBrowser) post(path string, form url.Values) {
-	b.t.Helper()
-	if m := reBankCSRF.FindStringSubmatch(b.last); m != nil && form.Get("csrf") == "" {
-		form.Set("csrf", m[1])
-	}
-	req, _ := http.NewRequest("POST", b.base+path, strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Origin", b.base)
-	b.do(req)
-}
-
-func (s *Stack) bankSignIn(persona string) *bankBrowser {
-	s.t.Helper()
-	b := s.bankBrowser()
-	p := s.persona(persona)
-	b.get("/login")
-	b.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
-	m := regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`).FindStringSubmatch(b.last)
-	if m == nil {
-		s.t.Fatalf("no code on the verify page: %.300s", b.last)
-	}
-	b.post("/verify", url.Values{"otp": {m[1]}})
-	if b.loc != "/accounts" {
-		s.t.Fatalf("sign-in ended at %s", b.loc)
-	}
-	return b
-}
-
 func TestOnlineBanking(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	s := newBankStack(t)
+	s := sharedStack(t)
+	s.needsNodes()
 	conn := s.connect("adaeze", "bank-a")
 	current := fmt.Sprint(accountAt(t, conn, "current")["account_number"])
 	b := s.bankSignIn("adaeze")
@@ -143,40 +72,12 @@ func TestOnlineBanking(t *testing.T) {
 	})) == 0 {
 		t.Fatal("no revoked webhook")
 	}
-	other := s.bankBrowser()
+	other := s.bankBrowserAt("bank-a")
 	other.get("/accounts")
 	if other.loc != "/login" {
 		t.Fatal("accounts page served without signing in")
 	}
-}
-
-func TestEveryDeclaredBankHasOnlineBanking(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	s := newBankStack(t)
-	jar, _ := cookiejar.New(nil)
-	b := &bankBrowser{t: t, base: s.cfg.Bank("bank-b").URL(), c: &http.Client{Jar: jar, Timeout: 30 * time.Second}}
-	p := s.persona("ngozi")
-	b.get("/login")
-	b.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
-	m := regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`).FindStringSubmatch(b.last)
-	if m == nil {
-		t.Fatalf("no code on Bank B's verify page: %.300s", b.last)
-	}
-	b.post("/verify", url.Values{"otp": {m[1]}})
-	if b.loc != "/accounts" || !strings.Contains(b.last, "Bank B") {
-		t.Fatalf("Bank B sign-in ended at %s", b.loc)
-	}
-	dbs := 0
-	for _, b := range s.cfg.Banks {
-		for _, o := range s.owned(setup.KindBank, b.ID) {
-			if o.Kind == "database" {
-				dbs++
-			}
-		}
-	}
-	if dbs != 2 {
-		t.Fatalf("the status store lists %d bank databases", dbs)
+	if b := s.signInAt("bank-b", "ngozi"); !strings.Contains(b.last, "Bank B") {
+		t.Fatalf("Bank B sign-in: %.300s", b.last)
 	}
 }

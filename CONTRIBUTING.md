@@ -42,10 +42,10 @@ Fast run, under 10 seconds:
 go test -short -count=1 ./...
 ```
 
-Full run, as CI does it. It starts real stacks and takes several minutes:
+Full run, as CI does it. It starts one shared stack for the contract tests:
 
 ```bash
-BEERUS_CONTRACT_FULL=1 go test -race -count=1 ./...
+go test -race -count=1 ./...
 ```
 
 Without `BEERUS_TEST_DATABASE_URL`, the database tests skip.
