@@ -21,7 +21,6 @@ const (
 	maxTrackedLogins = 10000
 	sessionLife      = 30 * time.Minute
 	sweepEvery       = time.Minute
-	maxShownUsers    = 5
 )
 
 type session struct {
@@ -103,18 +102,8 @@ func (s *site) user(w http.ResponseWriter, r *http.Request) *session {
 	return sess
 }
 
-func (s *site) renderLogin(w http.ResponseWriter, r *http.Request, status int, msg string) {
-	books, err := s.Host.Books()
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	names, total, err := books.Usernames(r.Context(), maxShownUsers)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	d := data{"Title": "Sign in", "TestUsers": strings.Join(names, ", "), "TestUserCount": total, "TestUsersMore": total - len(names)}
+func (s *site) renderLogin(w http.ResponseWriter, status int, msg string) {
+	d := data{"Title": "Sign in"}
 	if msg != "" {
 		d["Error"] = msg
 	}
@@ -122,7 +111,7 @@ func (s *site) renderLogin(w http.ResponseWriter, r *http.Request, status int, m
 }
 
 func (s *site) loginPage(w http.ResponseWriter, r *http.Request) {
-	s.renderLogin(w, r, http.StatusOK, "")
+	s.renderLogin(w, http.StatusOK, "")
 }
 
 func (s *site) loginSubmit(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +121,7 @@ func (s *site) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	user := strings.TrimSpace(r.PostForm.Get("username"))
 	if !bank.ValidUsername(user) {
-		s.renderLogin(w, r, http.StatusUnauthorized, "The username or password is wrong.")
+		s.renderLogin(w, http.StatusUnauthorized, "The username or password is wrong.")
 		return
 	}
 	ba := s.auth
@@ -143,11 +132,11 @@ func (s *site) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	full := len(ba.failures)+len(ba.locked) >= maxTrackedLogins
 	ba.mu.Unlock()
 	if full {
-		s.renderLogin(w, r, http.StatusTooManyRequests, fmt.Sprintf("Too many sign-in attempts are being tracked (%d). Try again in 15 minutes.", maxTrackedLogins))
+		s.renderLogin(w, http.StatusTooManyRequests, fmt.Sprintf("Too many sign-in attempts are being tracked (%d). Try again in 15 minutes.", maxTrackedLogins))
 		return
 	}
 	if real.Before(until) {
-		s.renderLogin(w, r, http.StatusTooManyRequests, "Too many attempts. Try again in 15 minutes.")
+		s.renderLogin(w, http.StatusTooManyRequests, "Too many attempts. Try again in 15 minutes.")
 		return
 	}
 	books, err := s.Host.Books()
@@ -170,7 +159,7 @@ func (s *site) loginSubmit(w http.ResponseWriter, r *http.Request) {
 			ba.failures[user] = f
 		}
 		ba.mu.Unlock()
-		s.renderLogin(w, r, http.StatusUnauthorized, "The username or password is wrong.")
+		s.renderLogin(w, http.StatusUnauthorized, "The username or password is wrong.")
 		return
 	}
 	if err != nil {

@@ -59,7 +59,6 @@ const templates = `
 <label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Password</span><input class="field" type="password" name="password" autocomplete="current-password" required></label>
 <button type="submit" class="btn btn-primary mt-2 w-full">Continue</button>
 </form>
-{{if .TestUserCount}}<p class="mt-5 rounded-[10px] bg-hover px-3.5 py-3 text-[14px] text-muted">Test {{if eq .TestUserCount 1}}username{{else}}usernames{{end}} <span class="font-mono text-ink">{{.TestUsers}}</span>{{if .TestUsersMore}} and {{.TestUsersMore}} more{{end}}</p>{{end}}
 {{template "bank_auth_foot" .}}{{end}}
 
 {{define "bank_accounts"}}{{template "bank_head" .}}
