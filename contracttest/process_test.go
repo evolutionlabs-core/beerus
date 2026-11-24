@@ -100,7 +100,10 @@ func startUp(t *testing.T, c *cli) (*lockedBuffer, *lockedBuffer, *exec.Cmd, cha
 		t.Fatalf("start beerus up: %v", err)
 	}
 	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
+	go func() {
+		exited <- cmd.Wait()
+		close(exited)
+	}()
 	t.Cleanup(func() {
 		if t.Failed() {
 			t.Logf("up stderr:\n%s", errOut.String())
@@ -302,10 +305,10 @@ func TestProcesses(t *testing.T) {
 	}
 	var thawed sync.Once
 	t.Cleanup(func() { thawed.Do(thaw) })
+	createServing(t, cfg, "Bank B", "bank-b")
 	if got := c.fails("accounts", "--bank", "bank-a"); got != stoppedBank {
 		t.Errorf("a call while the bank is stopped: %q", got)
 	}
-	createServing(t, cfg, "Bank B", "bank-b")
 	thawed.Do(thaw)
 	waitFor(t, waitLimit, "the thawed bank to answer", func() bool {
 		got, _, code := c.run("accounts", "--bank", "bank-a")

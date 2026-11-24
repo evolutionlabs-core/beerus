@@ -144,6 +144,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	http.DefaultTransport = localTransport()
 	go buildBinary()
 	code := m.Run()
 	if sharedEnv != nil {
@@ -819,6 +820,21 @@ func (s *Stack) balances(p persona) map[string]int64 {
 		out[fmt.Sprint(m["nuban"])] = int64(m["balance_minor"].(float64))
 	}
 	return out
+}
+
+func (s *Stack) waitBalance(p persona, want int64) {
+	s.t.Helper()
+	deadline := time.Now().Add(waitLimit)
+	for {
+		got := s.balances(p)[p.Accounts[0]]
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			s.t.Fatalf("%s at %s holds %d, want %d", p.Username, p.Bank, got, want)
+		}
+		time.Sleep(waitPoll)
+	}
 }
 
 func (s *Stack) closedBalances(p persona) map[string]int64 {
