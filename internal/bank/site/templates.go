@@ -62,20 +62,6 @@ const templates = `
 {{if .TestUserCount}}<p class="mt-5 rounded-[10px] bg-hover px-3.5 py-3 text-[14px] text-muted">Test {{if eq .TestUserCount 1}}username{{else}}usernames{{end}} <span class="font-mono text-ink">{{.TestUsers}}</span>{{if .TestUsersMore}} and {{.TestUsersMore}} more{{end}}</p>{{end}}
 {{template "bank_auth_foot" .}}{{end}}
 
-{{define "bank_verify"}}{{template "bank_auth_head" .}}
-<h1 class="text-[22px]">Verify it's you</h1>
-<p class="mt-2 text-[13.5px] text-muted">We sent a 6-digit code to the phone number on your account.</p>
-<div class="mt-5 rounded-xl border border-line bg-raised px-3.5 py-3">
-<div class="flex items-center justify-between text-[12px] text-muted"><span>Messages · {{.Bank.Name}}</span><span>now</span></div>
-<p class="mt-1.5 text-[13.5px] leading-relaxed">Your {{.Bank.Name}} verification code is <span class="num text-ink">{{.OTP}}</span>. It expires in 5 minutes. Never share this code with anyone.</p>
-</div>
-{{template "bank_error" .}}
-<form method="post" action="/verify" class="mt-5 space-y-4">
-<label class="block"><span class="mb-1.5 block text-[12.5px] text-muted">Verification code</span><input class="field h-13 text-center font-mono text-[20px] tracking-[0.4em]" type="text" name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required autofocus></label>
-<button type="submit" class="btn btn-primary w-full">Verify</button>
-</form>
-{{template "bank_auth_foot" .}}{{end}}
-
 {{define "bank_accounts"}}{{template "bank_head" .}}
 <div class="mb-7 flex flex-wrap items-end justify-between gap-4">
 <div><p class="text-[13px] text-muted">Total available</p><p class="mt-1 text-[30px] tracking-tight tabular-nums">{{naira .Total}}</p></div>
