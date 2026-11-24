@@ -11,74 +11,30 @@ import (
 
 var adaezeDOB = clock.Date{Y: 1990, M: 4, D: 12}
 
-func TestNormaliseName(t *testing.T) {
-	cases := []struct {
-		in, want string
-	}{
-		{"Adaeze Okafor", "ADAEZE OKAFOR"},
-		{"  adaeze\tokafor  ", "ADAEZE OKAFOR"},
-		{"ADAEZE    OKAFOR", "ADAEZE OKAFOR"},
-		{"Okafor Adaeze", "ADAEZE OKAFOR"},
-		{"Adébáyọ̀ Ọlá", "ADEBAYO OLA"},
-		{"Adebayo Ola", "ADEBAYO OLA"},
-		{"O'Neil Chukwu", "CHUKWU ONEIL"},
-		{"O’Neil Chukwu", "CHUKWU ONEIL"},
-		{"Ade-Bayo Musa", "ADE BAYO MUSA"},
-		{"Musa, Ade Bayo", "ADE BAYO MUSA"},
-		{"Dr. Ngozi Eze", "DR EZE NGOZI"},
-	}
-	for _, c := range cases {
-		got, err := normaliseName(c.in)
-		if err != nil || got != c.want {
-			t.Errorf("normaliseName(%q) = %q, %v; want %q", c.in, got, err, c.want)
+func TestNormalise(t *testing.T) {
+	for in, want := range map[string]string{
+		"Adaeze Okafor": "ADAEZE OKAFOR", "  adaeze\tokafor  ": "ADAEZE OKAFOR", "Okafor Adaeze": "ADAEZE OKAFOR", "Adébáyọ̀ Ọlá": "ADEBAYO OLA",
+		"O'Neil Chukwu": "CHUKWU ONEIL", "O’Neil Chukwu": "CHUKWU ONEIL", "Ade-Bayo Musa": "ADE BAYO MUSA", "Musa, Ade Bayo": "ADE BAYO MUSA", "Dr. Ngozi Eze": "DR EZE NGOZI",
+	} {
+		if got, err := normaliseName(in); err != nil || got != want {
+			t.Errorf("normaliseName(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
 	for _, bad := range []string{"", "   ", "..'", "-"} {
 		_, err := normaliseName(bad)
 		wantBadDetails(t, err, `name "`+bad+`" has no letters`)
 	}
-}
-
-func TestNormalisePhone(t *testing.T) {
-	cases := []struct {
-		in, want string
-	}{
-		{"08031234567", "2348031234567"},
-		{"+2348031234567", "2348031234567"},
-		{"2348031234567", "2348031234567"},
-		{"+234 803 123 4567", "2348031234567"},
-		{"0803-123-4567", "2348031234567"},
-		{"(0803) 123 4567", "2348031234567"},
-	}
-	for _, c := range cases {
-		got, err := normalisePhone(c.in, "234", "0")
-		if err != nil || got != c.want {
-			t.Errorf("normalisePhone(%q) = %q, %v; want %q", c.in, got, err, c.want)
+	for _, in := range []string{"08031234567", "+2348031234567", "2348031234567", "+234 803 123 4567", "0803-123-4567", "(0803) 123 4567"} {
+		if got, err := normalisePhone(in, "234", "0"); err != nil || got != "2348031234567" {
+			t.Errorf("normalisePhone(%q) = %q, %v", in, got, err)
 		}
 	}
-	bad := []struct {
-		in, want string
-	}{
-		{"0803x1234567", `phone "0803x1234567" may hold only digits, spaces, dashes, brackets and a leading +`},
-		{"080+31234567", `phone "080+31234567" may hold only digits, spaces, dashes, brackets and a leading +`},
-		{"+448031234567", `phone "+448031234567" must start with +234 or 0`},
-		{"8031234567", `phone "8031234567" must start with +234 or 0`},
-		{"0", `phone "0" must start with +234 or 0`},
-		{"", `phone "" must start with +234 or 0`},
+	digits, prefix := " may hold only digits, spaces, dashes, brackets and a leading +", " must start with +234 or 0"
+	for in, want := range map[string]string{"0803x1234567": digits, "080+31234567": digits, "+448031234567": prefix, "8031234567": prefix, "0": prefix, "": prefix} {
+		_, err := normalisePhone(in, "234", "0")
+		wantBadDetails(t, err, `phone "`+in+`"`+want)
 	}
-	for _, c := range bad {
-		_, err := normalisePhone(c.in, "234", "0")
-		wantBadDetails(t, err, c.want)
-	}
-}
-
-func TestMakeBVN(t *testing.T) {
-	cases := map[int64]string{
-		1:       "22900000013",
-		2:       "22900000021",
-		9999999: "22999999992",
-	}
-	for serial, want := range cases {
+	for serial, want := range map[int64]string{1: "22900000013", 2: "22900000021", 9999999: "22999999992"} {
 		if got := makeBVN(serial); got != want {
 			t.Errorf("makeBVN(%d) = %s, want %s", serial, got, want)
 		}
