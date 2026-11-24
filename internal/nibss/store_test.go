@@ -118,11 +118,14 @@ func TestOpen(t *testing.T) {
 			c.Close(ctx)
 		}
 	})
+	c, err := pgx.Connect(ctx, testBaseURL())
+	if err != nil {
+		t.Skipf("no Postgres for NIBSS tests (%v); set BEERUS_TEST_DATABASE_URL", err)
+	}
+	c.Close(ctx)
 	for i := range 2 {
 		s, err := Open(ctx, testBaseURL(), name)
-		if err != nil {
-			t.Skipf("no Postgres for NIBSS tests (%v); set BEERUS_TEST_DATABASE_URL", err)
-		}
+		must(t, err)
 		if i == 0 {
 			register(t, s, "bank-a", "Bank A", "999001", "901")
 		}
