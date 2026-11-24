@@ -41,6 +41,11 @@ func TestPickAccounts(t *testing.T) {
 			if b.result != nil || !strings.Contains(b.last, "Pick at least one account to continue.") || !strings.Contains(b.last, " disabled>Continue") {
 				t.Fatalf("%s: the screen did not stay with Continue disabled: %.600s", tc.name, b.last)
 			}
+			for _, kind := range []string{"current", "savings"} {
+				if !strings.Contains(b.last, `<span class="capitalize">`+kind+`</span> · <span class="font-mono">•••• `) {
+					t.Fatalf("%s: the screen does not show the %s account type: %.600s", tc.name, kind, b.last)
+				}
+			}
 			b.picked = func(all []string) []string {
 				picked = all[:1]
 				return picked

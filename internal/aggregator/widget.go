@@ -29,10 +29,7 @@ type page map[string]any
 
 func (a *App) render(w http.ResponseWriter, name string, status int, data page) {
 	data["ConnectBrand"] = a.cfg.Connect.BrandName
-	data["ConnectName"] = a.cfg.Connect.BrandName
 	data["Brand"] = a.cfg.Connect.BrandName
-	data["BankClass"] = ""
-	data["Ctx"] = "Open banking"
 	if _, ok := data["Title"]; !ok {
 		data["Title"] = data["Brand"]
 	}
