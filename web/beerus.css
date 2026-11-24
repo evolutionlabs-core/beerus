@@ -115,6 +115,12 @@
   --color-bank: var(--bank);
 }
 
+@theme {
+  --color-accent: #0f7082;
+  --color-accent-hover: #0b5d6d;
+  --color-danger: #b42318;
+}
+
 @layer base {
   html {
     @apply bg-canvas text-ink font-sans antialiased;
@@ -224,4 +230,64 @@
 }
 .mark-right-2 {
   stop-color: var(--mark-right-2);
+}
+
+@utility dialog {
+  @apply relative mx-auto flex h-dvh max-w-[448px] flex-col bg-white text-[14px] tracking-normal text-neutral-950;
+}
+
+@utility dialog-bar {
+  @apply flex h-[60px] shrink-0 items-center gap-[4px] border-b border-neutral-200 pr-[64px];
+}
+
+@utility dialog-close {
+  @apply absolute top-[8px] right-[10px];
+}
+
+@utility dialog-body {
+  @apply flex min-h-0 flex-1 flex-col gap-[16px] overflow-y-auto p-[20px];
+}
+
+@utility dialog-foot {
+  @apply flex h-[48px] shrink-0 items-center justify-center gap-[6px] border-t border-neutral-200 bg-neutral-50 text-[12px] text-neutral-500;
+}
+
+@utility dialog-tile {
+  @apply grid size-[28px] shrink-0 place-items-center rounded-[6px] bg-neutral-100 text-[11px] font-semibold text-neutral-700;
+}
+
+@utility dialog-name {
+  @apply ml-[6px] min-w-0 flex-1 truncate text-[16px] font-medium text-neutral-900;
+}
+
+@utility dialog-icon {
+  @apply grid size-[44px] shrink-0 cursor-pointer place-items-center rounded-[6px] text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950 focus-visible:outline-2 focus-visible:outline-accent;
+}
+
+@utility dialog-title {
+  @apply text-[18px] leading-[26px] font-semibold tracking-normal text-neutral-900;
+}
+
+@utility dialog-lede {
+  @apply text-[14px] leading-[20px] text-neutral-500;
+}
+
+@utility dialog-label {
+  @apply flex flex-col gap-[6px] text-[14px] font-medium text-neutral-900;
+}
+
+@utility dialog-input {
+  @apply h-[44px] w-full rounded-[6px] border border-neutral-300 bg-white px-[12px] text-[14px] font-normal text-neutral-950 outline-none focus:border-accent focus:shadow-[0_0_0_1px_var(--color-accent)];
+}
+
+@utility dialog-primary {
+  @apply flex h-[44px] w-full shrink-0 cursor-pointer items-center justify-center rounded-[6px] bg-accent text-[14px] font-medium text-white hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400;
+}
+
+@utility dialog-secondary {
+  @apply flex h-[44px] w-full shrink-0 cursor-pointer items-center justify-center rounded-[6px] border border-neutral-300 bg-white text-[14px] font-medium text-neutral-900 hover:bg-neutral-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent;
+}
+
+@utility dialog-error {
+  @apply text-[13px] text-danger;
 }
