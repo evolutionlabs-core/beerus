@@ -91,6 +91,7 @@ func (a *App) newLinkSession(p *config.Partner, user string, start clock.Date, r
 		State:        state,
 		ConnectionID: connectionID,
 		Institution:  institution,
+		Fixed:        institution != "",
 		TokenHash:    web.HashSecret(token),
 		TokenExpires: real.Add(linkTokenLife),
 		CreatedAt:    a.clock.Now(),
