@@ -80,7 +80,7 @@ var pages = template.Must(template.New("").Funcs(view.Funcs()).Parse(`
 <div class="flex flex-col overflow-hidden rounded-[8px] border border-neutral-200">
 {{range .Rows}}<label class="flex min-h-[64px] cursor-pointer items-center gap-[12px] border-b border-neutral-200 px-[16px] last:border-b-0">
 <input type="checkbox" name="account" value="{{.NUBAN}}" class="size-[18px] shrink-0 cursor-pointer accent-accent"{{if .Checked}} checked{{end}}>
-<span class="flex flex-col gap-[2px]"><span class="text-[14px] font-medium text-neutral-900">{{.Name}}</span><span class="font-mono text-[12px] text-neutral-500">•••• {{.Mask}}</span></span>
+<span class="flex flex-col gap-[2px]"><span class="text-[14px] font-medium text-neutral-900">{{.Name}}</span><span class="text-[12px] text-neutral-500"><span class="capitalize">{{.Type}}</span> · <span class="font-mono">•••• {{.Mask}}</span></span></span>
 </label>{{end}}
 </div>
 {{template "error" .}}
