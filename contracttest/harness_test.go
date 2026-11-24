@@ -678,7 +678,6 @@ func (s *Stack) bankOf(host string) string {
 
 var (
 	reCSRF    = regexp.MustCompile(`name="csrf" value="([^"]+)"`)
-	reOTP     = regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`)
 	reAccount = regexp.MustCompile(`name="account" value="([^"]+)"`)
 )
 
@@ -777,11 +776,6 @@ func (b *browser) bankSignIn(personaID string, accounts func([]string) []string)
 	if b.result != nil {
 		return
 	}
-	m := reOTP.FindStringSubmatch(b.last)
-	if m == nil {
-		b.s.t.Fatalf("no OTP on the bank page: %.400s", b.last)
-	}
-	b.postTo(base, "/verify", url.Values{"otp": {m[1]}})
 	all := []string{}
 	for _, m := range reAccount.FindAllStringSubmatch(b.last, -1) {
 		all = append(all, m[1])
