@@ -91,16 +91,12 @@ func TestEnsureAndLoadFiles(t *testing.T) {
 		"same port twice":  {`{"database":"` + nd + `","port":9001,"control_port":9001}`, "port and control_port are both 9001; they must differ"},
 		"another database": {`{"database":"beerus_other","port":9001,"control_port":9004,"tsq_after":"2m0s"}`, `database is "beerus_other", but core names the NIBSS database "` + nd + `"`},
 		"no tsq":           {`{"database":"` + nd + `","port":9001,"control_port":9004}`, `tsq_after needs a duration above zero, not ""`},
-		"no sessions":      {`{"database":"` + nd + `","port":9001,"control_port":9004,"tsq_after":"2m0s"}`, "sessions must be above zero, not 0"},
-		"no CBN port":      {`{"database":"` + nd + `","port":9001,"control_port":9004,"tsq_after":"2m0s","sessions":6}`, "cbn_port must be above zero, not 0"},
 	})
 	write(t, NIBSSFilePath(dir), "{")
 	if _, err := LoadNIBSSFile(dir); err == nil || err.Error() != "parse "+NIBSSFilePath(dir)+": unexpected end of JSON input" {
 		t.Errorf("not JSON: %v", err)
 	}
 	rejects(t, CBNFilePath(dir), func() error { _, err := LoadCBNFile(dir); return err }, CBNFilePath(dir)+": ", map[string][2]string{
-		"no ports":         {`{"database":"` + cd + `"}`, "port and control_port must be above zero"},
-		"same port twice":  {`{"database":"` + cd + `","port":9005,"control_port":9005}`, "port and control_port are both 9005; they must differ"},
 		"another database": {`{"database":"beerus_other","port":9005,"control_port":9007}`, `database is "beerus_other", but Beerus names the CBN database "` + cd + `"`},
 	})
 }

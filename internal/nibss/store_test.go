@@ -7,7 +7,6 @@ import (
 	"errors"
 	"os"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -86,6 +85,26 @@ func setStatus(t testing.TB, s *Store, id string, statuses ...string) {
 	}
 }
 
+func pages(t testing.TB, name string, list func(limit int, after string) ([]string, string, error), want ...string) {
+	t.Helper()
+	if got, next, err := list(len(want), ""); err != nil || next != "" || !slices.Equal(got, want) {
+		t.Errorf("%s whole list: %q, next %q, %v, want %q", name, got, next, err, want)
+	}
+	var got []string
+	for next, n := "", 0; n == 0 || next != ""; n++ {
+		page, nx, err := list(2, next)
+		if err != nil || n > len(want) {
+			t.Fatalf("%s page %d: %v", name, n, err)
+		}
+		got, next = append(got, page...), nx
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("%s pages: %q, want %q", name, got, want)
+	}
+	_, _, err := list(2, "~bad")
+	wantErr(t, err, `cursor "~bad" is not valid; use the next value from the last page`)
+}
+
 func TestOpen(t *testing.T) {
 	ctx := context.Background()
 	_, err := Open(ctx, testBaseURL(), "nibss")
@@ -137,31 +156,14 @@ func TestDirectory(t *testing.T) {
 	if err != nil || !slices.Equal(dir, want) {
 		t.Fatalf("directory: %+v, %v", dir, err)
 	}
-	all, bad := "bank-a active|bank-b removed|bank-c active", `cursor "nope" is not valid; use the next value from the last page`
-	for _, r := range []struct {
-		name         string
-		limit        int
-		after, want  string
-		next, errMsg string
-	}{
-		{"every bank in code order", 10, "", all, "", ""},
-		{"first page", 2, "", "bank-a active|bank-b removed", "999002", ""},
-		{"second page", 2, "999002", "bank-c active", "", ""},
-		{"after the last", 2, "999003", "", "", ""},
-		{"a bad cursor", 2, "nope", "", "", bad},
-	} {
-		got, next, err := s.Institutions(ctx, r.limit, r.after)
-		parts, msg := []string{}, ""
+	pages(t, "institutions", func(limit int, after string) ([]string, string, error) {
+		got, next, err := s.Institutions(ctx, limit, after)
+		ids := []string{}
 		for _, in := range got {
-			parts = append(parts, in.ID+" "+in.Status)
+			ids = append(ids, in.ID)
 		}
-		if err != nil {
-			msg = err.Error()
-		}
-		if have := strings.Join(parts, "|"); have != r.want || next != r.next || msg != r.errMsg {
-			t.Errorf("%s: %q, next %q, error %q; want %q, next %q, error %q", r.name, have, next, msg, r.want, r.next, r.errMsg)
-		}
-	}
+		return ids, next, err
+	}, "bank-a", "bank-b", "bank-c")
 	_, err = institution(ctx, s.pool, "123456", "")
 	if !errors.Is(err, nip.ErrUnknownInstitution) {
 		t.Fatalf("got %v, want nip.ErrUnknownInstitution", err)
@@ -339,15 +341,14 @@ func TestRegistryClients(t *testing.T) {
 		_, err := s.EnsureClient(ctx, client(id, "cn-"+id), false)
 		must(t, err)
 	}
-	page, next, err := s.Clients(ctx, 2, "")
-	if err != nil || len(page) != 2 || page[0].ID != "OBR-1" || page[1].ID != "OBR-2" || next != "OBR-2" {
-		t.Fatalf("page 1: %+v, %q, %v", page, next, err)
-	}
-	if page, next, err = s.Clients(ctx, 2, next); err != nil || len(page) != 1 || page[0].ID != "OBR-3" || next != "" {
-		t.Fatalf("page 2: %+v, %q, %v", page, next, err)
-	}
-	_, _, err = s.Clients(ctx, 2, "-bad")
-	wantErr(t, err, `cursor "-bad" is not valid; use the next value from the last page`)
+	pages(t, "clients", func(limit int, after string) ([]string, string, error) {
+		got, next, err := s.Clients(ctx, limit, after)
+		ids := []string{}
+		for _, c := range got {
+			ids = append(ids, c.ID)
+		}
+		return ids, next, err
+	}, "OBR-1", "OBR-2", "OBR-3")
 	if got, err := s.Client(ctx, "OBR-2"); err != nil || got.CertCN != "cn-OBR-2" {
 		t.Fatalf("client: %+v, %v", got, err)
 	}
@@ -380,13 +381,14 @@ func TestConsents(t *testing.T) {
 	if !errors.As(err, &reused) || err.Error() != "source_seq 1 of bank bank-a was first recorded with other status and changed_at" {
 		t.Fatalf("a changed repeat: %v", err)
 	}
-	page, next, err := s.ConsentLedger(ctx, "bank-a", 2, "")
-	if err != nil || len(page) != 2 || page[0].ConsentID != "c5" || page[1].ConsentID != "c4" || next != "5" {
-		t.Fatalf("page 1: %+v, %q, %v", page, next, err)
-	}
-	if page, next, err = s.ConsentLedger(ctx, "bank-a", 2, next); err != nil || len(page) != 2 || page[0].Incarnation != "db2" || page[1].ConsentID != "c3" || next != "3" {
-		t.Fatalf("page 2: %+v, %q, %v", page, next, err)
-	}
+	pages(t, "consents", func(limit int, after string) ([]string, string, error) {
+		got, next, err := s.ConsentLedger(ctx, "bank-a", limit, after)
+		ids := []string{}
+		for _, e := range got {
+			ids = append(ids, e.Incarnation+":"+e.ConsentID)
+		}
+		return ids, next, err
+	}, "db1:c5", "db1:c4", "db2:c1", "db1:c3", "db1:c1")
 	for _, c := range []struct {
 		limit  int
 		cursor string
@@ -394,7 +396,6 @@ func TestConsents(t *testing.T) {
 	}{
 		{0, "", "limit must be from 1 to 1000, not 0"},
 		{1001, "", "limit must be from 1 to 1000, not 1001"},
-		{10, "abc", `cursor "abc" is not valid; use the next value from the last page`},
 	} {
 		_, _, err := s.ConsentLedger(ctx, "", c.limit, c.cursor)
 		wantErr(t, err, c.want)

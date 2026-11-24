@@ -316,31 +316,22 @@ func TestClosureSessionsListOnePageAtATime(t *testing.T) {
 	}
 	_, err := begin(ctx, s, transfer("n1", "999002", t0))
 	must(t, err)
-	all := "c1 00|c2 pending|c3 pending|c4 91"
-	for _, r := range []struct {
-		name, code    string
-		limit         int
-		after, want   string
-		next, errText string
-	}{
-		{"every session in order", "999001", 10, "", all, "", ""},
-		{"first page", "999001", 2, "", "c1 00|c2 pending", "c2", ""},
-		{"second page", "999001", 2, "c2", "c3 pending|c4 91", "", ""},
-		{"a bank without closures", "999003", 10, "", "", "", ""},
-		{"a cursor of another bank", "999001", 2, "x1", "", "", `cursor "x1" is not valid; use the next value from the last page`},
-	} {
-		got, next, err := s.ClosureSessions(ctx, r.code, r.limit, r.after)
-		parts, msg := []string{}, ""
-		for _, x := range got {
-			parts = append(parts, x.ID+" "+x.Status)
-		}
-		if err != nil {
-			msg = err.Error()
-		}
-		if have := strings.Join(parts, "|"); have != r.want || next != r.next || msg != r.errText {
-			t.Errorf("%s: %q, next %q, error %q; want %q, next %q, error %q", r.name, have, next, msg, r.want, r.next, r.errText)
+	closures := func(code string) func(int, string) ([]string, string, error) {
+		return func(limit int, after string) ([]string, string, error) {
+			got, next, err := s.ClosureSessions(ctx, code, limit, after)
+			ids := []string{}
+			for _, x := range got {
+				ids = append(ids, x.ID)
+			}
+			return ids, next, err
 		}
 	}
+	pages(t, "closure sessions", closures("999001"), "c1", "c2", "c3", "c4")
+	if got, _, err := closures("999003")(10, ""); err != nil || len(got) != 0 {
+		t.Errorf("a bank without closures: %v, %v", got, err)
+	}
+	_, _, err = closures("999001")(2, "x1")
+	wantErr(t, err, `cursor "x1" is not valid; use the next value from the last page`)
 	got, _, err := s.ClosureSessions(ctx, "999001", 1, "")
 	if err != nil || len(got) != 1 || got[0].FromAccount != world.NUBAN("901", 11) || got[0].ToBankCode != "999002" || got[0].ToAccount != world.NUBAN("902", 2) || got[0].Amount != 500000 || got[0].Status != SessionOK || !got[0].CreatedAt.Equal(t0) {
 		t.Errorf("first closure session: %+v, %v", got, err)

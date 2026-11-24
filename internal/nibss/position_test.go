@@ -90,6 +90,8 @@ func sumsBeyondSixtyFourBits(t *testing.T, s *Store) {
 	}
 	_, err := s.SettlementPosition(ctx, "bank-a", "")
 	sum("position of the sender", err, "the open sessions of 999001 add up to more than 64 bits")
+	_, err = s.SettlementPosition(ctx, "bank-b", "")
+	sum("position of the receiver", err, "the open sessions of 999002 add up to more than 64 bits")
 	_, err = s.OpenSessions(ctx, "bank-a")
 	sum("open sessions of the sender", err, "the open sessions of bank-a add up to more than 64 bits")
 	_, err = s.Settle(ctx, Schedule{Per: 4}, t0.Add(11*time.Hour), false)
@@ -122,7 +124,6 @@ func settlementReports(t *testing.T, s *Store) {
 	must(t, s.MarkPosted(ctx, evening, lagos(18)))
 	must(t, s.MarkPosted(ctx, noon, lagos(12)))
 	first, second := report(noon, 12, 500, 200, -300, 2), report(evening, 18, 70, 0, -70, 1)
-	badCursor := `cursor "not-a-cursor" is not valid; use the next value from the last page`
 	for _, r := range []struct {
 		name, identity, after string
 		limit                 int
@@ -132,10 +133,8 @@ func settlementReports(t *testing.T, s *Store) {
 		err                   string
 	}{
 		{"bank a reads both", "bank-a", "", 10, "", []Report{first, second}, false, ""},
-		{"first page", "bank-a", "", 1, "", []Report{first}, true, ""},
 		{"after the first", "bank-a", noon, 10, "", []Report{second}, false, ""},
 		{"after the last", "bank-a", evening, 10, "", []Report{}, false, ""},
-		{"a bad cursor", "bank-a", "", 10, "not-a-cursor", nil, false, badCursor},
 		{"a stranger", "bank-z", "", 10, "", nil, false, "settlement reports for bank-z: not in the NIBSS directory"},
 		{"a limit that is too large", "bank-a", "", 5000, "", nil, false, "limit must be from 1 to 1000, not 5000"},
 	} {
@@ -144,8 +143,12 @@ func settlementReports(t *testing.T, s *Store) {
 			t.Errorf("%s: %+v %q %q, want %+v more %v %q", r.name, got, next, m, r.want, r.more, r.err)
 		}
 	}
-	_, next, _ := list("bank-a", "", 1, "")
-	if got, last, m := list("bank-a", "", 1, next); !reflect.DeepEqual(got, []Report{second}) || last != "" || m != "" {
-		t.Errorf("second page: %+v %q %q", got, last, m)
-	}
+	pages(t, "reports", func(limit int, cursor string) ([]string, string, error) {
+		got, next, err := s.SettlementReports(ctx, "bank-a", "", limit, cursor)
+		ids := []string{}
+		for _, r := range got {
+			ids = append(ids, r.SessionID)
+		}
+		return ids, next, err
+	}, noon, evening)
 }
