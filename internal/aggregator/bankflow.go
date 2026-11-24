@@ -46,7 +46,7 @@ func (a *App) beginBankAuth(w http.ResponseWriter, r *http.Request, ls *LinkSess
 		a.failSession(w, r, ls, "institution_down")
 		return
 	}
-	if a.st.LinkSessions[ls.ID] != ls || ls.Status == "expired" || ls.Status == "authorised" || ls.Status == "exchanged" {
+	if a.st.LinkSessions[ls.ID] != ls || ls.Status == "expired" || ls.Status == "picking" || ls.Status == "authorised" || ls.Status == "exchanged" {
 		a.message(w, http.StatusConflict, "Already finished", "You can close this window.")
 		return
 	}
@@ -173,19 +173,15 @@ func (a *App) bankCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	defer a.mu.Unlock()
 	slices.Sort(keys)
-	secret, err := web.NewSecret("oc_", 16)
-	if err != nil {
-		a.log.Error("link code", "err", err)
-		a.failSession(w, r, in.ls, "server_error")
-		return
-	}
 	in.ls.CustomerID, in.ls.Accounts, in.ls.BankAccounts = owner, keys, g.Accounts
 	in.ls.BankConsentID, in.ls.ConsentEnds, in.ls.BankFrom = tok.ConsentID, g.Ends, g.From
-	in.ls.Status = "authorised"
-	in.ls.CodeHash = web.HashSecret(secret)
-	in.ls.CodeExpires = a.clock.Real().Add(codeLife)
+	in.ls.Status = "picking"
 	if err := a.saveLocked(); err != nil {
 		a.log.Error("save state", "err", err)
 	}
-	a.redirectPartner(w, r, in.ls, url.Values{"code": {secret}})
+	if in.ls.Overlay {
+		a.relayLocked(w, in.ls, url.Values{"picking": {"1"}})
+		return
+	}
+	http.Redirect(w, r, pickPath, http.StatusSeeOther)
 }

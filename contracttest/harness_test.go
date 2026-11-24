@@ -684,6 +684,7 @@ type browser struct {
 	last   string
 	result *url.URL
 	cur    *url.URL
+	picked func([]string) []string
 }
 
 func (s *Stack) browser() *browser {
@@ -789,6 +790,25 @@ func (b *browser) bankSignIn(personaID string, accounts func([]string) []string)
 		pick = accounts(all)
 	}
 	b.postTo(base, "/authorize/consent", url.Values{"account": pick, "action": {"approve"}})
+	if b.result == nil {
+		b.pickAccounts()
+	}
+}
+
+func (b *browser) pickAccounts() {
+	b.s.t.Helper()
+	all := []string{}
+	for _, m := range reAccount.FindAllStringSubmatch(b.last, -1) {
+		all = append(all, m[1])
+	}
+	if len(all) == 0 {
+		b.s.t.Fatalf("no accounts on the Pick accounts screen: %.400s", b.last)
+	}
+	pick := all
+	if b.picked != nil {
+		pick = b.picked(all)
+	}
+	b.post("/link/accounts", url.Values{"account": pick})
 }
 
 type linkResult struct {

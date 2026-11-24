@@ -81,6 +81,8 @@ func TestDoneStory(t *testing.T) {
 	}
 	check(len(offered) == len(pa.Accounts), "the bank offered %d accounts, want %d", len(offered), len(pa.Accounts))
 	b.postTo(base, "/authorize/consent", url.Values{"account": {current}, "action": {"approve"}})
+	check(b.result == nil && strings.Contains(b.last, "Pick accounts"), "the widget did not ask which accounts to share: %.300s", b.last)
+	b.pickAccounts()
 	check(b.result != nil && b.result.Query().Get("code") != "", "no code on the redirect to Balance: %.300s", b.last)
 	q := b.result.Query()
 	check(q.Get("state") == "st-done" && q.Get("link_session_id") != "", "redirect: %v", b.result)

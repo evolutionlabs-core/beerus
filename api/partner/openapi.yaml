@@ -10,7 +10,7 @@ info:
 
     1. The partner's server creates a link token with `POST /v1/link/token/create`, giving its own `user_id` for the customer.
     2. The partner opens the Connect widget in the customer's browser at `/link?token=<link_token>`.
-    3. The customer picks a bank, signs in at the bank with 2FA and chooses the accounts to share.
+    3. The customer picks a bank, signs in at the bank with 2FA and approves the accounts to share. Connect then lists those accounts and the customer ticks the ones the partner may see. Only ticked accounts appear in the connection; any other account answers `404 not_found` like an unknown account.
     4. The widget redirects the browser to the partner's `redirect_uri` with `code`, `link_session_id` and the partner's `state`. If the customer cancels or the session fails, it redirects with `error` (`access_denied`, `link_session_expired` or `institution_down`), `link_session_id` and `state` instead.
     5. The partner's server exchanges the code and the link session ID for a permanent connection ID. If the response is lost, `GET /v1/link_sessions/{id}` shows the `connection_id`.
     6. Connect syncs the accounts and sends webhooks. The partner always pulls data through `/transactions/sync`.
@@ -915,7 +915,7 @@ components:
         expiration: '2026-10-28T12:30:00+01:00'
     LinkSessionStatus:
       type: string
-      enum: [created, bank_chosen, at_bank, authorised, exchanged, expired]
+      enum: [created, bank_chosen, at_bank, picking, authorised, exchanged, expired]
     LinkSessionView:
       type: object
       required: [id, status, start_date, user_id, connection_id, created_at]
