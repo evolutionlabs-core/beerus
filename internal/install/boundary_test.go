@@ -7,16 +7,9 @@ import (
 	"testing"
 )
 
-const (
-	module  = "github.com/evolutionlabs-core/beerus"
-	install = module + "/internal/install"
-	core    = module + "/internal/core"
-	cmd     = module + "/cmd/beerus"
-)
-
 func deps(t *testing.T, pkg string) []string {
 	t.Helper()
-	out, err := exec.Command("go", "list", "-deps", pkg).Output()
+	out, err := exec.Command("go", "list", "-deps", "github.com/evolutionlabs-core/beerus/"+pkg).Output()
 	if err != nil {
 		t.Fatalf("list %s: %v", pkg, err)
 	}
@@ -24,10 +17,8 @@ func deps(t *testing.T, pkg string) []string {
 }
 
 func TestInstallSitsBetweenTheCommandAndTheCore(t *testing.T) {
-	if slices.Contains(deps(t, core), install) || slices.Contains(deps(t, install), core) {
-		t.Errorf("%s and %s reach each other", core, install)
-	}
-	if !slices.Contains(deps(t, cmd), install) {
-		t.Errorf("%s does not reach %s", cmd, install)
+	const install, core = "github.com/evolutionlabs-core/beerus/internal/install", "github.com/evolutionlabs-core/beerus/internal/core"
+	if slices.Contains(deps(t, "internal/core"), install) || slices.Contains(deps(t, "internal/install"), core) || !slices.Contains(deps(t, "cmd/beerus"), install) {
+		t.Errorf("%s must not reach %s or the reverse, and the command must reach install", core, install)
 	}
 }

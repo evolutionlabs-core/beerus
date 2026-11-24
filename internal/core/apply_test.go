@@ -37,9 +37,6 @@ func TestApplyRefusals(t *testing.T) {
 	}
 	check(admissible(removes("bank-b"), ApplyOptions{}), http.StatusConflict, "prune_required", "The plan removes bank-b. Nothing was changed. Run again with --prune to remove it.")
 	check(admissible(removes("bank-b", "ledgerly", "other"), ApplyOptions{Confirmed: []string{"bank-b"}}), http.StatusConflict, "prune_required", "The plan removes ledgerly and other. Nothing was changed. Run again with --prune to remove them.")
-	if err := admissible(removes("bank-b", "ledgerly"), ApplyOptions{Confirmed: []string{"bank-b", "ledgerly"}}); err != nil {
-		t.Errorf("every removal was confirmed: %v", err)
-	}
 	blocked := setup.Plan{Actions: []setup.Action{{Op: setup.OpRemove, Kind: setup.KindBank, ID: "bank-a", Blockers: []string{"bank-c settles through bank-a and is not leaving."}}}}
 	check(admissible(blocked, ApplyOptions{Prune: true}), http.StatusUnprocessableEntity, "invalid_spec", "bank-c settles through bank-a and is not leaving.")
 

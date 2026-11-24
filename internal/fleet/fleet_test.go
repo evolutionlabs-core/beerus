@@ -85,6 +85,7 @@ func TestFleetSync(t *testing.T) {
 		{"changed fingerprint restarts", listJSON(bankJSON("b", config.PhaseActive, 300, "db_b2")), "", []string{"b=300/301/db_b2"}, []string{"a", "b", "b"}},
 		{"provisioning does not start", listJSON(bankJSON("c", config.PhaseProvisioning, 400, "db_c")), "", []string{}, []string{"a", "b", "b"}},
 		{"restart after drop", listJSON(bankJSON("a", config.PhaseActive, 100, "db_a")), "", []string{a}, []string{"a", "b", "b", "a"}},
+		{"provisioning after the CBN step starts", listJSON(bankJSON("a", config.PhaseActive, 100, "db_a"), `{"id":"p","phase":"provisioning","port":500,"api_port":501,"database":"db_p","steps":[{"id":"`+config.StepCBN+`","done":true}]}`), "", []string{a, "p=500/501/db_p"}, []string{"a", "b", "b", "a", "p"}},
 	}
 	for _, st := range steps {
 		serve(st.body)
@@ -119,29 +120,4 @@ func TestFleetWaitsForAStoppingBank(t *testing.T) {
 		t.Fatalf("after the old process stopped: running %v, started %v", got, rec.started)
 	}
 	rec.slow = false
-}
-
-func TestStartable(t *testing.T) {
-	provisioning := func(phase string, done bool) bank {
-		b := bank{Phase: phase}
-		b.Steps = append(b.Steps, struct {
-			ID   string `json:"id"`
-			Done bool   `json:"done"`
-		}{config.StepCBN, done})
-		return b
-	}
-	for _, c := range []struct {
-		name string
-		bank bank
-		want bool
-	}{
-		{"active", bank{Phase: config.PhaseActive}, true},
-		{"closed", bank{Phase: config.PhaseClosed}, false},
-		{"provisioning before the CBN step", provisioning(config.PhaseProvisioning, false), false},
-		{"repairing after the CBN step", provisioning(config.PhaseRepairing, true), true},
-	} {
-		if got := c.bank.startable(); got != c.want {
-			t.Errorf("%s: startable %v, want %v", c.name, got, c.want)
-		}
-	}
 }

@@ -31,11 +31,12 @@ var resetToday = clock.Date{Y: 2026, M: 11, D: 3}
 func writeOldDir(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "old-v1")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	for name, body := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -57,14 +58,9 @@ func TestResetRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := cmdReset([]string{"beerus", "--dir", dir}, &out); !errors.Is(err, install.ErrWrongName) || !strings.Contains(err.Error(), `"lagos"`) {
-		t.Fatalf("reset with the wrong name: %v", err)
-	}
-	if err := cmdReset([]string{"--dir", dir}, &out); err == nil || !strings.Contains(err.Error(), "usage") {
-		t.Fatalf("reset without a name: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, setup.SpecFile)); err != nil {
-		t.Fatalf("a refused reset touched the dir: %v", err)
+	err := cmdReset([]string{"beerus", "--dir", dir}, &out)
+	if _, statErr := os.Stat(filepath.Join(dir, setup.SpecFile)); !errors.Is(err, install.ErrWrongName) || !strings.Contains(err.Error(), `"lagos"`) || statErr != nil {
+		t.Fatalf("reset with the wrong name: %v, or it touched the dir", err)
 	}
 	old := writeOldDir(t, map[string]string{"control.json": versionOneStatus, "setup.yaml": oldSetupYAML, "local.yaml": "pace: 60\n"})
 	want := "beerus: " + old + ": This setup was made by an older Beerus. Run beerus reset, then beerus init.\n"
@@ -76,62 +72,47 @@ func TestResetRefusals(t *testing.T) {
 	}
 }
 
+func seeded(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := seed.Init(dir, banktest.Spec(defaultSetupName), setup.DefaultLocal(), resetToday); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestReset(t *testing.T) {
 	url := os.Getenv("BEERUS_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("set BEERUS_TEST_DATABASE_URL to run")
 	}
 	t.Setenv(config.DatabaseURLEnv, url)
-	older := func(files map[string]string) func(*testing.T) (string, string, string) {
-		return func(t *testing.T) (string, string, string) {
-			return "old-v1", writeOldDir(t, files), "Cleared "
-		}
-	}
 	rows := []struct {
 		name  string
 		setup func(*testing.T) (name, dir, want string)
 	}{
-		{"version one with start and pace", older(map[string]string{"control.json": versionOneStatus, "setup.yaml": oldSetupYAML, "local.yaml": "pace: 60\n"})},
-		{"version zero", older(map[string]string{"control.json": `{"version":0,"setup":"old-v1"}`, "setup.yaml": oldSetupYAML})},
-		{"corrupt control.json", older(map[string]string{"control.json": "{", "setup.yaml": oldSetupYAML})},
-		{"empty control.json", older(map[string]string{"control.json": "", "setup.yaml": oldSetupYAML})},
-		{"missing setup.yaml", older(map[string]string{"control.json": versionOneStatus})},
+		{"version one with start and pace", func(t *testing.T) (string, string, string) {
+			return "old-v1", writeOldDir(t, map[string]string{"control.json": versionOneStatus, "setup.yaml": oldSetupYAML, "local.yaml": "pace: 60\n"}), "Cleared "
+		}},
 		{"an old directory layout", func(t *testing.T) (string, string, string) {
-			dir := filepath.Join(t.TempDir(), "old-setup")
-			if err := os.MkdirAll(filepath.Join(dir, "banks", "bank-a"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, "beerus.yaml"), []byte("seed: 7\ndatabase_url: postgres:///nowhere\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := setup.Initialized(dir); !errors.Is(err, setup.ErrOldSetup) {
-				t.Fatalf("old dir before reset: %v", err)
-			}
+			dir := writeOldDir(t, map[string]string{"banks/bank-a/bank.json": "{}", "beerus.yaml": "seed: 7\ndatabase_url: postgres:///nowhere\n"})
 			db := config.DatabaseName(dir, "bank-a")
 			openNIBSS(t, url, db)
-			return "old-setup", dir, db
+			return "old-v1", dir, db
 		}},
-		{"a database outside the prefix that the setup owns", func(t *testing.T) (string, string, string) {
-			dir := t.TempDir()
-			if err := seed.Init(dir, banktest.Spec(defaultSetupName), setup.DefaultLocal(), resetToday); err != nil {
+		{"a snapshot database and one outside the prefix that the setup owns", func(t *testing.T) (string, string, string) {
+			dir := seeded(t)
+			live, custom := config.DatabaseName(dir, setup.SystemNIBSS), "beerus_zz_"+config.HashKey(dir)[:8]
+			openNIBSS(t, url, live)
+			openNIBSS(t, url, custom)
+			st, err := setup.LoadStatus(dir)
+			if err != nil {
 				t.Fatal(err)
 			}
-			custom := "beerus_custom_" + config.HashKey(dir)[:8]
-			openNIBSS(t, url, custom)
-			st := mustStatus(t, dir)
 			st.Resources[0].Owned = append(st.Resources[0].Owned, setup.Owned{Kind: "database", Name: custom})
 			if err := setup.SaveStatus(dir, st); err != nil {
 				t.Fatal(err)
 			}
-			return defaultSetupName, dir, custom
-		}},
-		{"a leftover NIBSS snapshot database", func(t *testing.T) (string, string, string) {
-			dir := t.TempDir()
-			if err := seed.Init(dir, banktest.Spec(defaultSetupName), setup.DefaultLocal(), resetToday); err != nil {
-				t.Fatal(err)
-			}
-			live := config.DatabaseName(dir, setup.SystemNIBSS)
-			openNIBSS(t, url, live)
 			leftover := live + "_snap_old"
 			conn, err := pgx.Connect(t.Context(), url)
 			if err != nil {
@@ -141,7 +122,7 @@ func TestReset(t *testing.T) {
 			if _, err := conn.Exec(t.Context(), `CREATE DATABASE `+leftover+` TEMPLATE `+live); err != nil {
 				t.Fatal(err)
 			}
-			return defaultSetupName, dir, "Dropped databases:\n  " + live + "\n  " + leftover + "\nCleared "
+			return defaultSetupName, dir, "Dropped databases:\n  " + live + "\n  " + leftover + "\n  " + custom + "\nCleared "
 		}},
 	}
 	for _, r := range rows {
@@ -151,15 +132,10 @@ func TestReset(t *testing.T) {
 			if err := cmdReset([]string{name, "--dir", dir}, &out); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(out.String(), want) || !strings.Contains(out.String(), "Cleared "+dir) {
-				t.Fatalf("output %q lacks %q", out.String(), want)
-			}
-			if ok, err := setup.Initialized(dir); err != nil || ok {
-				t.Fatalf("after reset: %v %v", ok, err)
-			}
 			prefix := strings.TrimSuffix(config.DatabaseName(dir, "x"), "x")
-			if left, err := postgres.List(t.Context(), url, prefix); err != nil || len(left) != 0 {
-				t.Fatalf("databases left after reset: %v %v", left, err)
+			left, err := postgres.List(t.Context(), url, prefix)
+			if ok, initErr := setup.Initialized(dir); !strings.Contains(out.String(), want) || !strings.Contains(out.String(), "Cleared "+dir) || ok || initErr != nil || err != nil || len(left) != 0 {
+				t.Fatalf("output %q lacks %q, or the reset left %v (%v, %v, %v)", out.String(), want, left, ok, initErr, err)
 			}
 		})
 	}

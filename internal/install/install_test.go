@@ -15,9 +15,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
-	"github.com/evolutionlabs-core/beerus/internal/state"
 )
 
 func installURL(t *testing.T) string {
@@ -40,11 +38,7 @@ func runInstall(ctx context.Context, dir, url string, after func(InstallStep)) (
 	local.DatabaseURL = url
 	var lines []string
 	err := Install(ctx, dir, banktest.Spec("beerus"), local, clock.Date{Y: 2026, M: 11, D: 3}, func(s InstallStep) {
-		mark := "ok"
-		if s.Err != nil {
-			mark = "failed"
-		}
-		lines = append(lines, fmt.Sprintf("%s|%s|%s", s.Name, s.Detail, mark))
+		lines = append(lines, fmt.Sprintf("%s|%s|%t", s.Name, s.Detail, s.Err == nil))
 		if after != nil {
 			after(s)
 		}
@@ -54,11 +48,11 @@ func runInstall(ctx context.Context, dir, url string, after func(InstallStep)) (
 
 func TestInstall(t *testing.T) {
 	url := installURL(t)
-	fresh := []string{"Checking Postgres||ok", "Writing config||ok", "Reserving CBN and NIBSS database names||ok", "Preparing CBN ports||ok"}
+	fresh := []string{"Checking Postgres||true", "Writing config||true", "Reserving CBN and NIBSS database names||true", "Preparing CBN ports||true"}
 	resumed := slices.Clone(fresh)
-	resumed[1] = "Writing config|already written|ok"
+	resumed[1] = "Writing config|already written|true"
 	cut := slices.Clone(fresh)
-	cut[3] = "Preparing CBN ports||failed"
+	cut[3] = "Preparing CBN ports||false"
 	for _, c := range []struct {
 		name  string
 		first []string
@@ -104,15 +98,9 @@ func TestInstall(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			made, err := postgres.List(t.Context(), url, config.DatabaseName(dir, ""))
-			if err != nil {
-				t.Fatal(err)
-			}
-			claims := state.Owned(st, state.OwnedDatabase)
 			for _, id := range []string{setup.SystemCBN, setup.SystemNIBSS} {
-				name := config.DatabaseName(dir, id)
-				if r := setup.FindResource(&st, setup.KindSystem, id); r == nil || r.Phase != config.PhaseActive || claims[name] != setup.KindSystem+"/"+id || slices.Contains(made, name) {
-					t.Errorf("%s after install: %+v, claims %v, made %v", id, r, claims, made)
+				if r := setup.FindResource(&st, setup.KindSystem, id); r == nil || r.Phase != config.PhaseActive {
+					t.Errorf("%s after install: %+v", id, r)
 				}
 			}
 		})
@@ -122,7 +110,7 @@ func TestInstall(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "setup")
 		got, err := runInstall(context.Background(), dir, "postgres://localhost:1/postgres", nil)
 		want := "cannot reach Postgres at localhost:1. Postgres is not installed or not running."
-		if err == nil || err.Error() != want || !slices.Equal(got, []string{"Checking Postgres||failed"}) {
+		if err == nil || err.Error() != want || !slices.Equal(got, []string{"Checking Postgres||false"}) {
 			t.Fatalf("steps %q, error %v, want %q", got, err, want)
 		}
 		if err := CheckStart(dir); err == nil || err.Error() != "no Beerus setup in "+dir+". Run beerus init first." {

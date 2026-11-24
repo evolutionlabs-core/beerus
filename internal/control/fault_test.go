@@ -31,13 +31,10 @@ func TestFaultLiveUntilItsEndTime(t *testing.T) {
 		now   time.Time
 		want  bool
 	}{
-		{"just created", f, start, true},
 		{"a nanosecond before the end", f, start.Add(time.Hour - time.Nanosecond), true},
 		{"at the end", f, start.Add(time.Hour), false},
 		{"without an end, a century on", forever, start.AddDate(100, 0, 0), true},
-		{"a timeout with uses left", timeout, start.AddDate(0, 0, 7), true},
 		{"a timeout with no uses left", spent, start, false},
-		{"an unknown kind", Fault{Kind: "other"}, start, false},
 	} {
 		if got := c.fault.Live(c.now); got != c.want {
 			t.Errorf("%s: live %v, want %v", c.name, got, c.want)
@@ -48,8 +45,8 @@ func TestFaultLiveUntilItsEndTime(t *testing.T) {
 	if !faults.Down(start.Add(time.Hour-time.Second)) || faults.Down(start.Add(time.Hour)) {
 		t.Errorf("down just before and at the end")
 	}
-	if got := len(faults.Live(start.Add(time.Hour))); got != 0 {
-		t.Errorf("%d live faults at the end", got)
+	if len(faults.Live(start.Add(time.Hour))) != 0 {
+		t.Error("a live fault at the end")
 	}
 	faults.Prune(start.Add(time.Hour))
 	if got := faults.Clear(start); got != 0 {

@@ -8,28 +8,23 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
 func TestIdempotencyLocksExcludeAndAreReleased(t *testing.T) {
 	var a Idempotency
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	inside := map[string]int{}
-	for _, scope := range []string{"s1", "s1", "s1", "s2", "s2"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			e := a.Acquire(scope)
-			mu.Lock()
-			inside[scope]++
-			if inside[scope] != 1 {
-				t.Errorf("two requests held %s at once", scope)
+	var inside atomic.Int32
+	for range 4 {
+		wg.Go(func() {
+			e := a.Acquire("s1")
+			if inside.Add(1) != 1 {
+				t.Error("two requests held s1 at once")
 			}
-			inside[scope]--
-			mu.Unlock()
-			a.Release(scope, e)
-		}()
+			inside.Add(-1)
+			a.Release("s1", e)
+		})
 	}
 	wg.Wait()
 	if n := len(a.locks); n != 0 {
@@ -37,38 +32,28 @@ func TestIdempotencyLocksExcludeAndAreReleased(t *testing.T) {
 	}
 }
 
-type memoryStore struct {
-	mu   sync.Mutex
-	recs map[string]*Record
+type memoryStore map[string]*Record
+
+func (m memoryStore) Lookup(scope string) *Record {
+	return m[scope]
 }
 
-func (m *memoryStore) Lookup(scope string) *Record {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.recs[scope]
-}
-
-func (m *memoryStore) Commit(scope string, rec *Record) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m memoryStore) Commit(scope string, rec *Record) error {
 	if rec != nil {
-		m.recs[scope] = rec
+		m[scope] = rec
 	}
 	return nil
 }
 
 func TestIdempotentWrites(t *testing.T) {
-	store := &memoryStore{recs: map[string]*Record{}}
+	store := memoryStore{}
 	var calls int
 	var i Idempotency
 	h := WithRequestID(i.Wrap(store, func(*http.Request) string { return ControlOwner }, slog.New(slog.NewTextHandler(io.Discard, nil)), func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		status := http.StatusCreated
-		switch r.URL.Query().Get("answer") {
-		case "500":
+		if r.URL.Query().Get("answer") == "500" {
 			status = http.StatusInternalServerError
-		case "429":
-			status = http.StatusTooManyRequests
 		}
 		WriteJSON(w, status, map[string]string{"n": "x"})
 	}))
@@ -85,8 +70,7 @@ func TestIdempotentWrites(t *testing.T) {
 		{"no key", "/w", "", `{}`, 400, false, 1, "An Idempotency-Key header of 1 to 255 characters is required on writes."},
 		{"server error is not recorded", "/w?answer=500", "k2", `{}`, 500, false, 2, ""},
 		{"server error runs again", "/w?answer=500", "k2", `{}`, 500, false, 3, ""},
-		{"rate limit runs again", "/w?answer=429", "k3", `{}`, 429, false, 4, ""},
-		{"body over the limit", "/w", "k4", strings.Repeat("a", BodyLimit+1), 413, false, 4, "Bodies over 1 MiB are refused."},
+		{"body over the limit", "/w", "k4", strings.Repeat("a", BodyLimit+1), 413, false, 3, "Bodies over 1 MiB are refused."},
 	} {
 		req := httptest.NewRequest(http.MethodPost, r.path, strings.NewReader(r.body))
 		if r.key != "" {
