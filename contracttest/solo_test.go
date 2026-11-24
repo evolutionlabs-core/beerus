@@ -699,7 +699,7 @@ func TestSoloNIBSS(t *testing.T) {
 			}
 		}
 		row := func(key string, h int, outward, inward, net int64, transfers int) string {
-			return fmt.Sprintf(`{"session_id":%q,"cutoff_at":"2026-11-04T%02d:00:00+01:00","posted_at":"2026-11-04T%02d:00:00+01:00","outward_minor":%d,"inward_minor":%d,"net_minor":%d,"transfers":%d}`, key, h, h, outward, inward, net, transfers)
+			return fmt.Sprintf(`{"session_id":%q,"cutoff_at":"2026-11-04T%02d:00:00+01:00","posted_at":"TIME","outward_minor":%d,"inward_minor":%d,"net_minor":%d,"transfers":%d}`, key, h, outward, inward, net, transfers)
 		}
 		position := func(outward, inward int64, transfers, settlements int) string {
 			return fmt.Sprintf(`{"outward_minor":%d,"inward_minor":%d,"pending_inward_minor":0,"transfers":%d,"settlements":%d}`, outward, inward, transfers, settlements)

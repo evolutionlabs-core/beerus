@@ -123,6 +123,7 @@ type env struct {
 	vmu        sync.Mutex
 	violations []string
 	people     map[string]persona
+	flows      map[string]int
 	dir        string
 }
 
@@ -751,6 +752,18 @@ var people = map[string]struct {
 	"chidi":  {"Chidi Okafor", "08034567890", "1995-05-30", map[string][]opening{"bank-b": {{"savings", "85000"}}}},
 }
 
+func (s *Stack) flowDigits() string {
+	s.vmu.Lock()
+	defer s.vmu.Unlock()
+	if s.flows == nil {
+		s.flows = map[string]int{}
+	}
+	if _, ok := s.flows[s.flow]; !ok {
+		s.flows[s.flow] = len(s.flows)
+	}
+	return fmt.Sprintf("%03d", s.flows[s.flow])
+}
+
 func (s *Stack) key(id, bank string) string {
 	return s.flow + "/" + id + "@" + bank
 }
@@ -796,7 +809,7 @@ func (s *Stack) join(id, bank string) persona {
 		s.t.Fatalf("no test customer %s", id)
 	}
 	p := persona{ID: id, Bank: bank, Name: spec.name, Username: id + "-" + s.flow, Password: "beerus-test-" + id}
-	c := s.ctl("POST", "/banks/"+bank+"/customers", map[string]string{"name": spec.name, "phone": spec.phone, "dob": spec.dob, "username": p.Username, "password": p.Password})
+	c := s.ctl("POST", "/banks/"+bank+"/customers", map[string]string{"name": spec.name, "phone": spec.phone[:8] + s.flowDigits(), "dob": spec.dob, "username": p.Username, "password": p.Password})
 	p.Customer, p.BVN = fmt.Sprint(c["id"]), fmt.Sprint(c["bvn"])
 	s.people[s.key(id, bank)] = p
 	return p
@@ -820,21 +833,6 @@ func (s *Stack) balances(p persona) map[string]int64 {
 		out[fmt.Sprint(m["nuban"])] = int64(m["balance_minor"].(float64))
 	}
 	return out
-}
-
-func (s *Stack) waitBalance(p persona, want int64) {
-	s.t.Helper()
-	deadline := time.Now().Add(waitLimit)
-	for {
-		got := s.balances(p)[p.Accounts[0]]
-		if got == want {
-			return
-		}
-		if time.Now().After(deadline) {
-			s.t.Fatalf("%s at %s holds %d, want %d", p.Username, p.Bank, got, want)
-		}
-		time.Sleep(waitPoll)
-	}
 }
 
 func (s *Stack) closedBalances(p persona) map[string]int64 {

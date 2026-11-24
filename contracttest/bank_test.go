@@ -376,7 +376,9 @@ func TestBankClose(t *testing.T) {
 		if kept := s.ctl("GET", "/closures/"+id, nil); fmt.Sprint(kept["lines"]) != fmt.Sprint(lines) || kept["name"] != "Close Digital" {
 			t.Errorf("kept closure: %v", kept)
 		}
-		s.waitBalance(home["adaeze"], before+2_500_000)
+		if got := s.balances(home["adaeze"])[home["adaeze"].Accounts[0]]; got != before+2_500_000 {
+			t.Errorf("adaeze at bank-a has %d, want %d", got, before+2_500_000)
+		}
 		s.syncNow()
 		if got := s.closedBalances(opened["adaeze"])[opened["adaeze"].Accounts[0]]; got != 0 {
 			t.Errorf("closed account keeps %d", got)
@@ -536,7 +538,9 @@ func TestPurge(t *testing.T) {
 		s.waitBlocked(id, setup.ReasonTargetUnavailable, "Bank A is suspended or down, so money cannot move there. Resume it or choose another bank.")
 		s.ctl("DELETE", "/faults?bank=bank-a", nil)
 		s.waitBlocked(id, setup.ReasonSettlementPending, "to settle 1 transfer (net ₦25,100.00)")
-		s.waitBalance(home, atBankA+2_510_000)
+		if got := s.balances(home)[home.Accounts[0]]; got != atBankA+2_510_000 {
+			t.Errorf("adaeze at bank-a holds %d, want %d", got, atBankA+2_510_000)
+		}
 		checkSettled(t, s.app)
 		s.ctl("POST", "/nip/settle-now", nil)
 		s.waitGone("bank", id)
