@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/evolutionlabs-core/beerus/internal/bank"
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
@@ -51,14 +53,14 @@ type adminReply struct {
 func newAdminBank(t *testing.T) *adminBank {
 	t.Helper()
 	ctx := context.Background()
-	books := bank.New(ledger.New(banktest.Schema(t), nil), bank.Profile{ID: "bank-a", Name: "Bank A", NIPCode: "000014", NUBANCode: "014"}, banktest.Fees(t))
+	books := bank.New(ledger.New(banktest.Schema(t), nil), bank.Profile{ID: "bank-a", Name: "Bank A", NIPCode: "000014", NUBANCode: "014", PasswordCost: bcrypt.MinCost}, banktest.Fees(t))
 	if err := books.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := books.Genesis(ctx, 1_000_000_000_000, 200_000_000_000, adminNow); err != nil {
 		t.Fatal(err)
 	}
-	hash, err := bank.HashPassword(adminPassword)
+	hash, err := bcryptHash(adminPassword)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,4 +331,9 @@ func TestParallelPayoutsCannotOverdrawTheAccount(t *testing.T) {
 	if got := a.call("GET", "/v1/accounts/"+a.ada, "", ""); got.body != account(a.ada, "ADA OBI", a.adaID, "active", 200_000) {
 		t.Fatalf("balance after the race: %s", got.body)
 	}
+}
+
+func bcryptHash(password string) (string, error) {
+	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	return string(h), err
 }

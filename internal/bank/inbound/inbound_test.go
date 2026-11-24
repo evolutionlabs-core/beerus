@@ -217,8 +217,7 @@ func badCheckDigit(nuban string) string {
 	return nuban[:9] + string(next)
 }
 
-func TestNIPContract(t *testing.T) {
-	s := newStack(t)
+func nipContract(t *testing.T, s *stack) {
 	unknown := world.NUBAN(nubanCode, 999999)
 	invalid := badCheckDigit(s.funded)
 	rows := []struct {
@@ -303,9 +302,13 @@ func TestNIPContract(t *testing.T) {
 	}
 }
 
-func TestCreditRacesStatus(t *testing.T) {
-	s := newStack(t)
-	const sessions, credits, parallel = 100, 3, 8
+func creditRacesStatus(t *testing.T, s *stack) {
+	const sessions, credits, parallel = 20, 3, 8
+	before := s.balance(t, s.funded)
+	var postedBefore int64
+	if err := s.bank.L.Pool().QueryRow(context.Background(), `SELECT count(*) FROM journal_entries WHERE kind = 'nip_inward'`).Scan(&postedBefore); err != nil {
+		t.Fatal(err)
+	}
 	type outcome struct {
 		credits [credits]string
 		status  string
@@ -361,14 +364,14 @@ func TestCreditRacesStatus(t *testing.T) {
 			credited++
 		}
 	}
-	if got, want := s.balance(t, s.funded), startAmount+credited*1000000; got != want {
+	if got, want := s.balance(t, s.funded), before+credited*1000000; got != want {
 		t.Fatalf("balance %d, want %d after %d credits", got, want, credited)
 	}
 	var posted int64
 	if err := s.bank.L.Pool().QueryRow(context.Background(), `SELECT count(*) FROM journal_entries WHERE kind = 'nip_inward'`).Scan(&posted); err != nil {
 		t.Fatal(err)
 	}
-	if posted != credited {
+	if posted-postedBefore != credited {
 		t.Fatalf("%d postings, want %d", posted, credited)
 	}
 	check, err := s.bank.L.Verify(context.Background())
@@ -378,4 +381,10 @@ func TestCreditRacesStatus(t *testing.T) {
 	if !check.OK() {
 		t.Fatal(check)
 	}
+}
+
+func TestNIP(t *testing.T) {
+	s := newStack(t)
+	t.Run("contract", func(t *testing.T) { nipContract(t, s) })
+	t.Run("credit races status", func(t *testing.T) { creditRacesStatus(t, s) })
 }

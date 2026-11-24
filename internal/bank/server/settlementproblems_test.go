@@ -111,24 +111,27 @@ func TestSettlementProblems(t *testing.T) {
 		},
 	}
 	for _, s := range steps {
-		b, nuban := reportBank(t), ""
-		if s.funded {
-			b, nuban = fundedBank(t)
-		}
-		if s.setup != nil {
-			s.setup(t, b, nuban)
-		}
-		desk := &nibssDesk{reports: s.reports, position: s.position}
-		if s.during != nil {
-			desk.onPosition = func() { s.during(t, b, nuban) }
-		}
-		got, err := settlementProblems(ctx, desk.client(), s.cbn.client(), b, "bank-a")
-		if err != nil || !slices.Equal(got, s.want) || got == nil {
-			t.Errorf("%s: %q, %v, want %q", s.name, got, err, s.want)
-		}
-		if desk.positionAfter != s.after {
-			t.Errorf("%s: asked NIBSS for the position after %q, want %q", s.name, desk.positionAfter, s.after)
-		}
+		t.Run(s.name, func(t *testing.T) {
+			t.Parallel()
+			b, nuban := reportBank(t), ""
+			if s.funded {
+				b, nuban = fundedBank(t)
+			}
+			if s.setup != nil {
+				s.setup(t, b, nuban)
+			}
+			desk := &nibssDesk{reports: s.reports, position: s.position}
+			if s.during != nil {
+				desk.onPosition = func() { s.during(t, b, nuban) }
+			}
+			got, err := settlementProblems(ctx, desk.client(), s.cbn.client(), b, "bank-a")
+			if err != nil || !slices.Equal(got, s.want) || got == nil {
+				t.Errorf("%q, %v, want %q", got, err, s.want)
+			}
+			if desk.positionAfter != s.after {
+				t.Errorf("asked NIBSS for the position after %q, want %q", desk.positionAfter, s.after)
+			}
+		})
 	}
 }
 

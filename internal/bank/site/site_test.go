@@ -114,9 +114,10 @@ func TestGuardOrder(t *testing.T) {
 		{name: "authorize stops when the registry cannot be read", phase: config.PhaseActive, refresh: errors.New("down"), method: "GET", path: "/authorize", host: own, want: http.StatusServiceUnavailable},
 		{name: "authorize goes on when the registry is read", phase: config.PhaseActive, method: "GET", path: "/authorize", host: own, want: http.StatusBadRequest},
 	}
+	books := newBooks(t)
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
-			h := New(Config{Host: fakeHost{phase: r.phase, refreshErr: r.refresh, books: newBooks(t)}, Clock: clock.New(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+			h := New(Config{Host: fakeHost{phase: r.phase, refreshErr: r.refresh, books: books}, Clock: clock.New(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
 			ln, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
 				t.Fatal(err)
