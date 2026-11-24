@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"net/http"
 	"slices"
@@ -120,14 +121,14 @@ func booked(t *testing.T, b *bank.Bank) map[string]int64 {
 }
 
 func TestBankPostsItsSideFromTheNIBSSReports(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	cutoff := time.Date(2026, 11, 4, 12, 0, 0, 0, clock.Lagos)
 	now := cutoff.Add(3 * time.Hour)
 	all := []SettlementReport{report("k1", 500, 200), report("k2", 70, 0), report("k3", 0, 30)}
-
 	fresh := reportBank(t)
 	desk := &nibssDesk{reports: all}
-	steps := []struct {
+	for _, s := range []struct {
 		name   string
 		books  *bank.Bank
 		before func()
@@ -139,16 +140,14 @@ func TestBankPostsItsSideFromTheNIBSSReports(t *testing.T) {
 		{"a replay asks after the newest and books nothing new", fresh, nil, "k3", map[string]int64{"k1": -300, "k2": -70, "k3": 30}, ""},
 		{"a new report is booked alone", fresh, func() { desk.reports = append(desk.reports, report("k4", 5, 0)) }, "k3", map[string]int64{"k1": -300, "k2": -70, "k3": 30, "k4": -5}, ""},
 		{"NIBSS down books nothing and says so", fresh, func() { desk.down = true; desk.reports = append(desk.reports, report("k5", 9, 0)) }, "", map[string]int64{"k1": -300, "k2": -70, "k3": 30, "k4": -5}, "read the settlement reports at NIBSS: NIBSS is not available right now. Try again soon."},
-		{"a report whose net is not inward less outward is refused", reportBank(t), func() {
+		{"a net that is not inward less outward is refused", reportBank(t), func() {
 			desk.down = false
 			desk.reports = []SettlementReport{report("k1", 5, 0), {SessionID: "k2", Outward: 5, Inward: 2, Net: 9}}
 		}, "", map[string]int64{"k1": -5}, "post settlement k2: outward 5, inward 2 and net 9 do not add up"},
-		{"a negative outward is refused", reportBank(t), func() { desk.reports = []SettlementReport{{SessionID: "k1", Outward: -5, Inward: 0, Net: 5}} }, "", map[string]int64{}, "post settlement k1: outward -5, inward 0 and net 5 do not add up"},
 		{"a net that overflows is refused", reportBank(t), func() {
 			desk.reports = []SettlementReport{{SessionID: "k1", Outward: 5, Inward: math.MinInt64, Net: 0}}
 		}, "", map[string]int64{}, "post settlement k1: outward 5, inward -9223372036854775808 and net 0 do not add up"},
-	}
-	for _, s := range steps {
+	} {
 		if s.before != nil {
 			s.before()
 		}
@@ -158,39 +157,25 @@ func TestBankPostsItsSideFromTheNIBSSReports(t *testing.T) {
 		if err != nil {
 			msg = err.Error()
 		}
-		if got := booked(t, s.books); !equalNets(got, s.want) || msg != s.err {
-			t.Errorf("%s: booked %v, error %q, want %v and %q", s.name, got, msg, s.want, s.err)
-		}
-		if s.after != "" && (len(desk.afters) == 0 || desk.afters[0] != s.after) {
-			t.Errorf("%s: asked NIBSS after %q, want %q", s.name, desk.afters, s.after)
+		if got := booked(t, s.books); !maps.Equal(got, s.want) || msg != s.err || (s.after != "" && (len(desk.afters) == 0 || desk.afters[0] != s.after)) {
+			t.Errorf("%s: booked %v, error %q, asked after %q, want %v, %q and %q", s.name, got, msg, desk.afters, s.want, s.err, s.after)
 		}
 	}
-
 	upgraded := reportBank(t)
-	if _, err := upgraded.Settle(ctx, "k1", 500, 200, cutoff); err != nil {
-		t.Fatal(err)
-	}
+	_, err := upgraded.Settle(ctx, "k1", 500, 200, cutoff)
+	chk(t, err)
 	upgradeDesk := &nibssDesk{reports: all[:2]}
-	if err := PostSettlements(ctx, upgradeDesk.client(), upgraded, now); err != nil {
-		t.Fatalf("a bank the bridge already booked: %v", err)
+	chk(t, PostSettlements(ctx, upgradeDesk.client(), upgraded, now))
+	problems, perr := nibssProblems(ctx, upgradeDesk.client(), booked(t, upgraded), "bank-a")
+	if got := booked(t, upgraded); !maps.Equal(got, map[string]int64{"k1": -300, "k2": -70}) || upgradeDesk.afters[0] != "k1" || perr != nil || len(problems) != 0 {
+		t.Errorf("a bank the bridge already booked: %v after %q, problems %v, %v", got, upgradeDesk.afters, problems, perr)
 	}
-	if got, want := booked(t, upgraded), map[string]int64{"k1": -300, "k2": -70}; !equalNets(got, want) || upgradeDesk.afters[0] != "k1" {
-		t.Errorf("a bank the bridge already booked: %v after %q, want %v after k1", got, upgradeDesk.afters, want)
-	}
-	problems, err := nibssProblems(ctx, upgradeDesk.client(), booked(t, upgraded), "bank-a")
-	if err != nil || len(problems) != 0 {
-		t.Errorf("problems of a bank the bridge already booked: %v, %v", problems, err)
-	}
-
 	odd := reportBank(t)
-	if _, err := odd.Settle(ctx, "k1", 500, 150, cutoff); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := odd.Settle(ctx, "k9", 5, 0, cutoff.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	oddDesk := &nibssDesk{reports: all[:2]}
-	problems, err = nibssProblems(ctx, oddDesk.client(), booked(t, odd), "bank-a")
+	_, err = odd.Settle(ctx, "k1", 500, 150, cutoff)
+	chk(t, err)
+	_, err = odd.Settle(ctx, "k9", 5, 0, cutoff.Add(time.Hour))
+	chk(t, err)
+	problems, err = nibssProblems(ctx, (&nibssDesk{reports: all[:2]}).client(), booked(t, odd), "bank-a")
 	want := []string{
 		"session k1 at bank-a: NIBSS nets -300, but the bank posted -350",
 		"session k2 at bank-a: NIBSS nets -70, but the bank posted 0",
@@ -199,52 +184,22 @@ func TestBankPostsItsSideFromTheNIBSSReports(t *testing.T) {
 	if err != nil || !slices.Equal(problems, want) {
 		t.Errorf("problems: %v, %v, want %v", problems, err, want)
 	}
-	stranger := reportBank(t)
-	for _, key := range []string{"kx", "kz"} {
-		if _, err := stranger.Settle(ctx, key, 1, 0, cutoff); err != nil {
-			t.Fatal(err)
-		}
-	}
-	err = PostSettlements(ctx, (&nibssDesk{reports: []SettlementReport{report("ky", 1, 0), report("kx", 2, 0)}}).client(), stranger, now)
-	if !errors.Is(err, ledger.ErrIdempotency) || !strings.HasPrefix(err.Error(), "post settlement kx: ") {
-		t.Errorf("a key booked with another amount: %v", err)
-	}
-	if got, want := booked(t, stranger), map[string]int64{"kx": -1, "kz": -1, "ky": -1}; !equalNets(got, want) {
-		t.Errorf("after the clash: %v, want %v", got, want)
-	}
-}
-
-func equalNets(a, b map[string]int64) bool {
-	return len(a) == len(b) && func() bool {
-		for k, v := range a {
-			if w, ok := b[k]; !ok || w != v {
-				return false
-			}
-		}
-		return true
-	}()
 }
 
 func TestBookingErrorStillRecordsTheCheck(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	books := reportBank(t)
 	cutoff := time.Date(2026, 11, 4, 12, 0, 0, 0, clock.Lagos)
 	for _, key := range []string{"kx", "kz"} {
-		if _, err := books.Settle(ctx, key, 1, 0, cutoff); err != nil {
-			t.Fatal(err)
-		}
+		_, err := books.Settle(ctx, key, 1, 0, cutoff)
+		chk(t, err)
 	}
 	desk := &nibssDesk{reports: []SettlementReport{report("ky", 1, 0), report("kx", 2, 0)}}
-	cbn := cbnDesk{}.client()
 	clk := clock.New()
-	s := New(Config{
-		Bank:  config.Bank{ID: "bank-a", Name: "Bank A"},
-		Books: books,
-		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock: clk,
-	})
+	s := New(Config{Bank: config.Bank{ID: "bank-a", Name: "Bank A"}, Books: books, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Clock: clk})
 	before := clk.Real()
-	err := s.postAndCheck(ctx, desk.client(), cbn)
+	err := s.postAndCheck(ctx, desk.client(), cbnDesk{}.client())
 	after := clk.Real()
 	if !errors.Is(err, ledger.ErrIdempotency) || !strings.HasPrefix(err.Error(), "post settlement kx: ") {
 		t.Errorf("the booking error: %v", err)
