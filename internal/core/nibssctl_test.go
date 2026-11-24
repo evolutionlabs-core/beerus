@@ -119,7 +119,7 @@ func TestNIBSSAdminReadsWhatNIBSSKeeps(t *testing.T) {
 		},
 	}
 	for _, r := range rows {
-		got, err := r.call(t.Context(), controlAt(t, r.routes))
+		got, err := r.call(t.Context(), controlAt(r.routes))
 		msg := ""
 		if err != nil {
 			msg = err.Error()
@@ -150,7 +150,7 @@ func TestOpenTransfersAddPendingInward(t *testing.T) {
 		{"a bank NIBSS does not know", map[string]string{}, 0, 0, ""},
 	}
 	for _, r := range rows {
-		a := &App{nibssCtl: controlAt(t, r.routes)}
+		a := &App{nibssCtl: controlAt(r.routes)}
 		transfers, net, err := a.openTransfers(t.Context(), "bank-a")
 		msg := ""
 		if err != nil {
@@ -171,7 +171,7 @@ func TestPlanReadsTheRegisterOnlyToAddABank(t *testing.T) {
 		return s
 	}
 	register := `{"data":[{"id":"bank-x","name":"Bank X","nip_code":"000019","nuban_code":"019","type":"commercial","status":"removed"}]}`
-	live := controlAt(t, map[string]string{control.NIBSSDirectoryPath: register})
+	live := controlAt(map[string]string{control.NIBSSDirectoryPath: register})
 	away := &nibssAdmin{control.NewNIBSSControl(control.NewLink("", ""), 1)}
 	rows := []struct {
 		name    string
@@ -232,7 +232,7 @@ func TestClosureKeyCountsDefiniteFailuresOfTheAccount(t *testing.T) {
 		{"another account's failure", page(row("s1", "0000000022", "91")), "close:bank-a:0000000014"},
 	}
 	for _, r := range rows {
-		a := &App{nibssCtl: controlAt(t, r.routes)}
+		a := &App{nibssCtl: controlAt(r.routes)}
 		got, err := a.closureKey(t.Context(), "bank-a", "0000000014", "close:bank-a:0000000014")
 		if err != nil || got != r.want {
 			t.Errorf("%s: %q, %v; want %q", r.name, got, err, r.want)

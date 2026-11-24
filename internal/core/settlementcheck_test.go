@@ -6,49 +6,28 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/control"
 	"log/slog"
 	"math"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
-func controlAt(t *testing.T, routes map[string]string) *nibssAdmin {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	mux := http.NewServeMux()
-	for path, body := range routes {
-		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			if _, err := w.Write([]byte(body)); err != nil {
-				t.Error(err)
-			}
-		})
-	}
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		if err := srv.Serve(l); !errors.Is(err, http.ErrServerClosed) {
-			t.Error(err)
+func controlAt(routes map[string]string) *nibssAdmin {
+	link := control.NewLink("", "")
+	link.Client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		body, ok := routes[r.URL.Path]
+		if !ok {
+			res := stubReply(http.StatusNotFound, "404 page not found\n")
+			res.Status = "404 Not Found"
+			return res, nil
 		}
-	}()
-	t.Cleanup(func() {
-		if err := srv.Close(); err != nil {
-			t.Error(err)
-		}
-		<-done
-	})
-	port := l.Addr().(*net.TCPAddr).Port
-	return &nibssAdmin{control.NewNIBSSControl(control.NewLink("", ""), port)}
+		return stubReply(http.StatusOK, body), nil
+	})}
+	return &nibssAdmin{control.NewNIBSSControl(link, 1)}
 }
 
 func TestNIBSSStatusNeedsTheCountOfPostedSessions(t *testing.T) {
@@ -64,7 +43,7 @@ func TestNIBSSStatusNeedsTheCountOfPostedSessions(t *testing.T) {
 		{"not counted", `{"problems":["NIBSS could not check its settlements: read settlement reports"]}`, 0, nil, "NIBSS could not count its settlement sessions: NIBSS could not check its settlements: read settlement reports"},
 	}
 	for _, r := range rows {
-		n := controlAt(t, map[string]string{nibssStatusPath: r.body})
+		n := controlAt(map[string]string{nibssStatusPath: r.body})
 		posted, problems, err := n.status(t.Context())
 		msg := ""
 		if err != nil {
@@ -119,7 +98,7 @@ func TestOpenSessionsDecideWhatClosingWaitsFor(t *testing.T) {
 		if status == "" {
 			status = reported
 		}
-		a.nibssCtl = controlAt(t, map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: r.body, nibssStatusPath: status})
+		a.nibssCtl = controlAt(map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: r.body, nibssStatusPath: status})
 		if r.down {
 			a.nibssCtl = nil
 		}
@@ -176,7 +155,7 @@ func positionsAt(t *testing.T, status string) *httptest.ResponseRecorder {
 	t.Helper()
 	const open = `{"transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":0}`
 	routes := map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: open, nibssBanksPath + "bank-b" + nibssOpenSuffix: open, nibssStatusPath: status}
-	a := &App{log: slog.New(slog.DiscardHandler), nibssCtl: controlAt(t, routes), cfg: &config.Config{Banks: []*config.Bank{{ID: "bank-a"}, {ID: "bank-b"}}}}
+	a := &App{log: slog.New(slog.DiscardHandler), nibssCtl: controlAt(routes), cfg: &config.Config{Banks: []*config.Bank{{ID: "bank-a"}, {ID: "bank-b"}}}}
 	w := httptest.NewRecorder()
 	a.ctlNIPPositions(w, httptest.NewRequest(http.MethodGet, "/", nil))
 	return w
@@ -211,7 +190,7 @@ func TestPositionsTakeTheNextSessionFromNIBSS(t *testing.T) {
 func TestMissingCutoffAnswersUnavailable(t *testing.T) {
 	const want = "NIBSS has not said when the next NIP session is. Try again soon."
 	const busy = `{"transfers":1,"outward_minor":0,"inward_minor":10000,"unposted_settlements":0}`
-	a := &App{log: slog.New(slog.DiscardHandler), nibssCtl: controlAt(t, map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: busy, nibssStatusPath: `{}`})}
+	a := &App{log: slog.New(slog.DiscardHandler), nibssCtl: controlAt(map[string]string{nibssBanksPath + "bank-a" + nibssOpenSuffix: busy, nibssStatusPath: `{}`})}
 	_, err := a.inflightWith(t.Context(), "bank-a", 0)
 	closing := httptest.NewRecorder()
 	a.bankError(closing, httptest.NewRequest(http.MethodGet, "/", nil), err)

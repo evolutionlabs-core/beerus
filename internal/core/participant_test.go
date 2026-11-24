@@ -43,7 +43,7 @@ type controlReply struct {
 
 type contractCall func(method, path, key, body, token string, validate bool) controlReply
 
-func newContractCall(t *testing.T, handler http.Handler) contractCall {
+func participantValidator(t *testing.T) validator.Validator {
 	t.Helper()
 	spec, err := os.ReadFile(participantSpec)
 	if err != nil {
@@ -57,6 +57,11 @@ func newContractCall(t *testing.T, handler http.Handler) contractCall {
 	if len(errs) > 0 {
 		t.Fatalf("validator: %v", errs)
 	}
+	return v
+}
+
+func newContractCall(t *testing.T, v validator.Validator, handler http.Handler) contractCall {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +120,7 @@ func newContractCall(t *testing.T, handler http.Handler) contractCall {
 	}
 }
 
-func TestParticipantControlContract(t *testing.T) {
+func controlContract(t *testing.T, v validator.Validator) {
 	cfg := bankDirConfig(t, &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1, APIPort: 2, Database: "db"})
 	srv := server.New(server.Config{
 		Dir:   cfg.Dir,
@@ -125,7 +130,7 @@ func TestParticipantControlContract(t *testing.T) {
 		Clock: clock.New(),
 		Phase: PhaseActive,
 	})
-	call := newContractCall(t, srv.API())
+	call := newContractCall(t, v, srv.API())
 	bankFile := config.BankFilePath(cfg.Dir, "bank-a")
 	renamed := *cfg.Bank("bank-a")
 	renamed.Name, renamed.State = "Bank A Renamed", "suspended"

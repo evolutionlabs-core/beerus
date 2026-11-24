@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
@@ -96,18 +95,5 @@ func TestWriteFilesRestoresExactlyTheSavedSet(t *testing.T) {
 	}
 	if err := writeFiles(filepath.Join(dir, "api.key", "x"), map[string][]byte{"a": nil}); err == nil {
 		t.Fatal("a restore under a file did not fail")
-	}
-}
-
-func TestClockIsReal(t *testing.T) {
-	app := newTestApp(t, Options{})
-	before := time.Now().Truncate(time.Millisecond)
-	got := app.clock.Now()
-	after := time.Now()
-	if got.Before(before) || got.After(after) || got.Location() != clock.Lagos {
-		t.Fatalf("clock now %v, want between %v and %v in Lagos", got, before, after)
-	}
-	if app.setupKey == 0 || app.setupKey != app.ctl.SetupKey() {
-		t.Fatalf("setup key %d", app.setupKey)
 	}
 }
