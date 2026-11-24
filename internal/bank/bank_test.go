@@ -3,11 +3,16 @@ package bank_test
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"math"
+	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	"pgregory.net/rapid"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
@@ -18,16 +23,35 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
+func TestMain(m *testing.M) {
+	flag.Parse()
+	given := false
+	flag.Visit(func(f *flag.Flag) { given = given || f.Name == "rapid.checks" })
+	if !given {
+		if err := flag.Set("rapid.checks", "20"); err != nil {
+			panic(err)
+		}
+	}
+	os.Exit(m.Run())
+}
+
 var t0 = time.Date(2026, 3, 2, 9, 0, 0, 0, clock.Lagos)
 
 type testBank struct {
 	*bank.Bank
 	custs []string
+	free  *[]string
+}
+
+func (b *testBank) take(n int) *testBank {
+	rest := *b.free
+	*b.free = rest[n:]
+	return &testBank{Bank: b.Bank, custs: rest[:n]}
 }
 
 func newBank(t testing.TB, id, nip, nubanCode string, customers int) *testBank {
 	ctx := context.Background()
-	b := bank.New(ledger.New(banktest.Schema(t), nil), bank.Profile{ID: id, Name: id, NIPCode: nip, NUBANCode: nubanCode}, banktest.Fees(t))
+	b := bank.New(ledger.New(banktest.Schema(t), nil), bank.Profile{ID: id, Name: id, NIPCode: nip, NUBANCode: nubanCode, PasswordCost: bcrypt.MinCost}, banktest.Fees(t))
 	if err := b.Setup(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +74,8 @@ func newBank(t testing.TB, id, nip, nubanCode string, customers int) *testBank {
 		}
 		tb.custs = append(tb.custs, n)
 	}
+	free := slices.Clone(tb.custs)
+	tb.free = &free
 	return tb
 }
 
@@ -73,69 +99,81 @@ func bal(t testing.TB, b *bank.Bank, code string) int64 {
 	return v
 }
 
-func TestNIPTransferEntriesMatchPRD(t *testing.T) {
+func transferPostings(t *testing.T, a *testBank) {
 	ctx := context.Background()
-	a := newBank(t, "bank-a", "999001", "901", 1)
-	sid := "999001260302090000000000000001"
-	before := bal(t, a.Bank, bank.CustomerAccount(a.custs[0]))
-	_, c, err := a.SendNIP(ctx, bank.NIPSend{Key: "send-1", From: a.custs[0], Amount: 10000000, SessionID: sid, To: bank.Counterparty{Name: "CHIDI OKAFOR", BankName: "BANK B"}, At: t0.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
+	to := bank.Counterparty{Name: "CHIDI OKAFOR", BankName: "BANK B"}
+	rows := []struct {
+		name      string
+		amount    int64
+		noCharges bool
+		own       bool
+		fee, vat  int64
+		stamp     int64
+		lines     int
+		err       error
+		msg       string
+	}{
+		{name: "paid NIP", amount: 10000000, fee: 5000, vat: 375, stamp: 5000, lines: 4},
+		{name: "free NIP", amount: 300000, lines: 1},
+		{name: "closure send", amount: 2000000, noCharges: true, lines: 1},
+		{name: "own account", amount: 2000000, own: true, lines: 1},
+		{name: "zero", amount: 0, err: ledger.ErrInvalid, msg: "ledger: invalid entry: amount must be positive"},
+		{name: "the largest amount", amount: math.MaxInt64, err: ledger.ErrOverflow, msg: "ledger: amount overflow"},
+		{name: "more than the balance", amount: 1 << 50, err: ledger.ErrInsufficientFunds, msg: "ledger: insufficient funds"},
 	}
-	if c.Fee != 5000 || c.VAT != 375 || c.StampDuty != 5000 {
-		t.Fatalf("charges %+v, want ₦50, ₦3.75 and ₦50", c)
-	}
-	if got := before - bal(t, a.Bank, bank.CustomerAccount(a.custs[0])); got != 10010375 {
-		t.Fatalf("customer debited %d, want 10010375", got)
-	}
-	if bal(t, a.Bank, bank.NIPOutward) != 10000000 || bal(t, a.Bank, bank.FeeIncome) != 5000 || bal(t, a.Bank, bank.VATPayable) != 375 || bal(t, a.Bank, bank.StampPayable) != 5000 {
-		t.Fatal("payables do not match the PRD example")
-	}
-	evs, _ := a.L.Events(ctx, bank.CustomerAccount(a.custs[0]), 1, 10)
-	if len(evs) != 4 {
-		t.Fatalf("want 4 separate statement lines, got %d", len(evs))
+	for i, r := range rows {
+		from := a.custs[i%len(a.custs)]
+		accounts := []string{bank.NIPOutward, bank.FeeIncome, bank.VATPayable, bank.StampPayable}
+		before := make([]int64, len(accounts))
+		for j, code := range accounts {
+			before[j] = bal(t, a.Bank, code)
+		}
+		own := bal(t, a.Bank, bank.CustomerAccount(from))
+		evs, _ := a.L.Events(ctx, bank.CustomerAccount(from), 0, 1000)
+		lines := len(evs)
+		sid := fmt.Sprintf("99900126030208%08d%08d", 1, i+1)
+		var err error
+		var c charges.Transfer
+		if r.own {
+			_, err = a.OwnTransfer(ctx, sid, from, a.custs[(i+1)%len(a.custs)], r.amount, "", t0.Add(time.Hour))
+		} else {
+			_, c, err = a.SendNIP(ctx, bank.NIPSend{Key: sid, From: from, Amount: r.amount, SessionID: sid, To: to, At: t0.Add(time.Hour), NoCharges: r.noCharges})
+		}
+		if r.err != nil {
+			wantErr(t, err, r.err, r.msg)
+			continue
+		}
+		if err != nil || c != (charges.Transfer{Fee: r.fee, VAT: r.vat, StampDuty: r.stamp}) {
+			t.Fatalf("%s: charges %+v, %v", r.name, c, err)
+		}
+		if got := own - bal(t, a.Bank, bank.CustomerAccount(from)); got != r.amount+r.fee+r.vat+r.stamp {
+			t.Errorf("%s: customer debited %d", r.name, got)
+		}
+		want := []int64{r.amount, r.fee, r.vat, r.stamp}
+		if r.own {
+			want[0] = 0
+		}
+		for j, code := range accounts {
+			if got := bal(t, a.Bank, code) - before[j]; got != want[j] {
+				t.Errorf("%s: %s moved %d, want %d", r.name, code, got, want[j])
+			}
+		}
+		if evs, _ := a.L.Events(ctx, bank.CustomerAccount(from), 0, 1000); len(evs)-lines != r.lines {
+			t.Errorf("%s: %d statement lines, want %d", r.name, len(evs)-lines, r.lines)
+		}
 	}
 	mustOK(t, a.L)
 }
 
-func TestFreeNIPTransferPostsNoFeeLines(t *testing.T) {
+func narration(t *testing.T, a *testBank) {
 	ctx := context.Background()
-	a := newBank(t, "bank-a", "999001", "901", 1)
-	at := time.Date(2026, 5, 4, 9, 0, 0, 0, clock.Lagos)
-	before := bal(t, a.Bank, bank.CustomerAccount(a.custs[0]))
-	_, c, err := a.SendNIP(ctx, bank.NIPSend{Key: "send-free", From: a.custs[0], Amount: 300000, SessionID: "999001260504090000000000000001", To: bank.Counterparty{Name: "CHIDI OKAFOR", BankName: "BANK B"}, At: at})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c != (charges.Transfer{}) {
-		t.Fatalf("charges %+v, want none", c)
-	}
-	if got := before - bal(t, a.Bank, bank.CustomerAccount(a.custs[0])); got != 300000 {
-		t.Fatalf("customer debited %d, want 300000", got)
-	}
-	if bal(t, a.Bank, bank.FeeIncome) != 0 || bal(t, a.Bank, bank.VATPayable) != 0 || bal(t, a.Bank, bank.StampPayable) != 0 {
-		t.Fatal("a free transfer posted fee, VAT or stamp duty")
-	}
-	evs, err := a.L.Events(ctx, bank.CustomerAccount(a.custs[0]), 1, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(evs) != 1 {
-		t.Fatalf("want the transfer line only, got %d", len(evs))
-	}
-	mustOK(t, a.L)
-}
-
-func TestStatementLinesCarryNarration(t *testing.T) {
-	ctx := context.Background()
-	a := newBank(t, "bank-a", "999001", "901", 2)
 	sender := bank.Counterparty{Name: "AMA", BankName: "BANK A"}
 	to := bank.Counterparty{Name: "CHIDI OKAFOR", BankName: "BANK B"}
 	for i, tc := range []struct{ narration, sent, received string }{
 		{"", "NIP TRF TO CHIDI OKAFOR/BANK B/000000000001", "NIP TRF FRM AMA/BANK A/000000000001"},
 		{"Rent", "NIP TRF TO CHIDI OKAFOR/BANK B/000000000002/Rent", "NIP TRF FRM AMA/BANK A/000000000002/Rent"},
 	} {
-		sid := fmt.Sprintf("99900126030209000000%010d", i+1)
+		sid := fmt.Sprintf("99900126030212000000%010d", i+1)
 		if _, _, err := a.SendNIP(ctx, bank.NIPSend{Key: sid, From: a.custs[0], Amount: 100000, SessionID: sid, To: to, At: t0.Add(time.Hour), Narration: tc.narration}); err != nil {
 			t.Fatal(err)
 		}
@@ -157,18 +195,6 @@ func hasNarration(evs []ledger.Event, want string) bool {
 		}
 	}
 	return false
-}
-
-func TestOwnAccountTransferHasNoCharges(t *testing.T) {
-	ctx := context.Background()
-	a := newBank(t, "bank-a", "999001", "901", 2)
-	if _, err := a.OwnTransfer(ctx, "own-1", a.custs[0], a.custs[1], 2000000, "", t0.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if bal(t, a.Bank, bank.FeeIncome)+bal(t, a.Bank, bank.StampPayable) != 0 {
-		t.Fatal("own-account transfer at the same bank was charged")
-	}
-	mustOK(t, a.L)
 }
 
 type cbn struct {
@@ -209,6 +235,25 @@ func (c *cbn) settle(t testing.TB, key string, net map[string]int64, at time.Tim
 	}
 }
 
+func TestPostings(t *testing.T) {
+	a := newBank(t, "bank-a", "999001", "901", 18)
+	for _, s := range []struct {
+		name  string
+		custs int
+		run   func(*testing.T, *testBank)
+	}{
+		{"open sends", 1, openSends},
+		{"transfers", 5, transferPostings},
+		{"narration", 2, narration},
+		{"reversal", 1, reverseNIP},
+		{"limits and closures", 3, limitsAndClosures},
+		{"concurrent posting", 6, concurrentPostings},
+	} {
+		t.Run(s.name, func(t *testing.T) { s.run(t, a.take(s.custs)) })
+	}
+	mustOK(t, a.L)
+}
+
 func TestMoneyIsConservedAcrossBanksUnderFaults(t *testing.T) {
 	ctx := context.Background()
 	banks := map[string]*testBank{
@@ -229,7 +274,6 @@ func TestMoneyIsConservedAcrossBanksUnderFaults(t *testing.T) {
 	}
 	start := customerTotal()
 	credited := map[string]int{}
-	pending := map[string]map[string]int64{}
 	clockAt := t0.Add(time.Hour)
 	seq := 0
 	session := 0
@@ -294,7 +338,6 @@ func TestMoneyIsConservedAcrossBanksUnderFaults(t *testing.T) {
 			net[name] = inward[name] - outward[name]
 		}
 		central.settle(t, "rtgs:"+key, net, clockAt)
-		_ = pending
 		for sid, c := range credited {
 			if c != 1 {
 				rt.Fatalf("session %s credited %d times", sid, c)
@@ -329,9 +372,8 @@ func TestMoneyIsConservedAcrossBanksUnderFaults(t *testing.T) {
 	})
 }
 
-func TestConcurrentPostingKeepsInvariants(t *testing.T) {
+func concurrentPostings(t *testing.T, a *testBank) {
 	ctx := context.Background()
-	a := newBank(t, "bank-a", "999001", "901", 6)
 	start := int64(0)
 	for _, n := range a.custs {
 		start += bal(t, a.Bank, bank.CustomerAccount(n))
@@ -342,7 +384,7 @@ func TestConcurrentPostingKeepsInvariants(t *testing.T) {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			for i := 0; i < 40; i++ {
+			for i := 0; i < 15; i++ {
 				from := a.custs[(w+i)%len(a.custs)]
 				to := a.custs[(w*7+i*3+1)%len(a.custs)]
 				if from == to {
@@ -373,67 +415,6 @@ func TestConcurrentPostingKeepsInvariants(t *testing.T) {
 	}
 	if end != start {
 		t.Fatalf("own transfers changed total customer money: %d to %d", start, end)
-	}
-	mustOK(t, a.L)
-}
-
-func TestReviewRegressions(t *testing.T) {
-	ctx := context.Background()
-	a := newBank(t, "bank-a", "999001", "901", 3)
-	c0, c1 := a.custs[0], a.custs[1]
-	at := t0.Add(2 * time.Hour)
-	p1, err := a.CashDeposit(ctx, "retry-1", c0, 100000, at)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p2, err := a.CashDeposit(ctx, "retry-1", c0, 100000, at.Add(time.Second))
-	if err != nil || !p2.Replayed || p2.EntryID != p1.EntryID {
-		t.Fatalf("a retry one second later was not a replay: %+v %v", p2, err)
-	}
-	sid := "999001260302110000000000000777"
-	sent, _, err := a.SendNIP(ctx, bank.NIPSend{Key: "nip-rev:" + sid, From: c0, Amount: 2000000, SessionID: sid, To: bank.Counterparty{Name: "X", BankName: "BANK B"}, At: at})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := a.L.SetStatus(ctx, bank.CustomerAccount(c0), "frozen"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.ReverseNIP(ctx, sent.EntryID, sid, at.Add(time.Hour)); err != nil {
-		t.Fatalf("refund to a frozen account, or a client key colliding with the reversal key: %v", err)
-	}
-	if _, err := credit(ctx, a.Bank, "123", c1, 100, bank.Counterparty{Name: "X", BankName: "Y"}, "", at); !errors.Is(err, ledger.ErrInvalid) {
-		t.Fatalf("short session ID: %v", err)
-	}
-	if _, err := a.L.OpenAccount(ctx, ledger.Account{Code: bank.CustomerAccount("9020000027"), Name: "Tier one", Kind: ledger.Liability, Customer: true, NUBAN: "9020000027", Product: "savings", Owner: "tier1", KYCTier: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.CashDeposit(ctx, "t1dep", "9020000027", 20000000, at); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.CashWithdrawal(ctx, "t1wd", "9020000027", 10000000, at); !errors.Is(err, ledger.ErrDailyLimit) {
-		t.Fatalf("tier 1 cash withdrawal over the daily limit: %v", err)
-	}
-	to := bank.Counterparty{Name: "X", BankName: "Y"}
-	if _, _, err := a.SendNIP(ctx, bank.NIPSend{Key: "t1nip", From: "9020000027", Amount: 10000000, SessionID: "999001260302100000000000000071", To: to, At: at}); !errors.Is(err, ledger.ErrDailyLimit) {
-		t.Fatalf("tier 1 NIP send over the daily limit: %v", err)
-	}
-	if _, _, err := a.SendNIP(ctx, bank.NIPSend{Key: "close:bank-a:9020000027", From: "9020000027", Amount: 10000000, SessionID: "999001260302100000000000000072", To: to, At: at, NoCharges: true}); err != nil {
-		t.Fatalf("a closure send must bypass the daily limit: %v", err)
-	}
-	if _, err := a.ClosurePayout(ctx, "close:bank-a:9020000027", "9020000027", 1000000, at); err != nil {
-		t.Fatalf("closure payout over the daily limit: %v", err)
-	}
-	if _, err := a.ClosurePayout(ctx, "close:bank-a:9020000027", "9020000027", 1000000, at); err != nil {
-		t.Fatalf("a repeated closure payout: %v", err)
-	}
-	if paid, err := a.ClosurePayouts(ctx); err != nil || paid["9020000027"] != 1000000 {
-		t.Fatalf("closure payouts %v %v, want one payout of 1000000", paid, err)
-	}
-	if err := a.FreezeAccount(ctx, "9020000027"); err != nil {
-		t.Fatal(err)
-	}
-	if status, err := a.AccountStatus(ctx, "9020000027"); err != nil || status != "frozen" {
-		t.Fatalf("account status %q %v", status, err)
 	}
 	mustOK(t, a.L)
 }

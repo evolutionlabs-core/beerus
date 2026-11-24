@@ -42,7 +42,7 @@ func reaches(dep string) string {
 	return ""
 }
 
-func TestImportBoundary(t *testing.T) {
+func TestBoundary(t *testing.T) {
 	lines := goList(t, "-f", `{{.ImportPath}} {{join .Deps " "}} {{join .TestImports " "}} {{join .XTestImports " "}}`, "./...", "../web", "../view")
 	listed := map[string]bool{}
 	for _, line := range lines {
@@ -67,9 +67,7 @@ func TestImportBoundary(t *testing.T) {
 			t.Errorf("internal/%s is not covered by the boundary check", name)
 		}
 	}
-}
 
-func TestBankProcessDeps(t *testing.T) {
 	deps := goList(t, "-deps", "./participant")
 	if !slices.Contains(deps, modulePath+"/internal/bank/site") || !slices.Contains(deps, modulePath+"/internal/bank/consent") {
 		t.Fatalf("the bank process does not reach its site and consent sender: %v", deps)

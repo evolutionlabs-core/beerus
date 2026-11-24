@@ -50,9 +50,9 @@ func sameRows(t *testing.T, got, want []feedRow) {
 	}
 }
 
-func TestFeedComesFromPostings(t *testing.T) {
+func TestFeed(t *testing.T) {
 	ctx := context.Background()
-	a := newBank(t, "bank-a", "999001", "901", 2)
+	a := newBank(t, "bank-a", "999001", "901", 3)
 	from, to := a.custs[0], a.custs[1]
 	at := t0.Add(time.Hour)
 	sid := "999001260302100000000000000001"
@@ -132,20 +132,14 @@ func TestFeedComesFromPostings(t *testing.T) {
 		t.Fatalf("a line read through another account: %v", err)
 	}
 	tot, err := a.Totals(ctx)
-	if err != nil || tot.Customers != 2 || tot.Accounts != 2 || tot.Deposits != 100000000 {
+	if err != nil || tot.Customers != 3 || tot.Accounts != 3 || tot.Deposits != 150000000 {
 		t.Fatalf("totals %+v %v", tot, err)
 	}
-}
-
-func TestReceivedNIPKeepsTheSender(t *testing.T) {
-	ctx := context.Background()
-	b := newBank(t, "bank-b", "999002", "902", 1)
-	sid := "999001260302100000000000000002"
-	sender := bank.Counterparty{Name: "ADAEZE OKAFOR", AccountNumber: "9010000014", BankCode: "999001", BankName: "BANK A"}
-	if _, err := credit(ctx, b.Bank, sid, b.custs[0], 1000000, sender, "", t0.Add(time.Hour)); err != nil {
+	received := bank.Counterparty{Name: "ADAEZE OKAFOR", AccountNumber: "9010000014", BankCode: "999001", BankName: "BANK A"}
+	if _, err := credit(ctx, a.Bank, "999001260302100000000000000002", a.custs[2], 1000000, received, "", at); err != nil {
 		t.Fatal(err)
 	}
-	sameRows(t, feedRows(t, b.Bank, b.custs[0], t0.Add(2*time.Hour)), []feedRow{
+	sameRows(t, feedRows(t, a.Bank, a.custs[2], at.Add(time.Hour)), []feedRow{
 		{amount: 50000000, channel: "branch"},
 		{amount: 1000000, channel: "nip", party: "ADAEZE OKAFOR/9010000014/999001", session: true},
 	})
