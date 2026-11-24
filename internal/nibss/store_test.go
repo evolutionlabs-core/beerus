@@ -92,7 +92,7 @@ func pages(t testing.TB, name string, list func(limit int, after string) ([]stri
 	}
 	var got []string
 	for next, n := "", 0; n == 0 || next != ""; n++ {
-		page, nx, err := list(2, next)
+		page, nx, err := list(1, next)
 		if err != nil || n > len(want) {
 			t.Fatalf("%s page %d: %v", name, n, err)
 		}
@@ -101,7 +101,7 @@ func pages(t testing.TB, name string, list func(limit int, after string) ([]stri
 	if !slices.Equal(got, want) {
 		t.Errorf("%s pages: %q, want %q", name, got, want)
 	}
-	_, _, err := list(2, "~bad")
+	_, _, err := list(1, "~bad")
 	wantErr(t, err, `cursor "~bad" is not valid; use the next value from the last page`)
 }
 
@@ -170,7 +170,7 @@ func TestDirectory(t *testing.T) {
 	}
 	wantErr(t, err, "bank code 123456 is not in the NIBSS directory")
 	for i, st := range []struct{ to, want string }{
-		{nip.StatusSuspended, ""}, {nip.StatusActive, ""},
+		{nip.StatusSuspended, ""}, {nip.StatusActive, ""}, {nip.StatusActive, ""},
 		{nip.StatusRemoved, "institution bank-a is active and cannot become removed: status change not allowed"},
 		{nip.StatusTerminating, ""},
 		{nip.StatusRemoved, ""},
@@ -216,6 +216,7 @@ func TestRegister(t *testing.T) {
 		{member("bank-a", "Member A", "999011", "901"), "bank bank-a is registered with nip_code 999001, and this request has nip_code 999011"},
 		{member("bank-x", "Member X", "999001", "931"), "bank bank-x: nip_code 999001 is held by bank-a" + held},
 		{member("bank-x", "member a plc", "999031", "931"), `bank bank-x: name "member a plc" is held by bank-a` + held},
+		{member("bank-x", "Member X", "999031", "901"), "bank bank-x: nuban_code 901 is held by bank-a" + held},
 		{member("bank-x", "Member X", "999009", "931"), "bank bank-x: nip_code 999009 is held by removed bank bank-gone" + held},
 		{member("bank-gone", "Gone Bank", "999009", "909"), "bank bank-gone was removed, and its id stays reserved" + held},
 		{member("bank-x", " ", "999031", "931"), "a bank needs an id, a name and a type"},
@@ -410,6 +411,7 @@ func TestConsents(t *testing.T) {
 		want string
 	}{
 		{consent("", "c1", 1, t0), "a consent event needs a bank and a consent id"},
+		{edit(func(e *ConsentEvent) { e.Incarnation = "" }), "consent c1 event needs an incarnation"},
 		{consent("bank-a", "c1", 0, t0), "consent c1 event: source seq 0 must be 1 or more"},
 		{edit(func(e *ConsentEvent) { e.Status = "Maybe" }), `consent c1 event: status "Maybe" must be AwaitingAuthorisation, Authorised, Rejected, Revoked, Expired, Dormant, ReconsentRequired`},
 	} {

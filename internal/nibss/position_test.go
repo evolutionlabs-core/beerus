@@ -136,6 +136,7 @@ func settlementReports(t *testing.T, s *Store) {
 		{"after the first", "bank-a", noon, 10, "", []Report{second}, false, ""},
 		{"after the last", "bank-a", evening, 10, "", []Report{}, false, ""},
 		{"a stranger", "bank-z", "", 10, "", nil, false, "settlement reports for bank-z: not in the NIBSS directory"},
+		{"a cursor that is not ours", "bank-a", "", 10, "eA", nil, false, `cursor "eA" is not valid; use the next value from the last page`},
 		{"a limit that is too large", "bank-a", "", 5000, "", nil, false, "limit must be from 1 to 1000, not 5000"},
 	} {
 		got, next, m := list(r.identity, r.after, r.limit, r.cursor)

@@ -127,6 +127,7 @@ func sessionBadInput(t *testing.T, s *Store) {
 	}{
 		{SessionPending, nip.OutcomeUnknown, t0, `session s3: "pending" is not a response code`},
 		{SessionOK, nip.OutcomeFailed, t0, `session s3: a 00 session is credited, not "failed"`},
+		{"91", nip.OutcomeCredited, t0, `session s3: a 91 session is failed, not "credited"`},
 		{"91", nip.OutcomeFailed, time.Time{}, "session s3 needs a resolved time"},
 		{SessionOK, nip.OutcomeCredited, t0.Add(-time.Second), "session s3 cannot resolve at 2026-11-04T09:11:59+01:00, before it began at 2026-11-04T09:12:00+01:00"},
 	} {
@@ -152,6 +153,8 @@ func sessionBadInput(t *testing.T, s *Store) {
 		{mod(func(x *Session) { x.ID = "" }), "a session needs an id"},
 		{mod(func(x *Session) { x.ToNUBAN = "123" }), "session s4: account numbers have 10 digits: 07 invalid account"},
 		{mod(func(x *Session) { x.Amount = 0 }), "session s4: amount must be above zero, not 0"},
+		{mod(func(x *Session) { x.CreatedAt = time.Time{} }), "session s4 needs a created time"},
+		{mod(func(x *Session) { x.FromCode = "123456" }), "bank code 123456 is not in the NIBSS directory"},
 		{mod(func(x *Session) { x.Status = SessionOK }), "session s4 starts pending, not 00"},
 		{mod(func(x *Session) { x.Outcome = "reversed" }), "session s4 cannot start with outcome reversed"},
 		{mod(func(x *Session) { x.Outcome = nip.OutcomeUnknown }), "session s4 holds outcome unknown and needs a status query time"},
@@ -195,6 +198,7 @@ func sessionSettlement(t *testing.T, s *Store) {
 	wantErr(t, s.MarkSettled(ctx, []string{"u3", "u5"}, "c2", t0), "1 of 2 sessions to settle are not 00")
 	wantErr(t, s.MarkSettled(ctx, []string{"u3", "x1", "x2"}, "c2", t0), "2 of 3 sessions to settle do not exist: 25 no record")
 	wantErr(t, s.MarkSettled(ctx, nil, "c2", t0), "mark settled needs at least one session id")
+	wantErr(t, s.MarkSettled(ctx, []string{"u1"}, "", t0), "mark settled needs a settlement session")
 	if un, _ = s.Unsettled(ctx, t0.Add(24*time.Hour)); len(un) != 2 || un[0].ID != "u3" || un[1].ID != "u4" {
 		t.Fatalf("after settling: %+v", un)
 	}

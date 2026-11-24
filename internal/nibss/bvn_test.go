@@ -22,6 +22,9 @@ func TestNormalise(t *testing.T) {
 	if got, err := normalisePhone("(0803) 123 4567", "234", "0"); err != nil || got != "2348031234567" {
 		t.Errorf("normalisePhone = %q, %v", got, err)
 	}
+	if got, err := normalisePhone("2348031234567", "234", "0"); err != nil || got != "2348031234567" {
+		t.Errorf("normalisePhone = %q, %v", got, err)
+	}
 	if got, err := normalisePhone("+234 803 123 4567", "234", "0"); err != nil || got != "2348031234567" {
 		t.Errorf("normalisePhone = %q, %v", got, err)
 	}
@@ -77,6 +80,7 @@ func TestEnrolBVN(t *testing.T) {
 		{"Adaeze Okafor", "08031234567", clock.Date{Y: 2023, M: 2, D: 29}, "date of birth 2023-02-29 is not a real date"},
 		{"Adaeze Okafor", "08031234567", clock.Date{}, "date of birth 0000-00-00 is not a real date"},
 		{" ", "08031234567", adaezeDOB, `name " " has no letters`},
+		{"Adaeze Okafor", "0803x", adaezeDOB, `phone "0803x" may hold only digits, spaces, dashes, brackets and a leading +`},
 	} {
 		_, err := s.EnrolBVN(ctx, c.name, c.phone, c.dob)
 		wantBadDetails(t, err, c.want)
