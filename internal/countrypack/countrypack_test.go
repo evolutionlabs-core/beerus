@@ -7,11 +7,11 @@ func TestNigeria(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Country != "NG" || len(p.Fixed.Days) != 4 || p.Fixed.Source == "" {
+	if p.Country != "NG" || len(p.Fixed.Days) != 4 || p.Fixed.Source == "" || p.BankCodes.Source == "" || len(p.BankCodes.Categories) != 2 {
 		t.Errorf("unexpected pack: %+v", p)
 	}
-	if p.BankCodes.Source == "" || len(p.BankCodes.Categories) != 2 {
-		t.Errorf("bank codes = %+v", p.BankCodes)
+	if p.Phone.CallingCode != "234" || p.Phone.TrunkPrefix != "0" || p.Phone.Source == "" || p.Link.HistoryDays != 90 || p.Link.Source == "" {
+		t.Errorf("phone %+v, link %+v", p.Phone, p.Link)
 	}
 }
 
@@ -63,19 +63,6 @@ func TestBankCodeFormats(t *testing.T) {
 		if category != c.category || tiers[c.tier].NIP(c.n) != c.nip || tiers[c.tier].NUBAN(c.n) != c.nuban {
 			t.Errorf("%s %d = %s %s %s", c.bankType, c.n, category, tiers[c.tier].NIP(c.n), tiers[c.tier].NUBAN(c.n))
 		}
-	}
-}
-
-func TestPhone(t *testing.T) {
-	p, err := Nigeria()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.Phone.CallingCode != "234" || p.Phone.TrunkPrefix != "0" || p.Phone.Source == "" {
-		t.Errorf("phone: %+v", p.Phone)
-	}
-	if p.Link.HistoryDays != 90 || p.Link.Source == "" {
-		t.Errorf("link: %+v", p.Link)
 	}
 }
 
