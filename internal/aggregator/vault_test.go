@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestVaultSealsEachTokenWithItsOwnKey(t *testing.T) {
+func TestVault(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vault.key")
 	v, err := loadVault(path)
 	if err != nil {
@@ -48,14 +48,7 @@ func TestVaultSealsEachTokenWithItsOwnKey(t *testing.T) {
 	if _, err := other.open(e.Access, "con_1/access"); err == nil {
 		t.Fatal("a different master key opened the token")
 	}
-}
-
-func TestVaultKeyIsCreatedOnlyWhenMissing(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "vault.key")
-	if _, err := loadVault(path); err != nil {
-		t.Fatal(err)
-	}
+	dir := filepath.Dir(path)
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("key file: %v %v", info, err)
