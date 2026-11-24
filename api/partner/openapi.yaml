@@ -11,8 +11,8 @@ info:
     1. The partner's server creates a link token with `POST /v1/link/token/create`, giving its own `user_id` for the customer.
     2. The partner opens the Connect widget in the customer's browser at `/link?token=<link_token>`.
     3. The customer picks a bank, signs in at the bank with 2FA and approves the accounts to share. Connect then lists those accounts and the customer ticks the ones the partner may see. Only ticked accounts appear in the connection; any other account answers `404 not_found` like an unknown account.
-    4. The widget redirects the browser to the partner's `redirect_uri` with `code`, `link_session_id` and the partner's `state`. If the customer cancels or the session fails, it redirects with `error` (`access_denied`, `link_session_expired` or `institution_down`), `link_session_id` and `state` instead.
-    5. The partner's server exchanges the code and the link session ID for a permanent connection ID. If the response is lost, `GET /v1/link_sessions/{id}` shows the `connection_id`.
+    4. The widget redirects the browser to the partner's `redirect_uri` with `public_token`, `link_session_id` and the partner's `state`. If the customer cancels or the session fails, it redirects with `error` (`access_denied`, `link_session_expired` or `institution_down`), `link_session_id` and `state` instead.
+    5. The partner's server exchanges the `public_token` for an `access_token` and a `connection_id` at `POST /v1/public_token/exchange`. If the response is lost, `GET /v1/link_sessions/{id}` shows the `connection_id`.
     6. Connect syncs the accounts and sends webhooks. The partner always pulls data through `/transactions/sync`.
 
     ## Guarantees
@@ -62,7 +62,7 @@ tags:
   - name: Institutions
     description: The banks a customer can link.
   - name: Link sessions
-    description: Start the Connect widget and exchange its one-time code.
+    description: Start the Connect widget and exchange its `public_token`.
   - name: Connections
     description: A partner's link to one customer's bank, backed by one consent.
   - name: Accounts
@@ -78,7 +78,7 @@ paths:
       tags: [Link sessions]
       operationId: createLinkToken
       summary: Create a link token
-      description: Starts a link and returns a short-lived `link_token`, like Plaid's `/link/token/create`. Open Connect for the customer at `{connect URL}/link?token=<link_token>`. Connect shares history from 90 days before today's Lagos date, or less if the bank keeps less. When Connect redirects the customer back, the redirect URI carries a `code` and the `link_session_id`; swap both for a connection at `/v1/connections/exchange`.
+      description: Starts a link and returns a short-lived `link_token`, like Plaid's `/link/token/create`. Open Connect for the customer at `{connect URL}/link?token=<link_token>`. Connect shares history from 90 days before today's Lagos date, or less if the bank keeps less. When Connect redirects the customer back, the redirect URI carries a `public_token` and the `link_session_id`; swap the `public_token` for an `access_token` and a connection at `/v1/public_token/exchange`.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -205,12 +205,12 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
-  /v1/connections/exchange:
+  /v1/public_token/exchange:
     post:
       tags: [Link sessions]
-      operationId: exchangeCode
-      summary: Exchange a one-time code for a connection
-      description: Exchanges the widget's one-time code for a permanent connection ID. The request must carry the link session ID. Connect checks that the code belongs to that session and that the session was created by the same partner, so a code cannot be injected into another session. A code can be exchanged once. A new connection returns 201; a reauthorised connection returns 200.
+      operationId: exchangePublicToken
+      summary: Exchange a public_token for an access_token
+      description: Swaps the `public_token` the widget returned for an `access_token` and a `connection_id`, like Plaid's `/item/public_token/exchange`. A `public_token` lasts 10 minutes and works once. The token finds its own link session, so the request carries nothing else. Keep the `access_token` on your server; Connect stores only its hash and never shows it again. Repeating the request with the same `Idempotency-Key` answers `409` instead of returning the `access_token` again, because Connect does not keep it. A reauthorised connection gets a new `access_token`.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -218,23 +218,19 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CodeExchange'
+              $ref: '#/components/schemas/PublicTokenExchange'
             example:
-              code: oc_8f2e61b0c4d94a57
-              link_session_id: lks_01JBC7Q2W8M4
+              public_token: public-8f2e61b0c4d94a57
       responses:
         '200':
-          description: The existing connection was reauthorised.
+          description: The connection is ready.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Connection'
-        '201':
-          description: The connection was created.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Connection'
+                $ref: '#/components/schemas/ExchangeResult'
+              example:
+                access_token: access-3c9a41d07be84f25a1e6b0d8c7f35e92
+                connection_id: con_01JBC7Q2W8M4
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -242,7 +238,30 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: The `public_token` is not known, has expired or was already used (`invalid_public_token`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                unknown:
+                  value:
+                    error:
+                      code: invalid_public_token
+                      message: This public_token is not known.
+                      request_id: req_01JBC9X5
+                expired:
+                  value:
+                    error:
+                      code: invalid_public_token
+                      message: This public_token has expired. Start a new link.
+                      request_id: req_01JBC9X5
+                used:
+                  value:
+                    error:
+                      code: invalid_public_token
+                      message: This public_token was already used.
+                      request_id: req_01JBC9X5
         '409':
           $ref: '#/components/responses/Conflict'
         '422':
@@ -334,7 +353,7 @@ paths:
       tags: [Connections]
       operationId: reauthConnection
       summary: Start reauthorisation
-      description: Creates a link session for the customer to consent again, for example after `reauth_required` or `expired`. The partner opens the Connect widget with its link token and exchanges the returned code as usual. The connection ID and account IDs stay the same. A revoked connection cannot be reauthorised; create a new link session instead.
+      description: Creates a link session for the customer to consent again, for example after `reauth_required` or `expired`. The partner opens the Connect widget with its link token and exchanges the returned `public_token` as usual. The connection ID and account IDs stay the same. A revoked connection cannot be reauthorised; create a new link session instead.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -864,13 +883,12 @@ components:
         - `unauthenticated` (401): the client ID or secret is missing or does not match.
         - `forbidden` (403): the caller may not do this.
         - `not_found` (404): the resource does not exist for this partner.
-        - `invalid_code` (404): the one-time code is unknown, used or expired.
+        - `invalid_public_token` (404): the `public_token` is unknown, used or expired.
         - `cursor_reset` (409): the world was replaced after an unclean shutdown or a reset.
         - `connection_revoked` (409): the connection was revoked.
         - `reauth_required` (409): the customer must consent again.
         - `account_not_shared` (409): the customer no longer shares this account. Ask them to reconnect and share it.
         - `link_session_expired` (409): the link session expired.
-        - `link_session_mismatch` (403): the code or session belongs to another partner or user.
         - `idempotency_key_reused` (422): the key was used with a different body.
         - `as_of_out_of_range` (422): `as_of` is outside the dates Connect holds.
         - `rate_limited` (429): too many requests.
@@ -887,7 +905,7 @@ components:
           type: string
           minLength: 1
           maxLength: 128
-          description: The partner's own ID for its customer, such as a Balance business. The code exchange is checked against it.
+          description: The partner's own ID for its customer, such as a Balance business. The `public_token` exchange is checked against it.
         institution_id:
           type: string
           description: A bank to open Connect on, from `GET /v1/institutions`. Omit it to let the customer pick.
@@ -931,7 +949,7 @@ components:
           type: string
         connection_id:
           type: [string, 'null']
-          description: Set once the session reauthorises a connection or its code is exchanged.
+          description: Set once the session reauthorises a connection or its `public_token` is exchanged.
         created_at:
           type: string
           format: date-time
@@ -1041,14 +1059,21 @@ components:
           type: string
           maxLength: 512
           description: An opaque value returned unchanged on the redirect.
-    CodeExchange:
+    PublicTokenExchange:
       type: object
-      required: [code, link_session_id]
+      required: [public_token]
       properties:
-        code:
+        public_token:
           type: string
-          description: The one-time code the widget returned.
-        link_session_id:
+          description: The one-time `public_token` the widget returned.
+    ExchangeResult:
+      type: object
+      required: [access_token, connection_id]
+      properties:
+        access_token:
+          type: string
+          description: The secret for this connection. Keep it on your server. Connect shows it once.
+        connection_id:
           type: string
     ConnectionStatus:
       type: string

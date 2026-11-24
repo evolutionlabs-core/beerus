@@ -3,6 +3,7 @@ package aggregator
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -99,14 +100,14 @@ func TestConsentExpiryAtTheBankExpiresTheConnectionUntilReauth(t *testing.T) {
 	}
 
 	renewed = true
-	ls.Status, ls.CodeHash, ls.CodeExpires = "authorised", web.HashSecret("code-1"), now.Add(time.Minute)
+	ls.Status, ls.PublicHash, ls.PublicExpires = "authorised", web.HashSecret("public-1"), now.Add(time.Minute)
 	ls.Accounts, ls.BankConsentID, ls.ConsentEnds = []string{account}, "obc_2", now.Add(24*time.Hour)
 	if err := a.vaultPut(linkVaultPrefix+ls.ID, bankToken{Access: "at2", Refresh: "rt2", AccessExpires: now.Add(time.Hour), RefreshExpires: now.Add(2 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	status, body = callPartner(t, partner, a.exchange, http.MethodPost, "/v1/connections/exchange", `{"code":"code-1","link_session_id":"`+lsID+`"}`, nil)
-	if status != http.StatusOK || body["id"] != "con_1" || body["status"] != "syncing" {
-		t.Fatalf("exchange after reauth: %d %v, want 200 with connection con_1 syncing", status, body)
+	status, body = callPartner(t, partner, a.exchange, http.MethodPost, "/v1/public_token/exchange", `{"public_token":"public-1"}`, nil)
+	if status != http.StatusOK || body["connection_id"] != "con_1" || !strings.HasPrefix(fmt.Sprint(body["access_token"]), "access-") {
+		t.Fatalf("exchange after reauth: %d %v, want 200 with connection con_1 and an access token", status, body)
 	}
 	if !a.syncConnection(c, a.clock.Now()) || c.Status != "active" || c.ConsentID != "obc_2" {
 		t.Fatalf("after the reauth and a sync: status %q consent %q, want active and obc_2", c.Status, c.ConsentID)

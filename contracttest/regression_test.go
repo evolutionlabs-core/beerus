@@ -12,14 +12,14 @@ func TestRevokedConnectionCannotBeReauthorised(t *testing.T) {
 	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", nil), 201)
 	s.must(s.call("DELETE", "/v1/connections/"+conn.ConnectionID, nil), 204)
 	res := s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), "", "tunde", nil)
-	if res.Error != "access_denied" || res.Code != "" {
+	if res.Error != "access_denied" || res.PublicToken != "" {
 		t.Fatalf("widget let a revoked connection be reauthorised: %+v", res)
 	}
 	conn2 := s.connect("tunde", "bank-a")
 	ls2 := s.must(s.call("POST", "/v1/connections/"+conn2.ConnectionID+"/reauth", nil), 201)
 	res2 := s.completeLink(fmt.Sprint(ls2.JSON["widget_url"]), "", "tunde", nil)
 	s.ctl("POST", "/connections/"+conn2.ConnectionID+"/revoke", nil)
-	r := s.call("POST", "/v1/connections/exchange", map[string]any{"code": res2.Code, "link_session_id": res2.SessionID})
+	r := s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": res2.PublicToken})
 	if r.Status != 409 || r.Code() != "connection_revoked" {
 		t.Fatalf("exchange after revoke: %d %s", r.Status, r.Body)
 	}
@@ -41,14 +41,14 @@ func TestOneRevokeLeavesOtherConnectionsWorking(t *testing.T) {
 	s := newStack(t)
 	a := s.connect("tunde", "bank-a")
 	res := s.completeLink(s.linkURL("ws_other", "x"), "bank-a", "tunde", nil)
-	b := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 201)
+	b := s.must(s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": res.PublicToken}), 200)
 	s.syncNow()
 	la := s.must(s.call("GET", "/v1/connections/"+a.ConnectionID+"/accounts", nil), 200)
 	acc := la.JSON["data"].([]any)[0].(map[string]any)
 	if acc["connection_id"] != a.ConnectionID {
 		t.Fatalf("connection A lists its account under %v", acc["connection_id"])
 	}
-	s.must(s.call("DELETE", "/v1/connections/"+fmt.Sprint(b.JSON["id"]), nil), 204)
+	s.must(s.call("DELETE", "/v1/connections/"+fmt.Sprint(b.JSON["connection_id"]), nil), 204)
 	s.must(s.call("GET", "/v1/accounts/"+fmt.Sprint(acc["id"])+"/transactions/sync", nil), 200)
 	got := s.must(s.call("GET", "/v1/accounts/"+fmt.Sprint(acc["id"]), nil), 200)
 	if got.JSON["connection_id"] != a.ConnectionID {
@@ -64,7 +64,7 @@ func TestReauthSendsSyncAvailable(t *testing.T) {
 	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", nil), 201)
 	res := s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), "", "tunde", nil)
 	mark := len(s.events())
-	s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 200)
+	s.must(s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": res.PublicToken}), 200)
 	s.spend(s.persona("tunde"), 2)
 	s.syncNow()
 	waitFor(t, waitLimit, "sync.available after the reauth", func() bool {

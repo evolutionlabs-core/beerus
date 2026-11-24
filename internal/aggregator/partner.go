@@ -2,6 +2,7 @@ package aggregator
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"io"
 	"net/http"
 	"net/url"
@@ -16,9 +17,11 @@ import (
 )
 
 const (
-	linkTokenLife   = 30 * time.Minute
-	linkSessionLife = 60 * time.Minute
-	codeLife        = 10 * time.Minute
+	publicTokenPrefix = "public-"
+	accessTokenPrefix = "access-"
+	linkTokenLife     = 30 * time.Minute
+	linkSessionLife   = 60 * time.Minute
+	publicTokenLife   = 10 * time.Minute
 )
 
 func (a *App) PartnerHandler() http.Handler {
@@ -27,7 +30,7 @@ func (a *App) PartnerHandler() http.Handler {
 	mux.HandleFunc("GET /v1/link_sessions/{id}", a.getLinkSession)
 	mux.HandleFunc("GET /v1/webhook_keys", a.listWebhookKeys)
 	mux.HandleFunc("GET /v1/institutions", a.listInstitutions)
-	mux.HandleFunc("POST /v1/connections/exchange", a.idempotent(a.exchange))
+	mux.HandleFunc("POST /v1/public_token/exchange", a.idempotent(a.exchange))
 	mux.HandleFunc("GET /v1/connections/{id}", a.getConnection)
 	mux.HandleFunc("DELETE /v1/connections/{id}", a.idempotent(a.deleteConnection))
 	mux.HandleFunc("GET /v1/connections/{id}/accounts", a.listAccounts)
@@ -226,15 +229,20 @@ func (a *App) effectiveStart(start clock.Date, institution string) (clock.Date, 
 func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
 	p := partnerFrom(r)
 	var body struct {
-		Code          string `json:"code"`
-		LinkSessionID string `json:"link_session_id"`
+		PublicToken string `json:"public_token"`
 	}
-	if err := web.DecodeBody(r, &body); err != nil || body.Code == "" || body.LinkSessionID == "" {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object with code and link_session_id.")
+	if err := web.DecodeBody(r, &body); err != nil || body.PublicToken == "" {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The body must be a JSON object with public_token.")
+		return
+	}
+	access, err := web.NewSecret(accessTokenPrefix, 32)
+	if err != nil {
+		a.log.Error("access token", "err", err)
+		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The access token could not be made.")
 		return
 	}
 	a.mu.Lock()
-	ex, ok := a.beginExchangeLocked(w, r, p, body.Code, body.LinkSessionID)
+	ex, ok := a.beginExchangeLocked(w, r, p, body.PublicToken, web.HashSecret(access))
 	a.mu.Unlock()
 	if !ok {
 		return
@@ -247,18 +255,17 @@ func (a *App) exchange(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	a.finishAuthoriseLocked(ex.conn, ex.auth)
-	out := a.connectionJSON(ex.conn)
 	b := a.bank(ex.conn.Institution)
 	a.mu.Unlock()
 	if b != nil && ex.oldConsent != "" && ex.oldConsent != ex.consent {
 		a.revokeOrQueue(b, ex.oldConsent)
 	}
-	web.WriteJSON(w, ex.status, out)
+	w.Header().Set(web.SecretReplyHeader, "This public_token was already used.")
+	web.WriteJSON(w, http.StatusOK, map[string]string{"access_token": access, "connection_id": ex.conn.ID})
 }
 
 type exchangeGrant struct {
 	conn       *Connection
-	status     int
 	oldConsent string
 	consent    string
 	auth       authorisation
@@ -283,42 +290,36 @@ func (a *App) firstSync(c *Connection, rec *AccountRec, at time.Time) {
 	a.log.Warn("first sync after linking failed", "connection", c.ID, "account", rec.ID, "err", err)
 }
 
-func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *config.Partner, code, linkSessionID string) (exchangeGrant, bool) {
-	ls := a.st.LinkSessions[linkSessionID]
-	if ls == nil {
-		web.WriteError(w, r, http.StatusNotFound, "invalid_code", "The code or link session is unknown.")
-		return exchangeGrant{}, false
-	}
-	if ls.PartnerID != p.ID {
-		web.WriteError(w, r, http.StatusForbidden, "link_session_mismatch", "The link session belongs to another partner.")
-		return exchangeGrant{}, false
-	}
-	h := web.HashSecret(code)
-	if ls.CodeHash != h {
-		for _, other := range a.st.LinkSessions {
-			if other.CodeHash == h {
-				web.WriteError(w, r, http.StatusForbidden, "link_session_mismatch", "The code belongs to another link session.")
-				return exchangeGrant{}, false
-			}
+func (a *App) linkByPublicToken(token string) *LinkSession {
+	h := web.HashSecret(token)
+	for _, s := range a.st.LinkSessions {
+		if s.PublicHash != "" && subtle.ConstantTimeCompare([]byte(s.PublicHash), []byte(h)) == 1 {
+			return s
 		}
-		web.WriteError(w, r, http.StatusNotFound, "invalid_code", "The code is unknown.")
+	}
+	return nil
+}
+
+func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *config.Partner, token, accessHash string) (exchangeGrant, bool) {
+	ls := a.linkByPublicToken(token)
+	if ls == nil || ls.PartnerID != p.ID {
+		web.WriteError(w, r, http.StatusNotFound, "invalid_public_token", "This public_token is not known.")
 		return exchangeGrant{}, false
 	}
-	if ls.CodeUsed || ls.Status == "exchanged" {
-		web.WriteError(w, r, http.StatusNotFound, "invalid_code", "The code was already used.")
+	if ls.PublicUsed || ls.Status == "exchanged" {
+		web.WriteError(w, r, http.StatusNotFound, "invalid_public_token", "This public_token was already used.")
 		return exchangeGrant{}, false
 	}
-	if a.clock.Real().After(ls.CodeExpires) {
-		web.WriteError(w, r, http.StatusNotFound, "invalid_code", "The code has expired.")
+	if a.clock.Real().After(ls.PublicExpires) {
+		web.WriteError(w, r, http.StatusNotFound, "invalid_public_token", "This public_token has expired. Start a new link.")
 		return exchangeGrant{}, false
 	}
 	if ls.Status != "authorised" {
 		web.WriteError(w, r, http.StatusConflict, "link_session_expired", "The link session is not authorised.")
 		return exchangeGrant{}, false
 	}
-	ls.CodeUsed = true
+	ls.PublicUsed = true
 	ls.Status = "exchanged"
-	status := http.StatusCreated
 	var c *Connection
 	if ls.ConnectionID != "" {
 		c = a.st.Connections[ls.ConnectionID]
@@ -332,7 +333,6 @@ func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *con
 			web.WriteError(w, r, http.StatusConflict, "connection_revoked", "The connection was revoked. Create a new link session.")
 			return exchangeGrant{}, false
 		}
-		status = http.StatusOK
 	} else {
 		c = &Connection{ID: web.NewID("con"), PartnerID: p.ID, UserID: ls.UserID, Institution: ls.Institution, CustomerID: ls.CustomerID, StartDate: ls.StartDate, CreatedAt: a.clock.Now()}
 		a.st.Connections[c.ID] = c
@@ -344,8 +344,9 @@ func (a *App) beginExchangeLocked(w http.ResponseWriter, r *http.Request, p *con
 		web.WriteError(w, r, http.StatusInternalServerError, "internal_error", "The bank tokens could not be stored.")
 		return exchangeGrant{}, false
 	}
+	c.AccessHash = accessHash
 	auth := a.authoriseLocked(c, ls)
-	return exchangeGrant{conn: c, status: status, oldConsent: oldConsent, consent: c.ConsentID, auth: auth}, true
+	return exchangeGrant{conn: c, oldConsent: oldConsent, consent: c.ConsentID, auth: auth}, true
 }
 
 type authorisation struct {

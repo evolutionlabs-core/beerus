@@ -99,24 +99,24 @@ func (a *App) pickSubmit(w http.ResponseWriter, r *http.Request) {
 		a.pickPageLocked(w, ws, ls, http.StatusUnprocessableEntity, nil)
 		return
 	}
-	secret, err := web.NewSecret("oc_", 16)
+	secret, err := web.NewSecret(publicTokenPrefix, 16)
 	if err != nil {
-		a.log.Error("link code", "err", err)
+		a.log.Error("public token", "err", err)
 		a.failSession(w, r, ls, "server_error")
 		return
 	}
 	slices.Sort(keys)
 	ls.Accounts = keys
 	ls.Status = "authorised"
-	ls.CodeHash = web.HashSecret(secret)
-	ls.CodeExpires = a.clock.Real().Add(codeLife)
+	ls.PublicHash = web.HashSecret(secret)
+	ls.PublicExpires = a.clock.Real().Add(publicTokenLife)
 	if err := a.saveLocked(); err != nil {
 		a.log.Error("save state", "err", err)
 	}
 	if ls.Overlay {
 		a.endWidgetLocked(w, ls)
-		a.resultLocked(w, "connected", ls, url.Values{"code": {secret}})
+		a.resultLocked(w, "connected", ls, url.Values{"public_token": {secret}})
 		return
 	}
-	a.redirectPartner(w, r, ls, url.Values{"code": {secret}})
+	a.redirectPartner(w, r, ls, url.Values{"public_token": {secret}})
 }

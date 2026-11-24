@@ -24,8 +24,11 @@ type Record struct {
 	Status      int       `json:"status"`
 	ContentType string    `json:"content_type"`
 	Body        []byte    `json:"body"`
+	Replay      string    `json:"replay,omitempty"`
 	CreatedReal time.Time `json:"created_real"`
 }
+
+const SecretReplyHeader = "Beerus-Secret-Reply"
 
 type Store interface {
 	Lookup(scope string) *Record
@@ -113,6 +116,10 @@ func (i *Idempotency) Wrap(store Store, owner func(*http.Request) string, log *s
 				WriteError(w, r, http.StatusUnprocessableEntity, "idempotency_key_reused", "This Idempotency-Key was used with a different request.")
 				return
 			}
+			if rec.Replay != "" {
+				WriteError(w, r, http.StatusConflict, "conflict", rec.Replay)
+				return
+			}
 			if rec.ContentType != "" {
 				w.Header().Set("Content-Type", rec.ContentType)
 			}
@@ -127,9 +134,14 @@ func (i *Idempotency) Wrap(store Store, owner func(*http.Request) string, log *s
 		if rw.status == 0 {
 			rw.status = http.StatusOK
 		}
+		replay := rw.Header().Get(SecretReplyHeader)
+		rw.Header().Del(SecretReplyHeader)
 		var rec *Record
 		if rw.status < 500 && rw.status != http.StatusTooManyRequests {
 			rec = &Record{Hash: hash, Status: rw.status, ContentType: rw.Header().Get("Content-Type"), Body: rw.buf.Bytes()}
+			if replay != "" {
+				rec.Body, rec.Replay = nil, replay
+			}
 		}
 		if err := store.Commit(scope, rec); err != nil {
 			log.Error("save state", "err", err)

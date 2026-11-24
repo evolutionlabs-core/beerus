@@ -216,27 +216,29 @@ The response holds a `link_token` and its `expiration`. Open Connect over your p
 ```html
 <script src="http://connect.localhost:7444/connect.js"></script>
 <script>BeerusConnect.open(LINK_TOKEN, {
-  onSuccess: (publicToken, metadata) => fetch('/exchange', {method: 'POST', body: JSON.stringify({code: publicToken, link_session_id: metadata.link_session_id})}),
+  onSuccess: (publicToken, metadata) => fetch('/exchange', {method: 'POST', body: JSON.stringify({public_token: publicToken})}),
   onExit: error => {}
 })</script>
 ```
 
 Connect opens on the bank list, or goes straight to the bank when the link token has an `institution_id`. The customer logs in on the bank's own page in a popup and approves. Then:
 
-- `onSuccess(publicToken, metadata)` runs when they finish. `publicToken` is the one-time `code` to exchange within 10 minutes. `metadata` holds `link_session_id`, `institution` and `accounts` (`account_id`, `name` and `mask` for each account the customer picked).
+- `onSuccess(publicToken, metadata)` runs when they finish. `publicToken` works once and lasts 10 minutes. `metadata` holds `institution` and `accounts` (`account_id`, `name` and `mask` for each account the customer picked).
 - `onExit(error)` runs when they close Connect (`error` is `null`) or it fails (`error` has a `code` and `message`).
 
 The page that calls `open` must be served from the origin of the `redirect_uri` you registered with `beerus partner add --redirect-uri`. Connect only lets that origin frame it, and sends results only to it. To keep the handle, use `const connect = BeerusConnect.create({token, onSuccess, onExit}); connect.open();`.
 
-Without the script, send the customer to `http://connect.localhost:7444/link?token=LINK_TOKEN`. Beerus Connect then redirects them to your redirect URI with a `code` and a `link_session_id`. The customer picks which of the bank's accounts to share, and only those accounts appear in your data. Connect shares history from 90 days before today, or less if the bank keeps less.
+Without the script, send the customer to `http://connect.localhost:7444/link?token=LINK_TOKEN`. Beerus Connect then redirects them to your redirect URI with a `public_token` and a `link_session_id`. The customer picks which of the bank's accounts to share, and only those accounts appear in your data. Connect shares history from 90 days before today, or less if the bank keeps less.
 
 ## 3. Get the connection
 
-Exchange the code within 10 minutes:
+Exchange the `public_token` within 10 minutes:
 
 ```bash
-api /v1/connections/exchange -d '{"code":"CODE","link_session_id":"LINK_SESSION_ID"}'
+api /v1/public_token/exchange -d '{"public_token":"PUBLIC_TOKEN"}'
 ```
+
+The response holds an `access_token` and a `connection_id`. Keep the `access_token` on your server.
 
 ## 4. Read customer data
 

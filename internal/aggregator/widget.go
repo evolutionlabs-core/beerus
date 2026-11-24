@@ -180,12 +180,11 @@ type overlayAccount struct {
 }
 
 type overlayResult struct {
-	PublicToken   string            `json:"public_token,omitempty"`
-	Picking       bool              `json:"picking,omitempty"`
-	LinkSessionID string            `json:"link_session_id"`
-	Institution   map[string]string `json:"institution"`
-	Accounts      []overlayAccount  `json:"accounts"`
-	Error         *overlayError     `json:"error,omitempty"`
+	PublicToken string            `json:"public_token,omitempty"`
+	Picking     bool              `json:"picking,omitempty"`
+	Institution map[string]string `json:"institution"`
+	Accounts    []overlayAccount  `json:"accounts"`
+	Error       *overlayError     `json:"error,omitempty"`
 }
 
 func overlayMessage(code string) string {
@@ -202,11 +201,10 @@ func overlayMessage(code string) string {
 
 func (a *App) resultLocked(w http.ResponseWriter, name string, ls *LinkSession, params url.Values) {
 	res := overlayResult{
-		PublicToken:   params.Get("code"),
-		Picking:       params.Get("picking") != "",
-		LinkSessionID: ls.ID,
-		Institution:   a.institutionJSON(ls.Institution),
-		Accounts:      []overlayAccount{},
+		PublicToken: params.Get("public_token"),
+		Picking:     params.Get("picking") != "",
+		Institution: a.institutionJSON(ls.Institution),
+		Accounts:    []overlayAccount{},
 	}
 	if code := params.Get("error"); code != "" {
 		res.Error = &overlayError{Code: code, Message: overlayMessage(code)}

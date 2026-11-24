@@ -276,20 +276,29 @@ func TestExchangeErrors(t *testing.T) {
 	mk := func() linkResult {
 		return s.completeLink(s.linkURL("w", ""), "bank-a", "tunde", nil)
 	}
-	r1, r2 := mk(), mk()
-	id1, id2 := r1.SessionID, r2.SessionID
-	r := s.call("POST", "/v1/connections/exchange", map[string]any{"code": r1.Code, "link_session_id": id2})
-	if r.Status != 403 || r.Code() != "link_session_mismatch" {
-		t.Fatalf("crossed code: %d %s", r.Status, r.Body)
+	r1 := mk()
+	id1 := r1.SessionID
+	exchange := func(token string) Resp {
+		return s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": token})
 	}
-	r = s.call("POST", "/v1/connections/exchange", map[string]any{"code": "oc_nope", "link_session_id": id1})
-	if r.Status != 404 || r.Code() != "invalid_code" {
-		t.Fatalf("unknown code: %d %s", r.Status, r.Body)
+	ok := s.must(exchange(r1.PublicToken), 200)
+	if !strings.HasPrefix(fmt.Sprint(ok.JSON["access_token"]), "access-") || !strings.HasPrefix(fmt.Sprint(ok.JSON["connection_id"]), "con_") {
+		t.Fatalf("exchange body: %s", ok.Body)
 	}
-	s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": r1.Code, "link_session_id": id1}), 201)
-	r = s.call("POST", "/v1/connections/exchange", map[string]any{"code": r1.Code, "link_session_id": id1})
-	if r.Status != 404 || r.Code() != "invalid_code" {
-		t.Fatalf("reused code: %d %s", r.Status, r.Body)
+	rows := []struct {
+		name    string
+		token   string
+		status  int
+		message string
+	}{
+		{"unknown", "public-nope", 404, "This public_token is not known."},
+		{"reused", r1.PublicToken, 404, "This public_token was already used."},
+	}
+	for _, c := range rows {
+		r := exchange(c.token)
+		if r.Status != c.status || r.Code() != "invalid_public_token" || !strings.Contains(string(r.Body), c.message) {
+			t.Fatalf("%s: %d %s, want %d invalid_public_token %q", c.name, r.Status, r.Body, c.status, c.message)
+		}
 	}
 	view := s.must(s.call("GET", "/v1/link_sessions/"+id1, nil), 200)
 	if view.JSON["status"] != "exchanged" || view.JSON["connection_id"] == nil {
@@ -378,11 +387,11 @@ func TestReauthKeepsTheConnection(t *testing.T) {
 		t.Fatalf("reauth session: %s", ls.Body)
 	}
 	res := s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), "", "tunde", nil)
-	if res.Code == "" || res.State != "again" {
+	if res.PublicToken == "" || res.State != "again" {
 		t.Fatalf("reauth link: %+v", res)
 	}
-	ex := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 200)
-	if ex.JSON["id"] != conn.ConnectionID {
+	ex := s.must(s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": res.PublicToken}), 200)
+	if ex.JSON["connection_id"] != conn.ConnectionID {
 		t.Fatal("reauth created a new connection")
 	}
 	s.syncNow()
