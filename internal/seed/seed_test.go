@@ -30,7 +30,7 @@ func initConfig(t *testing.T, today clock.Date, local setup.Local) *config.Confi
 	return cfg
 }
 
-func TestOldDirIsRefused(t *testing.T) {
+func TestInitRefusals(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, setup.OldSpecFile), []byte("seed: 1\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -46,6 +46,15 @@ func TestOldDirIsRefused(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, setup.StatusFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("an old dir got a status store: %v", err)
+	}
+	bad := banktest.Spec("beerus")
+	bad.Spec.Banks[1].ID = "cbn"
+	fresh := t.TempDir()
+	if err := Init(fresh, bad, setup.DefaultLocal(), clock.Date{Y: 2026, M: 11, D: 3}); err == nil || !strings.Contains(err.Error(), "reserved for the CBN") {
+		t.Fatalf("init with a reserved id: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(fresh, setup.StatusFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused spec left a status store: %v", err)
 	}
 }
 
@@ -107,6 +116,10 @@ func TestInitWritesTheDefaultSetup(t *testing.T) {
 	if err := Init(cfg.Dir, banktest.Spec("beerus"), setup.DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "already holds") {
 		t.Fatalf("second init: %v", err)
 	}
+	other := initConfig(t, today, setup.DefaultLocal())
+	if st2, err := setup.LoadStatus(other.Dir); err != nil || st2.SetupKey == 0 || st2.SetupKey == st.SetupKey {
+		t.Fatalf("setup keys %d and %d, %v", st.SetupKey, st2.SetupKey, err)
+	}
 }
 
 func TestDatabaseURLFromEnvIsNeverWritten(t *testing.T) {
@@ -124,32 +137,5 @@ func TestDatabaseURLFromEnvIsNeverWritten(t *testing.T) {
 		if strings.Contains(string(raw), "hunter2") {
 			t.Fatalf("%s holds the database password", f)
 		}
-	}
-}
-
-func TestInitRefusesABadSpec(t *testing.T) {
-	today := clock.Date{Y: 2026, M: 11, D: 3}
-	spec := banktest.Spec("beerus")
-	spec.Spec.Banks[1].ID = "cbn"
-	dir := t.TempDir()
-	if err := Init(dir, spec, setup.DefaultLocal(), today); err == nil || !strings.Contains(err.Error(), "reserved for the CBN") {
-		t.Fatalf("init with a reserved id: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, setup.StatusFile)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("a refused spec left a status store: %v", err)
-	}
-}
-
-func TestNewSetupKeyIsRandom(t *testing.T) {
-	a, err := newSetupKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := newSetupKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a == 0 || a == b {
-		t.Fatalf("keys %d and %d", a, b)
 	}
 }

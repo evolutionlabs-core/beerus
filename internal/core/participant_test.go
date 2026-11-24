@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"github.com/evolutionlabs-core/beerus/internal/control"
 	"io"
@@ -43,21 +44,17 @@ type controlReply struct {
 
 type contractCall func(method, path, key, body, token string, validate bool) controlReply
 
-func participantValidator(t *testing.T) validator.Validator {
-	t.Helper()
+func participantValidator() (validator.Validator, error) {
 	spec, err := os.ReadFile(participantSpec)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	doc, err := libopenapi.NewDocument(spec)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	v, errs := validator.NewValidator(doc)
-	if len(errs) > 0 {
-		t.Fatalf("validator: %v", errs)
-	}
-	return v
+	return v, errors.Join(errs...)
 }
 
 func newContractCall(t *testing.T, v validator.Validator, handler http.Handler) contractCall {

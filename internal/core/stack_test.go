@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/evolutionlabs-core/beerus/internal/control"
-	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -17,14 +15,15 @@ import (
 	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/control"
 	nibssparticipant "github.com/evolutionlabs-core/beerus/internal/nibss/participant"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 )
 
 const (
 	testProvisionLimit = 60 * time.Second
 	testProvisionPoll  = 50 * time.Millisecond
 	testBindTries      = 4
-	testBind           = "127.0.0.1"
 )
 
 type testNode struct {
@@ -34,42 +33,30 @@ type testNode struct {
 	err    error
 }
 
-func spawnTestNode(name string, serve func(context.Context) error) *testNode {
+type testNodes []*testNode
+
+func (ns *testNodes) add(name string, serve func(context.Context) error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &testNode{name: name, cancel: cancel, exited: make(chan struct{})}
 	go func() {
 		defer close(n.exited)
 		n.err = serve(ctx)
 	}()
-	return n
-}
-
-func (n *testNode) halt() error {
-	n.cancel()
-	<-n.exited
-	if n.err != nil {
-		return fmt.Errorf("serve %s: %w", n.name, n.err)
-	}
-	return nil
-}
-
-type testNodes struct {
-	order []*testNode
+	*ns = append(*ns, n)
 }
 
 func (ns *testNodes) halt() error {
 	var errs []error
-	for i := len(ns.order) - 1; i >= 0; i-- {
-		errs = append(errs, ns.order[i].halt())
+	for i := len(*ns) - 1; i >= 0; i-- {
+		n := (*ns)[i]
+		n.cancel()
+		<-n.exited
+		if n.err != nil {
+			errs = append(errs, fmt.Errorf("serve %s: %w", n.name, n.err))
+		}
 	}
-	ns.order = nil
+	*ns = nil
 	return errors.Join(errs...)
-}
-
-func (ns *testNodes) add(name string, serve func(context.Context) error) *testNode {
-	n := spawnTestNode(name, serve)
-	ns.order = append(ns.order, n)
-	return n
 }
 
 func prepareTestCore(t *testing.T, o Options) (*App, *config.Config) {
@@ -94,18 +81,6 @@ func newTestApp(t *testing.T, o Options) *App {
 	return a
 }
 
-func dropTestDatabases(t *testing.T, cfg *config.Config) {
-	t.Helper()
-	ctx := context.WithoutCancel(t.Context())
-	names, err := postgres.List(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, ""))
-	if err == nil {
-		err = postgres.DropDatabases(ctx, cfg.DatabaseURL, names)
-	}
-	if err != nil {
-		t.Errorf("drop databases: %v", err)
-	}
-}
-
 func startTestNodes(t *testing.T, o Options) (*App, *testNodes, error) {
 	t.Helper()
 	a, cfg := prepareTestCore(t, o)
@@ -114,7 +89,16 @@ func startTestNodes(t *testing.T, o Options) (*App, *testNodes, error) {
 		t.Skipf("no Postgres for app tests (%v); set BEERUS_TEST_DATABASE_URL", err)
 	}
 	conn.Close(context.Background())
-	t.Cleanup(func() { dropTestDatabases(t, cfg) })
+	t.Cleanup(func() {
+		ctx := context.WithoutCancel(t.Context())
+		names, err := postgres.List(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, ""))
+		if err == nil {
+			err = postgres.DropDatabases(ctx, cfg.DatabaseURL, names)
+		}
+		if err != nil {
+			t.Errorf("drop databases: %v", err)
+		}
+	})
 	ns := &testNodes{}
 	cbn, err := cbnparticipant.New(context.Background(), cfg.Dir, cbnparticipant.Options{Logger: a.log, DatabaseURL: cfg.DatabaseURL})
 	if err != nil {
@@ -130,7 +114,7 @@ func startTestNodes(t *testing.T, o Options) (*App, *testNodes, error) {
 	defer tick.Stop()
 	upCtx, upStop := context.WithTimeout(context.Background(), testProvisionLimit)
 	defer upStop()
-	for !participantsAnswer(upCtx, a) {
+	for !(answers(upCtx, a.nibssCtl.Link, a.nibssCtl.Base) && answers(upCtx, a.cbnCtl.link, a.cbnCtl.base)) {
 		select {
 		case <-upCtx.Done():
 			return nil, ns, errors.Join(upCtx.Err(), ns.halt())
@@ -140,28 +124,21 @@ func startTestNodes(t *testing.T, o Options) (*App, *testNodes, error) {
 	return a, ns, nil
 }
 
-func startWithNodes(t *testing.T, o Options) (*App, *testNodes) {
+func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("starts the NIBSS and CBN participants; run without -short")
 	}
-	if o.Logger == nil {
-		o.Logger = slog.New(slog.DiscardHandler)
-	}
+	var a *App
+	var ns *testNodes
 	for try := 0; ; try++ {
-		a, ns, err := startTestNodes(t, o)
-		if err == nil {
-			return a, ns
-		}
-		if try == testBindTries {
+		var err error
+		if a, ns, err = startTestNodes(t, o); err == nil {
+			break
+		} else if try == testBindTries {
 			t.Fatal(err)
 		}
 	}
-}
-
-func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
-	t.Helper()
-	a, ns := startWithNodes(t, o)
 	stop := sync.OnceFunc(func() {
 		if err := ns.halt(); err != nil {
 			t.Errorf("stop the participants: %v", err)
@@ -177,10 +154,6 @@ func newTestAppWithNIBSS(t *testing.T, o Options) (*App, func()) {
 		}
 	}
 	return a, stop
-}
-
-func participantsAnswer(ctx context.Context, a *App) bool {
-	return answers(ctx, a.nibssCtl.Link, a.nibssCtl.Base) && answers(ctx, a.cbnCtl.link, a.cbnCtl.base)
 }
 
 func answers(ctx context.Context, link control.Link, base string) bool {

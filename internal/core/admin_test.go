@@ -111,6 +111,17 @@ func setBankPhase(a *App, id, phase string) {
 }
 
 func TestBanks(t *testing.T) {
+	built := make(chan struct {
+		v   validator.Validator
+		err error
+	}, 1)
+	go func() {
+		v, err := participantValidator()
+		built <- struct {
+			v   validator.Validator
+			err error
+		}{v, err}
+	}()
 	core, stopNIBSS := newTestAppWithNIBSS(t, Options{Logger: slog.New(slog.DiscardHandler)})
 	coreURL := startCore(t, core)
 	t.Run("books not ready", func(t *testing.T) {
@@ -126,7 +137,11 @@ func TestBanks(t *testing.T) {
 	})
 	t.Run("retire", func(t *testing.T) { retireRows(t, core, coreURL) })
 	t.Run("verify", func(t *testing.T) { verifyRows(t, core) })
-	v := participantValidator(t)
+	spec := <-built
+	if spec.err != nil {
+		t.Fatalf("validator: %v", spec.err)
+	}
+	v := spec.v
 	t.Run("participant control contract", func(t *testing.T) { controlContract(t, v) })
 	t.Run("participant bank contract", func(t *testing.T) {
 		bankContract(t, v, core, bankOn(t, core, coreURL, "bank-b", true), "bank-b", stopNIBSS)
