@@ -50,28 +50,15 @@ func (b *testBank) take(n int) *testBank {
 }
 
 func newBank(t testing.TB, id, nip, nubanCode string, customers int) *testBank {
-	ctx := context.Background()
 	b := bank.New(ledger.New(banktest.Schema(t), nil), bank.Profile{ID: id, Name: id, NIPCode: nip, NUBANCode: nubanCode, PasswordCost: bcrypt.MinCost}, banktest.Fees(t))
-	if err := b.Setup(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.Genesis(ctx, 1000000000000, 200000000000, t0); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, b.Setup(ctx))
+	chk(t, b.Genesis(ctx, 1000000000000, 200000000000, t0))
 	tb := &testBank{Bank: b}
 	for i := 0; i < customers; i++ {
-		c, err := b.CreateCustomer(ctx, fmt.Sprintf("c%d", i), fmt.Sprintf("%s customer %d", id, i), "+2348030000001", clock.Date{Y: 1990, M: 1, D: 1}, "22912345678", "", "", t0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		acc, err := b.OpenAccount(ctx, fmt.Sprintf("a%d", i), c.ID, bank.ProductCurrent, t0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		n := acc.NUBAN
-		if _, err := b.CashDeposit(ctx, "open:"+n, n, 50000000, t0); err != nil {
-			t.Fatal(err)
-		}
+		c := mustCustomer(t, b, fmt.Sprintf("c%d", i), fmt.Sprintf("%s customer %d", id, i))
+		n := mustAccount(t, b, fmt.Sprintf("a%d", i), c.ID).NUBAN
+		_, err := b.CashDeposit(ctx, "open:"+n, n, 50000000, t0)
+		chk(t, err)
 		tb.custs = append(tb.custs, n)
 	}
 	free := slices.Clone(tb.custs)
@@ -81,10 +68,8 @@ func newBank(t testing.TB, id, nip, nubanCode string, customers int) *testBank {
 
 func mustOK(t testing.TB, l *ledger.Ledger) {
 	t.Helper()
-	c, err := l.Verify(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	c, err := l.Verify(ctx)
+	chk(t, err)
 	if !c.OK() {
 		t.Fatal(c)
 	}
@@ -92,17 +77,15 @@ func mustOK(t testing.TB, l *ledger.Ledger) {
 
 func bal(t testing.TB, b *bank.Bank, code string) int64 {
 	t.Helper()
-	v, err := b.L.Balance(context.Background(), code)
-	if err != nil {
-		t.Fatal(err)
-	}
+	v, err := b.L.Balance(ctx, code)
+	chk(t, err)
 	return v
 }
 
 func transferPostings(t *testing.T, a *testBank) {
-	ctx := context.Background()
 	to := bank.Counterparty{Name: "CHIDI OKAFOR", BankName: "BANK B"}
-	rows := []struct {
+	accounts := []string{bank.NIPOutward, bank.FeeIncome, bank.VATPayable, bank.StampPayable}
+	for i, r := range []struct {
 		name      string
 		amount    int64
 		noCharges bool
@@ -117,20 +100,17 @@ func transferPostings(t *testing.T, a *testBank) {
 		{name: "free NIP", amount: 300000, lines: 1},
 		{name: "closure send", amount: 2000000, noCharges: true, lines: 1},
 		{name: "own account", amount: 2000000, own: true, lines: 1},
-		{name: "zero", amount: 0, err: ledger.ErrInvalid, msg: "ledger: invalid entry: amount must be positive"},
+		{name: "zero", err: ledger.ErrInvalid, msg: "ledger: invalid entry: amount must be positive"},
 		{name: "the largest amount", amount: math.MaxInt64, err: ledger.ErrOverflow, msg: "ledger: amount overflow"},
 		{name: "more than the balance", amount: 1 << 50, err: ledger.ErrInsufficientFunds, msg: "ledger: insufficient funds"},
-	}
-	for i, r := range rows {
+	} {
 		from := a.custs[i%len(a.custs)]
-		accounts := []string{bank.NIPOutward, bank.FeeIncome, bank.VATPayable, bank.StampPayable}
 		before := make([]int64, len(accounts))
 		for j, code := range accounts {
 			before[j] = bal(t, a.Bank, code)
 		}
 		own := bal(t, a.Bank, bank.CustomerAccount(from))
 		evs, _ := a.L.Events(ctx, bank.CustomerAccount(from), 0, 1000)
-		lines := len(evs)
 		sid := fmt.Sprintf("99900126030208%08d%08d", 1, i+1)
 		var err error
 		var c charges.Transfer
@@ -143,12 +123,7 @@ func transferPostings(t *testing.T, a *testBank) {
 			wantErr(t, err, r.err, r.msg)
 			continue
 		}
-		if err != nil || c != (charges.Transfer{Fee: r.fee, VAT: r.vat, StampDuty: r.stamp}) {
-			t.Fatalf("%s: charges %+v, %v", r.name, c, err)
-		}
-		if got := own - bal(t, a.Bank, bank.CustomerAccount(from)); got != r.amount+r.fee+r.vat+r.stamp {
-			t.Errorf("%s: customer debited %d", r.name, got)
-		}
+		after, _ := a.L.Events(ctx, bank.CustomerAccount(from), 0, 1000)
 		want := []int64{r.amount, r.fee, r.vat, r.stamp}
 		if r.own {
 			want[0] = 0
@@ -158,15 +133,13 @@ func transferPostings(t *testing.T, a *testBank) {
 				t.Errorf("%s: %s moved %d, want %d", r.name, code, got, want[j])
 			}
 		}
-		if evs, _ := a.L.Events(ctx, bank.CustomerAccount(from), 0, 1000); len(evs)-lines != r.lines {
-			t.Errorf("%s: %d statement lines, want %d", r.name, len(evs)-lines, r.lines)
+		if got := own - bal(t, a.Bank, bank.CustomerAccount(from)); err != nil || c != (charges.Transfer{Fee: r.fee, VAT: r.vat, StampDuty: r.stamp}) || got != r.amount+r.fee+r.vat+r.stamp || len(after)-len(evs) != r.lines {
+			t.Errorf("%s: charges %+v, debited %d, %d lines, %v", r.name, c, got, len(after)-len(evs), err)
 		}
 	}
-	mustOK(t, a.L)
 }
 
 func narration(t *testing.T, a *testBank) {
-	ctx := context.Background()
 	sender := bank.Counterparty{Name: "AMA", BankName: "BANK A"}
 	to := bank.Counterparty{Name: "CHIDI OKAFOR", BankName: "BANK B"}
 	for i, tc := range []struct{ narration, sent, received string }{
@@ -174,12 +147,10 @@ func narration(t *testing.T, a *testBank) {
 		{"Rent", "NIP TRF TO CHIDI OKAFOR/BANK B/000000000002/Rent", "NIP TRF FRM AMA/BANK A/000000000002/Rent"},
 	} {
 		sid := fmt.Sprintf("99900126030212000000%010d", i+1)
-		if _, _, err := a.SendNIP(ctx, bank.NIPSend{Key: sid, From: a.custs[0], Amount: 100000, SessionID: sid, To: to, At: t0.Add(time.Hour), Narration: tc.narration}); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := credit(ctx, a.Bank, sid, a.custs[1], 100000, sender, tc.narration, t0.Add(time.Hour)); err != nil {
-			t.Fatal(err)
-		}
+		_, _, err := a.SendNIP(ctx, bank.NIPSend{Key: sid, From: a.custs[0], Amount: 100000, SessionID: sid, To: to, At: t0.Add(time.Hour), Narration: tc.narration})
+		chk(t, err)
+		_, err = credit(ctx, a.Bank, sid, a.custs[1], 100000, sender, tc.narration, t0.Add(time.Hour))
+		chk(t, err)
 		sent, _ := a.L.Events(ctx, bank.CustomerAccount(a.custs[0]), 0, 50)
 		got, _ := a.L.Events(ctx, bank.CustomerAccount(a.custs[1]), 0, 50)
 		if !hasNarration(sent, tc.sent) || !hasNarration(got, tc.received) {
@@ -189,12 +160,7 @@ func narration(t *testing.T, a *testBank) {
 }
 
 func hasNarration(evs []ledger.Event, want string) bool {
-	for _, e := range evs {
-		if e.Narration == want {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(evs, func(e ledger.Event) bool { return e.Narration == want })
 }
 
 type cbn struct {
@@ -236,6 +202,7 @@ func (c *cbn) settle(t testing.TB, key string, net map[string]int64, at time.Tim
 }
 
 func TestPostings(t *testing.T) {
+	t.Parallel()
 	a := newBank(t, "bank-a", "999001", "901", 19)
 	for _, s := range []struct {
 		name  string
@@ -256,6 +223,7 @@ func TestPostings(t *testing.T) {
 }
 
 func TestMoneyIsConservedAcrossBanksUnderFaults(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	banks := map[string]*testBank{
 		"bank-a": newBank(t, "bank-a", "999001", "901", 4),

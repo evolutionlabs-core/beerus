@@ -1,34 +1,21 @@
 package bank_test
 
 import (
-	"errors"
 	"os/exec"
 	"slices"
 	"strings"
 	"testing"
 )
 
-const (
-	modulePath     = "github.com/evolutionlabs-core/beerus"
-	testSupportPkg = modulePath + "/internal/bank/banktest"
-)
+const modulePath = "github.com/evolutionlabs-core/beerus"
 
-var forbidden = []string{
-	modulePath + "/internal/nibss",
-	modulePath + "/internal/core",
-	modulePath + "/internal/setup",
-	modulePath + "/cmd",
-}
+var forbidden = []string{modulePath + "/internal/nibss", modulePath + "/internal/core", modulePath + "/internal/setup", modulePath + "/cmd"}
 
 func goList(t *testing.T, args ...string) []string {
 	t.Helper()
-	out, err := exec.Command("go", append([]string{"list"}, args...)...).Output()
+	out, err := exec.Command("go", append([]string{"list"}, args...)...).CombinedOutput()
 	if err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			t.Fatalf("list %v: %v: %s", args, err, exit.Stderr)
-		}
-		t.Fatalf("list %v: %v", args, err)
+		t.Fatalf("list %v: %v: %s", args, err, out)
 	}
 	return strings.Split(strings.TrimSpace(string(out)), "\n")
 }
@@ -43,11 +30,11 @@ func reaches(dep string) string {
 }
 
 func TestBoundary(t *testing.T) {
-	lines := goList(t, "-f", `{{.ImportPath}} {{join .Deps " "}} {{join .TestImports " "}} {{join .XTestImports " "}}`, "./...", "../web", "../view")
+	t.Parallel()
 	listed := map[string]bool{}
-	for _, line := range lines {
+	for _, line := range goList(t, "-f", `{{.ImportPath}} {{join .Deps " "}} {{join .TestImports " "}} {{join .XTestImports " "}}`, "./...", "../web", "../view") {
 		fields := strings.Fields(line)
-		if len(fields) == 0 || fields[0] == testSupportPkg {
+		if len(fields) == 0 || fields[0] == modulePath+"/internal/bank/banktest" {
 			continue
 		}
 		listed[fields[0]] = true
@@ -57,29 +44,18 @@ func TestBoundary(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"consent", "participant", "server", "site", "store"} {
-		if !listed[modulePath+"/internal/bank/"+name] {
-			t.Errorf("internal/bank/%s is not covered by the boundary check", name)
-		}
-	}
-	for _, name := range []string{"view", "web"} {
+	for _, name := range []string{"bank/consent", "bank/participant", "bank/server", "bank/site", "bank/store", "view", "web"} {
 		if !listed[modulePath+"/internal/"+name] {
 			t.Errorf("internal/%s is not covered by the boundary check", name)
 		}
 	}
-
 	deps := goList(t, "-deps", "./participant")
 	if !slices.Contains(deps, modulePath+"/internal/bank/site") || !slices.Contains(deps, modulePath+"/internal/bank/consent") {
 		t.Fatalf("the bank process does not reach its site and consent sender: %v", deps)
 	}
-	for _, dep := range deps {
+	for _, dep := range append(deps, goList(t, "-deps", "../view")...) {
 		if bad := reaches(dep); bad != "" {
-			t.Errorf("the bank process reaches %s through %s", bad, dep)
-		}
-	}
-	for _, dep := range goList(t, "-deps", "../view") {
-		if bad := reaches(dep); bad != "" {
-			t.Errorf("the shared UI package reaches %s through %s", bad, dep)
+			t.Errorf("a bank process package reaches %s through %s", bad, dep)
 		}
 	}
 }
