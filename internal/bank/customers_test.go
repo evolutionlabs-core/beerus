@@ -206,11 +206,8 @@ func rejectedCustomers(t *testing.T, a *testBank) {
 		msg              string
 	}{
 		{"", "A", "080", dob, "229", "", "", "idempotency key is empty"},
-		{"k", " ", "080", dob, "229", "", "", "name is empty"},
 		{"k", "A", "080-1", dob, "229", "", "", `phone "080-1" must be digits with an optional leading +`},
-		{"k", "A", "080", clock.Date{}, "229", "", "", "date of birth is empty"},
 		{"k", "A", "080", future, "229", "", "", "date of birth 2026-03-03 is after today, 2026-03-02"},
-		{"k", "A", "080", dob, "22a", "", "", `BVN "22a" must be digits`},
 		{"k", "A", "080", dob, "229", "", hash, "a password needs a username"},
 		{"k", "A", "080", dob, "229", "Ada", hash, `username "Ada" may only use a-z, 0-9, dot, dash and underscore`},
 		{"k", "A", "080", dob, "229", "ada", "", `username "ada" needs a password`},

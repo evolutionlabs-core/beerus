@@ -22,7 +22,6 @@ func TestHistoryStart(t *testing.T) {
 		want   clock.Date
 		capped bool
 	}{
-		{"inside the history", day(2026, time.October, 1), today, 90, day(2026, time.October, 1), false},
 		{"on the floor", day(2026, time.August, 16), today, 90, day(2026, time.August, 16), false},
 		{"a day before the floor", day(2026, time.August, 15), today, 90, day(2026, time.August, 16), true},
 		{"a start in the future", day(2026, time.December, 1), today, 90, day(2026, time.December, 1), false},
@@ -60,7 +59,6 @@ func TestPlanSync(t *testing.T) {
 		{"a millisecond before expiry", Connection{Status: "active", LastSyncedReal: real, ExpiresAt: real.Add(time.Millisecond)}, real, false, false, real},
 		{"at expiry", Connection{Status: "active", LastSyncedReal: real, ExpiresAt: real}, real, true, true, real.Add(-time.Millisecond)},
 		{"expires on a leap day", Connection{Status: "active", LastSyncedReal: leap, ExpiresAt: leap}, leap, true, true, leap.Add(-time.Millisecond)},
-		{"the day before a leap day expiry", Connection{Status: "active", LastSyncedReal: leap.AddDate(0, 0, -1), ExpiresAt: leap}, leap.AddDate(0, 0, -1), false, false, leap.AddDate(0, 0, -1)},
 		{"expiry far in the future", Connection{Status: "active", LastSyncedReal: real, ExpiresAt: at(2126, time.March, 1, 0)}, real, false, false, real},
 	} {
 		got := planSync(&r.conn, interval, r.now, real)

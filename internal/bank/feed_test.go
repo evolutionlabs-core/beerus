@@ -21,9 +21,7 @@ type feedRow struct {
 func feedRows(t *testing.T, b *bank.Bank, nuban string, at time.Time) []feedRow {
 	t.Helper()
 	lines, err := b.Feed(context.Background(), nuban, at, clock.DateOf(t0))
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	out := []feedRow{}
 	for _, l := range lines {
 		r := feedRow{amount: l.Amount, channel: l.Channel, session: l.SessionID != ""}
@@ -57,15 +55,11 @@ func TestFeed(t *testing.T) {
 	at := t0.Add(time.Hour)
 	sid := "999001260302100000000000000001"
 	sent, c, err := a.SendNIP(ctx, bank.NIPSend{Key: sid, From: from, Amount: 1000000, SessionID: sid, To: bank.Counterparty{Name: "CHIDI OKAFOR", AccountNumber: "9020000011", BankCode: "999002", BankName: "BANK B"}, At: at})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.ReverseNIP(ctx, sent.EntryID, sid, at.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.OwnTransfer(ctx, "own-1", from, to, 5000, "", at.Add(2*time.Minute)); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
+	_, err = a.ReverseNIP(ctx, sent.EntryID, sid, at.Add(time.Minute))
+	chk(t, err)
+	_, err = a.OwnTransfer(ctx, "own-1", from, to, 5000, "", at.Add(2*time.Minute))
+	chk(t, err)
 	chidi := "CHIDI OKAFOR/9020000011/999002"
 	other := "bank-a customer 1/" + to + "/999001"
 	want := []feedRow{
@@ -87,9 +81,7 @@ func TestFeed(t *testing.T) {
 		{amount: 5000, channel: "internal", party: "bank-a customer 0/" + from + "/999001"},
 	})
 	got, err := a.BalanceAt(ctx, from, at)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	if want := 50000000 - 1000000 - c.Fee - c.VAT - c.StampDuty; got != want {
 		t.Fatalf("balance at the send: %d, want %d", got, want)
 	}
@@ -104,9 +96,7 @@ func TestFeed(t *testing.T) {
 	cursor := ""
 	for page := 0; page < 4; page++ {
 		lines, next, err := a.Recent(ctx, from, 4, cursor)
-		if err != nil {
-			t.Fatal(err)
-		}
+		chk(t, err)
 		for _, l := range lines {
 			seen = append(seen, l.Amount)
 		}
@@ -136,9 +126,8 @@ func TestFeed(t *testing.T) {
 		t.Fatalf("totals %+v %v", tot, err)
 	}
 	received := bank.Counterparty{Name: "ADAEZE OKAFOR", AccountNumber: "9010000014", BankCode: "999001", BankName: "BANK A"}
-	if _, err := credit(ctx, a.Bank, "999001260302100000000000000002", a.custs[2], 1000000, received, "", at); err != nil {
-		t.Fatal(err)
-	}
+	_, err = credit(ctx, a.Bank, "999001260302100000000000000002", a.custs[2], 1000000, received, "", at)
+	chk(t, err)
 	sameRows(t, feedRows(t, a.Bank, a.custs[2], at.Add(time.Hour)), []feedRow{
 		{amount: 50000000, channel: "branch"},
 		{amount: 1000000, channel: "nip", party: "ADAEZE OKAFOR/9010000014/999001", session: true},

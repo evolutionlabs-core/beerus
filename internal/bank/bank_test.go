@@ -170,17 +170,14 @@ type cbn struct {
 func newCBN(t testing.TB, banks ...string) *cbn {
 	ctx := context.Background()
 	l := ledger.New(banktest.Schema(t), nil)
-	if _, err := l.OpenAccount(ctx, ledger.Account{Code: "ISSUANCE", Name: "Issuance", Kind: ledger.Asset}); err != nil {
-		t.Fatal(err)
-	}
+	_, err := l.OpenAccount(ctx, ledger.Account{Code: "ISSUANCE", Name: "Issuance", Kind: ledger.Asset})
+	chk(t, err)
 	for _, b := range banks {
-		if _, err := l.OpenAccount(ctx, ledger.Account{Code: "SETTLE:" + b, Name: b + " settlement", Kind: ledger.Liability}); err != nil {
-			t.Fatal(err)
-		}
+		_, err := l.OpenAccount(ctx, ledger.Account{Code: "SETTLE:" + b, Name: b + " settlement", Kind: ledger.Liability})
+		chk(t, err)
 		d := clock.DateOf(t0)
-		if _, err := l.Post(ctx, ledger.Entry{Key: "genesis:" + b, Kind: "genesis", PostingDate: d, PostedAt: t0, Narration: "Issuance", Lines: []ledger.Line{{Account: "ISSUANCE", Amount: 1000000000000}, {Account: "SETTLE:" + b, Amount: -1000000000000}}}); err != nil {
-			t.Fatal(err)
-		}
+		_, err = l.Post(ctx, ledger.Entry{Key: "genesis:" + b, Kind: "genesis", PostingDate: d, PostedAt: t0, Narration: "Issuance", Lines: []ledger.Line{{Account: "ISSUANCE", Amount: 1000000000000}, {Account: "SETTLE:" + b, Amount: -1000000000000}}})
+		chk(t, err)
 	}
 	return &cbn{l: l}
 }
@@ -196,9 +193,8 @@ func (c *cbn) settle(t testing.TB, key string, net map[string]int64, at time.Tim
 		return
 	}
 	d := clock.DateOf(at)
-	if _, err := c.l.Post(context.Background(), ledger.Entry{Key: key, Kind: "rtgs", PostingDate: d, PostedAt: at, Narration: key, Lines: lines}); err != nil {
-		t.Fatal(err)
-	}
+	_, err := c.l.Post(context.Background(), ledger.Entry{Key: key, Kind: "rtgs", PostingDate: d, PostedAt: at, Narration: key, Lines: lines})
+	chk(t, err)
 }
 
 func TestPostings(t *testing.T) {

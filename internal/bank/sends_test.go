@@ -19,21 +19,15 @@ func reverseNIP(t *testing.T, a *testBank) {
 	fee0, vat0, out0 := bal(t, a.Bank, bank.FeeIncome), bal(t, a.Bank, bank.VATPayable), bal(t, a.Bank, bank.NIPOutward)
 	sid := "999001260302100000000000000042"
 	sent, _, err := a.SendNIP(ctx, bank.NIPSend{Key: sid, From: from, Amount: 10000000, SessionID: sid, To: bank.Counterparty{Name: "CHIDI OKAFOR", BankName: "BANK B"}, At: t0.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	_, err = a.ReverseNIP(ctx, sent.EntryID, "999001260302100000000000000043", t0.Add(2*time.Hour))
 	wantErr(t, err, ledger.ErrInvalid, fmt.Sprintf("ledger: invalid entry: entry %d is not the NIP send for session 999001260302100000000000000043", sent.EntryID))
 	dep, err := a.CashDeposit(ctx, "dep", from, 100, t0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	_, err = a.ReverseNIP(ctx, dep.EntryID, sid, t0.Add(2*time.Hour))
 	wantErr(t, err, ledger.ErrInvalid, fmt.Sprintf("ledger: invalid entry: entry %d is not the NIP send for session %s", dep.EntryID, sid))
 	rev, err := a.ReverseNIP(ctx, sent.EntryID, sid, t0.Add(2*time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	again, err := a.ReverseNIP(ctx, sent.EntryID, sid, t0.Add(3*time.Hour))
 	if err != nil || !again.Replayed || again.EntryID != rev.EntryID {
 		t.Fatalf("second reversal %+v %v", again, err)
@@ -42,9 +36,7 @@ func reverseNIP(t *testing.T, a *testBank) {
 		t.Fatalf("balance %d after reversal, want %d", got, before+100)
 	}
 	lines, _, err := a.Statement(ctx, from, clock.Date{}, clock.Date{}, 20, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	var credits []ledger.Event
 	for _, ln := range lines {
 		if ln.EntryID == rev.EntryID {
@@ -120,16 +112,12 @@ func openSends(t *testing.T, a *testBank) {
 		t.Fatalf("nothing is due before the check time: %v, %v", rows, err)
 	}
 	next := due.Add(time.Hour)
-	if err := a.RescheduleSend(ctx, first, next); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, a.RescheduleSend(ctx, first, next))
 	row, open, err := a.OpenSend(ctx, first)
 	if err != nil || !open || row.Attempts != 1 || !row.NextAt.Equal(next) || string(row.Request) != `{"session_id": "`+first+`"}` {
 		t.Fatalf("after a reschedule: %+v %v %v", row, open, err)
 	}
-	if err := a.FinishSend(ctx, first); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, a.FinishSend(ctx, first))
 	if _, open, err := a.OpenSend(ctx, first); err != nil || open {
 		t.Fatalf("a finished send is still open: %v %v", open, err)
 	}
@@ -145,9 +133,7 @@ func settlementBooks(t *testing.T, a *testBank) {
 	ctx := t.Context()
 	from := bank.Counterparty{Name: "CHIDI OKAFOR", AccountNumber: "0123456789", BankCode: "999002", BankName: "BANK B"}
 	base, err := a.SettlementBooks(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	steps := []struct {
 		name                       string
 		run                        func() error
@@ -192,33 +178,25 @@ func limitsAndClosures(t *testing.T, a *testBank) {
 	c0, c1 := a.custs[0], a.custs[1]
 	at := t0.Add(2 * time.Hour)
 	p1, err := a.CashDeposit(ctx, "retry-1", c0, 100000, at)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	p2, err := a.CashDeposit(ctx, "retry-1", c0, 100000, at.Add(time.Second))
 	if err != nil || !p2.Replayed || p2.EntryID != p1.EntryID {
 		t.Fatalf("a retry one second later was not a replay: %+v %v", p2, err)
 	}
 	sid := "999001260302110000000000000777"
 	sent, _, err := a.SendNIP(ctx, bank.NIPSend{Key: "nip-rev:" + sid, From: c0, Amount: 2000000, SessionID: sid, To: bank.Counterparty{Name: "X", BankName: "BANK B"}, At: at})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := a.L.SetStatus(ctx, bank.CustomerAccount(c0), "frozen"); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
+	chk(t, a.L.SetStatus(ctx, bank.CustomerAccount(c0), "frozen"))
 	if _, err := a.ReverseNIP(ctx, sent.EntryID, sid, at.Add(time.Hour)); err != nil {
 		t.Fatalf("refund to a frozen account, or a client key colliding with the reversal key: %v", err)
 	}
 	if _, err := credit(ctx, a.Bank, "123", c1, 100, bank.Counterparty{Name: "X", BankName: "Y"}, "", at); !errors.Is(err, ledger.ErrInvalid) {
 		t.Fatalf("short session ID: %v", err)
 	}
-	if _, err := a.L.OpenAccount(ctx, ledger.Account{Code: bank.CustomerAccount("9020000027"), Name: "Tier one", Kind: ledger.Liability, Customer: true, NUBAN: "9020000027", Product: "savings", Owner: "tier1", KYCTier: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := a.CashDeposit(ctx, "t1dep", "9020000027", 20000000, at); err != nil {
-		t.Fatal(err)
-	}
+	_, err = a.L.OpenAccount(ctx, ledger.Account{Code: bank.CustomerAccount("9020000027"), Name: "Tier one", Kind: ledger.Liability, Customer: true, NUBAN: "9020000027", Product: "savings", Owner: "tier1", KYCTier: 1})
+	chk(t, err)
+	_, err = a.CashDeposit(ctx, "t1dep", "9020000027", 20000000, at)
+	chk(t, err)
 	if _, err := a.CashWithdrawal(ctx, "t1wd", "9020000027", 10000000, at); !errors.Is(err, ledger.ErrDailyLimit) {
 		t.Fatalf("tier 1 cash withdrawal over the daily limit: %v", err)
 	}
@@ -238,9 +216,7 @@ func limitsAndClosures(t *testing.T, a *testBank) {
 	if paid, err := a.ClosurePayouts(ctx); err != nil || paid["9020000027"] != 1000000 {
 		t.Fatalf("closure payouts %v %v, want one payout of 1000000", paid, err)
 	}
-	if err := a.FreezeAccount(ctx, "9020000027"); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, a.FreezeAccount(ctx, "9020000027"))
 	if status, err := a.AccountStatus(ctx, "9020000027"); err != nil || status != "frozen" {
 		t.Fatalf("account status %q %v", status, err)
 	}

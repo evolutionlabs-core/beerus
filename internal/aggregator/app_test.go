@@ -36,9 +36,7 @@ func bankReply(status int, body string) *http.Response {
 func newApp(t *testing.T, rt roundTrip, partners ...*config.Partner) *App {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	return &App{
 		cfg:    &config.Config{Banks: []*config.Bank{{ID: "bank-a", Port: 7001, APIPort: 7011, HistoryDays: 36500}}, Partners: partners},
 		st:     newState(),
@@ -53,9 +51,7 @@ func newApp(t *testing.T, rt roundTrip, partners ...*config.Partner) *App {
 func (a *App) seedToken(t *testing.T, id, access string, accessLife time.Duration) {
 	t.Helper()
 	now := a.clock.Real()
-	if err := a.vaultPut(id, bankToken{Access: access, Refresh: "rt", AccessExpires: now.Add(accessLife), RefreshExpires: now.Add(2 * time.Hour)}); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, a.vaultPut(id, bankToken{Access: access, Refresh: "rt", AccessExpires: now.Add(accessLife), RefreshExpires: now.Add(2 * time.Hour)}))
 }
 
 func (a *App) seedAccount(c *Connection, nuban string) *AccountRec {
@@ -115,9 +111,7 @@ func (r *partnerReply) WriteHeader(code int) { r.code = code }
 func callPartner(t *testing.T, p *config.Partner, h http.HandlerFunc, method, target, body, token string, path map[string]string) (int, map[string]any) {
 	t.Helper()
 	r, err := http.NewRequestWithContext(context.WithValue(t.Context(), ctxPartner, p), method, "http://connect.localhost"+target, strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	if token != "" {
 		r.Header.Set(config.AccessTokenHeader, token)
 	}
@@ -193,5 +187,12 @@ func TestPartnerRequestsAreChecked(t *testing.T) {
 		if status != c.status || code != c.code || message != c.message {
 			t.Errorf("%s: %d %v, want %d %s %q", c.name, status, body, c.status, c.code, c.message)
 		}
+	}
+}
+
+func chk(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

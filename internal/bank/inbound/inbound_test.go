@@ -64,26 +64,17 @@ func newStack(t *testing.T) *stack {
 	t.Helper()
 	ctx := context.Background()
 	b := bank.New(ledger.New(banktest.Schema(t), nil), bank.Profile{ID: "bank-a", Name: "Bank A", NIPCode: nipCode, NUBANCode: nubanCode}, banktest.Fees(t))
-	if err := b.Setup(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := b.Genesis(ctx, 1000000000000, 200000000000, t0); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, b.Setup(ctx))
+	chk(t, b.Genesis(ctx, 1000000000000, 200000000000, t0))
 	s := &stack{bank: b, client: &http.Client{Timeout: clientLimit}}
 	for i, deposit := range []int64{startAmount, 0, 0} {
 		c, err := b.CreateCustomer(ctx, fmt.Sprintf("c%d", i), "ADA OBI", "+2348030000001", clock.Date{Y: 1990, M: 1, D: 1}, "22912345678", "", "", t0)
-		if err != nil {
-			t.Fatal(err)
-		}
+		chk(t, err)
 		acc, err := b.OpenAccount(ctx, fmt.Sprintf("a%d", i), c.ID, bank.ProductCurrent, t0)
-		if err != nil {
-			t.Fatal(err)
-		}
+		chk(t, err)
 		if deposit > 0 {
-			if _, err := b.CashDeposit(ctx, "open:"+acc.NUBAN, acc.NUBAN, deposit, t0); err != nil {
-				t.Fatal(err)
-			}
+			_, err := b.CashDeposit(ctx, "open:"+acc.NUBAN, acc.NUBAN, deposit, t0)
+			chk(t, err)
 		}
 		switch i {
 		case 0:
@@ -92,15 +83,11 @@ func newStack(t *testing.T) *stack {
 			s.empty = acc.NUBAN
 		default:
 			s.frozen = acc.NUBAN
-			if err := b.FreezeAccount(ctx, acc.NUBAN); err != nil {
-				t.Fatal(err)
-			}
+			chk(t, b.FreezeAccount(ctx, acc.NUBAN))
 		}
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	srv := &http.Server{
 		Handler:           inbound.New(b, clock.New(), slog.New(slog.NewTextHandler(io.Discard, nil))),
 		ReadHeaderTimeout: clientLimit,
@@ -116,13 +103,9 @@ func newStack(t *testing.T) *stack {
 	})
 	s.base = "http://" + ln.Addr().String()
 	spec, err := os.ReadFile(specFile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	doc, err := libopenapi.NewDocument(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	v, errs := validator.NewValidator(doc)
 	if len(errs) > 0 {
 		t.Fatalf("validator: %v", errs)
@@ -196,18 +179,14 @@ func (s *stack) do(caller, method, path, body string, mode check) (reply, error)
 func (s *stack) call(t *testing.T, caller, method, path, body string, mode check) reply {
 	t.Helper()
 	r, err := s.do(caller, method, path, body, mode)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	return r
 }
 
 func (s *stack) balance(t *testing.T, nuban string) int64 {
 	t.Helper()
 	v, err := s.bank.L.Balance(context.Background(), bank.CustomerAccount(nuban))
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	return v
 }
 
@@ -233,32 +212,29 @@ func nipContract(t *testing.T, s *stack) {
 		funded       int64
 		empty        int64
 	}{
-		{name: "name found", method: "GET", path: "/v1/nip/account-names/" + s.funded, status: 200, want: fmt.Sprintf(`{"response_code":"00","account_number":%q,"account_name":"ADA OBI"}`, s.funded), funded: startAmount},
-		{name: "name invalid account", method: "GET", path: "/v1/nip/account-names/" + invalid, status: 200, want: fmt.Sprintf(`{"response_code":"07","account_number":%q}`, invalid), funded: startAmount},
-		{name: "name unknown account", method: "GET", path: "/v1/nip/account-names/" + unknown, status: 200, want: fmt.Sprintf(`{"response_code":"25","account_number":%q}`, unknown), funded: startAmount},
-		{name: "credit", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(1), s.funded, 2500000, "Rent for November"), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(1)), funded: startAmount + 2500000},
-		{name: "credit repeat", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(1), s.funded, 2500000, "Rent for November"), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(1)), replayed: true, funded: startAmount + 2500000},
-		{name: "credit reused session", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(1), s.funded, 3000000, "Rent for November"), status: 422, want: fmt.Sprintf(`{"error":{"code":"idempotency_key_reused","message":"Session %s was first credited with amount_minor 2500000, and this request has 3000000. Repeat the first request.","request_id":"req_ID"}}`, session(1)), funded: startAmount + 2500000},
-		{name: "status credited", method: "GET", path: "/v1/nip/credits/" + session(1), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(1)), funded: startAmount + 2500000},
-		{name: "status unknown", method: "GET", path: "/v1/nip/credits/" + session(2), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"25"}`, session(2)), funded: startAmount + 2500000},
-		{name: "credit after 25", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(2), s.funded, 1000000, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"25"}`, session(2)), funded: startAmount + 2500000},
-		{name: "status after refused credit", method: "GET", path: "/v1/nip/credits/" + session(2), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"25"}`, session(2)), funded: startAmount + 2500000},
-		{name: "credit to invalid account", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(3), invalid, 1000000, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"07"}`, session(3)), funded: startAmount + 2500000},
-		{name: "status of refused credit", method: "GET", path: "/v1/nip/credits/" + session(3), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"25"}`, session(3)), funded: startAmount + 2500000},
-		{name: "largest amount", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(4), s.empty, math.MaxInt64, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(4)), funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "overflow", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(5), s.empty, 1, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"96"}`, session(5)), funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "credit to unknown account", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(7), unknown, 1000000, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"07"}`, session(7)), funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "credit to frozen account", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(8), s.frozen, 1000000, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"57"}`, session(8)), funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "wrong caller", client: config.ConnectID, method: "GET", path: "/v1/nip/account-names/" + s.funded, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "wrong caller unknown path", client: config.ConnectID, method: "GET", path: "/v1/nip/nothing", mode: checkNone, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "wrong caller wrong method", client: config.ConnectID, method: "DELETE", path: "/v1/nip/credits", mode: checkNone, status: 403, want: forbidden, funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "no caller", client: "-", method: "GET", path: "/v1/nip/account-names/" + s.funded, mode: checkNone, status: 401, want: anonymous, funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "unknown path", method: "GET", path: "/v1/nip/nothing", mode: checkNone, status: 404, want: `{"error":{"code":"not_found","message":"This path is not part of the NIP API of a bank.","request_id":"req_ID"}}`, funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "wrong method", method: "DELETE", path: "/v1/nip/credits", mode: checkNone, status: 405, allow: "POST", want: `{"error":{"code":"method_not_allowed","message":"Use POST for this path.","request_id":"req_ID"}}`, funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "unknown field", method: "POST", path: "/v1/nip/credits", body: strings.Replace(banktest.CreditBody(session(9), s.funded, 1000000, ""), `"narration"`, `"extra":1,"narration"`, 1), mode: checkResponse, status: 400, want: `{"error":{"code":"invalid_request","message":"Send a JSON credit request with only the documented fields as the body.","request_id":"req_ID"}}`, funded: startAmount + 2500000, empty: math.MaxInt64},
-		{name: "oversized body", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(6), s.funded, 1000000, strings.Repeat("x", bodyLimit)), mode: checkResponse, status: 400, want: fmt.Sprintf(`{"error":{"code":"invalid_request","message":"The body is larger than %d bytes. Send a smaller body.","request_id":"req_ID"}}`, bodyLimit), funded: startAmount + 2500000, empty: math.MaxInt64},
+		{name: "name found", method: "GET", path: "/v1/nip/account-names/" + s.funded, status: 200, want: fmt.Sprintf(`{"response_code":"00","account_number":%q,"account_name":"ADA OBI"}`, s.funded)},
+		{name: "name invalid account", method: "GET", path: "/v1/nip/account-names/" + invalid, status: 200, want: fmt.Sprintf(`{"response_code":"07","account_number":%q}`, invalid)},
+		{name: "name unknown account", method: "GET", path: "/v1/nip/account-names/" + unknown, status: 200, want: fmt.Sprintf(`{"response_code":"25","account_number":%q}`, unknown)},
+		{name: "credit", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(1), s.funded, 2500000, "Rent for November"), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(1)), funded: 2500000},
+		{name: "credit repeat", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(1), s.funded, 2500000, "Rent for November"), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(1)), replayed: true},
+		{name: "credit reused session", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(1), s.funded, 3000000, "Rent for November"), status: 422, want: fmt.Sprintf(`{"error":{"code":"idempotency_key_reused","message":"Session %s was first credited with amount_minor 2500000, and this request has 3000000. Repeat the first request.","request_id":"req_ID"}}`, session(1))},
+		{name: "status credited", method: "GET", path: "/v1/nip/credits/" + session(1), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(1))},
+		{name: "status unknown", method: "GET", path: "/v1/nip/credits/" + session(2), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"25"}`, session(2))},
+		{name: "credit after 25", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(2), s.funded, 1000000, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"25"}`, session(2))},
+		{name: "largest amount", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(4), s.empty, math.MaxInt64, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"00"}`, session(4)), empty: math.MaxInt64},
+		{name: "overflow", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(5), s.empty, 1, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"96"}`, session(5))},
+		{name: "credit to unknown account", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(7), unknown, 1000000, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"07"}`, session(7))},
+		{name: "credit to frozen account", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(8), s.frozen, 1000000, ""), status: 200, want: fmt.Sprintf(`{"session_id":%q,"response_code":"57"}`, session(8))},
+		{name: "wrong caller", client: config.ConnectID, method: "GET", path: "/v1/nip/account-names/" + s.funded, status: 403, want: forbidden},
+		{name: "no caller", client: "-", method: "GET", path: "/v1/nip/account-names/" + s.funded, mode: checkNone, status: 401, want: anonymous},
+		{name: "unknown path", method: "GET", path: "/v1/nip/nothing", mode: checkNone, status: 404, want: `{"error":{"code":"not_found","message":"This path is not part of the NIP API of a bank.","request_id":"req_ID"}}`},
+		{name: "wrong method", method: "DELETE", path: "/v1/nip/credits", mode: checkNone, status: 405, allow: "POST", want: `{"error":{"code":"method_not_allowed","message":"Use POST for this path.","request_id":"req_ID"}}`},
+		{name: "unknown field", method: "POST", path: "/v1/nip/credits", body: strings.Replace(banktest.CreditBody(session(9), s.funded, 1000000, ""), `"narration"`, `"extra":1,"narration"`, 1), mode: checkResponse, status: 400, want: `{"error":{"code":"invalid_request","message":"Send a JSON credit request with only the documented fields as the body.","request_id":"req_ID"}}`},
+		{name: "oversized body", method: "POST", path: "/v1/nip/credits", body: banktest.CreditBody(session(6), s.funded, 1000000, strings.Repeat("x", bodyLimit)), mode: checkResponse, status: 400, want: fmt.Sprintf(`{"error":{"code":"invalid_request","message":"The body is larger than %d bytes. Send a smaller body.","request_id":"req_ID"}}`, bodyLimit)},
 	}
+	wantFunded, wantEmpty := int64(startAmount), int64(0)
 	for _, r := range rows {
+		wantFunded, wantEmpty = wantFunded+r.funded, wantEmpty+r.empty
 		t.Run(r.name, func(t *testing.T) {
 			caller := r.client
 			switch caller {
@@ -271,8 +247,8 @@ func nipContract(t *testing.T, s *stack) {
 			if got.status != r.status || got.body != r.want || got.replayed != r.replayed || got.allow != r.allow {
 				t.Fatalf("got %d %s replayed=%v allow=%q, want %d %s replayed=%v allow=%q", got.status, got.body, got.replayed, got.allow, r.status, r.want, r.replayed, r.allow)
 			}
-			if f, e := s.balance(t, s.funded), s.balance(t, s.empty); f != r.funded || e != r.empty {
-				t.Fatalf("balances %d and %d, want %d and %d", f, e, r.funded, r.empty)
+			if f, e := s.balance(t, s.funded), s.balance(t, s.empty); f != wantFunded || e != wantEmpty {
+				t.Fatalf("balances %d and %d, want %d and %d", f, e, wantFunded, wantEmpty)
 			}
 		})
 	}
@@ -294,9 +270,7 @@ func nipContract(t *testing.T, s *stack) {
 		t.Fatalf("balance %d, want %d", got, startAmount+2500000+1000000)
 	}
 	check, err := s.bank.L.Verify(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	if !check.OK() {
 		t.Fatal(check)
 	}
@@ -306,9 +280,7 @@ func creditRacesStatus(t *testing.T, s *stack) {
 	const sessions, credits, parallel = 20, 3, 8
 	before := s.balance(t, s.funded)
 	var postedBefore int64
-	if err := s.bank.L.Pool().QueryRow(context.Background(), `SELECT count(*) FROM journal_entries WHERE kind = 'nip_inward'`).Scan(&postedBefore); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, s.bank.L.Pool().QueryRow(context.Background(), `SELECT count(*) FROM journal_entries WHERE kind = 'nip_inward'`).Scan(&postedBefore))
 	type outcome struct {
 		credits [credits]string
 		status  string
@@ -368,16 +340,12 @@ func creditRacesStatus(t *testing.T, s *stack) {
 		t.Fatalf("balance %d, want %d after %d credits", got, want, credited)
 	}
 	var posted int64
-	if err := s.bank.L.Pool().QueryRow(context.Background(), `SELECT count(*) FROM journal_entries WHERE kind = 'nip_inward'`).Scan(&posted); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, s.bank.L.Pool().QueryRow(context.Background(), `SELECT count(*) FROM journal_entries WHERE kind = 'nip_inward'`).Scan(&posted))
 	if posted-postedBefore != credited {
 		t.Fatalf("%d postings, want %d", posted, credited)
 	}
 	check, err := s.bank.L.Verify(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	if !check.OK() {
 		t.Fatal(check)
 	}
@@ -387,4 +355,11 @@ func TestNIP(t *testing.T) {
 	s := newStack(t)
 	t.Run("contract", func(t *testing.T) { nipContract(t, s) })
 	t.Run("credit races status", func(t *testing.T) { creditRacesStatus(t, s) })
+}
+
+func chk(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }

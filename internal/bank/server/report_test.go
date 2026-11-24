@@ -105,18 +105,14 @@ func report(key string, outward, inward int64) SettlementReport {
 func reportBank(t *testing.T) *bank.Bank {
 	t.Helper()
 	b := bank.New(ledger.New(banktest.Schema(t), nil), bank.Profile{ID: "bank-a", Name: "Bank A", NIPCode: "999001", NUBANCode: "901"}, banktest.Fees(t))
-	if err := b.Setup(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, b.Setup(t.Context()))
 	return b
 }
 
 func booked(t *testing.T, b *bank.Bank) map[string]int64 {
 	t.Helper()
 	got, err := b.Settlements(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	return got
 }
 

@@ -55,9 +55,7 @@ func TestConsentExpiryAtTheBankExpiresTheConnectionUntilReauth(t *testing.T) {
 			var e struct {
 				Data map[string]any `json:"data"`
 			}
-			if err := json.Unmarshal(d.Body, &e); err != nil {
-				t.Fatal(err)
-			}
+			chk(t, json.Unmarshal(d.Body, &e))
 			if d.PartnerID != "p1" || d.Status != "pending" {
 				t.Fatalf("delivery for %s with status %s, want a pending one for p1", d.PartnerID, d.Status)
 			}

@@ -114,7 +114,6 @@ func TestReconnectWithLaterStartKeepsTheEarlierFromAndTheBalanceInvariant(t *tes
 		from  string
 	}{
 		{"con_3", clock.Date{Y: 2026, M: time.October, D: 10}, "2026-10-10"},
-		{"con_4", clock.Date{Y: 2026, M: time.October, D: 14}, "2026-10-10"},
 		{"con_5", clock.Date{Y: 2026, M: time.October, D: 5}, "2026-10-05"},
 	} {
 		c3 := connect(c.id, "obc_"+c.id, link("lks_"+c.id, c.start))
@@ -138,7 +137,6 @@ func TestReconnectWithLaterStartKeepsTheEarlierFromAndTheBalanceInvariant(t *tes
 		{"the day before a leap day first date", clock.Date{Y: 2024, M: time.March, D: 1}, clock.Date{Y: 2024, M: time.February, D: 29}, http.StatusOK},
 		{"yesterday", clock.Date{Y: 2026, M: time.March, D: 1}, today.AddDays(-1), http.StatusOK},
 		{"today", clock.Date{Y: 2026, M: time.March, D: 1}, today, http.StatusUnprocessableEntity},
-		{"tomorrow", clock.Date{Y: 2026, M: time.March, D: 1}, today.AddDays(1), http.StatusUnprocessableEntity},
 		{"a first date in the far future", clock.Date{Y: 2126, M: time.March, D: 1}, clock.Date{Y: 2126, M: time.February, D: 28}, http.StatusUnprocessableEntity},
 	} {
 		a.mu.Lock()

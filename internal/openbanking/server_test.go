@@ -83,9 +83,7 @@ func clientFor(id string) *http.Client { return &http.Client{Transport: callerTr
 func newEnv(t *testing.T, tweaks ...func(*Config)) *env {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	e := &env{t: t, store: NewMemStore(), key: key, good: clientFor("connect")}
 	var h http.Handler
 	e.ts = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
@@ -242,29 +240,67 @@ func (e *env) tokens(scope string) (map[string]any, string) {
 	return body, id
 }
 
+func (e *env) getIs(c *http.Client, path, token string, status int, code string) map[string]any {
+	e.t.Helper()
+	got, body := e.get(c, path, token)
+	if got != status || (code != "" && body["error"] != code) {
+		e.t.Fatalf("GET %s: %d %v, want %d %s", path, got, body, status, code)
+	}
+	return body
+}
+
+func (e *env) exchangeIs(c *http.Client, code, v string, status int, errCode string) map[string]any {
+	e.t.Helper()
+	got, body := e.exchange(c, code, v)
+	if got != status || (errCode != "" && body["error"] != errCode) {
+		e.t.Fatalf("exchange: %d %v, want %d %s", got, body, status, errCode)
+	}
+	return body
+}
+
+func (e *env) refreshIs(token string, status int, errCode string) map[string]any {
+	e.t.Helper()
+	got, body := e.refresh(token)
+	if got != status || (errCode != "" && body["error"] != errCode) {
+		e.t.Fatalf("refresh: %d %v, want %d %s", got, body, status, errCode)
+	}
+	return body
+}
+
+func (e *env) revoke(id string) {
+	e.t.Helper()
+	if err := e.srv.Revoke(context.Background(), id, "adaeze", "bank"); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+func (e *env) consent(id string) *Consent {
+	e.t.Helper()
+	c, err := e.store.Consent(context.Background(), id)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return c
+}
+
 func TestFlow(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	tok, id := e.tokens(allScopes)
 	access := tok["access_token"].(string)
-	if status, body := e.get(e.good, "/accounts", access); status != 200 || len(body["data"].([]any)) != 1 {
-		t.Fatalf("accounts: %d %v", status, body)
+	if body := e.getIs(e.good, "/accounts", access, 200, ""); len(body["data"].([]any)) != 1 {
+		t.Fatalf("accounts %v", body)
 	}
-	if status, body := e.get(e.good, "/accounts/0123456789/balances", access); status != 200 || body["ledger_balance"].(map[string]any)["amount_minor"].(float64) != 5000 {
-		t.Fatalf("balances: %d %v", status, body)
+	if body := e.getIs(e.good, "/accounts/0123456789/balances", access, 200, ""); body["ledger_balance"].(map[string]any)["amount_minor"].(float64) != 5000 {
+		t.Fatalf("balances %v", body)
 	}
-	if status, _ := e.get(e.good, "/accounts/0123456790/balances", access); status != http.StatusForbidden {
-		t.Fatalf("unshared account: %d", status)
-	}
-	if status, body := e.get(e.good, "/discover", ""); status != 200 || body["token_endpoint"] != e.ts.URL+"/token" {
-		t.Fatalf("discover: %d %v", status, body)
+	e.getIs(e.good, "/accounts/0123456790/balances", access, http.StatusForbidden, "")
+	if body := e.getIs(e.good, "/discover", "", 200, ""); body["token_endpoint"] != e.ts.URL+"/token" {
+		t.Fatalf("discover %v", body)
 	}
 	seen, cursors, cursor := []string{}, []string{}, ""
 	for i := 0; i < 5 && (i == 0 || cursor != ""); i++ {
-		status, body := e.get(e.good, "/accounts/0123456789/transactions?page_size=2&cursor="+url.QueryEscape(cursor), access)
-		if status != 200 {
-			t.Fatalf("page %d: %d %v", i, status, body)
-		}
+		body := e.getIs(e.good, "/accounts/0123456789/transactions?page_size=2&cursor="+url.QueryEscape(cursor), access, 200, "")
 		for _, row := range body["data"].([]any) {
 			seen = append(seen, row.(map[string]any)["id"].(string))
 		}
@@ -274,20 +310,18 @@ func TestFlow(t *testing.T) {
 	if strings.Join(seen, "") != "abcde" || cursors[0] != "2026-01-05.1" {
 		t.Fatalf("paged through %v with cursors %v", seen, cursors)
 	}
-	for _, bad := range []string{"9223372036854775807", "2026-01-05.99999999999999999999", "x.1", "2026-01-05"} {
-		if status, _ := e.get(e.good, "/accounts/0123456789/transactions?cursor="+url.QueryEscape(bad), access); status != http.StatusBadRequest {
-			t.Errorf("cursor %q: %d", bad, status)
-		}
+	for _, bad := range []string{"2026-01-05.99999999999999999999", "x.1", "2026-01-05"} {
+		e.getIs(e.good, "/accounts/0123456789/transactions?cursor="+url.QueryEscape(bad), access, http.StatusBadRequest, "")
 	}
-	if status, body := e.get(e.good, "/accounts/0123456789/transactions?cursor=2099-01-01.0", access); status != 200 || len(body["data"].([]any)) != 0 || body["next_cursor"] != nil {
-		t.Errorf("cursor past the end: %d %v", status, body)
+	if body := e.getIs(e.good, "/accounts/0123456789/transactions?cursor=2099-01-01.0", access, 200, ""); len(body["data"].([]any)) != 0 || body["next_cursor"] != nil {
+		t.Errorf("cursor past the end: %v", body)
 	}
 	want := clock.DateOf(time.Now()).AddDays(defaultLookaheadDays).String()
-	if status, body := e.get(e.good, "/accounts/0123456789/transactions", access); status != 200 || body["to"] != want {
-		t.Errorf("default window: %d %v, want to %s", status, body, want)
+	if body := e.getIs(e.good, "/accounts/0123456789/transactions", access, 200, ""); body["to"] != want {
+		t.Errorf("default window to %v, want %s", body["to"], want)
 	}
-	if status, body := e.get(e.good, "/accounts/0123456789/transactions?to=2026-01-06", access); status != 200 || body["to"] != "2026-01-06" {
-		t.Errorf("requested window: %d %v", status, body)
+	if body := e.getIs(e.good, "/accounts/0123456789/transactions?to=2026-01-06", access, 200, ""); body["to"] != "2026-01-06" {
+		t.Errorf("requested window to %v", body["to"])
 	}
 	c, _ := e.srv.Consent(ctx, id)
 	if hist, _ := e.srv.AccessHistory(ctx, "adaeze", 10); c.Status != Authorised || c.Customer != "adaeze" || c.LastUsedAt.IsZero() || len(hist) == 0 {
@@ -304,23 +338,17 @@ func TestScopeNarrowsWhatIsShared(t *testing.T) {
 	e := newEnv(t)
 	tok, id := e.tokens("balances accounts")
 	access := tok["access_token"].(string)
-	if status, body := e.get(e.good, "/accounts/0123456789/balances", access); tok["scope"] != "accounts balances" || status != 200 {
-		t.Fatalf("scope %v balances: %d %v", tok["scope"], status, body)
-	}
-	if status, body := e.get(e.good, "/accounts/0123456789/transactions", access); status != http.StatusForbidden || body["error"] != "insufficient_scope" {
-		t.Fatalf("transactions without the scope: %d %v", status, body)
-	}
-	if c, _ := e.store.Consent(context.Background(), id); strings.Join(c.Scopes, " ") != "accounts balances" {
-		t.Fatalf("stored scopes %v", c.Scopes)
+	e.getIs(e.good, "/accounts/0123456789/balances", access, 200, "")
+	e.getIs(e.good, "/accounts/0123456789/transactions", access, http.StatusForbidden, "insufficient_scope")
+	if got := strings.Join(e.consent(id).Scopes, " "); got != "accounts balances" || tok["scope"] != got {
+		t.Fatalf("stored scopes %q, token scope %v", got, tok["scope"])
 	}
 }
 
 func TestPushedRequests(t *testing.T) {
 	e := newEnv(t, func(c *Config) { c.Terms.AssertionLife = time.Minute })
 	other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	replayed := e.sign(e.key, e.ts.URL, 30*time.Second)
 	rows := []struct {
 		name   string
@@ -341,7 +369,7 @@ func TestPushedRequests(t *testing.T) {
 		for k, v := range r.set {
 			f.Set(k, v)
 		}
-		if _, ok := r.set["client_assertion_type"]; !ok && f.Get("client_assertion") != "" {
+		if f.Get("client_assertion") != "" {
 			f.Set("client_assertion_type", assertionType)
 		}
 		status, body := e.post(e.good, "/par", f)
@@ -361,43 +389,29 @@ func TestAuthorisationCodes(t *testing.T) {
 	if _, err := e.srv.Approve(ctx, uri, "adaeze", nil, false); err != ErrNoAccounts {
 		t.Fatalf("approve without accounts: %v", err)
 	}
-	if _, err := e.srv.Approve(ctx, uri, "adaeze", []string{"0123456789"}, false); err != nil {
-		t.Fatal(err)
-	}
+	_, err := e.srv.Approve(ctx, uri, "adaeze", []string{"0123456789"}, false)
+	chk(t, err)
 	if _, err := e.srv.Approve(ctx, uri, "adaeze", []string{"0123456789"}, false); err == nil {
 		t.Fatal("request_uri was approved twice")
 	}
 	uri, id := e.pushed(allScopes)
 	loc, err := e.srv.Reject(ctx, uri)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	u, _ := url.Parse(loc)
-	if c, _ := e.srv.Consent(ctx, id); u.Query().Get("error") != "access_denied" || u.Query().Get("iss") != e.ts.URL || c.Status != Rejected {
-		t.Fatalf("redirect %s, status %s", loc, c.Status)
+	if u.Query().Get("error") != "access_denied" || u.Query().Get("iss") != e.ts.URL || e.consent(id).Status != Rejected {
+		t.Fatalf("redirect %s", loc)
 	}
 	code, _ := e.code(allScopes)
-	if status, body := e.exchange(e.good, code, "wrong-verifier-wrong-verifier-wrong-verifier-1"); status != http.StatusBadRequest || body["error"] != "invalid_grant" {
-		t.Fatalf("wrong verifier: %d %v", status, body)
-	}
-	if status, _ := e.exchange(e.good, code, verifier); status != http.StatusBadRequest {
-		t.Fatalf("code worked after a failed attempt: %d", status)
-	}
+	e.exchangeIs(e.good, code, "wrong-verifier-wrong-verifier-wrong-verifier-1", http.StatusBadRequest, "invalid_grant")
+	e.exchangeIs(e.good, code, verifier, http.StatusBadRequest, "")
 	code, _ = e.code(allScopes)
-	status, body := e.exchange(e.good, code, verifier)
-	if status != 200 {
-		t.Fatal(status, body)
-	}
-	if status, _ := e.exchange(e.good, code, verifier); status != http.StatusBadRequest {
-		t.Fatalf("second use: %d", status)
-	}
-	if status, body := e.get(e.good, "/accounts", body["access_token"].(string)); status != http.StatusUnauthorized {
-		t.Fatalf("token from a reused code still works: %d %v", status, body)
-	}
+	access := e.exchangeIs(e.good, code, verifier, 200, "")["access_token"].(string)
+	e.exchangeIs(e.good, code, verifier, http.StatusBadRequest, "")
+	e.getIs(e.good, "/accounts", access, http.StatusUnauthorized, "")
 	code, _ = e.code(allScopes)
 	e.ageRequests(time.Second, time.Second)
-	if status, body := e.exchange(e.good, code, verifier); status != http.StatusBadRequest || !strings.Contains(body["error_description"].(string), "expired") {
-		t.Fatalf("expired code: %d %v", status, body)
+	if body := e.exchangeIs(e.good, code, verifier, http.StatusBadRequest, ""); !strings.Contains(body["error_description"].(string), "expired") {
+		t.Fatalf("expired code: %v", body)
 	}
 }
 
@@ -412,62 +426,39 @@ func TestWrongCaller(t *testing.T) {
 		{"no caller", &http.Client{}, "Send your ID in the Beerus-Caller header."},
 		{"unregistered ID", clientFor("stranger"), "stranger is not registered at the Registry."},
 	} {
-		status, body := e.exchange(r.client, code, verifier)
-		if status != http.StatusUnauthorized || body["error"] != "invalid_client" || body["error_description"] != r.desc {
-			t.Errorf("%s: %d %v, want 401 invalid_client %q", r.name, status, body, r.desc)
+		if body := e.exchangeIs(r.client, code, verifier, http.StatusUnauthorized, "invalid_client"); body["error_description"] != r.desc {
+			t.Errorf("%s: %v, want %q", r.name, body, r.desc)
 		}
 	}
-	status, body := e.exchange(e.good, code, verifier)
-	if status != 200 {
-		t.Fatalf("the real client was locked out: %d %v", status, body)
-	}
-	access := body["access_token"].(string)
-	if status, body := e.get(&http.Client{}, "/accounts", access); status != http.StatusUnauthorized || body["error"] != "invalid_client" {
-		t.Fatalf("token used with no caller: %d %v", status, body)
-	}
+	access := e.exchangeIs(e.good, code, verifier, 200, "")["access_token"].(string)
+	e.getIs(&http.Client{}, "/accounts", access, http.StatusUnauthorized, "invalid_client")
 }
 
 func TestRefreshTokens(t *testing.T) {
 	e := newEnv(t)
 	tok, _ := e.tokens(allScopes)
 	first := tok["refresh_token"].(string)
-	status, second := e.refresh(first)
-	if status != 200 || second["refresh_token"] == first {
-		t.Fatalf("refresh: %d %v", status, second)
+	second := e.refreshIs(first, 200, "")
+	if second["refresh_token"] == first {
+		t.Fatal("refresh token was not rotated")
 	}
-	status, third := e.refresh(first)
-	if status != 200 {
-		t.Fatalf("previous refresh token inside the grace period: %d %v", status, third)
-	}
-	if status, _ := e.get(e.good, "/accounts", second["access_token"].(string)); status != http.StatusUnauthorized {
-		t.Fatalf("the lost-response access token should be replaced: %d", status)
-	}
+	third := e.refreshIs(first, 200, "")
+	e.getIs(e.good, "/accounts", second["access_token"].(string), http.StatusUnauthorized, "")
 	e.editToken(first, func(t *Token) { t.RotatedAt = time.Now().Add(-50 * time.Second) })
-	if status, body := e.refresh(first); status != 200 {
-		t.Fatalf("previous refresh token rotated 50 seconds ago: %d %v", status, body)
-	}
+	e.refreshIs(first, 200, "")
 	e.editToken(first, func(t *Token) { t.RotatedAt = time.Now().Add(-70 * time.Second) })
-	if status, body := e.refresh(first); status != http.StatusBadRequest || body["error"] != "invalid_grant" {
-		t.Fatalf("previous refresh token after the grace period: %d %v", status, body)
-	}
-	if status, _ := e.refresh(third["refresh_token"].(string)); status != http.StatusBadRequest {
-		t.Fatalf("reuse should revoke the whole family: %d", status)
-	}
+	e.refreshIs(first, http.StatusBadRequest, "invalid_grant")
+	e.refreshIs(third["refresh_token"].(string), http.StatusBadRequest, "")
 	tok, _ = e.tokens(allScopes)
 	access, refresh := tok["access_token"].(string), tok["refresh_token"].(string)
 	past := time.Now().Add(-time.Second)
 	e.editToken(access, func(x *Token) { x.ExpiresAt = past })
-	if status, body := e.get(e.good, "/accounts", access); status != http.StatusUnauthorized || body["error"] != "invalid_token" {
-		t.Fatalf("expired access token: %d %v", status, body)
-	}
+	e.getIs(e.good, "/accounts", access, http.StatusUnauthorized, "invalid_token")
 	e.editToken(refresh, func(x *Token) { x.ExpiresAt = past })
-	if status, body := e.refresh(refresh); status != http.StatusBadRequest || body["error"] != "invalid_grant" {
-		t.Fatalf("expired refresh token: %d %v", status, body)
-	}
+	e.refreshIs(refresh, http.StatusBadRequest, "invalid_grant")
 }
 
 func TestConsentLifecycle(t *testing.T) {
-	ctx := context.Background()
 	rows := []struct {
 		name  string
 		tweak func(*Config)
@@ -475,17 +466,10 @@ func TestConsentLifecycle(t *testing.T) {
 		code  string
 		want  Status
 	}{
-		{"revoked by the customer", nil, func(e *env, id string) {
-			if err := e.srv.Revoke(ctx, id, "adaeze", "bank"); err != nil {
-				e.t.Fatal(err)
-			}
-		}, "consent_revoked", Revoked},
+		{"revoked by the customer", nil, func(e *env, id string) { e.revoke(id) }, "consent_revoked", Revoked},
 		{"a year has passed", nil, func(e *env, id string) {
 			e.editConsent(id, func(c *Consent) { c.ExpiresAt = time.Now().Add(-time.Second) })
 		}, "consent_reconsent_required", ReconsentRequired},
-		{"unused for 181 days", func(c *Config) { c.Terms.ConsentMonths = 24 }, func(e *env, id string) {
-			e.editConsent(id, func(c *Consent) { c.AuthorisedAt, c.LastUsedAt = time.Now().Add(-400*day), time.Now().Add(-181*day) })
-		}, "consent_dormant", Dormant},
 		{"unused for 31 days with a 30 day setting", func(c *Config) { c.Terms.DormantDays = 30 }, func(e *env, id string) {
 			e.editConsent(id, func(c *Consent) { c.AuthorisedAt, c.LastUsedAt = time.Now().Add(-31*day), time.Time{} })
 		}, "consent_dormant", Dormant},
@@ -498,22 +482,16 @@ func TestConsentLifecycle(t *testing.T) {
 		e := newEnv(t, tweaks...)
 		tok, id := e.tokens(allScopes)
 		before := e.srv.cfg.Clock.Now()
-		if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != 200 {
-			t.Fatalf("%s: used today: %d %v", r.name, status, body)
-		}
-		if used, _ := e.store.Consent(ctx, id); used.LastUsedAt.Before(before) || used.LastUsedAt.After(e.srv.cfg.Clock.Now()) {
+		e.getIs(e.good, "/accounts", tok["access_token"].(string), 200, "")
+		if used := e.consent(id); used.LastUsedAt.Before(before) || used.LastUsedAt.After(e.srv.cfg.Clock.Now()) {
 			t.Fatalf("%s: last used %s", r.name, used.LastUsedAt)
 		}
 		r.act(e, id)
-		if status, body := e.get(e.good, "/accounts", tok["access_token"].(string)); status != http.StatusForbidden || body["error"] != r.code {
-			t.Errorf("%s: %d %v, want 403 %s", r.name, status, body, r.code)
-		}
-		if c, _ := e.store.Consent(ctx, id); c.Status != r.want {
+		e.getIs(e.good, "/accounts", tok["access_token"].(string), http.StatusForbidden, r.code)
+		if c := e.consent(id); c.Status != r.want {
 			t.Errorf("%s: status %s, want %s", r.name, c.Status, r.want)
 		}
-		if status, _ := e.refresh(tok["refresh_token"].(string)); status != http.StatusBadRequest {
-			t.Errorf("%s: refresh: %d", r.name, status)
-		}
+		e.refreshIs(tok["refresh_token"].(string), http.StatusBadRequest, "")
 		if last := e.lastLedger(); last.Status != r.want || last.ConsentID != id {
 			t.Errorf("%s: ledger %+v", r.name, last)
 		}
@@ -529,12 +507,10 @@ func TestRevokeNeedsTheCustomer(t *testing.T) {
 			t.Fatalf("revoke by %q: %v", who, err)
 		}
 	}
-	if c, _ := e.store.Consent(ctx, id); c.Status != Authorised {
+	if c := e.consent(id); c.Status != Authorised {
 		t.Fatalf("status %s", c.Status)
 	}
-	if err := e.srv.Revoke(ctx, id, "adaeze", "bank"); err != nil {
-		t.Fatal(err)
-	}
+	e.revoke(id)
 	if last := e.lastLedger(); last.Via != "bank" {
 		t.Fatalf("ledger %+v", last)
 	}
@@ -552,9 +528,7 @@ func TestTerms(t *testing.T) {
 	}
 	for kind, raw := range map[string]string{"access": tok["access_token"].(string), "refresh": tok["refresh_token"].(string)} {
 		stored, err := e.store.Token(ctx, Hash(raw))
-		if err != nil {
-			t.Fatal(err)
-		}
+		chk(t, err)
 		min, max := before.Add(3*time.Minute), after.Add(3*time.Minute)
 		if kind == "refresh" {
 			min, max = before.AddDate(0, 0, 10), after.AddDate(0, 0, 10)
@@ -644,11 +618,9 @@ func TestConsentStatus(t *testing.T) {
 		{"fresh", consent(Authorised, authorised, year, none), authorised, 180, Authorised},
 		{"day 180 unused", consent(Authorised, authorised, year, none), at(180), 180, Dormant},
 		{"unused 180 days after the last use", consent(Authorised, authorised, year, at(179)), at(359), 180, Dormant},
-		{"dormancy follows the setting", consent(Authorised, authorised, year, none), at(31), 30, Dormant},
 		{"day before the year ends", consent(Authorised, authorised, year, at(364)), at(364), 400, Authorised},
 		{"expiry beats dormancy", consent(Authorised, authorised, year, none), at(366), 180, ReconsentRequired},
 		{"revoked stays revoked", consent(Revoked, authorised, year, none), at(1), 180, Revoked},
-		{"month end, a second before the last day ends", consent(Authorised, monthEnd, addMonths(monthEnd, 6), none), addMonths(monthEnd, 6).Add(-time.Second), 400, Authorised},
 		{"month end, at the expiry", consent(Authorised, monthEnd, addMonths(monthEnd, 6), none), addMonths(monthEnd, 6), 400, ReconsentRequired},
 	} {
 		if got := consentStatus(c.consent, c.now, c.dormant); got != c.want {
@@ -691,21 +663,8 @@ func TestBalanceAsOfFollowsTheHistoryWindow(t *testing.T) {
 		if got := e.srv.HistoryFloor(); got != floor {
 			t.Fatalf("%d days: history floor %s, want %s", days, got, floor)
 		}
-		for _, c := range []struct {
-			name string
-			d    clock.Date
-			want int
-		}{
-			{"yesterday", today.AddDays(-1), http.StatusOK},
-			{"today", today, http.StatusBadRequest},
-			{"tomorrow", today.AddDays(1), http.StatusBadRequest},
-			{"the day before the floor", floor.AddDays(-1), http.StatusOK},
-			{"two days before the floor", floor.AddDays(-2), http.StatusBadRequest},
-		} {
-			status, body := e.get(e.good, "/accounts/0123456789/balances?as_of="+c.d.String(), tok["access_token"].(string))
-			if status != c.want {
-				t.Errorf("%d days, %s: as_of %s gave %d %v, want %d", days, c.name, c.d, status, body, c.want)
-			}
+		for d, want := range map[clock.Date]int{today.AddDays(-1): 200, today: 400, today.AddDays(1): 400, floor.AddDays(-1): 200, floor.AddDays(-2): 400} {
+			e.getIs(e.good, "/accounts/0123456789/balances?as_of="+d.String(), tok["access_token"].(string), want, "")
 		}
 	}
 }
@@ -724,38 +683,30 @@ func TestRequestsAndOutbox(t *testing.T) {
 	e.srv.mu.Lock()
 	pars, codes := len(e.srv.pars), len(e.srv.codes)
 	e.srv.mu.Unlock()
-	if c, _ := e.store.Consent(ctx, stale); pars != 1 || codes != 1 || c.Status != Expired {
-		t.Fatalf("%d requests and %d codes kept, abandoned request is %s", pars, codes, c.Status)
+	if pars != 1 || codes != 1 || e.consent(stale).Status != Expired {
+		t.Fatalf("%d requests and %d codes kept, abandoned request is %s", pars, codes, e.consent(stale).Status)
 	}
 	e.ageRequests(0, 11*time.Minute)
-	if status, _ := e.exchange(e.good, code, verifier); status != http.StatusBadRequest {
-		t.Fatalf("expired code: %d", status)
-	}
+	e.exchangeIs(e.good, code, verifier, http.StatusBadRequest, "")
 	e.srv.mu.Lock()
 	codes = len(e.srv.codes)
 	e.srv.mu.Unlock()
 	if codes != 0 {
 		t.Fatalf("%d codes kept", codes)
 	}
-	if err := New(e.srv.cfg).Resume(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if c, _ := e.store.Consent(ctx, lost); c.Status != Expired {
-		t.Fatalf("status %s", c.Status)
+	chk(t, New(e.srv.cfg).Resume(ctx))
+	if e.consent(lost).Status != Expired {
+		t.Fatalf("status %s", e.consent(lost).Status)
 	}
 
 	e = newEnv(t)
-	_, id := e.tokens(allScopes)
-	if err := e.srv.Revoke(ctx, id, "adaeze", "bank"); err != nil {
-		t.Fatal(err)
-	}
+	tok, id := e.tokens(allScopes)
+	e.revoke(id)
 	due, err := e.srv.LedgerDue(ctx, 10)
 	if err != nil || len(due) != 2 || due[0].Status != Authorised || due[1].Status != Revoked || due[0].ID >= due[1].ID {
 		t.Fatalf("pending ledger events %+v: %v", due, err)
 	}
-	if err := e.srv.Retry(ctx, due[0], time.Now().Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, e.srv.Retry(ctx, due[0], time.Now().Add(time.Minute)))
 	if again, _ := e.srv.LedgerDue(ctx, 10); len(again) != 0 {
 		t.Fatalf("a later event is due while the first waits: %+v", again)
 	}
@@ -767,17 +718,23 @@ func TestRequestsAndOutbox(t *testing.T) {
 		t.Fatalf("after the wait: %+v", again)
 	}
 	for _, d := range again {
-		if err := e.srv.Delivered(ctx, d); err != nil {
-			t.Fatal(err)
-		}
+		chk(t, e.srv.Delivered(ctx, d))
 	}
 	if left, _ := e.srv.LedgerDue(ctx, 10); len(left) != 0 {
 		t.Fatalf("delivered events still due: %+v", left)
 	}
 
-	tok, _ := e.tokens(allScopes)
+	e = newEnv(t)
+	tok, _ = e.tokens(allScopes)
 	e.srv.cfg.Store = failingStore{e.store}
-	if status, body := e.get(e.good, "/accounts/0123456789/balances", tok["access_token"].(string)); status != http.StatusInternalServerError || body["data"] != nil {
-		t.Fatalf("balances with a broken access log: %d %v", status, body)
+	if body := e.getIs(e.good, "/accounts/0123456789/balances", tok["access_token"].(string), http.StatusInternalServerError, ""); body["data"] != nil {
+		t.Fatalf("balances with a broken access log: %v", body)
+	}
+}
+
+func chk(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

@@ -71,9 +71,7 @@ func TestEventsAreMarkedAfterTheAnswer(t *testing.T) {
 		t.Run(r.name, func(t *testing.T) {
 			store := cancelledStore{openbanking.NewMemStore()}
 			srv := openbanking.New(openbanking.Config{BankID: "bank-a", Store: store, Clock: clk})
-			if err := store.Enqueue(t.Context(), openbanking.ConsentEvent{ConsentID: "obc_1", Bank: "bank-a", Status: openbanking.Revoked, At: now}, now); err != nil {
-				t.Fatal(err)
-			}
+			chk(t, store.Enqueue(t.Context(), openbanking.ConsentEvent{ConsentID: "obc_1", Bank: "bank-a", Status: openbanking.Revoked, At: now}, now))
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			const widget = "http://widget.localhost"
@@ -100,9 +98,7 @@ func TestEventsAreMarkedAfterTheAnswer(t *testing.T) {
 				t.Fatalf("due right after the send: %v, %v", due, err)
 			}
 			due, err = store.Due(t.Context(), done.Add(r.retryAt), 10)
-			if err != nil {
-				t.Fatal(err)
-			}
+			chk(t, err)
 			if r.pending != (len(due) == 1) {
 				t.Fatalf("pending %v, want %v: %v", len(due) == 1, r.pending, due)
 			}
@@ -110,5 +106,12 @@ func TestEventsAreMarkedAfterTheAnswer(t *testing.T) {
 				t.Fatalf("attempts %d, want %d", due[0].Attempts, r.attempts)
 			}
 		})
+	}
+}
+
+func chk(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
