@@ -59,6 +59,8 @@ servers:
   - url: http://connect.localhost:7443
     description: Beerus Connect on the local machine
 tags:
+  - name: Institutions
+    description: The banks a customer can link.
   - name: Link sessions
     description: Start the Connect widget and exchange its one-time code.
   - name: Connections
@@ -155,6 +157,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WebhookKeyList'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/institutions:
+    get:
+      tags: [Institutions]
+      operationId: listInstitutions
+      summary: List institutions
+      description: Returns the banks a customer can link, sorted by `institution_id`. Use it to show your own bank list. The `institution_id` is the same value the link flow uses. Call again with `next_cursor` while it is present.
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: The `next_cursor` from the previous call.
+          schema:
+            type: string
+          example: bank-a
+        - name: limit
+          in: query
+          required: false
+          description: The most institutions to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+      responses:
+        '200':
+          description: One page of institutions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstitutionList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '403':
@@ -926,6 +968,30 @@ components:
         workspace_id: ws_adaeze_bakery
         connection_id: null
         created_at: '2026-10-28T12:00:00+01:00'
+    ListedInstitution:
+      type: object
+      required: [institution_id, name]
+      properties:
+        institution_id:
+          type: string
+        name:
+          type: string
+    InstitutionList:
+      type: object
+      required: [institutions]
+      properties:
+        institutions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ListedInstitution'
+        next_cursor:
+          type: string
+          description: Present when more institutions follow.
+      example:
+        institutions:
+          - institution_id: bank-a
+            name: Bank A
+        next_cursor: bank-a
     WebhookKey:
       type: object
       required: [key_id, public_key, status]
