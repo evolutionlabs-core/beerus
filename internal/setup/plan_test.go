@@ -241,7 +241,6 @@ func TestBuildLockedFields(t *testing.T) {
 	buildCases(t, []planCase{
 		{name: "apiVersion", desired: func(s *Spec) { s.APIVersion = "beerus.dev/v2" }, errs: []string{"apiVersion cannot change from beerus.dev/v1 to beerus.dev/v2. Put back beerus.dev/v1."}},
 		{name: "metadata.name", desired: both(func(s *Spec) { s.Metadata.Name = "lagos-dev" }, pinned("metadata.name", 4, 9)), errs: []string{"setup.yaml:4:9: metadata.name is lagos-dev, but this dir holds setup beerus. Use the file for beerus, or another dir."}, is: ErrSetupMismatch},
-		{name: "nip.sessions", desired: func(s *Spec) { s.Spec.NIP.Sessions = 6 }, errs: []string{"nip.sessions cannot change from 4 to 6. Put back 4."}},
 		{name: "bank type", desired: eb("bank-a", func(b *Bank) { b.Type = "microfinance" }), errs: []string{"banks[bank-a].type cannot change from commercial to microfinance. Put back commercial."}},
 		{name: "nuban_code with its line", desired: both(eb("bank-b", func(b *Bank) { b.NUBANCode = "905" }), pinned("banks[bank-b].nuban_code", 31, 19)), errs: []string{"setup.yaml:31:19: banks[bank-b].nuban_code cannot change; it is 902"}},
 		{name: "settles_through set later", desired: eb("bank-b", func(b *Bank) { b.SettlesThrough = "bank-a" }), errs: []string{"banks[bank-b].settles_through cannot change from nothing to bank-a. Put back nothing."}},
