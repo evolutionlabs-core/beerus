@@ -1,6 +1,7 @@
 package nibss
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,9 +11,8 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
-func TestSettleGroupsByCutoffAndKeepsTheSchedule(t *testing.T) {
+func settleByCutoff(t *testing.T, s *Store) {
 	ctx := t.Context()
-	s := sessionStore(t)
 	sched := Schedule{Per: 4}
 	for i, id := range []string{"v1", "v2", "v3", "v4"} {
 		if _, err := begin(ctx, s, transfer(id, "999002", t0)); err != nil {
@@ -80,7 +80,7 @@ func TestSettleGroupsByCutoffAndKeepsTheSchedule(t *testing.T) {
 	}
 }
 
-func TestSettleCutoffsFollowTheCalendarAndRunOnce(t *testing.T) {
+func settleOnTheCalendar(t *testing.T, s *Store) {
 	ctx := t.Context()
 	at := func(day string, hh, mm int) time.Time {
 		d, err := clock.ParseDate(day)
@@ -141,7 +141,7 @@ func TestSettleCutoffsFollowTheCalendarAndRunOnce(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			s := sessionStore(t)
+			resetSessions(t, s)
 			for i, resolved := range c.resolved {
 				id := "w" + string(rune('a'+i))
 				if _, err := begin(ctx, s, transfer(id, "999002", resolved.Add(-time.Minute))); err != nil {
@@ -183,9 +183,8 @@ func TestSettleCutoffsFollowTheCalendarAndRunOnce(t *testing.T) {
 	}
 }
 
-func TestSettleOnDemandUsesAnAdhocKey(t *testing.T) {
+func settleOnDemand(t *testing.T, s *Store) {
 	ctx := t.Context()
-	s := sessionStore(t)
 	if _, err := begin(ctx, s, transfer("ad1", "999002", t0)); err != nil {
 		t.Fatal(err)
 	}
@@ -196,5 +195,38 @@ func TestSettleOnDemandUsesAnAdhocKey(t *testing.T) {
 	got, err := s.Settle(ctx, Schedule{Per: 4}, now, true)
 	if err != nil || len(got) != 1 || got[0].Key != "adhoc:"+now.In(clock.Lagos).Format(time.RFC3339Nano)+":ad1" || !got[0].CutoffAt.Equal(now) {
 		t.Fatalf("on demand: %+v, %v", got, err)
+	}
+}
+
+func settlementProblems(t *testing.T, s *Store) {
+	ctx := t.Context()
+	sched := Schedule{Per: 4}
+	noon := time.Date(2026, 11, 4, 12, 0, 0, 0, t0.Location())
+	for _, r := range []struct {
+		name       string
+		resolvedAt []time.Duration
+		settled    bool
+		checkedAt  time.Time
+		want       []string
+	}{
+		{"nothing yet", nil, false, noon.Add(time.Hour), []string{}},
+		{"inside the grace", []time.Duration{0, time.Hour}, false, noon.Add(30 * time.Second), []string{}},
+		{"two transfers past the grace", []time.Duration{0, time.Hour}, false, noon.Add(61 * time.Second), []string{"2 transfers resolved before the 2026-11-04 12:00 cutoff are not settled yet"}},
+		{"one transfer past the grace", []time.Duration{0, 4 * time.Hour}, false, noon.Add(61 * time.Second), []string{"1 transfer resolved before the 2026-11-04 12:00 cutoff is not settled yet"}},
+		{"settled but not posted", []time.Duration{0}, true, noon.Add(time.Hour), []string{"settlement session 2026-11-04T12:00 was cut off at 2026-11-04T12:00:00+01:00 and is not posted to the CBN yet"}},
+		{"settled inside the grace", []time.Duration{0}, true, noon.Add(30 * time.Second), []string{}},
+	} {
+		resetSessions(t, s)
+		for i, d := range r.resolvedAt {
+			pay(t, s, fmt.Sprintf("transfer-%d", i+1), "999001", "999002", 500000, SessionOK, d)
+		}
+		if r.settled {
+			if _, err := s.Settle(ctx, sched, noon.Add(time.Minute), false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got, err := s.SettlementProblems(ctx, sched, r.checkedAt); err != nil || !reflect.DeepEqual(got, r.want) {
+			t.Errorf("%s: %q, %v, want %q", r.name, got, err, r.want)
+		}
 	}
 }

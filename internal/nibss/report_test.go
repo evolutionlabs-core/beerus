@@ -7,33 +7,14 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
-func TestSettlementReportsListOnlyPostedSessionsOfTheCaller(t *testing.T) {
+func settlementReports(t *testing.T, s *Store) {
 	ctx := t.Context()
-	s := testStore(t)
-	for _, m := range []Member{member("bank-a", "Bank A", "999001", "901"), member("bank-b", "Bank B", "999002", "902"), member("bank-c", "Bank C", "999003", "903")} {
-		m.Limits = Limits{NetDebitCap: 100_000_000}
-		m.CallerID = m.ID
-		if err := s.Register(ctx, m); err != nil {
-			t.Fatal(err)
-		}
-	}
-	pay := func(id, from, to string, amount int64, resolved time.Duration) {
-		x := transfer(id, to, t0)
-		x.FromCode, x.Amount = from, amount
-		if _, err := begin(ctx, s, x); err != nil {
-			t.Fatal(err)
-		}
-		if err := s.Resolve(ctx, id, SessionOK, nip.OutcomeCredited, t0.Add(resolved)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	pay("r1", "999001", "999002", 500, 0)
-	pay("r2", "999002", "999001", 200, 0)
-	pay("r3", "999001", "999002", 70, 3*time.Hour)
-	pay("r4", "999002", "999003", 30, 8*time.Hour)
+	pay(t, s, "r1", "999001", "999002", 500, SessionOK, 0)
+	pay(t, s, "r2", "999002", "999001", 200, SessionOK, 0)
+	pay(t, s, "r3", "999001", "999002", 70, SessionOK, 3*time.Hour)
+	pay(t, s, "r4", "999002", "999003", 30, SessionOK, 8*time.Hour)
 	if _, err := s.Settle(ctx, Schedule{Per: 4}, t0.Add(11*time.Hour), false); err != nil {
 		t.Fatal(err)
 	}

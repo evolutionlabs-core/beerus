@@ -7,53 +7,25 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
-func positionStore(t *testing.T) *Store {
+func settledBooks(t *testing.T, s *Store) {
 	t.Helper()
-	ctx := t.Context()
-	s := testStore(t)
-	for _, m := range []Member{member("bank-a", "Bank A", "999001", "901"), member("bank-b", "Bank B", "999002", "902"), member("bank-c", "Bank C", "999003", "903")} {
-		m.Limits = Limits{NetDebitCap: 100_000_000}
-		m.CallerID = m.ID
-		if err := s.Register(ctx, m); err != nil {
-			t.Fatal(err)
-		}
-	}
-	pay := func(id, from, to string, amount int64, status string, resolved time.Duration) {
-		x := transfer(id, to, t0)
-		x.FromCode, x.Amount = from, amount
-		if _, err := begin(ctx, s, x); err != nil {
-			t.Fatal(err)
-		}
-		if resolved < 0 {
-			return
-		}
-		outcome := nip.OutcomeCredited
-		if status != SessionOK {
-			outcome = nip.OutcomeFailed
-		}
-		if err := s.Resolve(ctx, id, status, outcome, t0.Add(resolved)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	pay("p1", "999001", "999002", 100, "", -1)
-	pay("p2", "999002", "999001", 20, "", -1)
-	pay("r1", "999001", "999002", 500, SessionOK, 0)
-	pay("r2", "999002", "999001", 200, SessionOK, 0)
-	pay("r3", "999001", "999002", 70, SessionOK, 3*time.Hour)
-	pay("f1", "999001", "999002", 9, "61", 0)
-	pay("r4", "999001", "999002", 11, SessionOK, 11*time.Hour)
-	if _, err := s.Settle(ctx, Schedule{Per: 4}, t0.Add(11*time.Hour), false); err != nil {
+	pay(t, s, "p1", "999001", "999002", 100, "", -1)
+	pay(t, s, "p2", "999002", "999001", 20, "", -1)
+	pay(t, s, "r1", "999001", "999002", 500, SessionOK, 0)
+	pay(t, s, "r2", "999002", "999001", 200, SessionOK, 0)
+	pay(t, s, "r3", "999001", "999002", 70, SessionOK, 3*time.Hour)
+	pay(t, s, "f1", "999001", "999002", 9, "61", 0)
+	pay(t, s, "r4", "999001", "999002", 11, SessionOK, 11*time.Hour)
+	if _, err := s.Settle(t.Context(), Schedule{Per: 4}, t0.Add(11*time.Hour), false); err != nil {
 		t.Fatal(err)
 	}
-	return s
 }
 
-func TestSettlementPositionCountsWhatNoReportCovers(t *testing.T) {
+func settlementPosition(t *testing.T, s *Store) {
 	ctx := t.Context()
-	s := positionStore(t)
+	settledBooks(t, s)
 	const noon, evening = "2026-11-04T12:00", "2026-11-04T18:00"
 	at := func(h int) time.Time { return time.Date(2026, 11, 4, h, 0, 0, 0, clock.Lagos) }
 	read := func(identity, after string) (SettlementPosition, string) {
@@ -99,9 +71,9 @@ func TestSettlementPositionCountsWhatNoReportCovers(t *testing.T) {
 	})
 }
 
-func TestOpenSessionsCountsWhatIsNotSettled(t *testing.T) {
+func openSessions(t *testing.T, s *Store) {
 	ctx := t.Context()
-	s := positionStore(t)
+	settledBooks(t, s)
 	rows := []struct {
 		name string
 		id   string
@@ -131,16 +103,8 @@ func TestOpenSessionsCountsWhatIsNotSettled(t *testing.T) {
 	}
 }
 
-func TestSumsBeyondSixtyFourBitsAreRefused(t *testing.T) {
+func sumsBeyondSixtyFourBits(t *testing.T, s *Store) {
 	ctx := t.Context()
-	s := testStore(t)
-	for _, m := range []Member{member("bank-a", "Bank A", "999001", "901"), member("bank-b", "Bank B", "999002", "902")} {
-		m.Limits = Limits{NetDebitCap: 100_000_000}
-		m.CallerID = m.ID
-		if err := s.Register(ctx, m); err != nil {
-			t.Fatal(err)
-		}
-	}
 	for _, id := range []string{"big1", "big2"} {
 		if _, err := s.pool.Exec(ctx, `INSERT INTO nip_sessions (session_id, from_code, to_code, from_nuban, to_nuban, amount_minor, narration, status, outcome, created_at, resolved_at)
 			VALUES ($1, '999001', '999002', '0000000011', '0000000022', $2, 'rent', '00', 'credited', $3, $3)`, id, int64(math.MaxInt64), t0); err != nil {

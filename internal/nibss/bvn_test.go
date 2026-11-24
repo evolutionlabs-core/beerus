@@ -85,91 +85,54 @@ func TestMakeBVN(t *testing.T) {
 	}
 }
 
-func TestEnrolBVNReuse(t *testing.T) {
+func TestEnrolBVN(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
+	count := func() int {
+		var rows int
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM bvns`).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
 	first, err := s.EnrolBVN(ctx, "Adaeze Okafor", "08031234567", adaezeDOB)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || first != makeBVN(1) {
+		t.Fatalf("first BVN %s, %v, want %s", first, err, makeBVN(1))
 	}
-	if first != "22900000013" {
-		t.Fatalf("first BVN %s, want 22900000013", first)
-	}
-	for _, again := range []struct{ name, phone string }{
-		{"ADAEZE OKAFOR", "+2348031234567"},
-		{"  okafor   adaeze ", "0803 123 4567"},
-	} {
-		got, err := s.EnrolBVN(ctx, again.name, again.phone, adaezeDOB)
-		if err != nil || got != first {
+	for _, again := range []struct{ name, phone string }{{"ADAEZE OKAFOR", "+2348031234567"}, {"  okafor   adaeze ", "0803 123 4567"}} {
+		if got, err := s.EnrolBVN(ctx, again.name, again.phone, adaezeDOB); err != nil || got != first {
 			t.Errorf("EnrolBVN(%q, %q) = %s, %v; want %s", again.name, again.phone, got, err, first)
 		}
 	}
-	var rows int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM bvns`).Scan(&rows); err != nil || rows != 1 {
-		t.Fatalf("%d bvn rows, %v; want 1", rows, err)
+	if count() != 1 {
+		t.Fatalf("%d bvn rows, want 1", count())
 	}
-}
-
-func TestEnrolBVNNoReuse(t *testing.T) {
-	ctx := context.Background()
-	s := testStore(t)
-	base, err := s.EnrolBVN(ctx, "Adaeze Okafor", "08031234567", adaezeDOB)
-	if err != nil {
-		t.Fatal(err)
+	for i, o := range []struct {
+		name, phone string
+		dob         clock.Date
+	}{
+		{"Adaeze Okafor", "08031234568", adaezeDOB},
+		{"Adaeze Okafor", "08031234567", clock.Date{Y: 1990, M: 4, D: 13}},
+		{"Adaeze Okafor-Eze", "08031234567", adaezeDOB},
+		{"Adaeze Okafor", "08031234567", clock.Date{Y: 2024, M: 2, D: 29}},
+	} {
+		if got, err := s.EnrolBVN(ctx, o.name, o.phone, o.dob); err != nil || got != makeBVN(int64(i+2)) {
+			t.Errorf("EnrolBVN(%q, %q, %s) = %s, %v; want new BVN %s", o.name, o.phone, o.dob, got, err, makeBVN(int64(i+2)))
+		}
 	}
-	others := []struct {
+	for _, c := range []struct {
 		name, phone string
 		dob         clock.Date
 		want        string
 	}{
-		{"Adaeze Okafor", "08031234568", adaezeDOB, "22900000021"},
-		{"Adaeze Okafor", "08031234567", clock.Date{Y: 1990, M: 4, D: 13}, "22900000039"},
-		{"Adaeze Okafor-Eze", "08031234567", adaezeDOB, "22900000047"},
+		{"Adaeze Okafor", "08031234567", clock.Date{Y: 2023, M: 2, D: 29}, "date of birth 2023-02-29 is not a real date"},
+		{"Adaeze Okafor", "08031234567", clock.Date{}, "date of birth 0000-00-00 is not a real date"},
+		{" ", "08031234567", adaezeDOB, `name " " has no letters`},
+		{"Adaeze Okafor", "phone", adaezeDOB, `phone "phone" may hold only digits, spaces, dashes, brackets and a leading +`},
+	} {
+		_, err := s.EnrolBVN(ctx, c.name, c.phone, c.dob)
+		wantBadDetails(t, err, c.want)
 	}
-	for _, o := range others {
-		got, err := s.EnrolBVN(ctx, o.name, o.phone, o.dob)
-		if err != nil || got != o.want || got == base {
-			t.Errorf("EnrolBVN(%q, %q, %s) = %s, %v; want new BVN %s", o.name, o.phone, o.dob, got, err, o.want)
-		}
-	}
-}
-
-func TestEnrolBVNRejectsBadInput(t *testing.T) {
-	ctx := context.Background()
-	s := testStore(t)
-	_, err := s.EnrolBVN(ctx, "Adaeze Okafor", "08031234567", clock.Date{Y: 2023, M: 2, D: 29})
-	wantBadDetails(t, err, "date of birth 2023-02-29 is not a real date")
-	_, err = s.EnrolBVN(ctx, "Adaeze Okafor", "08031234567", clock.Date{})
-	wantBadDetails(t, err, "date of birth 0000-00-00 is not a real date")
-	_, err = s.EnrolBVN(ctx, " ", "08031234567", adaezeDOB)
-	wantBadDetails(t, err, `name " " has no letters`)
-	_, err = s.EnrolBVN(ctx, "Adaeze Okafor", "phone", adaezeDOB)
-	wantBadDetails(t, err, `phone "phone" may hold only digits, spaces, dashes, brackets and a leading +`)
-	if got, err := s.EnrolBVN(ctx, "Adaeze Okafor", "08031234567", clock.Date{Y: 2024, M: 2, D: 29}); err != nil || got != "22900000013" {
-		t.Errorf("leap-day birth: %s, %v", got, err)
-	}
-}
-
-func TestEnrolBVNSerialsRunOut(t *testing.T) {
-	ctx := context.Background()
-	s := testStore(t)
-	if _, err := s.pool.Exec(ctx, `SELECT setval('bvn_seq', 9999998)`); err != nil {
-		t.Fatal(err)
-	}
-	last, err := s.EnrolBVN(ctx, "Tunde Bello", "08030000001", adaezeDOB)
-	if err != nil || last != "22999999992" {
-		t.Fatalf("last BVN %s, %v", last, err)
-	}
-	_, err = s.EnrolBVN(ctx, "Ngozi Eze", "08030000002", adaezeDOB)
-	wantErr(t, err, "all 9999999 BVN serials are used")
-	if got, err := s.EnrolBVN(ctx, "Tunde Bello", "08030000001", adaezeDOB); err != nil || got != last {
-		t.Errorf("existing person after run out: %s, %v", got, err)
-	}
-}
-
-func TestEnrolBVNConcurrent(t *testing.T) {
-	ctx := context.Background()
-	s := testStore(t)
 	const n = 8
 	got := make([]string, n)
 	errs := make([]error, n)
@@ -187,9 +150,20 @@ func TestEnrolBVNConcurrent(t *testing.T) {
 			t.Fatalf("call %d: %s, %v; want %s", i, got[i], errs[i], got[0])
 		}
 	}
-	var rows int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM bvns`).Scan(&rows); err != nil || rows != 1 {
-		t.Fatalf("%d bvn rows, %v; want 1", rows, err)
+	if count() != 6 {
+		t.Fatalf("%d bvn rows, want 6", count())
+	}
+	if _, err := s.pool.Exec(ctx, `SELECT setval('bvn_seq', 9999998)`); err != nil {
+		t.Fatal(err)
+	}
+	last, err := s.EnrolBVN(ctx, "Tunde Bello", "08030000001", adaezeDOB)
+	if err != nil || last != "22999999992" {
+		t.Fatalf("last BVN %s, %v", last, err)
+	}
+	_, err = s.EnrolBVN(ctx, "Ngozi Eze", "08030000002", adaezeDOB)
+	wantErr(t, err, "all 9999999 BVN serials are used")
+	if got, err := s.EnrolBVN(ctx, "Tunde Bello", "08030000001", adaezeDOB); err != nil || got != last {
+		t.Errorf("existing person after run out: %s, %v", got, err)
 	}
 }
 
