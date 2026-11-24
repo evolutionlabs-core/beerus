@@ -7,10 +7,10 @@
 
     function layout() {
       var small = window.innerWidth < 480;
-      frame.style.width = small ? "100%" : "400px";
+      frame.style.width = small ? "100%" : "448px";
       frame.style.height = small ? "100%" : "640px";
       frame.style.maxHeight = "100%";
-      frame.style.borderRadius = small ? "0" : "16px";
+      frame.style.borderRadius = small ? "0" : "12px";
     }
 
     function close() {
@@ -51,7 +51,8 @@
       overlay.style.display = "flex";
       overlay.style.alignItems = "center";
       overlay.style.justifyContent = "center";
-      overlay.style.background = "rgba(20, 18, 11, 0.56)";
+      overlay.style.background = "rgba(23, 23, 23, 0.45)";
+      overlay.style.backdropFilter = "blur(2px)";
       overlay.addEventListener("click", function (event) {
         if (event.target === overlay) exit(null);
       });
@@ -59,7 +60,8 @@
       frame.title = "Beerus Connect";
       frame.src = origin + "/link?token=" + encodeURIComponent(options.token) + "&mode=overlay";
       frame.style.border = "0";
-      frame.style.background = "#f7f6f2";
+      frame.style.background = "#ffffff";
+      frame.style.boxShadow = "0 20px 50px rgba(0, 0, 0, 0.18)";
       layout();
       overlay.appendChild(frame);
       document.body.appendChild(overlay);

@@ -65,12 +65,9 @@ func TestDoneStory(t *testing.T) {
 	b.post("/link/institution", url.Values{"institution": {"bank-a"}})
 	check(b.result == nil && b.atBank(), "the widget did not send her to the bank: %v %.200s", b.cur, b.last)
 
-	step(3, "sign in, 2FA code, CBN consent screen, pick accounts, approve")
+	step(3, "sign in, CBN consent screen, pick accounts, approve")
 	base := b.cur.Scheme + "://" + b.cur.Host
 	b.postTo(base, "/login", url.Values{"username": {pa.Username}, "password": {pa.Password}})
-	otp := reOTP.FindStringSubmatch(b.last)
-	check(otp != nil, "no 2FA code in the inbox: %.300s", b.last)
-	b.postTo(base, "/verify", url.Values{"otp": {otp[1]}})
 	for _, want := range []string{s.cfg.Connect.LegalName, s.cfg.Connect.RegistryID, s.cfg.Connect.CACNumber, s.cfg.Partners[0].LegalName, s.cfg.Partners[0].Purpose, "Read only", "Anonymised analytics", "12 months", "Connected apps"} {
 		check(strings.Contains(b.last, want), "the consent screen is missing %q", want)
 	}

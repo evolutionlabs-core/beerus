@@ -29,21 +29,15 @@ func (s *site) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: oauthCookie, Value: url.Values{"client_id": {client}, "request_uri": {uri}}.Encode(), Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
-	sess, _ := s.sessionFor(r)
+	sess, h := s.sessionFor(r)
 	if sess == nil {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	code, err := otp()
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
 	s.auth.mu.Lock()
-	sess.Verified, sess.Fresh, sess.Attempts = false, "", 0
-	sess.OTP, sess.OTPExpires = code, s.Clock.Real().Add(otpLife)
+	delete(s.auth.sessions, h)
 	s.auth.mu.Unlock()
-	http.Redirect(w, r, "/verify", http.StatusSeeOther)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *site) pendingRequest(w http.ResponseWriter, r *http.Request, sess *session) (*openbanking.Request, string) {

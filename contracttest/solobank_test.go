@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -286,12 +285,7 @@ func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
 		}
 		return resp.StatusCode, string(raw)
 	}
-	_, verify := page("POST", "/login", url.Values{"username": {"ada"}, "password": {soloPassword}})
-	code := regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`).FindStringSubmatch(verify)
-	if code == nil {
-		t.Fatalf("no code on the verify page: %.300s", verify)
-	}
-	page("POST", "/verify", url.Values{"otp": {code[1]}})
+	page("POST", "/login", url.Values{"username": {"ada"}, "password": {soloPassword}})
 	status, body := page("GET", "/transfer", nil)
 	if want := "Bank A cannot reach NIBSS right now. Try again in a minute."; status != http.StatusServiceUnavailable || strings.TrimSpace(body) != want {
 		t.Fatalf("the transfer page answered %d %q, want 503 %q", status, strings.TrimSpace(body), want)

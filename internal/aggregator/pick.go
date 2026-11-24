@@ -16,6 +16,7 @@ const (
 type pickRow struct {
 	NUBAN   string
 	Name    string
+	Type    string
 	Mask    string
 	Checked bool
 }
@@ -41,7 +42,7 @@ func (a *App) pickPageLocked(w http.ResponseWriter, ws *WidgetSession, ls *LinkS
 	d := a.base(ls, ws)
 	rows := []pickRow{}
 	for _, ba := range ls.BankAccounts {
-		rows = append(rows, pickRow{NUBAN: ba.ID, Name: ba.Name, Mask: mask(ba.ID), Checked: slices.Contains(ticked, ba.ID)})
+		rows = append(rows, pickRow{NUBAN: ba.ID, Name: ba.Name, Type: ba.Type, Mask: mask(ba.ID), Checked: slices.Contains(ticked, ba.ID)})
 	}
 	d["Rows"] = rows
 	d["Ticked"] = len(ticked)

@@ -398,27 +398,6 @@ func (b *Bank) Customers(ctx context.Context, limit int, cursor string) ([]Custo
 	return b.listCustomers(ctx, "", limit, cursor)
 }
 
-func (b *Bank) Usernames(ctx context.Context, limit int) ([]string, int, error) {
-	rows, err := b.L.Pool().Query(ctx, `SELECT username, count(*) OVER () FROM customers WHERE username IS NOT NULL AND status = $1 ORDER BY username LIMIT $2`, CustomerActive, limit)
-	if err != nil {
-		return nil, 0, fmt.Errorf("list usernames: %w", err)
-	}
-	defer rows.Close()
-	names := []string{}
-	total := 0
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name, &total); err != nil {
-			return nil, 0, fmt.Errorf("scan username: %w", err)
-		}
-		names = append(names, name)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("read usernames: %w", err)
-	}
-	return names, total, nil
-}
-
 func (b *Bank) CustomersByBVN(ctx context.Context, bvn string, limit int, cursor string) ([]Customer, string, error) {
 	return b.listCustomers(ctx, bvn, limit, cursor)
 }
