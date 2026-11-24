@@ -18,6 +18,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 const (
@@ -336,4 +337,40 @@ func TestParallelPayoutsCannotOverdrawTheAccount(t *testing.T) {
 func bcryptHash(password string) (string, error) {
 	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
 	return string(h), err
+}
+
+func TestCustomerUsernamesAreMapped(t *testing.T) {
+	a := newAdminBank(t)
+	ctx := context.Background()
+	hash, err := bcryptHash("pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dob := clock.Date{Y: 1992, M: 3, D: 3}
+	_, noPassword := a.books.CreateCustomer(ctx, "cus-np", "NO PASS", "+2348030000003", dob, "22911111111", "nopass", "", adminNow)
+	_, taken := a.books.CreateCustomer(ctx, "cus-tk", "TWIN", "+2348030000004", dob, "22922222222", "ada", hash, adminNow)
+	for _, r := range []struct {
+		name   string
+		err    error
+		status int
+		want   string
+	}{
+		{"a username needs a password", noPassword, 422, apiError("invalid_request", `Username "nopass" needs a password.`)},
+		{"a taken username", taken, 409, apiError("username_taken", "Username is taken: ada.")},
+	} {
+		w := httptest.NewRecorder()
+		WriteBankingError(w, httptest.NewRequest("POST", "/v1/customers", nil), slog.New(slog.NewTextHandler(a.logs, nil)), func() bool { return false }, r.err)
+		if body := strings.Replace(strings.TrimSpace(w.Body.String()), `"request_id":""`, `"request_id":"req_ID"`, 1); w.Code != r.status || body != r.want {
+			t.Errorf("%s: %d %s, want %d %s", r.name, w.Code, body, r.status, r.want)
+		}
+	}
+	created, err := a.books.CreateCustomer(ctx, "cus-un", "BO", "+2348030000005", dob, "22933333333", "bo", hash, adminNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	web.WriteJSON(w, 201, created)
+	if !strings.Contains(w.Body.String(), `"username":"bo"`) || strings.Contains(w.Body.String(), "password") {
+		t.Errorf("customer response %s", w.Body)
+	}
 }
