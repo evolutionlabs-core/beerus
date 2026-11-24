@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,17 +15,13 @@ func finish(c Config) (*Config, error) {
 	return &c, c.Finish()
 }
 
-func TestStatusQueriesNeedAWait(t *testing.T) {
+func TestFinishValidates(t *testing.T) {
 	c := Config{Dir: "x"}
 	if err := c.Finish(); err == nil || err.Error() != "nip status queries need a wait above zero, not 0s" {
 		t.Errorf("finish with no wait: %v", err)
 	}
-}
-
-func TestNIPSessionsAreValidated(t *testing.T) {
-	c, err := finish(Config{})
-	if err != nil || c.Sessions() != DefaultNIPSessions {
-		t.Fatalf("default: %v %v", c, err)
+	if c, err := finish(Config{}); err != nil || c.Sessions() != DefaultNIPSessions || c.APIPortOffset() != DefaultAPIPortOffset || c.PortWindow() != DefaultPortWindow {
+		t.Fatalf("defaults: %v %v", c, err)
 	}
 	for _, ok := range []int{1, 2, 12, 24, 1440} {
 		if _, err := finish(Config{NIPSessions: ok}); err != nil {
@@ -32,21 +29,33 @@ func TestNIPSessionsAreValidated(t *testing.T) {
 		}
 	}
 	for _, bad := range []int{-1, 7, 11, 2880, 1000000000} {
-		_, err := finish(Config{NIPSessions: bad})
-		if err == nil || !strings.Contains(err.Error(), "nip sessions") {
+		if _, err := finish(Config{NIPSessions: bad}); err == nil || !strings.Contains(err.Error(), "nip sessions") {
 			t.Errorf("nip sessions %d: %v", bad, err)
 		}
+	}
+	bank := func(a BankAPI) Config { return Config{Banks: []*Bank{{ID: "bank-a", API: a}}} }
+	rng := "bank bank-a open_banking.access_seconds %d is out of range. Use 130 to 3600, or leave it out for the default"
+	for _, c := range []struct {
+		name string
+		in   Config
+		want string
+	}{
+		{"negative window", Config{Ports: Ports{Window: -1}}, "ports.window"},
+		{"negative dormant_days", bank(BankAPI{DormantDays: -5}), "dormant_days"},
+		{"low access_seconds", bank(BankAPI{AccessSeconds: 129}), fmt.Sprintf(rng, 129)},
+		{"high access_seconds", bank(BankAPI{AccessSeconds: 3601}), "access_seconds 3601 is out of range"},
+	} {
+		if _, err := finish(c.in); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+	if _, err := finish(bank(BankAPI{AccessSeconds: MaxAccessSeconds})); err != nil {
+		t.Fatalf("access_seconds at the ceiling: %v", err)
 	}
 }
 
 func TestPortAllocation(t *testing.T) {
-	c, err := finish(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.APIPortOffset() != DefaultAPIPortOffset || c.PortWindow() != DefaultPortWindow {
-		t.Fatalf("defaults %d %d", c.APIPortOffset(), c.PortWindow())
-	}
+	c, _ := finish(Config{})
 	used := map[int]bool{8010: true, 8011: true}
 	if p, err := c.AllocatePort(8010, used, func(p int) bool { return p != 8012 }); err != nil || p != 8013 {
 		t.Fatalf("port %d: %v", p, err)
@@ -54,28 +63,12 @@ func TestPortAllocation(t *testing.T) {
 	if _, err := c.AllocatePort(8010, used, func(int) bool { return false }); err == nil || !strings.Contains(err.Error(), "8010 to 8209") {
 		t.Fatalf("no port free: %v", err)
 	}
-	c, err = finish(Config{Ports: Ports{APIOffset: 20, Window: 3}})
+	c, err := finish(Config{Ports: Ports{APIOffset: 20, Window: 3}})
 	if err != nil || c.APIPortOffset() != 20 {
 		t.Fatalf("custom: %v", err)
 	}
 	if _, err := c.AllocatePort(9000, map[int]bool{9000: true, 9001: true, 9002: true}, func(int) bool { return true }); err == nil {
 		t.Fatal("the window should stop the search")
-	}
-	if _, err := finish(Config{Ports: Ports{Window: -1}}); err == nil {
-		t.Fatal("negative window accepted")
-	}
-	if _, err := finish(Config{Banks: []*Bank{{ID: "bank-a", API: BankAPI{DormantDays: -5}}}}); err == nil || !strings.Contains(err.Error(), "dormant_days") {
-		t.Fatalf("negative dormant_days: %v", err)
-	}
-	want := "bank bank-a open_banking.access_seconds 129 is out of range. Use 130 to 3600, or leave it out for the default"
-	if _, err := finish(Config{Banks: []*Bank{{ID: "bank-a", API: BankAPI{AccessSeconds: 129}}}}); err == nil || err.Error() != want {
-		t.Fatalf("low access_seconds: %v", err)
-	}
-	if _, err := finish(Config{Banks: []*Bank{{ID: "bank-a", API: BankAPI{AccessSeconds: 3601}}}}); err == nil || !strings.Contains(err.Error(), "access_seconds 3601 is out of range") {
-		t.Fatalf("high access_seconds: %v", err)
-	}
-	if _, err := finish(Config{Banks: []*Bank{{ID: "bank-a", API: BankAPI{AccessSeconds: MaxAccessSeconds}}}}); err != nil {
-		t.Fatalf("access_seconds at the ceiling: %v", err)
 	}
 }
 
