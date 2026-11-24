@@ -75,11 +75,6 @@ func (s *Stack) signInAt(bank, id string) *bankBrowser {
 	p := s.personaAt(id, bank)
 	b.get("/login")
 	b.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
-	m := reOTP.FindStringSubmatch(b.last)
-	if m == nil {
-		s.t.Fatalf("no code on the verify page: %.300s", b.last)
-	}
-	b.post("/verify", url.Values{"otp": {m[1]}})
 	if b.loc != "/accounts" {
 		s.t.Fatalf("sign-in ended at %s", b.loc)
 	}

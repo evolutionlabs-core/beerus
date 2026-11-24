@@ -79,3 +79,25 @@ func TestScript(t *testing.T) {
 		})
 	}
 }
+
+func TestInitials(t *testing.T) {
+	initials := Funcs()["initials"].(func(string) string)
+	tests := []struct {
+		name, in, want string
+	}{
+		{"two words", "Acme Bank", "AB"},
+		{"letter suffix", "Bank A", "BA"},
+		{"more than two words", "Lapo Microfinance Bank", "LM"},
+		{"one word", "Kuda", "K"},
+		{"lower case", "opay digital", "OD"},
+		{"extra spaces", "  Harbour   Bank ", "HB"},
+		{"non-ASCII", "Ọ̀yọ́ Bank", "ỌB"},
+		{"empty", "", "?"},
+		{"spaces only", "   ", "?"},
+	}
+	for _, tc := range tests {
+		if got := initials(tc.in); got != tc.want {
+			t.Errorf("%s: initials(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
+	}
+}

@@ -159,6 +159,23 @@ func Funcs() template.FuncMap {
 			}
 			return strings.ToUpper(string(r))
 		},
+		"initials": func(s string) string {
+			out := ""
+			for _, w := range strings.Fields(s) {
+				r, _ := utf8.DecodeRuneInString(w)
+				if r == utf8.RuneError {
+					continue
+				}
+				out += strings.ToUpper(string(r))
+				if utf8.RuneCountInString(out) == 2 {
+					break
+				}
+			}
+			if out == "" {
+				return "?"
+			}
+			return out
+		},
 		"statusClass": func(s string) string {
 			switch s {
 			case "active", "posted", "delivered", "succeeded":

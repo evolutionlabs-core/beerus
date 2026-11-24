@@ -114,16 +114,14 @@ func TestOpenBanking(t *testing.T) {
 		return nil
 	}
 	authorize := "/authorize?" + url.Values{"client_id": {s.cfg.Connect.RegistryID}, "request_uri": {par["request_uri"].(string)}}.Encode()
-	code := regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`)
 	b.get(authorize)
 	if b.loc != "/login" {
 		t.Fatalf("authorize ended at %s: %.2000s", b.loc, b.last)
 	}
 	p := s.persona("adaeze")
 	b.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
-	b.post("/verify", url.Values{"otp": {code.FindStringSubmatch(b.last)[1]}})
 	if b.loc != "/authorize/consent" {
-		t.Fatalf("after 2FA: %s", b.loc)
+		t.Fatalf("after sign-in: %s", b.loc)
 	}
 	for _, want := range []string{"Beerus Connect Limited", s.cfg.Connect.RegistryID, s.cfg.Connect.CACNumber, "Evolution Labs", "to keep your books in sync", "Anonymised analytics", "12 months", "Connected apps"} {
 		if !strings.Contains(b.last, want) {
@@ -165,17 +163,18 @@ func TestOpenBanking(t *testing.T) {
 	par = push()
 	b2.get("/login")
 	b2.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
-	b2.post("/verify", url.Values{"otp": {code.FindStringSubmatch(b2.last)[1]}})
 	b2.get("/authorize?" + url.Values{"client_id": {s.cfg.Connect.RegistryID}, "request_uri": {par["request_uri"].(string)}}.Encode())
-	if !strings.Contains(b2.last, "verification code") {
-		t.Fatalf("a signed-in customer was not asked for 2FA again: %.300s", b2.last)
+	if b2.loc != "/login" {
+		t.Fatalf("a signed-in customer was not asked to sign in again: %s", b2.loc)
 	}
 	b2.get("/authorize/consent")
-	if strings.Contains(b2.last, "Anonymised analytics") {
-		t.Fatal("consent screen shown without a fresh 2FA")
+	if b2.loc != "/login" || strings.Contains(b2.last, "Anonymised analytics") {
+		t.Fatalf("consent screen shown without a fresh sign-in: %s", b2.loc)
 	}
-	b2.get("/verify")
-	b2.post("/verify", url.Values{"otp": {code.FindStringSubmatch(b2.last)[1]}})
+	b2.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
+	if b2.loc != "/authorize/consent" {
+		t.Fatalf("after the second sign-in: %s", b2.loc)
+	}
 	b2.post("/authorize/consent", url.Values{"action": {"approve"}, "account": {shared}})
 	cb2, _ := url.Parse(b2.next)
 	status, tok = o.post("/token", tokenForm(cb2.Query().Get("code")))

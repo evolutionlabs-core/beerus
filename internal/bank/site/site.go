@@ -46,8 +46,6 @@ func New(c Config) http.Handler {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/accounts", http.StatusSeeOther) })
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.loginSubmit)
-	mux.HandleFunc("GET /verify", s.verifyPage)
-	mux.HandleFunc("POST /verify", s.verifySubmit)
 	mux.HandleFunc("POST /logout", s.logout)
 	mux.HandleFunc("GET /accounts", s.accounts)
 	mux.HandleFunc("GET /accounts/{nuban}", s.statement)
@@ -113,7 +111,7 @@ func (s *site) render(w http.ResponseWriter, name string, status int, sess *sess
 	own := s.Host.Bank()
 	d["Bank"] = &own
 	d["Now"] = s.Clock.Now()
-	if sess != nil && sess.Verified {
+	if sess != nil {
 		d["User"] = sess.Name
 		d["CSRF"] = sess.CSRF
 	}
