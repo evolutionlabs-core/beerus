@@ -83,7 +83,7 @@ func commands() []command {
 		{"partner", groupOpen, "Add, list, rekey and remove partner apps", "", cmdPartner},
 		{"partner add", "", "Register a partner app", "partner add <id> --redirect-uri URL [options]", nil},
 		{"partner list", "", "List partner apps", "partner list [options]", nil},
-		{"partner rotate-key", "", "Issue new credentials for a partner app", "partner rotate-key <id> [options]", nil},
+		{"partner rotate-key", "", "Issue a new secret for a partner app", "partner rotate-key <id> [options]", nil},
 		{"partner remove", "", "Remove a partner app", "partner remove <id> [options]", nil},
 		{"registry", groupOpen, "Open banking clients and consents", "", cmdRegistry},
 		{"registry list", "", "List registered clients", "registry list [options]", nil},

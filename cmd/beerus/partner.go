@@ -88,25 +88,25 @@ func cmdPartner(args []string) error {
 			return err
 		}
 		fmt.Printf("Registered %s.\n\n", id)
-		return printCredentials(*dir, id, fmt.Sprint(out["api_key"]))
+		return printCredentials(*dir, id, fmt.Sprint(out["secret"]))
 	case "rotate-key":
 		out, err := ctl.do("POST", "/partners/"+url.PathEscape(id)+"/rotate-key", nil)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Issued new credentials for %s. The old API key no longer works.\n\n", id)
-		return printCredentials(*dir, id, fmt.Sprint(out["api_key"]))
+		fmt.Printf("Issued a new secret for %s. The old secret no longer works.\n\n", id)
+		return printCredentials(*dir, id, fmt.Sprint(out["secret"]))
 	case "remove":
 		if _, err := ctl.do("DELETE", "/partners/"+url.PathEscape(id), nil); err != nil {
 			return err
 		}
-		fmt.Printf("Removed %s. Its API key no longer works.\n", id)
+		fmt.Printf("Removed %s. Its secret no longer works.\n", id)
 		return nil
 	}
 	return usageError("partner")
 }
 
-func printCredentials(dir, id, key string) error {
+func printCredentials(dir, id, secret string) error {
 	c, err := setup.LoadConfig(dir)
 	if err != nil {
 		return err
@@ -120,7 +120,8 @@ func printCredentials(dir, id, key string) error {
 		return fmt.Errorf("partner %s is not in the setup", id)
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintf(w, "API key\t%s\t(shown once; also in %s)\n", key, c.Path("partners", id, "api-key"))
+	fmt.Fprintf(w, "Client ID\t%s\n", id)
+	fmt.Fprintf(w, "Secret\t%s\t(shown once; also in %s)\n", secret, c.Path("partners", id, config.PartnerSecretFile))
 	fmt.Fprintf(w, "Partner API\t%s\n", c.PartnerURL())
 	fmt.Fprintf(w, "Redirect URIs\t%s\n", strings.Join(p.RedirectURIs, ", "))
 	fmt.Fprintf(w, "Webhook URL\t%s\n", p.WebhookURL)

@@ -80,7 +80,7 @@ type Stack struct {
 	aggOpts    aggregator.Options
 	api        *http.Client
 	raw        *http.Client
-	apiKey     string
+	secret     string
 	ctlToken   string
 	sink       *sink
 	external   bool
@@ -247,11 +247,11 @@ func startStackWith(t *testing.T, opts aggregator.Options, edits ...func(*config
 		}
 	}
 	s.redirect = s.cfg.Partners[0].RedirectURIs[0]
-	key, err := config.ReadSecret(s.cfg.Path("partners", "balance", "api-key"))
+	secret, err := config.ReadSecret(s.cfg.Path("partners", "balance", config.PartnerSecretFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.apiKey = key
+	s.secret = secret
 	if s.ctlToken, err = config.ReadSecret(s.cfg.Path("control-token")); err != nil {
 		t.Fatal(err)
 	}
@@ -438,12 +438,15 @@ func skipValidation() callOpt {
 	return func(r *http.Request) { r.Header.Set("X-Test-Skip-Validation", "1") }
 }
 
-func apiKey(k string) callOpt {
+func credentials(clientID, secret string) callOpt {
 	return func(r *http.Request) {
-		if k == "" {
-			r.Header.Del("X-Api-Key")
-		} else {
-			r.Header.Set("X-Api-Key", k)
+		r.Header.Del(config.ClientIDHeader)
+		r.Header.Del(config.SecretHeader)
+		if clientID != "" {
+			r.Header.Set(config.ClientIDHeader, clientID)
+		}
+		if secret != "" {
+			r.Header.Set(config.SecretHeader, secret)
 		}
 	}
 }
@@ -464,7 +467,8 @@ func (s *Stack) call(method, path string, body any, opts ...callOpt) Resp {
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	req.Header.Set("X-Api-Key", s.apiKey)
+	req.Header.Set(config.ClientIDHeader, "balance")
+	req.Header.Set(config.SecretHeader, s.secret)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

@@ -145,15 +145,15 @@ func TestLoadStatusDropsOldPartnerCertificateFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := st.Resources[0].Partner; got == nil || *got != (PartnerKeys{APIKeySHA256: "abc"}) {
-		t.Fatalf("partner keys %+v, want only the API key hash abc", got)
+	if got := st.Resources[0].Partner; got == nil || *got != (PartnerKeys{SecretSHA256: "abc"}) {
+		t.Fatalf("partner keys %+v, want only the old key hash abc as the secret hash", got)
 	}
 	if err := SaveStatus(dir, st); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := os.ReadFile(filepath.Join(dir, "control.json"))
-	if err != nil || bytes.Contains(saved, []byte("cert_")) {
-		t.Fatalf("a saved status still holds certificate fields: %v %s", err, saved)
+	if err != nil || bytes.Contains(saved, []byte("cert_")) || bytes.Contains(saved, []byte("api_key_sha256")) || !bytes.Contains(saved, []byte(`"secret_sha256":"abc"`)) {
+		t.Fatalf("a saved status still holds old fields or lost the secret hash: %v %s", err, saved)
 	}
 }
 

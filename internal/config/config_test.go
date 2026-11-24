@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -127,5 +129,48 @@ func TestPrepareIsIdempotentAndPlain(t *testing.T) {
 	}
 	if _, err := os.Stat(c.Path("ca")); !os.IsNotExist(err) {
 		t.Fatalf("prepare made a ca directory: %v", err)
+	}
+}
+
+func TestCarryOverSecret(t *testing.T) {
+	dir := t.TempDir()
+	partner := filepath.Join(dir, "partners", "myapp")
+	secretPath := filepath.Join(partner, PartnerSecretFile)
+	if err := os.MkdirAll(partner, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := CarryOverSecret(dir, "myapp"); err != nil {
+		t.Fatalf("no old key: %v", err)
+	}
+	if _, err := os.Stat(secretPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a secret was made from nothing: %v", err)
+	}
+	if err := WriteSecret(filepath.Join(partner, "api-key"), "bk_test_old\n"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 2; i++ {
+		if err := CarryOverSecret(dir, "myapp"); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+	got, err := ReadSecret(secretPath)
+	if err != nil || got != "bk_test_old" {
+		t.Fatalf("carried secret %q, %v, want bk_test_old", got, err)
+	}
+	info, err := os.Stat(secretPath)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("secret mode %v, %v, want 0600", info, err)
+	}
+	if err := WriteSecret(secretPath, "bk_test_new\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := CarryOverSecret(dir, "myapp"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ReadSecret(secretPath); got != "bk_test_new" {
+		t.Fatalf("an existing secret was overwritten with %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(partner, "api-key")); err != nil {
+		t.Fatalf("the old key file was removed: %v", err)
 	}
 }

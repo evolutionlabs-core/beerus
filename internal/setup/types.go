@@ -2,6 +2,7 @@ package setup
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"slices"
 	"time"
@@ -245,11 +246,12 @@ type Owned struct {
 }
 
 type PartnerKeys struct {
-	APIKeySHA256 string `json:"api_key_sha256"`
+	SecretSHA256 string `json:"secret_sha256"`
 }
 
 func (k *PartnerKeys) UnmarshalJSON(raw []byte) error {
 	var v struct {
+		SecretSHA256 string `json:"secret_sha256"`
 		APIKeySHA256 string `json:"api_key_sha256"`
 		CertCN       string `json:"cert_cn"`
 		CertSHA256   string `json:"cert_sha256"`
@@ -259,7 +261,7 @@ func (k *PartnerKeys) UnmarshalJSON(raw []byte) error {
 	if err := dec.Decode(&v); err != nil {
 		return err
 	}
-	k.APIKeySHA256 = v.APIKeySHA256
+	k.SecretSHA256 = cmp.Or(v.SecretSHA256, v.APIKeySHA256)
 	return nil
 }
 

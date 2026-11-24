@@ -190,11 +190,11 @@ Connect your existing app to Beerus, the way you would connect it to Mono or Okr
 beerus partner add myapp --redirect-uri http://localhost:3000/callback --webhook-url http://localhost:3000/webhooks
 ```
 
-Your app's API key lands in `.beerus/partners/myapp`. Every call to the Partner API at `http://connect.localhost:7443` sends it in the `X-Api-Key` header. To try calls from a terminal:
+Your app's client ID and secret land in `.beerus/partners/myapp`. Every call to the Partner API at `http://connect.localhost:7443` sends them in the `Beerus-Client-ID` and `Beerus-Secret` headers. To try calls from a terminal:
 
 ```bash
 P=.beerus/partners/myapp
-api() { curl -sS -H "X-Api-Key: $(cat $P/api-key)" -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "http://connect.localhost:7443$1" "${@:2}"; echo; }
+api() { curl -sS -H "Beerus-Client-ID: myapp" -H "Beerus-Secret: $(cat $P/secret)" -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "http://connect.localhost:7443$1" "${@:2}"; echo; }
 ```
 
 ## 2. Let a customer link their bank
@@ -232,6 +232,8 @@ beerus webhooks
 beerus revoke CONNECTION_ID
 beerus partner rotate-key myapp
 ```
+
+`partner rotate-key` issues a new secret and the old one stops working at once.
 
 The customer needs an online banking login: create them with `--username`. Full API: [api/partner/openapi.yaml](api/partner/openapi.yaml).
 

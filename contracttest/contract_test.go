@@ -25,26 +25,25 @@ func accountAt(t *testing.T, c connected, typ string) map[string]any {
 
 func TestAuthentication(t *testing.T) {
 	s := newStack(t)
-	r := s.call("GET", "/v1/webhook_keys", nil, apiKey(""), skipValidation())
-	if r.Status != 401 || r.Code() != "unauthenticated" {
-		t.Fatalf("missing key: %d %s", r.Status, r.Body)
+	const missing = "Send your Beerus-Client-ID and Beerus-Secret headers."
+	const mismatch = "The client ID and secret do not match."
+	for _, c := range []struct{ name, clientID, secret, message string }{
+		{"no headers", "", "", missing},
+		{"no secret", "balance", "", missing},
+		{"no client ID", "", s.secret, missing},
+		{"wrong secret", "balance", "bk_test_wrong", mismatch},
+		{"unknown client ID", "nobody", s.secret, mismatch},
+	} {
+		r := s.call("GET", "/v1/webhook_keys", nil, credentials(c.clientID, c.secret), skipValidation())
+		if r.Status != 401 || r.Code() != "unauthenticated" || !strings.Contains(string(r.Body), c.message) {
+			t.Fatalf("%s: %d %s, want 401 %q", c.name, r.Status, r.Body, c.message)
+		}
 	}
-	r = s.call("GET", "/v1/webhook_keys", nil, apiKey("bk_test_wrong"), skipValidation())
-	if r.Status != 401 || r.Code() != "unauthenticated" {
-		t.Fatalf("wrong key: %d %s", r.Status, r.Body)
-	}
-	req, _ := http.NewRequest("GET", s.cfg.PartnerURL()+"/v1/webhook_keys", nil)
-	req.Header.Set("X-Api-Key", s.apiKey)
-	resp, err := s.raw.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("a call with only an API key over plain HTTP got %d, want 200", resp.StatusCode)
+	if code := rawGet(t, s, "balance", s.secret, "/v1/webhook_keys"); code != http.StatusOK {
+		t.Fatalf("a call with the client ID and secret over plain HTTP got %d, want 200", code)
 	}
 	s.must(s.call("GET", "/v1/webhook_keys", nil), 200)
-	r = s.call("GET", "/v1/nothing", nil, skipValidation())
+	r := s.call("GET", "/v1/nothing", nil, skipValidation())
 	if r.Status != 404 || r.Code() != "not_found" {
 		t.Fatalf("unknown path: %d %s", r.Status, r.Body)
 	}

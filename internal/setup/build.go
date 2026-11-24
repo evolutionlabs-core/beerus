@@ -269,7 +269,7 @@ func RuntimeBank(b Bank, r Resource) *config.Bank {
 }
 
 func RuntimePartner(p Partner, k PartnerKeys, l PartnerLocal) *config.Partner {
-	out := &config.Partner{ID: p.ID, Name: p.Name, LegalName: cmp.Or(p.LegalName, p.Name), Purpose: cmp.Or(p.Purpose, defaultPurpose), APIKeySHA256: k.APIKeySHA256, RedirectURIs: p.RedirectURIs, WebhookURL: p.WebhookURL}
+	out := &config.Partner{ID: p.ID, Name: p.Name, LegalName: cmp.Or(p.LegalName, p.Name), Purpose: cmp.Or(p.Purpose, defaultPurpose), SecretSHA256: k.SecretSHA256, RedirectURIs: p.RedirectURIs, WebhookURL: p.WebhookURL}
 	if len(l.RedirectURIs) > 0 {
 		out.RedirectURIs = l.RedirectURIs
 	}
