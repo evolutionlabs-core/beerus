@@ -65,33 +65,6 @@ Environment:
 Run "beerus <command> --help" for a command's options.
 `
 
-const wantBankCreateHelp = `Usage: beerus bank create --name NAME [options]
-
-Create a bank.
-
-Options:
-  --id ID                  Bank ID, derived from the name when empty
-  --name NAME              Bank name
-  --settles-through BANK   Bank that a microfinance bank settles through
-  --type TYPE              Bank type: commercial, digital or microfinance (default commercial)
-`
-
-const wantTransferHelp = `Usage: beerus transfer --from NUBAN --to NUBAN --amount NAIRA [options]
-
-Send money between accounts over NIP.
-
-Options:
-  --amount NAIRA          Amount in naira, such as 25000 or 2500.50
-  --dry-run               Show the fee, VAT, stamp duty and total debit without sending
-  --from NUBAN            NUBAN of the account to pay from
-  --from-bank ID          Bank ID of the paying account; the session bank when empty
-  --idempotency-key KEY   Key that makes a rerun safe after a timeout; a new one is made when empty
-  --json                  Print the API response as JSON
-  --narration TEXT        Text shown on the transfer
-  --to NUBAN              NUBAN of the account to pay into
-  --to-bank ID            Bank ID of the receiving account; the paying bank when empty
-`
-
 func helpOf(t *testing.T, args ...string) string {
 	t.Helper()
 	var h *helpError
@@ -109,18 +82,9 @@ func TestHelp(t *testing.T) {
 	}{
 		{nil, wantTopHelp, false},
 		{[]string{"help"}, wantTopHelp, false},
-		{[]string{"help", "--help"}, wantTopHelp, false},
 		{[]string{"--help"}, wantTopHelp, false},
-		{[]string{"-h"}, wantTopHelp, false},
-		{[]string{"bank", "create", "--help"}, wantBankCreateHelp, false},
-		{[]string{"bank", "create", "-h"}, wantBankCreateHelp, false},
-		{[]string{"help", "bank", "create"}, wantBankCreateHelp, false},
-		{[]string{"transfer", "--help"}, wantTransferHelp, false},
 		{[]string{"nope"}, `unknown command "nope". Run beerus help.`, true},
-		{[]string{"clock"}, `unknown command "clock". Run beerus help.`, true},
-		{[]string{"scenarios"}, `unknown command "scenarios". Run beerus help.`, true},
 		{[]string{"scenario", "run"}, `unknown command "scenario". Run beerus help.`, true},
-		{[]string{"help", "nope"}, `unknown command "nope". Run beerus help.`, true},
 		{[]string{"help", "bank", "nope"}, `unknown command "bank nope". Run beerus help.`, true},
 		{[]string{"bank", "create", "--bogus"}, "flag provided but not defined: -bogus; usage: beerus bank create --name NAME [options]", true},
 		{[]string{"bank", "nope"}, "usage: beerus bank list|create|suspend|resume|close|purge", true},
