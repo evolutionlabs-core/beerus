@@ -115,7 +115,7 @@ func (a *App) connectionView(c *Connection) control.ConnectionView {
 		ID:                 c.ID,
 		Status:             c.Status,
 		Institution:        control.InstitutionRef{ID: in["id"], Name: in["name"]},
-		WorkspaceID:        c.WorkspaceID,
+		UserID:             c.UserID,
 		StartDate:          c.StartDate.String(),
 		EffectiveStartDate: eff,
 		ConsentExpiresAt:   exp,

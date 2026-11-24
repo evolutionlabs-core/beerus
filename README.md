@@ -205,13 +205,13 @@ api "/v1/institutions?limit=50"
 
 ## 2. Let a customer link their bank
 
-Your app creates a link session:
+Your app creates a link token. `user_id` is your own ID for the customer. `institution_id` is optional; give one from `GET /v1/institutions` to open Connect on that bank.
 
 ```bash
-api /v1/link_sessions -d '{"start_date":"2026-11-01","workspace_id":"ws_1","redirect_uri":"http://localhost:3000/callback"}'
+api /v1/link/token/create -d '{"user_id":"user_1","institution_id":"bank-a","redirect_uri":"http://localhost:3000/callback"}'
 ```
 
-Send the customer to its `widget_url`. They pick their bank, log in with their online banking details and approve. Beerus Connect then sends them to your redirect URI with a `code`.
+The response holds a `link_token` and its `expiration`. Open Connect for the customer at `http://connect.localhost:7444/link?token=LINK_TOKEN`. Connect shares history from 90 days before today, or less if the bank keeps less. They pick their bank if you gave none, log in with their online banking details and approve. Beerus Connect then sends them to your redirect URI with a `code` and a `link_session_id`.
 
 ## 3. Get the connection
 

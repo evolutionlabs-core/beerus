@@ -28,7 +28,7 @@ func TestPartnerLifecycle(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newStack(t)
-	conn := s.connect("tunde", "bank-a", s.today().AddDays(-10))
+	conn := s.connect("tunde", "bank-a")
 	oldSecret := s.secret
 
 	otherSecret := fmt.Sprint(s.ctl("POST", "/partners", map[string]any{"id": "ledgerly", "redirect_uris": []string{"https://ledgerly.localhost/cb"}})["secret"])

@@ -167,9 +167,8 @@ func TestCreateBank(t *testing.T) {
 	if !strings.Contains(ob.last, "The username or password is wrong.") {
 		t.Fatalf("sign-in at a bank with no customers: %.300s", ob.last)
 	}
-	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
 	br := s.browser()
-	br.get(fmt.Sprint(ls.JSON["widget_url"]))
+	br.get(s.linkURL("w", ""))
 	if !strings.Contains(br.last, "Abuja Digital") {
 		t.Fatal("the widget does not list Bank C")
 	}
@@ -193,7 +192,7 @@ func TestSuspendBank(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newBankStack(t)
-	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
+	conn := s.connect("chidi", "bank-b")
 	chidi, tunde := s.persona("chidi").Accounts[0], s.persona("tunde").Accounts[0]
 	st := s.ctl("POST", "/banks/bank-b/suspend", nil)
 	if st["phase"] != core.PhaseSuspended {
@@ -262,7 +261,7 @@ func TestBankRepairsDrift(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newBankStack(t)
-	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
+	conn := s.connect("chidi", "bank-b")
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
 	p := s.persona("chidi")
 	pc, err := pgx.ParseConfig(s.cfg.DatabaseURL)
@@ -362,7 +361,7 @@ func TestOpenAccountAtNewBank(t *testing.T) {
 	if !strings.Contains(b.last, nuban) || !strings.Contains(b.last, "25,000.00") {
 		t.Fatalf("online banking does not show the funded account: %.600s", b.last)
 	}
-	conn := s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
+	conn := s.connect("adaeze", "abuja-digital")
 	if len(conn.Accounts) != 1 || conn.Accounts[0]["account_number"] != nuban {
 		t.Fatalf("connected accounts: %v", conn.Accounts)
 	}
@@ -381,7 +380,7 @@ func TestCloseImpact(t *testing.T) {
 	}
 	p := s.join("adaeze", "abuja-digital")
 	s.pay("bank-a", s.persona("adaeze").Accounts[0], "abuja-digital", s.openAccount(p, "current"), "25000")
-	s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
+	s.connect("adaeze", "abuja-digital")
 	imp := s.ctl("GET", "/banks/abuja-digital/close", nil)
 	if imp["insured_limit_minor"] != float64(500_000_000) || len(imp["blockers"].([]any)) != 0 {
 		t.Fatalf("impact: %v", imp)
@@ -425,7 +424,7 @@ func TestCloseBank(t *testing.T) {
 		s.pay("bank-a", home[id].Accounts[0], "abuja-digital", s.openAccount(opened[id], "current"), fund[id])
 		opened[id] = s.personaAt(id, "abuja-digital")
 	}
-	conn := s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
+	conn := s.connect("adaeze", "abuja-digital")
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
 	balance := func(p persona) int64 {
 		return s.balances(p)[p.Accounts[0]]

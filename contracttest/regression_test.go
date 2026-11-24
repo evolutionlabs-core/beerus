@@ -4,20 +4,18 @@ import (
 	"context"
 	"fmt"
 	"testing"
-
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 )
 
 func TestRevokedConnectionCannotBeReauthorised(t *testing.T) {
 	s := newStack(t)
-	conn := s.connect("tunde", "bank-a", s.today().AddDays(-30))
+	conn := s.connect("tunde", "bank-a")
 	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", nil), 201)
 	s.must(s.call("DELETE", "/v1/connections/"+conn.ConnectionID, nil), 204)
 	res := s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), "", "tunde", nil)
 	if res.Error != "access_denied" || res.Code != "" {
 		t.Fatalf("widget let a revoked connection be reauthorised: %+v", res)
 	}
-	conn2 := s.connect("tunde", "bank-a", s.today().AddDays(-30))
+	conn2 := s.connect("tunde", "bank-a")
 	ls2 := s.must(s.call("POST", "/v1/connections/"+conn2.ConnectionID+"/reauth", nil), 201)
 	res2 := s.completeLink(fmt.Sprint(ls2.JSON["widget_url"]), "", "tunde", nil)
 	s.ctl("POST", "/connections/"+conn2.ConnectionID+"/revoke", nil)
@@ -39,52 +37,10 @@ func TestRevokedConnectionCannotBeReauthorised(t *testing.T) {
 	}
 }
 
-func TestReconnectWithLaterStartKeepsBalanceInvariant(t *testing.T) {
-	s := newStack(t)
-	c1 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
-	s.spend(s.persona("adaeze"), 3)
-	s.spend(s.persona("adaeze"), 2)
-	s.syncNow()
-	s.ctl("POST", "/connections/"+c1.ConnectionID+"/revoke", nil)
-	s.spend(s.persona("adaeze"), 2)
-	start := s.today().AddDays(-1)
-	c2 := s.connect("adaeze", "bank-a", start)
-	id := fmt.Sprint(accountAt(t, c2, "current")["id"])
-	hist := s.eventsOf("historical_sync.completed", func(d map[string]any) bool {
-		return d["connection_id"] == c2.ConnectionID && d["account_id"] == id
-	})
-	if len(hist) == 0 {
-		t.Fatal("no historical_sync.completed for the new connection")
-	}
-	eff := fmt.Sprint(hist[len(hist)-1]["effective_start_date"])
-	first, err := clock.ParseDate(eff)
-	if err != nil || !first.Before(start) {
-		t.Fatalf("effective_start_date %q should be before the requested start %s", eff, start)
-	}
-	feed, _ := s.syncAll(id, "", 500)
-	var sum int64
-	for _, l := range feed.lines {
-		if l["status"] == "posted" {
-			sum += num(l["amount_minor"])
-		}
-	}
-	bal := s.must(s.call("GET", "/v1/accounts/"+id+"/balance?as_of="+first.AddDays(-1).String(), nil), 200)
-	if bal.JSON["effective_start_date"] != eff {
-		t.Fatalf("balance effective_start_date %v, webhook %s", bal.JSON["effective_start_date"], eff)
-	}
-	opening := num(bal.JSON["ledger_balance"].(map[string]any)["amount_minor"])
-	cur := s.must(s.call("GET", "/v1/accounts/"+id, nil), 200)
-	ledger := num(cur.JSON["balances"].(map[string]any)["current"].(map[string]any)["amount_minor"])
-	if opening+sum != ledger {
-		t.Fatalf("opening %d + posted %d != ledger %d", opening, sum, ledger)
-	}
-}
-
 func TestOneRevokeLeavesOtherConnectionsWorking(t *testing.T) {
 	s := newStack(t)
-	a := s.connect("tunde", "bank-a", s.today().AddDays(-30))
-	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().AddDays(-30).String(), "workspace_id": "ws_other", "redirect_uri": s.redirect, "state": "x"}), 201)
-	res := s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), "bank-a", "tunde", nil)
+	a := s.connect("tunde", "bank-a")
+	res := s.completeLink(s.linkURL("ws_other", "x"), "bank-a", "tunde", nil)
 	b := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 201)
 	s.syncNow()
 	la := s.must(s.call("GET", "/v1/connections/"+a.ConnectionID+"/accounts", nil), 200)
@@ -102,7 +58,7 @@ func TestOneRevokeLeavesOtherConnectionsWorking(t *testing.T) {
 
 func TestReauthSendsSyncAvailable(t *testing.T) {
 	s := newStack(t)
-	conn := s.connect("tunde", "bank-a", s.today().AddDays(-30))
+	conn := s.connect("tunde", "bank-a")
 	id := fmt.Sprint(conn.Accounts[0]["id"])
 	st, _ := s.syncAll(id, "", 500)
 	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", nil), 201)
@@ -131,7 +87,7 @@ func TestBankLedgerStaysConsistent(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newBankStack(t)
-	s.connect("adaeze", "bank-a", s.today().AddDays(-40))
+	s.connect("adaeze", "bank-a")
 	s.pay("bank-a", s.persona("adaeze").Accounts[0], "bank-b", s.persona("ngozi").Accounts[0], "20000")
 	c, err := s.app.VerifyBank(context.Background())
 	if err != nil {

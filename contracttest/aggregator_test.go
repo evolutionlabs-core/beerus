@@ -62,7 +62,7 @@ func TestRealAggregator(t *testing.T) {
 	s := newBankStack(t)
 	db := s.bankDB("bank-a")
 	s.spend(s.persona("adaeze"), 3)
-	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	conn := s.connect("adaeze", "bank-a")
 	id := fmt.Sprint(accountAt(t, conn, "current")["id"])
 
 	var consentID string
@@ -159,7 +159,7 @@ func TestRealAggregator(t *testing.T) {
 		t.Fatalf("account after revoke: %d %s", r.Status, r.Body)
 	}
 
-	conn2 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	conn2 := s.connect("adaeze", "bank-a")
 	if fmt.Sprint(accountAt(t, conn2, "current")["id"]) != id {
 		t.Fatal("account ID changed across the reconnect")
 	}
@@ -176,7 +176,7 @@ func TestRealAggregator(t *testing.T) {
 		t.Fatalf("status after disconnect: %s", r.Body)
 	}
 
-	conn4 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	conn4 := s.connect("adaeze", "bank-a")
 	if err := db.QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestRealAggregator(t *testing.T) {
 	}
 	s.waitConsent("bank-a", consentID+" ReconsentRequired/bank")
 
-	conn3 := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	conn3 := s.connect("adaeze", "bank-a")
 	if _, err := db.Exec(context.Background(), `UPDATE ob_consents SET status = 'Revoked', revoked_via = 'bank' WHERE status = 'Authorised' AND partner_id = 'balance'`); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestConsentEventsNeedAKnownBank(t *testing.T) {
 		t.Skip("needs an in-process stack")
 	}
 	s := newBankStack(t)
-	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	conn := s.connect("adaeze", "bank-a")
 	var consentID string
 	if err := s.bankDB("bank-a").QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
 		t.Fatal(err)
@@ -273,7 +273,7 @@ func TestConsentEventsAreKeptAndRetried(t *testing.T) {
 	}
 	s := newBankStack(t)
 	db := s.bankDB("bank-a")
-	conn := s.connect("adaeze", "bank-a", s.today().AddDays(-30))
+	conn := s.connect("adaeze", "bank-a")
 	var consentID string
 	if err := db.QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
 		t.Fatal(err)
