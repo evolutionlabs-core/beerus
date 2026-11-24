@@ -221,7 +221,7 @@ The response holds a `link_token` and its `expiration`. Open Connect over your p
 })</script>
 ```
 
-Connect opens on the bank list, or goes straight to the bank when the link token has an `institution_id`. The customer logs in on the bank's own page in a popup and approves. Then:
+Connect opens as a 448×640 dialog over your page, or full screen below 480px wide. It opens on the bank list, or goes straight to the bank when the link token has an `institution_id`. The customer signs in on the bank's own page in a popup, picks the accounts to share, and taps Done. Each screen has a top bar and the footer "Connected securely by Beerus Connect". If the bank does not answer, Connect offers Try again or Pick another bank. Then:
 
 - `onSuccess(publicToken, metadata)` runs when they finish. `publicToken` works once and lasts 10 minutes. `metadata` holds `institution` and `accounts` (`account_id`, `name` and `mask` for each account the customer picked).
 - `onExit(error)` runs when they close Connect (`error` is `null`) or it fails (`error` has a `code` and `message`).

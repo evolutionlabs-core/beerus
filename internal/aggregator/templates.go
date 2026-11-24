@@ -6,135 +6,105 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/view"
 )
 
-var pages = template.Must(template.New("").Funcs(view.Funcs()).Funcs(template.FuncMap{
-	"logo": func() template.HTML { return template.HTML(view.LogoSVG) },
-}).Parse(`
-{{define "head"}}<!doctype html>
+var pages = template.Must(template.New("").Funcs(view.Funcs()).Parse(`
+{{define "doc"}}<!doctype html>
 <html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark light">
 <title>{{.Title}}</title>
 <link rel="stylesheet" href="{{css}}">
 <link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
-</head>
-<body class="min-h-screen">
-<div class="fixed top-3 right-4">{{themeToggle}}</div>
-<main class="flex min-h-screen flex-col items-center px-4 pt-14 pb-10 sm:pt-20 {{.BankClass}}">
-<div class="w-full max-w-[420px]">
-<header class="mb-6 flex items-center gap-3">
-{{if .Mark}}<span class="grid size-9 place-items-center rounded-[10px] border border-line-strong bg-raised text-[15px] font-medium text-bank">{{.Mark}}</span>{{else}}<span class="grid size-9 place-items-center rounded-[10px] border border-line-strong bg-raised text-ink">{{logo}}</span>{{end}}
-<div class="leading-tight"><div class="text-[14px]">{{.Brand}}</div><div class="text-[12.5px] text-muted">{{.Ctx}}</div></div>
-</header>
-<section class="rounded-2xl border border-line bg-panel p-7">
-{{end}}
+</head>{{end}}
 
-{{define "foot"}}</section>
-<footer class="mt-5 flex items-center justify-between gap-3 px-1 text-[12px] text-faint">
-<span class="flex items-center gap-1.5"><svg viewBox="0 0 16 16" class="size-3.5" fill="none" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" stroke="currentColor" stroke-width="1.2"/></svg>Secured by {{.ConnectBrand}}</span>
-{{if .PartnerName}}<span>For {{.PartnerName}}</span>{{end}}
-</footer>
-</div>
-</main>
-</body>
-</html>{{end}}
+{{define "x"}}<svg viewBox="0 0 24 24" class="size-[16px]" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>{{end}}
 
-{{define "error"}}{{if .Error}}<p class="mt-4 rounded-[10px] border border-neg/30 bg-neg/10 px-3 py-2.5 text-[13px] text-neg" role="alert">{{.Error}}</p>{{end}}{{end}}
+{{define "cancel"}}<form method="post" action="/link/cancel" class="dialog-close"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit" id="close" class="dialog-icon" aria-label="Close">{{template "x"}}</button></form>{{end}}
 
-{{define "choose"}}<!doctype html>
-<html lang="en" data-theme="light">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark light">
-<title>{{.Title}}</title>
-<link rel="stylesheet" href="{{css}}">
-<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
-</head>
-<body class="min-h-screen" data-overlay="{{.Overlay}}" data-fixed="{{.Fixed}}" data-parent="{{.Parent}}" data-app="{{.PartnerName}}">
-<form method="post" action="/link/cancel"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit" id="close" class="absolute top-3 right-3 grid size-11 cursor-pointer place-items-center rounded-full text-muted hover:bg-hover hover:text-ink" aria-label="Close"><svg viewBox="0 0 16 16" class="size-4" fill="none" aria-hidden="true"><path d="m3.5 3.5 9 9m0-9-9 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></form>
-<main class="mx-auto flex min-h-screen max-w-[420px] flex-col p-6">
-<div id="list" class="flex flex-1 flex-col pt-8">
-<h1 class="text-[24px] leading-tight font-semibold">Pick your bank</h1>
-<input id="search" type="search" autocomplete="off" placeholder="Search banks" aria-label="Search banks" class="mt-5 h-12 w-full rounded-[10px] border border-line-strong bg-transparent px-3.5 text-[15px] text-ink placeholder:text-faint focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-line-strong">
-<div class="mt-3">
-{{range .Institutions}}<form method="post" action="/link/institution"{{if $.Overlay}} target="beerus_bank"{{end}} data-bank data-id="{{.ID}}" data-name="{{.Name}}">
+{{define "foot"}}<footer class="dialog-foot"><svg viewBox="0 0 24 24" class="size-[14px]" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Connected securely by {{.ConnectBrand}}</footer>{{end}}
+
+{{define "error"}}{{if .Error}}<p class="dialog-error" role="alert">{{.Error}}</p>{{end}}{{end}}
+
+{{define "choose"}}{{template "doc" .}}
+<body class="bg-white" data-overlay="{{.Overlay}}" data-fixed="{{.Fixed}}" data-parent="{{.Parent}}" data-app="{{.PartnerName}}">
+<main class="dialog">
+{{template "cancel" .}}
+<div id="list" class="flex min-h-0 flex-1 flex-col">
+<div class="dialog-bar pl-[20px]"><h1 class="text-[16px] font-medium tracking-normal">Link a bank</h1></div>
+<div class="dialog-body">
+<label class="flex h-[44px] shrink-0 items-center gap-[8px] rounded-[6px] border border-neutral-300 px-[12px] text-neutral-500 focus-within:border-accent focus-within:shadow-[0_0_0_1px_var(--color-accent)]">
+<svg viewBox="0 0 24 24" class="size-[16px] shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+<input id="search" type="search" autocomplete="off" placeholder="Search banks" aria-label="Search banks" class="min-w-0 flex-1 bg-transparent text-[14px] text-neutral-950 outline-none placeholder:text-neutral-500">
+</label>
+<div class="flex flex-col [&>form:last-of-type>button]:border-b-0">
+{{range .Institutions}}<form method="post" action="/link/institution"{{if $.Overlay}} target="beerus_bank"{{end}} data-bank data-id="{{.ID}}" data-name="{{.Name}}" data-initials="{{initials .Name}}">
 <input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="institution" value="{{.ID}}">
-<button type="submit" class="group flex h-16 w-full cursor-pointer items-center gap-3 border-b border-line text-left">
-<span class="grid size-10 shrink-0 place-items-center rounded-[10px] bg-hover text-[15px] font-medium">{{initial .Name}}</span>
-<span class="flex-1 text-[16px] font-medium">{{.Name}}</span>
-<svg viewBox="0 0 16 16" class="size-4 text-faint transition-transform group-hover:translate-x-0.5" fill="none" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<button type="submit" class="group flex min-h-[60px] w-full cursor-pointer items-center gap-[12px] border-b border-[#f0f0f0] text-left focus-visible:outline-2 focus-visible:outline-accent">
+<span class="grid size-[36px] shrink-0 place-items-center rounded-[8px] bg-neutral-100 text-[13px] font-semibold text-neutral-700">{{initials .Name}}</span>
+<span class="flex-1 text-[14px] font-medium">{{.Name}}</span>
+<svg viewBox="0 0 24 24" class="size-[16px] text-neutral-400 transition-transform group-hover:translate-x-0.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
 </button></form>{{end}}
 </div>
-<div id="none" hidden class="pt-8 text-center"><p class="text-[16px] font-medium">No banks match “<span id="query"></span>”</p><p class="mt-1.5 text-[14px] text-muted">Only banks in this setup are listed.</p></div>
-<p id="blocked" hidden class="mt-4 text-[14px] text-muted" role="alert">Allow pop-ups to sign in at your bank.</p>
+<div id="none" hidden class="flex flex-col items-center gap-[4px] pt-[32px] text-center"><p class="text-[14px] font-medium text-neutral-900">No banks match “<span id="query"></span>”</p><p class="dialog-lede">Only banks in this setup are listed.</p></div>
+<p id="blocked" hidden class="dialog-error" role="alert">Allow pop-ups to sign in at your bank.</p>
 </div>
-{{if .Overlay}}<div id="down" hidden class="flex flex-1 flex-col items-center justify-center text-center">
-<span class="grid size-14 place-items-center rounded-full bg-hover text-[24px] font-semibold">!</span>
-<h1 class="mt-6 text-[24px] leading-tight font-semibold"><span id="bank-down"></span> isn't responding</h1>
-<p class="mt-2 text-[14px] text-muted">Try again in a moment, or pick another bank.</p>
-<button type="button" id="retry" class="mt-8 h-12 w-full cursor-pointer rounded-[10px] bg-primary text-[15px] font-medium text-on-primary hover:opacity-90">Try again</button>
-<button type="button" id="other" class="mt-2 h-12 w-full cursor-pointer rounded-[10px] text-[15px] font-medium text-muted hover:text-ink">Pick another bank</button>
+</div>
+{{if .Overlay}}<div id="down" hidden class="flex min-h-0 flex-1 flex-col">
+<div class="dialog-bar pl-[8px]">
+<button type="button" id="back" class="dialog-icon" aria-label="Back to banks"><svg viewBox="0 0 24 24" class="size-[16px]" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+<span class="dialog-tile" data-down-initials></span><span class="dialog-name" data-down-name></span>
+</div>
+<div class="dialog-body gap-[12px]">
+<div class="flex flex-1 flex-col items-center justify-center gap-[16px] text-center">
+<span class="grid size-[48px] place-items-center rounded-full bg-neutral-100 text-neutral-700"><svg viewBox="0 0 24 24" class="size-[22px]" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 7v6M12 17h.01"/></svg></span>
+<div class="flex flex-col gap-[4px]"><h2 class="dialog-title"><span data-down-name></span> isn’t responding</h2><p class="dialog-lede">Try again in a moment, or pick another bank.</p></div>
+</div>
+<button type="button" id="retry" class="dialog-primary">Try again</button>
+<button type="button" id="other" class="dialog-secondary">Pick another bank</button>
+</div>
 </div>{{end}}
+{{template "foot" .}}
 </main>
 <script src="/assets/connect-frame.js"></script>
 </body>
 </html>{{end}}
 
-{{define "pick"}}<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark light">
-<title>{{.Title}}</title>
-<link rel="stylesheet" href="{{css}}">
-<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
-</head>
-<body class="min-h-screen">
-<form method="post" action="/link/cancel"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit" class="absolute top-3 right-3 grid size-11 cursor-pointer place-items-center rounded-full text-muted hover:bg-hover hover:text-ink" aria-label="Close"><svg viewBox="0 0 16 16" class="size-4" fill="none" aria-hidden="true"><path d="m3.5 3.5 9 9m0-9-9 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button></form>
-<main class="mx-auto flex min-h-screen max-w-[420px] flex-col p-6">
-<div class="flex items-center gap-3 pt-1">
-<span class="grid size-10 shrink-0 place-items-center rounded-[10px] bg-hover text-[15px] font-medium">{{initial .Bank}}</span>
-<span class="text-[16px] font-medium">{{.Bank}}</span>
-</div>
-<form method="post" action="/link/accounts" class="flex flex-1 flex-col pt-8">
+{{define "pick"}}{{template "doc" .}}
+<body class="bg-white">
+<main class="dialog">
+{{template "cancel" .}}
+<div class="dialog-bar pl-[20px]"><span class="dialog-tile">{{initials .Bank}}</span><span class="dialog-name">{{.Bank}}</span></div>
+<form method="post" action="/link/accounts" class="dialog-body">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
-<h1 class="text-[24px] leading-tight font-semibold">Pick accounts</h1>
-<p class="mt-2 text-[14px] text-muted">{{.PartnerName}} will see the accounts you pick.</p>
-<div class="mt-6 overflow-hidden rounded-xl border border-line bg-panel">
-{{range .Rows}}<label class="flex h-[68px] cursor-pointer items-center gap-3.5 border-b border-line px-4 last:border-b-0">
-<span class="relative size-5 shrink-0"><input type="checkbox" name="account" value="{{.NUBAN}}" class="peer absolute inset-0 size-5 cursor-pointer appearance-none rounded-md border border-line-strong checked:border-primary checked:bg-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-line-strong"{{if .Checked}} checked{{end}}>
-<svg viewBox="0 0 16 16" class="pointer-events-none absolute inset-0 m-auto size-3.5 text-on-primary opacity-0 peer-checked:opacity-100" fill="none" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-<span class="flex flex-col"><span class="text-[16px] font-medium">{{.Name}}</span><span class="font-mono text-[13px] text-muted">•••• {{.Mask}}</span></span>
+<div class="flex flex-col gap-[4px]"><h1 class="dialog-title">Pick accounts</h1><p class="dialog-lede">{{.PartnerName}} will see the accounts you pick.</p></div>
+<div class="flex flex-col overflow-hidden rounded-[8px] border border-neutral-200">
+{{range .Rows}}<label class="flex min-h-[64px] cursor-pointer items-center gap-[12px] border-b border-neutral-200 px-[16px] last:border-b-0">
+<input type="checkbox" name="account" value="{{.NUBAN}}" class="size-[18px] shrink-0 cursor-pointer accent-accent"{{if .Checked}} checked{{end}}>
+<span class="flex flex-col gap-[2px]"><span class="text-[14px] font-medium text-neutral-900">{{.Name}}</span><span class="text-[12px] text-neutral-500"><span class="capitalize">{{.Type}}</span> · <span class="font-mono">•••• {{.Mask}}</span></span></span>
 </label>{{end}}
 </div>
 {{template "error" .}}
-<div class="mt-auto pt-8"><button type="submit" id="continue" class="h-12 w-full cursor-pointer rounded-[10px] bg-primary text-[15px] font-medium text-on-primary hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"{{if not .Ticked}} disabled{{end}}>Continue</button></div>
+<button type="submit" id="continue" class="dialog-primary mt-[4px]"{{if not .Ticked}} disabled{{end}}>Continue</button>
 </form>
+{{template "foot" .}}
 </main>
 <script src="/assets/connect-pick.js"></script>
 </body>
 </html>{{end}}
 
-{{define "connected"}}<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark light">
-<title>Connected</title>
-<link rel="stylesheet" href="{{css}}">
-<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
-</head>
-<body class="min-h-screen" data-result="{{.Result}}" data-parent="{{.Parent}}">
-<button type="button" id="close" class="absolute top-3 right-3 grid size-11 cursor-pointer place-items-center rounded-full text-muted hover:bg-hover hover:text-ink" aria-label="Close"><svg viewBox="0 0 16 16" class="size-4" fill="none" aria-hidden="true"><path d="m3.5 3.5 9 9m0-9-9 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
-<main class="mx-auto flex min-h-screen max-w-[420px] flex-col items-center justify-center p-6 text-center">
-<span class="grid size-14 place-items-center rounded-full bg-primary text-on-primary"><svg viewBox="0 0 16 16" class="size-6" fill="none" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-<h1 class="mt-6 text-[24px] leading-tight font-semibold">Connected</h1>
-<p class="mt-2 text-[14px] text-muted">{{.Bank}} is now connected to {{.PartnerName}}.</p>
-<button type="button" id="done" class="mt-8 h-12 w-full cursor-pointer rounded-[10px] bg-primary text-[15px] font-medium text-on-primary hover:opacity-90">Done</button>
+{{define "connected"}}{{template "doc" .}}
+<body class="bg-white" data-result="{{.Result}}" data-parent="{{.Parent}}">
+<main class="dialog">
+<div class="dialog-close"><button type="button" id="close" class="dialog-icon" aria-label="Close">{{template "x"}}</button></div>
+<div class="dialog-bar pl-[20px]"><span class="dialog-tile">{{initials .Bank}}</span><span class="dialog-name">{{.Bank}}</span></div>
+<div class="dialog-body">
+<div class="flex flex-1 flex-col items-center justify-center gap-[16px] text-center">
+<span class="grid size-[48px] place-items-center rounded-full bg-accent text-white"><svg viewBox="0 0 24 24" class="size-[22px]" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+<div class="flex flex-col gap-[4px]"><h1 class="dialog-title">Connected</h1><p class="dialog-lede">{{.Bank}} is now connected to {{.PartnerName}}.</p></div>
+</div>
+<button type="button" id="done" class="dialog-primary">Done</button>
+</div>
+{{template "foot" .}}
 </main>
 <script src="/assets/connect-done.js"></script>
 </body>
@@ -154,8 +124,13 @@ var pages = template.Must(template.New("").Funcs(view.Funcs()).Funcs(template.Fu
 </body>
 </html>{{end}}
 
-{{define "message"}}{{template "head" .}}
-<h1 class="text-[22px] leading-snug">{{.Heading}}</h1>
-<p class="mt-2 text-[13.5px] leading-relaxed text-muted">{{.Message}}</p>
-{{template "foot" .}}{{end}}
+{{define "message"}}{{template "doc" .}}
+<body class="bg-white">
+<main class="dialog">
+<div class="dialog-bar pl-[20px]"><span class="text-[16px] font-medium">{{.Brand}}</span></div>
+<div class="dialog-body"><div class="flex flex-col gap-[4px]"><h1 class="dialog-title">{{.Heading}}</h1><p class="dialog-lede">{{.Message}}</p></div></div>
+{{template "foot" .}}
+</main>
+</body>
+</html>{{end}}
 `))

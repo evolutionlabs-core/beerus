@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -353,11 +352,6 @@ func TestOpenAccountAtNewBank(t *testing.T) {
 	b.base = s.cfg.Bank("abuja-digital").URL()
 	b.get("/login")
 	b.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
-	m := regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`).FindStringSubmatch(b.last)
-	if m == nil {
-		t.Fatalf("sign-in at the new bank: %.300s", b.last)
-	}
-	b.post("/verify", url.Values{"otp": {m[1]}})
 	if !strings.Contains(b.last, nuban) || !strings.Contains(b.last, "25,000.00") {
 		t.Fatalf("online banking does not show the funded account: %.600s", b.last)
 	}

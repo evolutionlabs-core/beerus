@@ -29,7 +29,10 @@
     if (result.picking) {
       window.location.assign("/link/accounts");
     } else if (result.error.code === "institution_down") {
-      document.getElementById("bank-down").textContent = chosen.dataset.name;
+      document.querySelectorAll("[data-down-name]").forEach(function (el) {
+        el.textContent = chosen.dataset.name;
+      });
+      document.querySelector("[data-down-initials]").textContent = chosen.dataset.initials;
       show("down");
     } else {
       tell({ type: "exit", error: result.error });
@@ -71,9 +74,12 @@
   document.getElementById("retry").addEventListener("click", function () {
     chosen.requestSubmit();
   });
-  document.getElementById("other").hidden = fixed;
-  document.getElementById("other").addEventListener("click", function () {
-    show("list");
+  ["back", "other"].forEach(function (id) {
+    var el = document.getElementById(id);
+    el.hidden = fixed;
+    el.addEventListener("click", function () {
+      show("list");
+    });
   });
   if (fixed && forms.length === 1) forms[0].requestSubmit();
 })();
