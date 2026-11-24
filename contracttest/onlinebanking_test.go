@@ -67,11 +67,6 @@ func (s *Stack) bankSignIn(persona string) *bankBrowser {
 	p := s.persona(persona)
 	b.get("/login")
 	b.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
-	m := regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`).FindStringSubmatch(b.last)
-	if m == nil {
-		s.t.Fatalf("no code on the verify page: %.300s", b.last)
-	}
-	b.post("/verify", url.Values{"otp": {m[1]}})
 	if b.loc != "/accounts" {
 		s.t.Fatalf("sign-in ended at %s", b.loc)
 	}
@@ -160,11 +155,6 @@ func TestEveryDeclaredBankHasOnlineBanking(t *testing.T) {
 	p := s.persona("ngozi")
 	b.get("/login")
 	b.post("/login", url.Values{"username": {p.Username}, "password": {p.Password}})
-	m := regexp.MustCompile(`verification code is <span[^>]*>(\d{6})</span>`).FindStringSubmatch(b.last)
-	if m == nil {
-		t.Fatalf("no code on Bank B's verify page: %.300s", b.last)
-	}
-	b.post("/verify", url.Values{"otp": {m[1]}})
 	if b.loc != "/accounts" || !strings.Contains(b.last, "Bank B") {
 		t.Fatalf("Bank B sign-in ended at %s", b.loc)
 	}

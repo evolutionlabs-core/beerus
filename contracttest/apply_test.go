@@ -99,9 +99,6 @@ func TestApplyFromTheSpec(t *testing.T) {
 	signedIn := s.browser()
 	signedIn.get(site + "/login")
 	signedIn.postTo(site, "/login", url.Values{"username": {who.Username}, "password": {who.Password}})
-	if otp := reOTP.FindStringSubmatch(signedIn.last); otp != nil {
-		signedIn.postTo(site, "/verify", url.Values{"otp": {otp[1]}})
-	}
 	if signedIn.get(site+"/accounts") != http.StatusOK || signedIn.cur.Path != "/accounts" || !strings.Contains(signedIn.last, nuban) {
 		t.Fatalf("sign in at the new bank: %v %.300s", signedIn.cur, signedIn.last)
 	}

@@ -10,7 +10,7 @@ info:
 
     1. The partner's server creates a link token with `POST /v1/link/token/create`, giving its own `user_id` for the customer.
     2. The partner opens the Connect widget in the customer's browser at `/link?token=<link_token>`.
-    3. The customer picks a bank, signs in at the bank with 2FA and approves the accounts to share. Connect then lists those accounts and the customer ticks the ones the partner may see. Only ticked accounts appear in the connection; any other account answers `404 not_found` like an unknown account.
+    3. The customer picks a bank, signs in at the bank with a password and approves the accounts to share. Connect then lists those accounts and the customer ticks the ones the partner may see. Only ticked accounts appear in the connection; any other account answers `404 not_found` like an unknown account.
     4. The widget redirects the browser to the partner's `redirect_uri` with `public_token`, `link_session_id` and the partner's `state`. If the customer cancels or the session fails, it redirects with `error` (`access_denied`, `link_session_expired` or `institution_down`), `link_session_id` and `state` instead.
     5. The partner's server exchanges the `public_token` for an `access_token` and a `connection_id` at `POST /v1/public_token/exchange`. If the response is lost, `GET /v1/link_sessions/{id}` shows the `connection_id`.
     6. Connect syncs the accounts and sends webhooks. The partner always pulls data through `/transactions/sync`. Every call that reads or ends the connection sends its `access_token` in the `Beerus-Access-Token` header, next to `Beerus-Client-ID` and `Beerus-Secret`.

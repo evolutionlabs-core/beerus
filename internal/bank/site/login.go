@@ -1,11 +1,9 @@
 package site
 
 import (
-	"crypto/rand"
 	"crypto/subtle"
 	"errors"
 	"fmt"
-	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,25 +16,19 @@ import (
 
 const (
 	cookieName       = "beerus_bank"
-	otpLife          = 5 * time.Minute
 	maxAttempts      = 5
 	lockout          = 15 * time.Minute
 	maxTrackedLogins = 10000
 	sessionLife      = 30 * time.Minute
 	sweepEvery       = time.Minute
-	maxShownUsers    = 5
 )
 
 type session struct {
-	Customer   string
-	Name       string
-	CSRF       string
-	Verified   bool
-	OTP        string
-	OTPExpires time.Time
-	Attempts   int
-	Expires    time.Time
-	Fresh      string
+	Customer string
+	Name     string
+	CSRF     string
+	Expires  time.Time
+	Fresh    string
 }
 
 type failures struct {
@@ -78,14 +70,6 @@ func (ba *auth) sweepLocked(real time.Time) {
 	}
 }
 
-func otp() (string, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
-	if err != nil {
-		return "", fmt.Errorf("read random bytes: %w", err)
-	}
-	return fmt.Sprintf("%06d", n.Int64()), nil
-}
-
 func (s *site) sessionFor(r *http.Request) (*session, string) {
 	ck, err := r.Cookie(cookieName)
 	if err != nil {
@@ -105,7 +89,7 @@ func (s *site) sessionFor(r *http.Request) (*session, string) {
 
 func (s *site) user(w http.ResponseWriter, r *http.Request) *session {
 	sess, _ := s.sessionFor(r)
-	if sess == nil || !sess.Verified {
+	if sess == nil {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return nil
 	}
@@ -118,18 +102,8 @@ func (s *site) user(w http.ResponseWriter, r *http.Request) *session {
 	return sess
 }
 
-func (s *site) renderLogin(w http.ResponseWriter, r *http.Request, status int, msg string) {
-	books, err := s.Host.Books()
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	names, total, err := books.Usernames(r.Context(), maxShownUsers)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	d := data{"Title": "Sign in", "TestUsers": strings.Join(names, ", "), "TestUserCount": total, "TestUsersMore": total - len(names)}
+func (s *site) renderLogin(w http.ResponseWriter, status int, msg string) {
+	d := data{"Title": "Sign in"}
 	if msg != "" {
 		d["Error"] = msg
 	}
@@ -137,7 +111,7 @@ func (s *site) renderLogin(w http.ResponseWriter, r *http.Request, status int, m
 }
 
 func (s *site) loginPage(w http.ResponseWriter, r *http.Request) {
-	s.renderLogin(w, r, http.StatusOK, "")
+	s.renderLogin(w, http.StatusOK, "")
 }
 
 func (s *site) loginSubmit(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +121,7 @@ func (s *site) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	user := strings.TrimSpace(r.PostForm.Get("username"))
 	if !bank.ValidUsername(user) {
-		s.renderLogin(w, r, http.StatusUnauthorized, "The username or password is wrong.")
+		s.renderLogin(w, http.StatusUnauthorized, "The username or password is wrong.")
 		return
 	}
 	ba := s.auth
@@ -158,11 +132,11 @@ func (s *site) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	full := len(ba.failures)+len(ba.locked) >= maxTrackedLogins
 	ba.mu.Unlock()
 	if full {
-		s.renderLogin(w, r, http.StatusTooManyRequests, fmt.Sprintf("Too many sign-in attempts are being tracked (%d). Try again in 15 minutes.", maxTrackedLogins))
+		s.renderLogin(w, http.StatusTooManyRequests, fmt.Sprintf("Too many sign-in attempts are being tracked (%d). Try again in 15 minutes.", maxTrackedLogins))
 		return
 	}
 	if real.Before(until) {
-		s.renderLogin(w, r, http.StatusTooManyRequests, "Too many attempts. Try again in 15 minutes.")
+		s.renderLogin(w, http.StatusTooManyRequests, "Too many attempts. Try again in 15 minutes.")
 		return
 	}
 	books, err := s.Host.Books()
@@ -185,7 +159,7 @@ func (s *site) loginSubmit(w http.ResponseWriter, r *http.Request) {
 			ba.failures[user] = f
 		}
 		ba.mu.Unlock()
-		s.renderLogin(w, r, http.StatusUnauthorized, "The username or password is wrong.")
+		s.renderLogin(w, http.StatusUnauthorized, "The username or password is wrong.")
 		return
 	}
 	if err != nil {
@@ -202,69 +176,26 @@ func (s *site) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	code, err := otp()
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	sess := &session{Customer: c.ID, Name: c.Name, CSRF: csrf, OTP: code, OTPExpires: real.Add(otpLife), Expires: real.Add(sessionLife)}
+	next, fresh := s.afterLogin(r)
+	sess := &session{Customer: c.ID, Name: c.Name, CSRF: csrf, Fresh: fresh, Expires: real.Add(sessionLife)}
 	ba.mu.Lock()
 	delete(ba.failures, user)
 	ba.sessions[web.HashSecret(raw)] = sess
 	ba.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: raw, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int(sessionLife.Seconds())})
-	http.Redirect(w, r, "/verify", http.StatusSeeOther)
+	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 
-func (s *site) verifyPage(w http.ResponseWriter, r *http.Request) {
-	sess, _ := s.sessionFor(r)
-	if sess == nil {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
+func (s *site) afterLogin(r *http.Request) (string, string) {
+	ck, err := r.Cookie(oauthCookie)
+	if err != nil || ck.Value == "" {
+		return "/accounts", ""
 	}
-	s.render(w, "bank_verify", http.StatusOK, nil, data{"Title": "Verify it's you", "OTP": sess.OTP})
-}
-
-func (s *site) verifySubmit(w http.ResponseWriter, r *http.Request) {
-	sess, h := s.sessionFor(r)
-	if sess == nil || r.ParseForm() != nil {
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
+	v, err := url.ParseQuery(ck.Value)
+	if err != nil {
+		return "/accounts", ""
 	}
-	ba := s.auth
-	ba.mu.Lock()
-	if s.Clock.Real().After(sess.OTPExpires) {
-		delete(ba.sessions, h)
-		ba.mu.Unlock()
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(sess.OTP), []byte(strings.TrimSpace(r.PostForm.Get("otp")))) != 1 {
-		sess.Attempts++
-		if sess.Attempts >= maxAttempts {
-			delete(ba.sessions, h)
-			ba.mu.Unlock()
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
-			return
-		}
-		code := sess.OTP
-		ba.mu.Unlock()
-		s.render(w, "bank_verify", http.StatusUnauthorized, nil, data{"Title": "Verify it's you", "OTP": code, "Error": "That code is wrong."})
-		return
-	}
-	sess.Verified = true
-	sess.OTP = ""
-	ba.mu.Unlock()
-	if ck, err := r.Cookie(oauthCookie); err == nil && ck.Value != "" {
-		if v, err := url.ParseQuery(ck.Value); err == nil {
-			ba.mu.Lock()
-			sess.Fresh = v.Get("request_uri")
-			ba.mu.Unlock()
-			http.Redirect(w, r, "/authorize/consent", http.StatusSeeOther)
-			return
-		}
-	}
-	http.Redirect(w, r, "/accounts", http.StatusSeeOther)
+	return "/authorize/consent", v.Get("request_uri")
 }
 
 func (s *site) logout(w http.ResponseWriter, r *http.Request) {
