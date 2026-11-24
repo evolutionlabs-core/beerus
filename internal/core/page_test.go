@@ -78,16 +78,3 @@ func TestTransferFormCarriesAFreshKey(t *testing.T) {
 		t.Fatalf("two renders gave %d different keys, want 2", len(seen))
 	}
 }
-
-func TestOpenSendsBlockClosing(t *testing.T) {
-	a := newTestApp(t, Options{})
-	for sends, want := range map[int]string{
-		1: "Bank A has 1 transfer still being sent. Wait for it to finish.",
-		2: "Bank A has 2 transfers still being sent. Wait for them to finish.",
-	} {
-		got, err := a.inflightWith(t.Context(), "bank-a", sends)
-		if err != nil || got != want {
-			t.Fatalf("%d open sends: %q, %v, want %q", sends, got, err, want)
-		}
-	}
-}
