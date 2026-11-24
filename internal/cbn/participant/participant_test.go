@@ -58,20 +58,12 @@ func TestCBNServesSettlement(t *testing.T) {
 	}
 	stage := t.TempDir()
 	cfg := &config.Config{Dir: stage, SetupKey: 9, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: freePort(t), NIBSSControlPort: freePort(t), CBNPort: freePort(t), CBNControlPort: freePort(t)}}
-	if err := config.Prepare(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.EnsureCBNDir(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.EnsureNIBSSDir("wld_test"); err != nil {
-		t.Fatal(err)
-	}
+	must(t, config.Prepare(cfg))
+	must(t, cfg.EnsureCBNDir())
+	must(t, cfg.EnsureNIBSSDir("wld_test"))
 	for i, id := range []string{"bank-a", "bank-b", "bank-c"} {
 		b := &config.Bank{ID: id, Name: id, Type: "commercial", Port: 3 + 2*i, APIPort: 4 + 2*i, Database: config.DatabaseName(stage, id)}
-		if err := cfg.EnsureBankDir(b); err != nil {
-			t.Fatal(err)
-		}
+		must(t, cfg.EnsureBankDir(b))
 	}
 	t.Cleanup(func() {
 		if err := postgres.DropDatabases(context.WithoutCancel(t.Context()), url, []string{config.DatabaseName(stage, config.CBNID)}); err != nil {
@@ -227,5 +219,12 @@ func TestCBNServesSettlement(t *testing.T) {
 	}
 	if _, err := New(ctx, stage, Options{}); err == nil || err.Error() != config.DatabaseURLEnv+" is not set; set it to the Postgres URL of the CBN" {
 		t.Errorf("start without a database: %v", err)
+	}
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

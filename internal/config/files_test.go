@@ -13,9 +13,7 @@ import (
 
 func write(t *testing.T, path, body string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	must(t, os.WriteFile(path, []byte(body), 0o600))
 }
 
 func readFile(t *testing.T, path string) string {
@@ -50,9 +48,7 @@ func TestEnsureAndLoadFiles(t *testing.T) {
 	dir := t.TempDir()
 	conn := Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, NIBSSControlPort: 9003, CBNPort: 9005, CBNControlPort: 9006, ControlPort: 9002, BrandName: "Connect"}
 	c := &Config{Dir: dir, SetupKey: 1<<63 + 5, Connect: conn, TSQAfter: 2 * time.Minute, NIPSessions: 6}
-	if err := Prepare(c); err != nil {
-		t.Fatal(err)
-	}
+	must(t, Prepare(c))
 	for _, f := range []struct {
 		name, missing string
 		load          func() error
@@ -71,19 +67,13 @@ func TestEnsureAndLoadFiles(t *testing.T) {
 		{NIBSSDir(dir), NIBSSFileName, NIBSSTokenFile, func() error { return c.EnsureNIBSSDir("wld_a") }},
 		{CBNDir(dir), CBNFileName, CBNTokenFile, c.EnsureCBNDir},
 	} {
-		if err := f.ensure(); err != nil {
-			t.Fatal(err)
-		}
+		must(t, f.ensure())
 		private(t, filepath.Join(f.dir, f.file), filepath.Join(f.dir, f.token))
 	}
 	nibssToken, cbnToken := readFile(t, filepath.Join(NIBSSDir(dir), NIBSSTokenFile)), readFile(t, filepath.Join(CBNDir(dir), CBNTokenFile))
 	c.Connect.NIBSSControlPort, c.Connect.CBNControlPort = 9004, 9007
-	if err := c.EnsureNIBSSDir("wld_b"); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.EnsureCBNDir(); err != nil {
-		t.Fatal(err)
-	}
+	must(t, c.EnsureNIBSSDir("wld_b"))
+	must(t, c.EnsureCBNDir())
 	if readFile(t, filepath.Join(NIBSSDir(dir), NIBSSTokenFile)) != nibssToken || readFile(t, filepath.Join(CBNDir(dir), CBNTokenFile)) != cbnToken {
 		t.Fatal("a control token changed on a repeat")
 	}
@@ -117,13 +107,9 @@ func TestEnsureAndLoadFiles(t *testing.T) {
 
 func TestBankFile(t *testing.T) {
 	c := &Config{Dir: t.TempDir(), Connect: Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, ControlPort: 9002, BrandName: "Connect"}, SetupKey: 1<<63 + 5}
-	if err := Prepare(c); err != nil {
-		t.Fatal(err)
-	}
+	must(t, Prepare(c))
 	b := &Bank{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: 8001, APIPort: 8011, Database: DatabaseName(c.Dir, "bank-a"), NetDebitCap: 5_000_000, State: "suspended"}
-	if err := c.EnsureBankDir(b); err != nil {
-		t.Fatal(err)
-	}
+	must(t, c.EnsureBankDir(b))
 	dir := BankDir(c.Dir, "bank-a")
 	path := filepath.Join(dir, BankFileName)
 	private(t, path, filepath.Join(dir, BankTokenFile))
@@ -131,9 +117,7 @@ func TestBankFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.EnsureBankDir(b); err != nil {
-		t.Fatal(err)
-	}
+	must(t, c.EnsureBankDir(b))
 	if after, err := os.Stat(path); err != nil || !os.SameFile(before, after) {
 		t.Fatalf("an unchanged bank file was written again: %v", err)
 	}
@@ -142,9 +126,7 @@ func TestBankFile(t *testing.T) {
 		t.Fatalf("loaded %+v and %+v, %v", f, got, err)
 	}
 	b.Name, b.State = "Bank Alpha", ""
-	if err := c.EnsureBankDir(b); err != nil {
-		t.Fatal(err)
-	}
+	must(t, c.EnsureBankDir(b))
 	if f, err = LoadBankFile(c.Dir, "bank-a"); err != nil || f.Name != "Bank Alpha" || f.State != "active" || f.Bank().State != "" {
 		t.Fatalf("rename and resume: %+v, %v", f, err)
 	}
@@ -160,17 +142,13 @@ func TestBankFile(t *testing.T) {
 	rangeMsg := path + ": open_banking.access_seconds %d is out of range. Use 130 to 3600, or leave it out for the default"
 	for _, secs := range []int{129, 3601} {
 		b.API.AccessSeconds = secs
-		if err := c.EnsureBankDir(b); err != nil {
-			t.Fatal(err)
-		}
+		must(t, c.EnsureBankDir(b))
 		if _, err := LoadBankFile(c.Dir, "bank-a"); err == nil || err.Error() != fmt.Sprintf(rangeMsg, secs) {
 			t.Errorf("access seconds %d: %v", secs, err)
 		}
 	}
 	b.API.AccessSeconds = MinAccessSeconds
-	if err := c.EnsureBankDir(b); err != nil {
-		t.Fatal(err)
-	}
+	must(t, c.EnsureBankDir(b))
 	if f, err = LoadBankFile(c.Dir, "bank-a"); err != nil || f.API.AccessSeconds != 130 {
 		t.Fatalf("access seconds at the floor: %+v, %v", f.API, err)
 	}
@@ -211,5 +189,12 @@ func TestHolidayOverrides(t *testing.T) {
 		if _, err := finish(c); err == nil {
 			t.Error("a bad date should be rejected")
 		}
+	}
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

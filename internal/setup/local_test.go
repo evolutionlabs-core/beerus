@@ -29,9 +29,7 @@ partners:
 func writeLocal(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "local.yaml"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	must(t, os.WriteFile(filepath.Join(dir, "local.yaml"), []byte(body), 0o600))
 	return dir
 }
 

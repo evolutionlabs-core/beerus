@@ -144,9 +144,7 @@ func exampleJSON(t *testing.T, v any) []byte {
 func decode(t *testing.T, n interface{ Decode(any) error }) any {
 	t.Helper()
 	var v any
-	if err := n.Decode(&v); err != nil {
-		t.Fatal(err)
-	}
+	must(t, n.Decode(&v))
 	return v
 }
 
@@ -289,5 +287,12 @@ func TestOpenAPI(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			checkSpec(t, s.file, s.operations)
 		})
+	}
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

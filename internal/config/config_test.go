@@ -95,9 +95,7 @@ func TestPrepareIsIdempotentAndPlain(t *testing.T) {
 	files := []string{c.Path("connect", "ob-signing.key"), c.Path("webhook", "signing.key"), c.Path("control-token")}
 	var first []string
 	for i := 0; i < 2; i++ {
-		if err := Prepare(c); err != nil {
-			t.Fatal(err)
-		}
+		must(t, Prepare(c))
 		var got []string
 		for _, f := range files {
 			b, err := os.ReadFile(f)
@@ -129,18 +127,14 @@ func TestCarryOverSecret(t *testing.T) {
 	dir := t.TempDir()
 	partner := filepath.Join(dir, "partners", "myapp")
 	secretPath := filepath.Join(partner, PartnerSecretFile)
-	if err := os.MkdirAll(partner, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	must(t, os.MkdirAll(partner, 0o700))
 	if err := CarryOverSecret(dir, "myapp"); err != nil {
 		t.Fatalf("no old key: %v", err)
 	}
 	if _, err := os.Stat(secretPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a secret was made from nothing: %v", err)
 	}
-	if err := WriteSecret(filepath.Join(partner, "api-key"), "bk_test_old\n"); err != nil {
-		t.Fatal(err)
-	}
+	must(t, WriteSecret(filepath.Join(partner, "api-key"), "bk_test_old\n"))
 	for i := 1; i <= 2; i++ {
 		if err := CarryOverSecret(dir, "myapp"); err != nil {
 			t.Fatalf("run %d: %v", i, err)
@@ -154,12 +148,8 @@ func TestCarryOverSecret(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("secret mode %v, %v, want 0600", info, err)
 	}
-	if err := WriteSecret(secretPath, "bk_test_new\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := CarryOverSecret(dir, "myapp"); err != nil {
-		t.Fatal(err)
-	}
+	must(t, WriteSecret(secretPath, "bk_test_new\n"))
+	must(t, CarryOverSecret(dir, "myapp"))
 	if got, _ := ReadSecret(secretPath); got != "bk_test_new" {
 		t.Fatalf("an existing secret was overwritten with %q", got)
 	}

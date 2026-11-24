@@ -400,3 +400,10 @@ func TestBuildIsPure(t *testing.T) {
 		t.Fatal("Build is not deterministic or changed its input")
 	}
 }
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}

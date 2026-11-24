@@ -19,9 +19,7 @@ func TestStatusWithoutTheSettlementCountReportsAProblem(t *testing.T) {
 	w := httptest.NewRecorder()
 	p.status(w, httptest.NewRequest(http.MethodGet, "/v1/status", nil))
 	var got map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	must(t, json.Unmarshal(w.Body.Bytes(), &got))
 	problems, _ := got["problems"].([]any)
 	_, counted := got["posted_sessions"]
 	_, dated := got["next_cutoff_at"]

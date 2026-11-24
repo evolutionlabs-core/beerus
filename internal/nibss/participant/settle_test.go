@@ -4,23 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
+	"github.com/evolutionlabs-core/beerus/internal/postgres"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 	"github.com/evolutionlabs-core/beerus/internal/world"
 )
@@ -62,9 +59,9 @@ func (l *cbnLedger) snapshot() (map[string]sessionPost, int) {
 	return out, l.replayed
 }
 
-func startFakeCBN(t *testing.T, port int) *cbnLedger {
+func startFakeCBN(t *testing.T) (*cbnLedger, int) {
 	t.Helper()
-	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,44 +78,7 @@ func startFakeCBN(t *testing.T, port int) *cbnLedger {
 		_ = srv.Close()
 		<-served
 	})
-	return ledger
-}
-
-const (
-	testPortLow  = 20000
-	testPortHigh = 31000
-)
-
-func freePortBelow32000(t *testing.T) int {
-	t.Helper()
-	for range 200 {
-		port := testPortLow + rand.IntN(testPortHigh-testPortLow)
-		ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-		if err == nil {
-			ln.Close()
-			return port
-		}
-	}
-	t.Fatal("no free port")
-	return 0
-}
-
-func dropDatabase(t *testing.T, url, name string) {
-	t.Helper()
-	ctx := context.WithoutCancel(t.Context())
-	cfg, err := pgx.ParseConfig(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c, err := pgx.ConnectConfig(ctx, cfg)
-	if err != nil {
-		t.Errorf("connect to drop %s: %v", name, err)
-		return
-	}
-	defer c.Close(ctx)
-	if _, err := c.Exec(ctx, `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`); err != nil {
-		t.Errorf("drop %s: %v", name, err)
-	}
+	return ledger, ln.Addr().(*net.TCPAddr).Port
 }
 
 func TestScheduledCutoffPostsItsKeyToTheCBNOnce(t *testing.T) {
@@ -127,19 +87,16 @@ func TestScheduledCutoffPostsItsKeyToTheCBNOnce(t *testing.T) {
 		t.Skip("needs Postgres; set BEERUS_TEST_DATABASE_URL and run without -short")
 	}
 	stage := t.TempDir()
-	cbnPort := freePortBelow32000(t)
+	cbn, cbnPort := startFakeCBN(t)
 	cfg := &config.Config{Dir: stage, SetupKey: 9, TSQAfter: time.Minute, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: 1, NIBSSControlPort: 2, CBNPort: cbnPort, CBNControlPort: 3}}
-	if err := config.Prepare(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.EnsureCBNDir(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.EnsureNIBSSDir("wld_test"); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { dropDatabase(t, url, config.DatabaseName(stage, config.NIBSSID)) })
-	cbn := startFakeCBN(t, cbnPort)
+	must(t, config.Prepare(cfg))
+	must(t, cfg.EnsureCBNDir())
+	must(t, cfg.EnsureNIBSSDir("wld_test"))
+	t.Cleanup(func() {
+		if err := postgres.DropDatabases(context.WithoutCancel(t.Context()), url, []string{config.DatabaseName(stage, config.NIBSSID)}); err != nil {
+			t.Errorf("drop the NIBSS database: %v", err)
+		}
+	})
 	ctx := t.Context()
 	p, err := New(ctx, stage, Options{DatabaseURL: url, Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
@@ -149,18 +106,14 @@ func TestScheduledCutoffPostsItsKeyToTheCBNOnce(t *testing.T) {
 
 	for id, code := range map[string][2]string{"bank-a": {"000014", "014"}, "bank-b": {"000015", "015"}} {
 		m := nibss.Member{Institution: nip.Institution{ID: id, Name: id, NIPCode: code[0], NUBANCode: code[1], Type: "commercial"}, CreditURL: "http://" + id + ".localhost:18451", CallerID: id, Limits: nibss.Limits{NetDebitCap: 500_000_000}}
-		if err := p.store.Register(ctx, m); err != nil {
-			t.Fatal(err)
-		}
+		must(t, p.store.Register(ctx, m))
 	}
 	resolved := time.Date(2026, time.November, 4, 10, 30, 0, 0, clock.Lagos)
 	x := nibss.Session{ID: "sched1", FromCode: "000014", ToCode: "000015", FromNUBAN: world.NUBAN("014", 1), ToNUBAN: world.NUBAN("015", 1), Amount: 500, Narration: "rent", CreatedAt: resolved.Add(-time.Minute)}
 	if _, _, err := p.store.Begin(ctx, x); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.store.Resolve(ctx, x.ID, nibss.SessionOK, nip.OutcomeCredited, resolved); err != nil {
-		t.Fatal(err)
-	}
+	must(t, p.store.Resolve(ctx, x.ID, nibss.SessionOK, nip.OutcomeCredited, resolved))
 
 	const key = "2026-11-04T12:00"
 	cutoff := time.Date(2026, time.November, 4, 12, 0, 0, 0, clock.Lagos)
@@ -203,5 +156,12 @@ func TestScheduledCutoffPostsItsKeyToTheCBNOnce(t *testing.T) {
 	}
 	if raw, err := json.Marshal(posted[key].Nets); err != nil || string(raw) != `[{"bank_id":"bank-a","net_minor":-500},{"bank_id":"bank-b","net_minor":500}]` {
 		t.Fatalf("posted nets %s, %v", raw, err)
+	}
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

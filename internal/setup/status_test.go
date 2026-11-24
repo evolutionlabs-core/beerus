@@ -45,9 +45,7 @@ func sampleStatus() Status {
 func TestStatusRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	in := sampleStatus()
-	if err := SaveStatus(dir, in); err != nil {
-		t.Fatal(err)
-	}
+	must(t, SaveStatus(dir, in))
 	out, err := LoadStatus(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -64,9 +62,7 @@ func TestStatusRoundTrip(t *testing.T) {
 func writeStatus(t *testing.T, body string, mode os.FileMode) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(body), mode); err != nil {
-		t.Fatal(err)
-	}
+	must(t, os.WriteFile(filepath.Join(dir, "control.json"), []byte(body), mode))
 	return dir
 }
 
@@ -104,9 +100,7 @@ func TestLoadStatusErrors(t *testing.T) {
 
 func TestSaveStatus(t *testing.T) {
 	dir := writeStatus(t, "{}", 0o644)
-	if err := SaveStatus(dir, sampleStatus()); err != nil {
-		t.Fatal(err)
-	}
+	must(t, SaveStatus(dir, sampleStatus()))
 	info, err := os.Stat(filepath.Join(dir, "control.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -129,9 +123,7 @@ func TestLoadStatusDropsOldPartnerCertificateFields(t *testing.T) {
 	if got := st.Resources[0].Partner; got == nil || *got != (PartnerKeys{SecretSHA256: "abc"}) {
 		t.Fatalf("partner keys %+v, want only the old key hash abc as the secret hash", got)
 	}
-	if err := SaveStatus(dir, st); err != nil {
-		t.Fatal(err)
-	}
+	must(t, SaveStatus(dir, st))
 	saved, err := os.ReadFile(filepath.Join(dir, "control.json"))
 	if err != nil || bytes.Contains(saved, []byte("cert_")) || bytes.Contains(saved, []byte("api_key_sha256")) || !bytes.Contains(saved, []byte(`"secret_sha256":"abc"`)) {
 		t.Fatalf("a saved status still holds old fields or lost the secret hash: %v %s", err, saved)
