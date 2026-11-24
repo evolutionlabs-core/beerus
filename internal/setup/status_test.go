@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,88 +61,67 @@ func TestStatusRoundTrip(t *testing.T) {
 	}
 }
 
-func TestLoadStatusRefusesAnOlderVersion(t *testing.T) {
-	bodies := map[string]string{
-		"version 1":  `{"version":1,"setup":"beerus","clock":{"anchor_business":"2026-11-04T08:00:00+01:00"},"applied":{"spec":{"start":"2026-11-04T08:00:00+01:00"}}}`,
-		"version 0":  `{"version":0,"setup":"beerus"}`,
-		"no version": `{"setup":"beerus"}`,
-	}
-	for name, body := range bodies {
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(body), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := LoadStatus(dir)
-			if !errors.Is(err, ErrOldSetup) {
-				t.Fatalf("got %v", err)
-			}
-			want := dir + ": This setup was made by an older Beerus. Run beerus reset, then beerus init."
-			if err.Error() != want {
-				t.Fatalf("got %q, want %q", err.Error(), want)
-			}
-		})
-	}
-}
-
-func TestIsCorrupt(t *testing.T) {
-	for body, want := range map[string]bool{"{": true, "": true, `{"version":"x"}`: true, `{"version":2,"colour":1}`: false} {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		_, err := LoadStatus(dir)
-		if got := IsCorrupt(err); got != want {
-			t.Errorf("%q: IsCorrupt = %v (%v), want %v", body, got, err, want)
-		}
-	}
-}
-
-func TestSaveStatusWritesMode0600AndLeavesNoTemp(t *testing.T) {
+func writeStatus(t *testing.T, body string, mode os.FileMode) string {
+	t.Helper()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "control.json")
-	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(body), mode); err != nil {
 		t.Fatal(err)
 	}
+	return dir
+}
+
+func TestLoadStatusErrors(t *testing.T) {
+	older := "This setup was made by an older Beerus. Run beerus reset, then beerus init."
+	rows := []struct {
+		name, body, want string
+		is               error
+		corrupt          bool
+	}{
+		{"version 1", `{"version":1,"setup":"beerus","clock":{"anchor_business":"2026-11-04T08:00:00+01:00"},"applied":{"spec":{"start":"2026-11-04T08:00:00+01:00"}}}`, "%s: " + older, ErrOldSetup, false},
+		{"version 0", `{"version":0,"setup":"beerus"}`, "%s: " + older, ErrOldSetup, false},
+		{"no version", `{"setup":"beerus"}`, "%s: " + older, ErrOldSetup, false},
+		{"newer version", `{"version":3,"setup":"beerus","future":true}`, "control.json has version 3, but this beerus reads up to version 2. Upgrade beerus", nil, false},
+		{"unknown field", `{"version":2,"setup":"beerus","colour":"red"}`, `decode control.json: json: unknown field "colour"`, nil, false},
+		{"not json", `{`, "decode control.json: unexpected end of JSON input", nil, true},
+		{"empty", ``, "decode control.json: unexpected end of JSON input", nil, true},
+		{"version as text", `{"version":"x"}`, "", nil, true},
+	}
+	for _, r := range rows {
+		dir := writeStatus(t, r.body, 0o600)
+		_, err := LoadStatus(dir)
+		want := r.want
+		if strings.Contains(want, "%s") {
+			want = fmt.Sprintf(want, dir)
+		}
+		if err == nil || (want != "" && err.Error() != want) || (r.is != nil && !errors.Is(err, r.is)) || IsCorrupt(err) != r.corrupt {
+			t.Errorf("%s: got %v (corrupt %v), want %q (corrupt %v)", r.name, err, IsCorrupt(err), want, r.corrupt)
+		}
+	}
+	if _, err := LoadStatus(t.TempDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("missing file: got %v", err)
+	}
+}
+
+func TestSaveStatus(t *testing.T) {
+	dir := writeStatus(t, "{}", 0o644)
 	if err := SaveStatus(dir, sampleStatus()); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(path)
+	info, err := os.Stat(filepath.Join(dir, "control.json"))
 	if err != nil {
 		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %v", info.Mode().Perm())
 	}
 	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || info.Mode().Perm() != 0o600 || len(entries) != 1 {
+		t.Fatalf("mode %v, %d files, %v", info.Mode().Perm(), len(entries), err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("dir holds %d files", len(entries))
-	}
-}
-
-func TestSaveStatusMissingDir(t *testing.T) {
-	err := SaveStatus(filepath.Join(t.TempDir(), "gone"), sampleStatus())
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("got %v", err)
-	}
-}
-
-func TestLoadStatusMissingFile(t *testing.T) {
-	_, err := LoadStatus(t.TempDir())
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("got %v", err)
+	if err := SaveStatus(filepath.Join(dir, "gone"), sampleStatus()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing dir: got %v", err)
 	}
 }
 
 func TestLoadStatusDropsOldPartnerCertificateFields(t *testing.T) {
-	dir := t.TempDir()
-	body := `{"version":2,"setup":"beerus","resources":[{"kind":"Partner","id":"balance","partner":{"cert_cn":"balance","api_key_sha256":"abc","cert_sha256":"def"}}]}`
-	if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	dir := writeStatus(t, `{"version":2,"setup":"beerus","resources":[{"kind":"Partner","id":"balance","partner":{"cert_cn":"balance","api_key_sha256":"abc","cert_sha256":"def"}}]}`, 0o600)
 	st, err := LoadStatus(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -154,27 +135,5 @@ func TestLoadStatusDropsOldPartnerCertificateFields(t *testing.T) {
 	saved, err := os.ReadFile(filepath.Join(dir, "control.json"))
 	if err != nil || bytes.Contains(saved, []byte("cert_")) || bytes.Contains(saved, []byte("api_key_sha256")) || !bytes.Contains(saved, []byte(`"secret_sha256":"abc"`)) {
 		t.Fatalf("a saved status still holds old fields or lost the secret hash: %v %s", err, saved)
-	}
-}
-
-func TestLoadStatusRejects(t *testing.T) {
-	cases := []struct {
-		name, body, want string
-	}{
-		{"newer version", `{"version":3,"setup":"beerus","future":true}`, "control.json has version 3, but this beerus reads up to version 2. Upgrade beerus"},
-		{"unknown field", `{"version":2,"setup":"beerus","colour":"red"}`, `decode control.json: json: unknown field "colour"`},
-		{"not json", `{`, "decode control.json: unexpected end of JSON input"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(c.body), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := LoadStatus(dir)
-			if err == nil || err.Error() != c.want {
-				t.Fatalf("got %v", err)
-			}
-		})
 	}
 }

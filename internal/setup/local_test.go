@@ -37,60 +37,30 @@ func writeLocal(t *testing.T, body string) string {
 
 func TestLoadLocal(t *testing.T) {
 	t.Setenv(config.DatabaseURLEnv, "")
-	l, err := LoadLocal(writeLocal(t, sampleLocal))
+	dir := writeLocal(t, sampleLocal)
+	l, err := LoadLocal(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.DatabaseURL != "postgres:///postgres?host=/tmp" || l.Bind != "127.0.0.1" || l.Ports.Window != 300 {
+	if l.DatabaseURL != "postgres:///postgres?host=/tmp" || l.Bind != "127.0.0.1" || l.Ports.Window != 300 || l.Connect.ControlPort != 7480 || l.Connect.RefreshEvery != "5m" {
 		t.Fatalf("%+v", l)
-	}
-	if l.Connect.ControlPort != 7480 || l.Connect.RefreshEvery != "5m" {
-		t.Fatalf("connect: %+v", l.Connect)
 	}
 	if p := l.Partners["balance"]; p.WebhookURL != "http://localhost:3000/webhooks" || !slices.Equal(p.RedirectURIs, []string{"http://localhost:3000/callback"}) {
 		t.Fatalf("partner: %+v", p)
 	}
-}
-
-func TestLoadLocalEnvOverridesAndIsNeverSaved(t *testing.T) {
-	dir := writeLocal(t, sampleLocal)
 	t.Setenv(config.DatabaseURLEnv, "postgres://other:5432/postgres")
-	l, err := LoadLocal(dir)
-	if err != nil {
-		t.Fatal(err)
+	if l, err = LoadLocal(dir); err != nil || l.DatabaseURL != "postgres://other:5432/postgres" {
+		t.Fatalf("env override: %+v %v", l, err)
 	}
-	if l.DatabaseURL != "postgres://other:5432/postgres" {
-		t.Fatalf("database_url = %s", l.DatabaseURL)
+	if raw, err := os.ReadFile(filepath.Join(dir, "local.yaml")); err != nil || string(raw) != sampleLocal {
+		t.Fatalf("local.yaml changed: %v\n%s", err, raw)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "local.yaml"))
-	if err != nil {
-		t.Fatal(err)
+	bare := writeLocal(t, strings.Replace(sampleLocal, "database_url: postgres:///postgres?host=/tmp\n", "", 1))
+	if l, err = LoadLocal(bare); err != nil || l.DatabaseURL != "postgres://other:5432/postgres" {
+		t.Fatalf("env fills a missing url: %+v %v", l, err)
 	}
-	if string(raw) != sampleLocal {
-		t.Fatalf("local.yaml changed:\n%s", raw)
-	}
-}
-
-func TestLoadLocalEnvFillsAMissingURL(t *testing.T) {
-	body := strings.Replace(sampleLocal, "database_url: postgres:///postgres?host=/tmp\n", "", 1)
-	dir := writeLocal(t, body)
-	t.Setenv(config.DatabaseURLEnv, "")
-	_, err := LoadLocal(dir)
-	want := "local.yaml:1:1: database_url is required. Set it in local.yaml or in BEERUS_DATABASE_URL."
-	if err == nil || err.Error() != want {
-		t.Fatalf("got %v", err)
-	}
-	t.Setenv(config.DatabaseURLEnv, "postgres://env/postgres")
-	l, err := LoadLocal(dir)
-	if err != nil || l.DatabaseURL != "postgres://env/postgres" {
-		t.Fatalf("%+v %v", l, err)
-	}
-}
-
-func TestLoadLocalMissingFile(t *testing.T) {
-	_, err := LoadLocal(t.TempDir())
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("got %v", err)
+	if _, err := LoadLocal(t.TempDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing file: got %v", err)
 	}
 }
 
@@ -99,6 +69,7 @@ func TestLoadLocalRejects(t *testing.T) {
 	cases := []struct {
 		name, old, new, want string
 	}{
+		{"no url", "database_url: postgres:///postgres?host=/tmp\n", "", "local.yaml:1:1: database_url is required. Set it in local.yaml or in BEERUS_DATABASE_URL."},
 		{"typo", "database_url:", "databse_url:", `local.yaml:1:1: unknown field "databse_url" (did you mean "database_url"?)`},
 		{"bad bind", "bind: 127.0.0.1", "bind: nowhere", `local.yaml:2:1: bind "nowhere" is not an IP address. Use an address such as 127.0.0.1.`},
 		{"port too high", "partner_port: 7443", "partner_port: 70000", "local.yaml:6:3: connect.partner_port 70000 is not a port. Use a number from 1 to 65535, or leave it out."},

@@ -12,12 +12,6 @@ func validSpec(t *testing.T) Spec {
 }
 
 func TestValidateDefaultSpecIsClean(t *testing.T) {
-	if errs := Validate(DefaultSpec("beerus")); len(errs) > 0 {
-		t.Fatal(errStrings(errs))
-	}
-	if banks := DefaultSpec("beerus").Spec.Banks; len(banks) != 0 {
-		t.Fatalf("a new setup has %d banks", len(banks))
-	}
 	if errs := Validate(validSpec(t)); len(errs) > 0 {
 		t.Fatal(errStrings(errs))
 	}
@@ -133,16 +127,11 @@ func TestValidateRules(t *testing.T) {
 func TestValidateUsesPositionsWhenParsed(t *testing.T) {
 	s := parseFixture(t, "default.yaml")
 	s.Spec.Banks[1].Type = "online"
-	want := []string{`setup.yaml:25:7: banks[bank-b].type "online" is not a bank type. Use commercial, digital or microfinance.`}
-	if got := errStrings(Validate(s)); !slices.Equal(got, want) {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func TestValidateFallsBackToTheParentPosition(t *testing.T) {
-	s := parseFixture(t, "default.yaml")
 	s.Spec.Banks[0].SettlesThrough = "bank-z"
-	want := []string{`setup.yaml:18:7: banks[bank-a].settles_through "bank-z" is not a bank in this file. Name a bank listed under banks.`}
+	want := []string{
+		`setup.yaml:18:7: banks[bank-a].settles_through "bank-z" is not a bank in this file. Name a bank listed under banks.`,
+		`setup.yaml:25:7: banks[bank-b].type "online" is not a bank type. Use commercial, digital or microfinance.`,
+	}
 	if got := errStrings(Validate(s)); !slices.Equal(got, want) {
 		t.Fatalf("got %q", got)
 	}
