@@ -370,6 +370,7 @@ func (s *solo) onlyFiles(want []string, modes ...string) {
 }
 
 func TestSoloBank(t *testing.T) {
+	t.Parallel()
 	t.Run("serves with nothing else running", func(t *testing.T) {
 		s := newSolo(t, false, "", "bank-a")
 		a := s.banks["bank-a"]
@@ -496,6 +497,7 @@ func TestSoloBank(t *testing.T) {
 }
 
 func TestSoloNIBSS(t *testing.T) {
+	t.Parallel()
 	t.Run("directory, names and consents", func(t *testing.T) {
 		s := newSolo(t, true, "", "bank-a", "bank-b")
 		s.register("bank-a", soloCap)

@@ -76,7 +76,7 @@ func (o *obClient) get(path, token string) (int, map[string]any) {
 }
 
 func TestOpenBanking(t *testing.T) {
-	s := sharedStack(t)
+	s := sharedStack(t, 1)
 	s.needsNodes()
 	bank := s.cfg.Bank("bank-a")
 	o := &obClient{t: t, s: s, issuer: bank.APIURL(), c: callerClient(t, config.ConnectID)}

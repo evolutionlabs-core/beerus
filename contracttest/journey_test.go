@@ -31,7 +31,7 @@ func postedKeys(t *testing.T, st *feedState) map[string]string {
 }
 
 func TestJourney(t *testing.T) {
-	s := sharedStack(t)
+	s := sharedStack(t, 1)
 	cur := ""
 	step := func(n int, what string) {
 		cur = fmt.Sprintf("step %d (%s)", n, what)

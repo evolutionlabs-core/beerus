@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	mrand "math/rand/v2"
@@ -134,9 +135,7 @@ type Stack struct {
 }
 
 var (
-	sharedOnce sync.Once
-	sharedEnv  *env
-	sharedErr  error
+	lanes = [laneCount]lane{{spares: spareBanks}, {}}
 
 	binOnce sync.Once
 	binDir  string
@@ -144,12 +143,32 @@ var (
 	binDone = make(chan builtResult, 1)
 )
 
+const (
+	laneCount     = 2
+	parallelTests = "16"
+)
+
+type lane struct {
+	once   sync.Once
+	mu     sync.Mutex
+	env    *env
+	err    error
+	spares []setup.Bank
+}
+
 func TestMain(m *testing.M) {
 	http.DefaultTransport = localTransport()
+	if err := flag.Set("test.parallel", parallelTests); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	go buildBinary()
 	code := m.Run()
-	if sharedEnv != nil {
-		if err := sharedEnv.stop(); err != nil {
+	for i := range lanes {
+		if lanes[i].env == nil {
+			continue
+		}
+		if err := lanes[i].env.stop(); err != nil {
 			fmt.Fprintln(os.Stderr, "stop the shared stack:", err)
 			code = 1
 		}
@@ -451,16 +470,20 @@ func (e *env) ready() bool {
 	return len(list) > 0
 }
 
-func sharedStack(t *testing.T) *Stack {
+func sharedStack(t *testing.T, n int) *Stack {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}
-	sharedOnce.Do(func() { sharedEnv, sharedErr = startEnv(aggregator.Options{}, spareBanks) })
-	if sharedErr != nil {
-		t.Fatal(sharedErr)
+	t.Parallel()
+	l := &lanes[n]
+	l.mu.Lock()
+	t.Cleanup(l.mu.Unlock)
+	l.once.Do(func() { l.env, l.err = startEnv(aggregator.Options{}, l.spares) })
+	if l.err != nil {
+		t.Fatal(l.err)
 	}
-	return attach(t, sharedEnv)
+	return attach(t, l.env)
 }
 
 func ownStack(t *testing.T, opts aggregator.Options, edits ...func(*config.Config)) *Stack {
@@ -468,6 +491,7 @@ func ownStack(t *testing.T, opts aggregator.Options, edits ...func(*config.Confi
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}
+	t.Parallel()
 	e, err := startEnv(opts, nil, edits...)
 	if err != nil {
 		t.Fatal(err)

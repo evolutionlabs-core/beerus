@@ -130,7 +130,7 @@ func (s *Stack) loginAt(bankID string, p persona) *bankBrowser {
 }
 
 func TestBankLifecycle(t *testing.T) {
-	s := sharedStack(t)
+	s := sharedStack(t, 0)
 	s.needsNodes()
 
 	s.run("create and open an account", func(s *Stack) {
@@ -293,7 +293,7 @@ func TestBankLifecycle(t *testing.T) {
 }
 
 func TestBankClose(t *testing.T) {
-	s := sharedStack(t)
+	s := sharedStack(t, 0)
 	s.needsNodes()
 
 	s.run("impact, close and a second close", func(s *Stack) {
@@ -477,7 +477,7 @@ func TestBankClose(t *testing.T) {
 }
 
 func TestPurge(t *testing.T) {
-	s := sharedStack(t)
+	s := sharedStack(t, 0)
 	s.needsNodes()
 
 	s.run("nothing is left behind", func(s *Stack) {

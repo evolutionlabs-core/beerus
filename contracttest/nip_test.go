@@ -70,7 +70,7 @@ func (s *Stack) suspended(bank string) {
 }
 
 func TestNIPSwitch(t *testing.T) {
-	s := sharedStack(t)
+	s := sharedStack(t, 1)
 	s.needsNodes()
 	t.Cleanup(func() { s.setCap("bank-a", roomyCap) })
 	adaeze, ngozi := s.persona("adaeze"), s.persona("ngozi")
@@ -259,7 +259,7 @@ func TestNIPSwitch(t *testing.T) {
 }
 
 func TestSettlement(t *testing.T) {
-	s := sharedStack(t)
+	s := sharedStack(t, 1)
 	s.needsNodes()
 	from, to := s.persona("adaeze").Accounts[0], s.persona("ngozi").Accounts[0]
 

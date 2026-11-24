@@ -229,6 +229,7 @@ func createServing(t *testing.T, cfg *config.Config, name, id string) {
 }
 
 func TestProcesses(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}

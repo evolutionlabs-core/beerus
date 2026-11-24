@@ -96,6 +96,7 @@ func runOnce(t *testing.T, cfg *config.Config) run {
 }
 
 func TestRestarts(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("starts a full stack; run without -short")
 	}

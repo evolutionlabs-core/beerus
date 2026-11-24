@@ -10,7 +10,7 @@ import (
 )
 
 func TestOnlineBanking(t *testing.T) {
-	s := sharedStack(t)
+	s := sharedStack(t, 0)
 	s.needsNodes()
 	conn := s.connect("adaeze", "bank-a")
 	current := fmt.Sprint(accountAt(t, conn, "current")["account_number"])

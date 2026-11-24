@@ -140,7 +140,7 @@ func (s *Stack) signingKey() *ecdsa.PrivateKey {
 }
 
 func TestConsentEvents(t *testing.T) {
-	s := sharedStack(t)
+	s := sharedStack(t, 1)
 	s.needsNodes()
 
 	s.run("tokens, revoke and expiry", func(s *Stack) {

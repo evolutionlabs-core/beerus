@@ -15,7 +15,7 @@ import (
 )
 
 func TestPartnerAPI(t *testing.T) {
-	s := sharedStack(t)
+	s := sharedStack(t, 0)
 
 	s.run("authentication", func(s *Stack) {
 		const missing = "Send your Beerus-Client-ID and Beerus-Secret headers."
@@ -268,7 +268,7 @@ func TestPartnerAPI(t *testing.T) {
 }
 
 func TestConnectionLifecycle(t *testing.T) {
-	s := sharedStack(t)
+	s := sharedStack(t, 1)
 
 	s.run("revoke and reconnect", func(s *Stack) {
 		s.needsNodes()
