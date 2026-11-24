@@ -12,6 +12,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
 type bankPosting struct {
@@ -103,6 +104,7 @@ func TestReconnectWithLaterStartKeepsTheEarlierFromAndTheBalanceInvariant(t *tes
 		t.Fatalf("after reconnecting from 2026-11-05: account from %s, cut %v, connection effective start %v, want 2026-10-18 for all", rec.From, rec.Cut, second.EffectiveStart)
 	}
 
+	second.AccessHash = web.HashSecret(testToken)
 	var sum int64
 	posted := 0
 	for _, line := range a.st.Feeds[accID].Lines {
@@ -111,7 +113,7 @@ func TestReconnectWithLaterStartKeepsTheEarlierFromAndTheBalanceInvariant(t *tes
 			posted++
 		}
 	}
-	status, body := callPartner(t, partner, a.getBalance, http.MethodGet, "/v1/accounts/"+accID+"/balance?as_of="+rec.From.AddDays(-1).String(), "", map[string]string{"id": accID})
+	status, body := callPartner(t, partner, a.getBalance, http.MethodGet, "/v1/accounts/"+accID+"/balance?as_of="+rec.From.AddDays(-1).String(), "", testToken, map[string]string{"id": accID})
 	ledger, _ := body["ledger_balance"].(map[string]any)
 	if status != http.StatusOK || body["effective_start_date"] != "2026-10-18" || ledger["amount_minor"] != float64(opening) {
 		t.Fatalf("balance before the first date: %d %v, want 200 with %d and effective_start_date 2026-10-18", status, body, opening)
@@ -159,7 +161,7 @@ func TestReconnectWithLaterStartKeepsTheEarlierFromAndTheBalanceInvariant(t *tes
 		a.mu.Lock()
 		rec.From = c.from
 		a.mu.Unlock()
-		status, body := callPartner(t, partner, a.getBalance, http.MethodGet, "/v1/accounts/"+accID+"/balance?as_of="+c.asOf.String(), "", map[string]string{"id": accID})
+		status, body := callPartner(t, partner, a.getBalance, http.MethodGet, "/v1/accounts/"+accID+"/balance?as_of="+c.asOf.String(), "", testToken, map[string]string{"id": accID})
 		if status != c.want {
 			t.Errorf("%s: as_of %s with first date %s gave %d %v, want %d", c.name, c.asOf, c.from, status, body, c.want)
 		}

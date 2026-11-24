@@ -35,7 +35,7 @@ func TestExchangeRefusesBadPublicTokens(t *testing.T) {
 		{"used", `{"public_token":"public-used"}`, "invalid_public_token", "This public_token was already used.", http.StatusNotFound},
 	}
 	for _, c := range rows {
-		status, body := callPartner(t, partner, a.exchange, http.MethodPost, "/v1/public_token/exchange", c.body, nil)
+		status, body := callPartner(t, partner, a.exchange, http.MethodPost, "/v1/public_token/exchange", c.body, "", nil)
 		apiErr, _ := body["error"].(map[string]any)
 		if status != c.status || apiErr["code"] != c.code || apiErr["message"] != c.message {
 			t.Errorf("%s: %d %v, want %d %s %q", c.name, status, body, c.status, c.code, c.message)

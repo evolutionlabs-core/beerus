@@ -106,3 +106,11 @@ func (a *App) idemPutLocked(scope, hash string, status int, contentType string, 
 func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
 	return a.idem.Wrap(idemStore{a}, idemOwner, a.log, next)
 }
+
+func connectionOwner(r *http.Request) string {
+	return idemOwner(r) + " " + web.HashSecret(r.Header.Get(config.AccessTokenHeader))
+}
+
+func (a *App) idempotentConnection(next http.HandlerFunc) http.HandlerFunc {
+	return a.idem.Wrap(idemStore{a}, connectionOwner, a.log, next)
+}

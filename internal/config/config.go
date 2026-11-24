@@ -297,6 +297,8 @@ const (
 	CallerHeader   = "Beerus-Caller"
 	ClientIDHeader = "Beerus-Client-ID"
 	SecretHeader   = "Beerus-Secret"
+
+	AccessTokenHeader = "Beerus-Access-Token"
 )
 
 func (c *Config) SigningKey() (*ecdsa.PrivateKey, error) {

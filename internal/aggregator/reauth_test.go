@@ -3,7 +3,6 @@ package aggregator
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -48,7 +47,7 @@ func TestConsentExpiryAtTheBankExpiresTheConnectionUntilReauth(t *testing.T) {
 	now := a.clock.Real()
 	account := acctKey("bank-a", "0123456789")
 	accID := AccountID("p1", "bank-a", "0123456789")
-	c := &Connection{ID: "con_1", PartnerID: "p1", Institution: "bank-a", Status: "active", ConsentID: "obc_1", AccountIDs: []string{accID}}
+	c := &Connection{ID: "con_1", PartnerID: "p1", Institution: "bank-a", Status: "active", ConsentID: "obc_1", AccountIDs: []string{accID}, AccessHash: web.HashSecret(testToken)}
 	acct := &AccountRec{ID: accID, PartnerID: "p1", Key: account, ConnectionID: "con_1", NUBAN: "0123456789", Grants: []string{"con_1"}, HistoryDone: true}
 	a.st.Connections[c.ID] = c
 	a.st.Accounts[acct.ID] = acct
@@ -86,13 +85,13 @@ func TestConsentExpiryAtTheBankExpiresTheConnectionUntilReauth(t *testing.T) {
 		t.Fatalf("webhooks %v, want %v", got, want)
 	}
 
-	status, body := callPartner(t, partner, a.syncTransactions, http.MethodGet, "/v1/accounts/"+accID+"/transactions/sync", "", map[string]string{"id": accID})
+	status, body := callPartner(t, partner, a.syncTransactions, http.MethodGet, "/v1/accounts/"+accID+"/transactions/sync", "", testToken, map[string]string{"id": accID})
 	apiErr, _ := body["error"].(map[string]any)
 	if status != http.StatusConflict || apiErr["code"] != "reauth_required" || apiErr["message"] != "The customer must consent again." {
 		t.Fatalf("a sync on the expired connection: %d %v, want 409 reauth_required %q", status, body, "The customer must consent again.")
 	}
 
-	status, body = callPartner(t, partner, a.reauth, http.MethodPost, "/v1/connections/con_1/reauth", "", map[string]string{"id": "con_1"})
+	status, body = callPartner(t, partner, a.reauth, http.MethodPost, "/v1/connection/reauth", "", testToken, nil)
 	lsID, _ := body["id"].(string)
 	ls := a.st.LinkSessions[lsID]
 	if status != http.StatusCreated || ls == nil || body["connection_id"] != "con_1" || body["status"] != "created" || ls.ConnectionID != "con_1" || ls.RedirectURI != "https://app.example.localhost/cb" {
@@ -105,9 +104,9 @@ func TestConsentExpiryAtTheBankExpiresTheConnectionUntilReauth(t *testing.T) {
 	if err := a.vaultPut(linkVaultPrefix+ls.ID, bankToken{Access: "at2", Refresh: "rt2", AccessExpires: now.Add(time.Hour), RefreshExpires: now.Add(2 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	status, body = callPartner(t, partner, a.exchange, http.MethodPost, "/v1/public_token/exchange", `{"public_token":"public-1"}`, nil)
-	if status != http.StatusOK || body["connection_id"] != "con_1" || !strings.HasPrefix(fmt.Sprint(body["access_token"]), "access-") {
-		t.Fatalf("exchange after reauth: %d %v, want 200 with connection con_1 and an access token", status, body)
+	status, body = callPartner(t, partner, a.exchange, http.MethodPost, "/v1/public_token/exchange", `{"public_token":"public-1"}`, "", nil)
+	if _, issued := body["access_token"]; status != http.StatusOK || body["connection_id"] != "con_1" || issued {
+		t.Fatalf("exchange after reauth: %d %v, want 200 with connection con_1 and no new access token", status, body)
 	}
 	if !a.syncConnection(c, a.clock.Now()) || c.Status != "active" || c.ConsentID != "obc_2" {
 		t.Fatalf("after the reauth and a sync: status %q consent %q, want active and obc_2", c.Status, c.ConsentID)
@@ -119,7 +118,7 @@ func TestConsentExpiryAtTheBankExpiresTheConnectionUntilReauth(t *testing.T) {
 	if got := events(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("webhooks %v, want %v", got, want)
 	}
-	if status, _ := callPartner(t, partner, a.syncTransactions, http.MethodGet, "/v1/accounts/"+accID+"/transactions/sync", "", map[string]string{"id": accID}); status != http.StatusOK {
+	if status, _ := callPartner(t, partner, a.syncTransactions, http.MethodGet, "/v1/accounts/"+accID+"/transactions/sync", "", testToken, map[string]string{"id": accID}); status != http.StatusOK {
 		t.Fatalf("a sync on the renewed connection: %d, want 200", status)
 	}
 }
