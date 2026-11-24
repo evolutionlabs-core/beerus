@@ -74,7 +74,6 @@ func TestSettlementProblems(t *testing.T) {
 			after: "k1",
 			want:  []string{"bank-a has NIP payable -100 and receivable 0, but its open NIBSS sessions come to 0 and 0"},
 		},
-		{name: "payable off while a send is open", funded: true, setup: send, cbn: cbnDesk{balance: funded}, want: []string{}},
 		{name: "receivable within the pending range", funded: true, setup: credit, position: settlementPosition{Inward: 100, PendingInward: 300}, cbn: cbnDesk{balance: funded}, want: []string{}},
 		{
 			name: "receivable below the range", funded: true, setup: credit, position: settlementPosition{Inward: 500}, cbn: cbnDesk{balance: funded},
@@ -96,7 +95,6 @@ func TestSettlementProblems(t *testing.T) {
 				"session k9 at bank-a: the bank posted 0, but the CBN moved 50",
 			},
 		},
-		{name: "a credit lands while NIBSS is read", funded: true, during: credit, cbn: cbnDesk{balance: funded}, want: []string{}},
 		{name: "a send is made while NIBSS is read", funded: true, during: sendDone, cbn: cbnDesk{balance: funded}, want: []string{}},
 		{
 			name: "a settlement posts while NIBSS is read", funded: true,

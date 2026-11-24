@@ -236,7 +236,7 @@ func (c *cbn) settle(t testing.TB, key string, net map[string]int64, at time.Tim
 }
 
 func TestPostings(t *testing.T) {
-	a := newBank(t, "bank-a", "999001", "901", 18)
+	a := newBank(t, "bank-a", "999001", "901", 19)
 	for _, s := range []struct {
 		name  string
 		custs int
@@ -248,6 +248,7 @@ func TestPostings(t *testing.T) {
 		{"reversal", 1, reverseNIP},
 		{"limits and closures", 3, limitsAndClosures},
 		{"concurrent posting", 6, concurrentPostings},
+		{"settlement books", 1, settlementBooks},
 	} {
 		t.Run(s.name, func(t *testing.T) { s.run(t, a.take(s.custs)) })
 	}

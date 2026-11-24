@@ -125,9 +125,8 @@ func lifecycle(t *testing.T, a *testBank) {
 	mustOK(t, a.L)
 }
 
-func TestNUBANsAndCustomerIDsAreNeverReused(t *testing.T) {
+func neverReused(t *testing.T, a *testBank) {
 	ctx := context.Background()
-	a := newBank(t, "bank-a", "999001", "901", 0)
 	c1 := mustCustomer(t, a.Bank, t.Name()+":cli:1", "Ngozi Ade")
 	c2 := mustCustomer(t, a.Bank, t.Name()+":cli:2", "Ngozi Ade")
 	if c1.ID == c2.ID || c1.ID[:4] != "cus_" {
@@ -143,18 +142,23 @@ func TestNUBANsAndCustomerIDsAreNeverReused(t *testing.T) {
 		t.Fatal("a customer row was deleted")
 	}
 	first := mustAccount(t, a.Bank, t.Name()+":open:1", c1.ID)
-	if _, err := a.L.OpenAccount(ctx, ledger.Account{Code: bank.CustomerAccount(world.NUBAN("901", 2)), Name: "Legacy", Kind: ledger.Liability, Customer: true, NUBAN: world.NUBAN("901", 2), Product: "current", Owner: "legacy", KYCTier: 3}); err != nil {
+	serial := uint64(1)
+	for world.NUBAN("901", serial) != first.NUBAN {
+		serial++
+	}
+	taken := world.NUBAN("901", serial+1)
+	if _, err := a.L.OpenAccount(ctx, ledger.Account{Code: bank.CustomerAccount(taken), Name: "Legacy", Kind: ledger.Liability, Customer: true, NUBAN: taken, Product: "current", Owner: "legacy", KYCTier: 3}); err != nil {
 		t.Fatal(err)
 	}
 	second := mustAccount(t, a.Bank, t.Name()+":open:2", c1.ID)
-	if second.NUBAN != world.NUBAN("901", 3) {
-		t.Fatalf("second NUBAN %s, want serial 3 after the taken serial 2: %s", second.NUBAN, world.NUBAN("901", 3))
+	if second.NUBAN != world.NUBAN("901", serial+2) {
+		t.Fatalf("second NUBAN %s, want serial %d after the taken serial %d: %s", second.NUBAN, serial+2, serial+1, world.NUBAN("901", serial+2))
 	}
 	if err := a.CloseAccount(ctx, first.NUBAN, t0); err != nil {
 		t.Fatal(err)
 	}
 	third := mustAccount(t, a.Bank, t.Name()+":open:3", c2.ID)
-	if third.NUBAN == first.NUBAN || third.NUBAN != world.NUBAN("901", 4) {
+	if third.NUBAN == first.NUBAN || third.NUBAN != world.NUBAN("901", serial+3) {
 		t.Fatalf("third NUBAN %s reused or skipped", third.NUBAN)
 	}
 	if _, err := a.L.Pool().Exec(ctx, `DELETE FROM gl_accounts WHERE nuban = $1`, first.NUBAN); err == nil {
@@ -390,6 +394,7 @@ func TestCustomers(t *testing.T) {
 		{"passwords", passwords},
 		{"statements", statements},
 		{"name enquiry", nameEnquiry},
+		{"numbers never reused", neverReused},
 	} {
 		t.Run(s.name, func(t *testing.T) { s.run(t, a) })
 	}
