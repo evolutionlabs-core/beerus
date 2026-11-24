@@ -2,7 +2,6 @@ package participant
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -13,7 +12,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 const (
@@ -40,7 +38,6 @@ type Participant struct {
 	bind  string
 	token string
 	store *nibss.Store
-	tls   *tls.Config
 	banks *bankCaller
 	cbn   *cbnCaller
 
@@ -60,19 +57,7 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 	if err != nil {
 		return nil, fmt.Errorf("control token: %w", err)
 	}
-	tc, err := serverTLS(own)
-	if err != nil {
-		return nil, err
-	}
-	banks, err := newBankCaller(own, remoteBind(o.Bind), bankCallTimeout)
-	if err != nil {
-		return nil, err
-	}
-	cbn, err := newCBNCaller(own, f.CBNPort, remoteBind(o.Bind))
-	if err != nil {
-		return nil, err
-	}
-	p := &Participant{dir: dir, file: f, log: o.Logger, clock: clock.New(), bind: o.Bind, token: token, tls: tc, banks: banks, cbn: cbn, settles: make(chan settleRequest)}
+	p := &Participant{dir: dir, file: f, log: o.Logger, clock: clock.New(), bind: o.Bind, token: token, banks: newBankCaller(remoteBind(o.Bind), bankCallTimeout), cbn: newCBNCaller(f.CBNPort, remoteBind(o.Bind)), settles: make(chan settleRequest)}
 	if p.log == nil {
 		p.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
@@ -102,16 +87,4 @@ func Run(ctx context.Context, dir string, o Options) error {
 
 func (p *Participant) Close() {
 	p.store.Close()
-}
-
-func serverTLS(own string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(filepath.Join(own, "server.crt"), filepath.Join(own, "server.key"))
-	if err != nil {
-		return nil, fmt.Errorf("load NIBSS server certificate: %w", err)
-	}
-	pool, err := pki.LoadPool(filepath.Join(own, config.NIBSSCAFile))
-	if err != nil {
-		return nil, err
-	}
-	return &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12}, nil
 }

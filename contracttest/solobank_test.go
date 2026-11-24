@@ -41,22 +41,6 @@ const (
 	soloPassword = "correct horse battery"
 )
 
-func copyBankFiles(t *testing.T, from, to string, names ...string) {
-	t.Helper()
-	for _, name := range names {
-		raw, err := os.ReadFile(filepath.Join(from, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Join(to, filepath.Dir(name)), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(to, name), raw, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func dirListing(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
@@ -167,11 +151,11 @@ func startSoloBank(t *testing.T, state string) soloBank {
 	}
 	ports := freePorts(t, 5)
 	cfg := &config.Config{Dir: stage, SetupKey: soloSetupKey, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", WidgetPort: ports[2], ControlPort: ports[3], NIBSSPort: ports[4]}}
-	if err := config.Prepare(cfg, now); err != nil {
+	if err := config.Prepare(cfg); err != nil {
 		t.Fatal(err)
 	}
 	own := &config.Bank{State: state, ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: ports[0], APIPort: ports[1], Database: config.DatabaseName(stage, "bank-a")}
-	if err := cfg.EnsureBankDir(own, now); err != nil {
+	if err := cfg.EnsureBankDir(own); err != nil {
 		t.Fatal(err)
 	}
 	other := config.DatabaseName(stage, "bank-b")
@@ -181,8 +165,6 @@ func startSoloBank(t *testing.T, state string) soloBank {
 	t.Cleanup(func() { _ = postgres.DropDatabases(ctx, dbURL, []string{other}) })
 	books, account := seedSoloBank(t, ctx, dbURL, stage, own, now)
 
-	clientDir := t.TempDir()
-	copyBankFiles(t, stage, clientDir, "ca/root.crt", "nibss/client.crt", "nibss/client.key")
 	entries, err := os.ReadDir(stage)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +179,7 @@ func startSoloBank(t *testing.T, state string) soloBank {
 	solo := stage
 	logs, exited, _ := runSolo(t, own.ID, solo, dbURL)
 	site := fmt.Sprintf("http://127.0.0.1:%d", own.Port)
-	api := fmt.Sprintf("https://127.0.0.1:%d", own.APIPort)
+	api := fmt.Sprintf("http://127.0.0.1:%d", own.APIPort)
 	probe := &bankProbe{t: t, plain: &http.Client{Timeout: controlProbeTimeout}}
 	waitFor(t, waitLimit, "the bank to answer on its own", func() bool {
 		select {
@@ -208,7 +190,7 @@ func startSoloBank(t *testing.T, state string) soloBank {
 		code, _ := probe.get(probe.plain, site+"/health", nil)
 		return code == http.StatusOK
 	})
-	nibss := mutualClient(t, clientDir, "nibss", "client")
+	nibss := callerClient(t, config.NIBSSID)
 	return soloBank{ctx, dbURL, stage, own, books, account, solo, site, api, probe, nibss}
 }
 
@@ -316,13 +298,13 @@ func TestSoloBankServesWithNothingElseRunning(t *testing.T) {
 	}
 
 	files := []string{"banks", "banks/bank-a"}
-	for _, f := range []string{"bank.json", "ca.crt", "client.crt", "client.key", "control-token", "events.crt", "events.key", "server.crt", "server.key"} {
+	for _, f := range []string{"bank.json", "control-token"} {
 		files = append(files, "banks/bank-a/"+f)
 	}
 	if got := dirListing(t, solo); !slices.Equal(got, files) {
 		t.Fatalf("the bank directory holds %v, want %v", got, files)
 	}
-	for _, f := range []string{"bank.json", "control-token", "client.key", "events.key", "server.key"} {
+	for _, f := range []string{"bank.json", "control-token"} {
 		fi, err := os.Stat(filepath.Join(config.BankDir(solo, own.ID), f))
 		if err != nil || fi.Mode().Perm() != 0o600 {
 			t.Fatalf("%s: mode %v, error %v, want 0600", f, fi, err)

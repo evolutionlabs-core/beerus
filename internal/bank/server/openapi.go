@@ -1,15 +1,12 @@
 package server
 
 import (
-	"crypto/tls"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"strconv"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 const (
@@ -51,16 +48,4 @@ func OpenAPI(h Host, ob *openbanking.Server, log *slog.Logger) http.Handler {
 	mux.Handle("/v1/nip/", h.Banking().NIP(id))
 	mux.Handle("/", guarded)
 	return mux
-}
-
-func OpenAPITLS(dir, id, ca string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "banks", id, "server.crt"), filepath.Join(dir, "banks", id, "server.key"))
-	if err != nil {
-		return nil, err
-	}
-	pool, err := pki.LoadPool(ca)
-	if err != nil {
-		return nil, err
-	}
-	return &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12}, nil
 }

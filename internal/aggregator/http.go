@@ -8,7 +8,6 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -37,37 +36,18 @@ func keyMatches(key, hash string) bool {
 
 func (a *App) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
-			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "A client certificate from the Connect CA is required.")
-			return
-		}
-		cert := r.TLS.PeerCertificates[0]
-		var p *config.Partner
-		for _, x := range a.partnersSnapshot() {
-			if x.CertCN == cert.Subject.CommonName {
-				p = x
-			}
-		}
-		role := ""
-		if len(cert.Subject.OrganizationalUnit) > 0 {
-			role = cert.Subject.OrganizationalUnit[0]
-		}
-		if p == nil || role != "partner" || (p.CertSHA256 != "" && subtle.ConstantTimeCompare([]byte(pki.Thumbprint(cert)), []byte(p.CertSHA256)) != 1) {
-			web.WriteError(w, r, http.StatusForbidden, "forbidden", "The client certificate does not belong to a registered partner.")
-			return
-		}
 		key := r.Header.Get("X-Api-Key")
 		if key == "" {
 			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "The X-Api-Key header is required.")
 			return
 		}
-		if !keyMatches(key, p.APIKeySHA256) {
-			for _, other := range a.partnersSnapshot() {
-				if other != p && keyMatches(key, other.APIKeySHA256) {
-					web.WriteError(w, r, http.StatusForbidden, "forbidden", "The API key does not belong to the client certificate's partner.")
-					return
-				}
+		var p *config.Partner
+		for _, x := range a.partnersSnapshot() {
+			if keyMatches(key, x.APIKeySHA256) {
+				p = x
 			}
+		}
+		if p == nil {
 			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "The API key is not valid.")
 			return
 		}

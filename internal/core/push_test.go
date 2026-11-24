@@ -28,12 +28,12 @@ func stubReply(status int, body string) *http.Response {
 func bankDirConfig(t *testing.T, banks ...*config.Bank) *config.Config {
 	t.Helper()
 	cfg := &config.Config{Dir: t.TempDir(), Banks: banks, SetupKey: 1<<63 + 5, Connect: config.Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, ControlPort: 9002, BrandName: "Connect"}}
-	if err := config.Prepare(cfg, clock.New().Real()); err != nil {
+	if err := config.Prepare(cfg); err != nil {
 		t.Fatal(err)
 	}
 	for _, b := range banks {
 		b.Database = config.DatabaseName(cfg.Dir, b.ID)
-		if err := cfg.EnsureBankDir(b, clock.New().Real()); err != nil {
+		if err := cfg.EnsureBankDir(b); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -146,7 +146,8 @@ func TestHungBankDoesNotDelayAnother(t *testing.T) {
 func TestEnsureBankDirRepairsOnATick(t *testing.T) {
 	cfg := bankDirConfig(t, &config.Bank{ID: "bank-a", Name: "Bank A", Port: 1, APIPort: 2, Database: "db"})
 	a := &App{cfg: cfg, clock: clock.New()}
-	path := config.BankDir(cfg.Dir, "bank-a") + "/" + config.BankCAFile
+	path := config.BankDir(cfg.Dir, "bank-a") + "/" + config.BankFileName
+	var intact []byte
 	rows := []struct {
 		name    string
 		elapsed bool
@@ -157,7 +158,7 @@ func TestEnsureBankDirRepairsOnATick(t *testing.T) {
 		{name: "nothing changed", want: true},
 		{name: "deleted file inside the interval", damage: func() error { return os.Remove(path) }, want: false},
 		{name: "deleted file after the interval", elapsed: true, want: true},
-		{name: "corrupted file after the interval", elapsed: true, damage: func() error { return os.WriteFile(path, []byte("x"), 0o644) }, want: true},
+		{name: "corrupted file after the interval", elapsed: true, damage: func() error { return os.WriteFile(path, []byte("x"), 0o600) }, want: true},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
@@ -174,13 +175,12 @@ func TestEnsureBankDirRepairsOnATick(t *testing.T) {
 			if _, err := a.ensureBankDir("bank-a", false); err != nil {
 				t.Fatal(err)
 			}
-			root, err := os.ReadFile(cfg.Path("ca", "root.crt"))
-			if err != nil {
-				t.Fatal(err)
-			}
 			got, err := os.ReadFile(path)
-			if ok := err == nil && string(got) == string(root); ok != r.want {
-				t.Fatalf("ca.crt intact is %v, want %v", ok, r.want)
+			if intact == nil {
+				intact = got
+			}
+			if ok := err == nil && string(got) == string(intact); ok != r.want {
+				t.Fatalf("bank.json intact is %v, want %v", ok, r.want)
 			}
 		})
 	}

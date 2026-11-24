@@ -45,7 +45,7 @@ func TestComposeFollowsTheSetup(t *testing.T) {
 		&config.Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", Port: 7460, APIPort: 7470},
 	)
 	c.Connect.Host = "connect.example.localhost"
-	c.Partners = append(c.Partners, &config.Partner{ID: "ledger", Name: "Ledger", LegalName: "Ledger Ltd", Purpose: "to reconcile", RedirectURIs: []string{"https://ledger.localhost/cb"}})
+	c.Partners = append(c.Partners, &config.Partner{ID: "ledger", Name: "Ledger", LegalName: "Ledger Ltd", Purpose: "to reconcile", RedirectURIs: []string{"http://ledger.localhost/cb"}})
 	out, err = renderCompose(c)
 	if err != nil {
 		t.Fatal(err)

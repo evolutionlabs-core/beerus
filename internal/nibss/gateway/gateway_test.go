@@ -3,8 +3,6 @@ package gateway_test
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -24,14 +22,12 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss/gateway"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 const (
 	specFile    = "../../../api/nip/openapi.yaml"
-	certLife    = time.Hour
 	clientLimit = 10 * time.Second
-	forbidden   = `{"error":{"code":"forbidden","message":"This certificate may not read the bank directory. Only banks may.","request_id":"req_ID"}}`
+	anonymous   = `{"error":{"code":"unauthenticated","message":"Send your ID in the Beerus-Caller header to read the bank directory.","request_id":"req_ID"}}`
 	unavailable = `{"error":{"code":"unavailable","message":"NIBSS is not available right now. Try again soon.","request_id":"req_ID"}}`
 )
 
@@ -44,41 +40,16 @@ var directory = []nip.Institution{
 	{ID: "bank-d", Name: "Bank D", NIPCode: "000017", NUBANCode: "017", Type: "commercial", Status: nip.StatusRemoved},
 }
 
-func leafConfig(t *testing.T, leaf *pki.Leaf, ca *pki.Authority) *tls.Config {
-	t.Helper()
-	pair, err := tls.X509KeyPair(leaf.CertPEM, leaf.KeyPEM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(ca.PEM)
-	return &tls.Config{Certificates: []tls.Certificate{pair}, RootCAs: pool, MinVersion: tls.VersionTLS12}
-}
-
 type stack struct {
-	base    string
-	clients map[string]*http.Client
-	spec    validator.Validator
-	down    atomic.Bool
+	base   string
+	client *http.Client
+	spec   validator.Validator
+	down   atomic.Bool
 }
 
 func newStack(t *testing.T) *stack {
 	t.Helper()
-	s := &stack{clients: map[string]*http.Client{}}
-	ca, err := pki.NewAuthority("Test CA", certLife)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server, err := ca.IssueServer([]string{"localhost"}, certLife)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pair, err := tls.X509KeyPair(server.CertPEM, server.KeyPEM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(ca.PEM)
+	s := &stack{client: &http.Client{Timeout: clientLimit}}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -92,31 +63,17 @@ func newStack(t *testing.T) *stack {
 	srv := &http.Server{
 		Handler:           gateway.New(list, slog.New(slog.NewTextHandler(io.Discard, nil))),
 		ReadHeaderTimeout: clientLimit,
-		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{pair}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12},
 	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = srv.Serve(tls.NewListener(ln, srv.TLSConfig))
+		_ = srv.Serve(ln)
 	}()
 	t.Cleanup(func() {
 		_ = srv.Close()
 		<-done
 	})
-	s.base = "https://" + ln.Addr().String()
-	for name, id := range map[string]string{"bank-a": "bank-a", "bank-d": "bank-d", "stranger": "bank-z", "aggregator": "beerus-connect"} {
-		role := config.BankRole
-		if name == "aggregator" {
-			role = "aggregator"
-		}
-		leaf, err := ca.IssueClient(id, role, certLife)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tr := &http.Transport{TLSClientConfig: leafConfig(t, leaf, ca), IdleConnTimeout: clientLimit}
-		t.Cleanup(tr.CloseIdleConnections)
-		s.clients[name] = &http.Client{Transport: tr, Timeout: clientLimit}
-	}
+	s.base = "http://" + ln.Addr().String()
 	spec, err := os.ReadFile(specFile)
 	if err != nil {
 		t.Fatal(err)
@@ -139,12 +96,15 @@ type reply struct {
 	allow  string
 }
 
-func (s *stack) call(t *testing.T, client, method, path string, validate bool) reply {
+func (s *stack) call(t *testing.T, caller, method, path string, validate bool) reply {
 	t.Helper()
 	newRequest := func() *http.Request {
 		req, err := http.NewRequest(method, s.base+path, nil)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if caller != "" {
+			req.Header.Set(config.CallerHeader, caller)
 		}
 		return req
 	}
@@ -153,7 +113,7 @@ func (s *stack) call(t *testing.T, client, method, path string, validate bool) r
 			t.Fatalf("%s %s request: %v", method, path, errs)
 		}
 	}
-	resp, err := s.clients[client].Do(newRequest())
+	resp, err := s.client.Do(newRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,9 +156,10 @@ func TestBankDirectoryContract(t *testing.T) {
 		{name: "limit not a number", method: "GET", path: "/v1/banks?limit=many", status: 400, want: `{"error":{"code":"invalid_request","message":"limit must be a number from 1 to 500.","request_id":"req_ID"}}`},
 		{name: "cursor not in the directory", method: "GET", path: "/v1/banks?cursor=999999", validate: true, status: 400, want: `{"error":{"code":"invalid_cursor","message":"That cursor is not valid. Use the next_cursor value from the last page.","request_id":"req_ID"}}`},
 		{name: "cursor of a removed bank", method: "GET", path: "/v1/banks?cursor=000017", status: 400, want: `{"error":{"code":"invalid_cursor","message":"That cursor is not valid. Use the next_cursor value from the last page.","request_id":"req_ID"}}`},
-		{name: "aggregator certificate", client: "aggregator", method: "GET", path: "/v1/banks", validate: true, status: 403, want: forbidden},
-		{name: "bank NIBSS does not know", client: "stranger", method: "GET", path: "/v1/banks", validate: true, status: 403, want: `{"error":{"code":"forbidden","message":"This certificate may not read the bank directory. bank-z is not a bank NIBSS knows.","request_id":"req_ID"}}`},
-		{name: "removed bank", client: "bank-d", method: "GET", path: "/v1/banks", status: 403, want: `{"error":{"code":"forbidden","message":"This certificate may not read the bank directory. bank-d is not a bank NIBSS knows.","request_id":"req_ID"}}`},
+		{name: "no caller", client: "-", method: "GET", path: "/v1/banks", status: 401, want: anonymous},
+		{name: "aggregator", client: config.ConnectID, method: "GET", path: "/v1/banks", validate: true, status: 403, want: `{"error":{"code":"forbidden","message":"connect may not read the bank directory. It is not a bank NIBSS knows.","request_id":"req_ID"}}`},
+		{name: "bank NIBSS does not know", client: "bank-z", method: "GET", path: "/v1/banks", validate: true, status: 403, want: `{"error":{"code":"forbidden","message":"bank-z may not read the bank directory. It is not a bank NIBSS knows.","request_id":"req_ID"}}`},
+		{name: "removed bank", client: "bank-d", method: "GET", path: "/v1/banks", status: 403, want: `{"error":{"code":"forbidden","message":"bank-d may not read the bank directory. It is not a bank NIBSS knows.","request_id":"req_ID"}}`},
 		{name: "wrong method", method: "POST", path: "/v1/banks", status: 405, allow: "GET", want: `{"error":{"code":"method_not_allowed","message":"Use GET for this path.","request_id":"req_ID"}}`},
 		{name: "unknown path", method: "GET", path: "/v1/nothing", status: 404, want: `{"error":{"code":"not_found","message":"This path is not part of the NIBSS API.","request_id":"req_ID"}}`},
 		{name: "directory closed", method: "GET", path: "/v1/banks", validate: true, down: true, status: 503, want: unavailable},
@@ -206,11 +167,14 @@ func TestBankDirectoryContract(t *testing.T) {
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
 			s.down.Store(r.down)
-			client := r.client
-			if client == "" {
-				client = "bank-a"
+			caller := r.client
+			switch caller {
+			case "":
+				caller = "bank-a"
+			case "-":
+				caller = ""
 			}
-			got := s.call(t, client, r.method, r.path, r.validate)
+			got := s.call(t, caller, r.method, r.path, r.validate)
 			if got.status != r.status || got.body != r.want || got.allow != r.allow {
 				t.Fatalf("got %d %s allow=%q, want %d %s allow=%q", got.status, got.body, got.allow, r.status, r.want, r.allow)
 			}

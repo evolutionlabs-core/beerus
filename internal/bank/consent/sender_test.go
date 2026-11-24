@@ -2,16 +2,9 @@ package consent
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"encoding/pem"
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,35 +12,18 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
-func TestEventClientIsSharedPerDestination(t *testing.T) {
-	dir := t.TempDir()
-	authority, err := pki.NewAuthority("test", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := authority.Save(dir, "root"); err != nil {
-		t.Fatal(err)
-	}
-	s := &Sender{CA: filepath.Join(dir, "root.crt")}
-	a, err := s.client("https://widget-a.localhost")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestEventClientIsSharedAndBounded(t *testing.T) {
+	s := &Sender{}
+	first := s.httpClient()
 	for i := 0; i < 20; i++ {
-		again, err := s.client("https://widget-a.localhost")
-		if err != nil || again != a {
-			t.Fatalf("attempt %d built a new client: %v", i, err)
+		if again := s.httpClient(); again != first {
+			t.Fatalf("attempt %d built a new client", i)
 		}
 	}
-	b, err := s.client("https://widget-b.localhost")
-	if err != nil || b == a {
-		t.Fatalf("another destination shares a client: %v", err)
-	}
-	if tr, ok := a.Transport.(*http.Transport); !ok || tr.IdleConnTimeout <= 0 {
-		t.Fatalf("idle connections are never closed: %+v", a.Transport)
+	if tr, ok := first.Transport.(*http.Transport); !ok || tr.IdleConnTimeout <= 0 || first.Timeout <= 0 {
+		t.Fatalf("idle connections or calls are never closed: %+v", first)
 	}
 }
 
@@ -93,21 +69,6 @@ func TestEventsAreMarkedAfterTheAnswer(t *testing.T) {
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
-			dir := t.TempDir()
-			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-			der, err := x509.MarshalPKCS8PrivateKey(key)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.MkdirAll(filepath.Join(dir, "banks", "bank-a"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, "banks", "bank-a", config.EventSignerName+".key"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
-				t.Fatal(err)
-			}
 			store := cancelledStore{openbanking.NewMemStore()}
 			srv := openbanking.New(openbanking.Config{BankID: "bank-a", Store: store, Clock: clk})
 			if err := store.Enqueue(t.Context(), openbanking.ConsentEvent{ConsentID: "obc_1", Bank: "bank-a", Status: openbanking.Revoked, At: now}, now); err != nil {
@@ -115,20 +76,22 @@ func TestEventsAreMarkedAfterTheAnswer(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			const widget = "https://widget.localhost"
+			const widget = "http://widget.localhost"
 			s := &Sender{
 				Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 				Clock:     clk,
-				Dir:       dir,
 				WidgetURL: widget,
 				Servers:   func() map[string]*openbanking.Server { return map[string]*openbanking.Server{"bank-a": srv} },
 				Bank:      func(id string) *config.Bank { return &config.Bank{ID: id, APIPort: 7001} },
-				clients: map[string]*http.Client{widget: {Transport: answer(func(req *http.Request) (*http.Response, error) {
+				client: &http.Client{Transport: answer(func(req *http.Request) (*http.Response, error) {
+					if got := req.Header.Get(config.CallerHeader); got != "bank-a" {
+						t.Errorf("%s = %q, want bank-a", config.CallerHeader, got)
+					}
 					if r.cancel {
 						cancel()
 					}
 					return &http.Response{StatusCode: r.status, Status: http.StatusText(r.status), Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
-				})}},
+				})},
 			}
 			s.Events(ctx)
 			done := clk.Real()

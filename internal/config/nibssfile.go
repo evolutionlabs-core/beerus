@@ -11,14 +11,12 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 const (
 	NIBSSID        = "nibss"
 	NIBSSFileName  = "nibss.json"
 	NIBSSTokenFile = "control-token"
-	NIBSSCAFile    = "ca.crt"
 	maxNIBSSFile   = 1 << 20
 )
 
@@ -145,21 +143,14 @@ func (c *Config) nibssFileBytes(worldID string) ([]byte, error) {
 	return append(raw, '\n'), nil
 }
 
-func (c *Config) EnsureNIBSSDir(worldID string, now time.Time) error {
-	root, err := pki.LoadAuthority(c.Path("ca"), "root")
-	if err != nil {
-		return fmt.Errorf("load root authority: %w", err)
-	}
-	if err := c.ensureNIBSS(root, now); err != nil {
-		return err
+func (c *Config) EnsureNIBSSDir(worldID string) error {
+	dir := NIBSSDir(c.Dir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create nibss dir: %w", err)
 	}
 	raw, err := c.nibssFileBytes(worldID)
 	if err != nil {
 		return err
-	}
-	dir := NIBSSDir(c.Dir)
-	if err := writeIfChanged(filepath.Join(dir, NIBSSCAFile), root.PEM, 0o644); err != nil {
-		return fmt.Errorf("write %s of NIBSS: %w", NIBSSCAFile, err)
 	}
 	if err := writeIfChanged(filepath.Join(dir, NIBSSFileName), raw, 0o600); err != nil {
 		return fmt.Errorf("write %s of NIBSS: %w", NIBSSFileName, err)

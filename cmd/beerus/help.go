@@ -106,8 +106,6 @@ func commands() []command {
 		{"compose", groupRunning, "Print a Docker Compose file for the setup", "compose [options]", cmdCompose},
 		{"info", groupRunning, "Show addresses and partner apps", "info [options]", cmdInfo},
 		{"doctor", groupRunning, "Find and clean up leftovers", "doctor [options]", cmdDoctor},
-		{"trust", groupRunning, "Trust the Beerus root certificate", "trust [options]", bind(cmdTrust, true)},
-		{"untrust", groupRunning, "Stop trusting the Beerus root certificate", "untrust [options]", bind(cmdTrust, false)},
 		{"health", groupRunning, "Check that a URL answers", "health <url> [options]", cmdHealth},
 		{"version", groupRunning, "Print the version", "version", cmdVersion},
 	}

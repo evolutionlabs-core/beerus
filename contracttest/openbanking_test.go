@@ -6,7 +6,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -15,7 +14,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -24,7 +22,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 type obClient struct {
@@ -78,35 +75,16 @@ func (o *obClient) get(path, token string) (int, map[string]any) {
 	return o.call(req)
 }
 
-func (s *Stack) mtls(cert, key string) *http.Client {
-	s.t.Helper()
-	pair, err := tls.LoadX509KeyPair(cert, key)
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	return s.mtlsPair(pair)
-}
-
-func (s *Stack) mtlsPair(pair tls.Certificate) *http.Client {
-	pem, err := os.ReadFile(s.cfg.Path("ca", "root.crt"))
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(pem)
-	return &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{pair}, RootCAs: pool}}}
-}
-
 func TestOpenBanking(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
 	s := newBankStack(t)
 	bank := s.cfg.Bank("bank-a")
-	o := &obClient{t: t, s: s, issuer: bank.APIURL(), c: s.mtls(s.cfg.Path("connect", "client.crt"), s.cfg.Path("connect", "client.key"))}
+	o := &obClient{t: t, s: s, issuer: bank.APIURL(), c: callerClient(t, config.ConnectID)}
 
 	status, meta := o.get("/discover", "")
-	if status != 200 || meta["issuer"] != o.issuer || meta["authorization_endpoint"] != bank.URL()+"/authorize" || meta["tls_client_certificate_bound_access_tokens"] != true {
+	if status != 200 || meta["issuer"] != o.issuer || meta["authorization_endpoint"] != bank.URL()+"/authorize" {
 		t.Fatalf("discover: %d %v", status, meta)
 	}
 	if status, _ := o.get("/health", ""); status != 200 {
@@ -234,23 +212,11 @@ func TestOpenBanking(t *testing.T) {
 		t.Fatalf("history starts at %s, before the start date the customer saw", from)
 	}
 
-	root, err := pki.LoadAuthority(s.cfg.Path("ca"), "root")
-	if err != nil {
-		t.Fatal(err)
+	if status, body := (&obClient{t: t, s: s, issuer: o.issuer, c: callerClient(t, "stranger")}).get("/accounts", access); status != http.StatusUnauthorized || body["error_description"] != "stranger is not registered at the Registry." {
+		t.Fatalf("unregistered caller: %d %v", status, body)
 	}
-	stranger, err := root.IssueClient("stranger", "aggregator", time.Hour)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pair, err := tls.X509KeyPair(stranger.CertPEM, stranger.KeyPEM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status, _ := (&obClient{t: t, s: s, issuer: o.issuer, c: s.mtlsPair(pair)}).get("/accounts", access); status != http.StatusUnauthorized {
-		t.Fatalf("unregistered certificate: %d", status)
-	}
-	if _, err := s.mtls(s.cfg.Path("partners", "balance", "client.crt"), s.cfg.Path("partners", "balance", "client.key")).Get(o.issuer + "/discover"); err == nil {
-		t.Fatal("a certificate from the partner CA reached the bank API")
+	if status, body := (&obClient{t: t, s: s, issuer: o.issuer, c: &http.Client{Timeout: 30 * time.Second}}).get("/accounts", access); status != http.StatusUnauthorized || body["error_description"] != "Send your ID in the Beerus-Caller header." {
+		t.Fatalf("no caller: %d %v", status, body)
 	}
 
 	b2.get("/apps")

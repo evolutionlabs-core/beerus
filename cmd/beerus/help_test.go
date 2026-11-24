@@ -53,8 +53,6 @@ Running Beerus:
   compose       Print a Docker Compose file for the setup
   info          Show addresses and partner apps
   doctor        Find and clean up leftovers
-  trust         Trust the Beerus root certificate
-  untrust       Stop trusting the Beerus root certificate
   health        Check that a URL answers
   version       Print the version
 

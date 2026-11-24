@@ -41,7 +41,7 @@ func (a *App) ensureBankDir(id string, force bool) (string, error) {
 	if !force && ok && last.digest == digest && ensuredRecently(last.at, now) {
 		return digest, nil
 	}
-	if err := a.cfg.EnsureBankDir(snap, now); err != nil {
+	if err := a.cfg.EnsureBankDir(snap); err != nil {
 		return "", fmt.Errorf("ensure the bank directory of %s: %w", id, err)
 	}
 	if a.bankEnsures == nil {

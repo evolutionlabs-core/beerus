@@ -144,7 +144,7 @@ func buildRequest(t *testing.T, f found) *http.Request {
 		body = bytes.NewReader(exampleJSON(t, mediaExamples(t, f.op.OperationId, mt)[0]))
 		header.Set("Content-Type", "application/json")
 	}
-	target := "https://example.localhost" + path
+	target := "http://example.localhost" + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}

@@ -69,7 +69,7 @@ func TestSoloNIBSSServesSettlementReportsToTheirBank(t *testing.T) {
 		{"after a session that is not posted", banks["bank-a"], url + "?after=2026-11-04T23:00", 200, `{"data":[` + noon + `,` + evening + `]}`},
 		{"a bad cursor", banks["bank-a"], url + "?cursor=nope", 400, errBody("invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page.")},
 		{"a bad limit", banks["bank-a"], url + "?limit=0", 400, errBody("invalid_request", "limit must be a number from 1 to 500.")},
-		{"a stranger", banks["bank-z"], url, 403, errBody("forbidden", "This certificate may not read settlement reports. bank-z is not a bank NIBSS knows.")},
+		{"a stranger", banks["bank-z"], url, 403, errBody("forbidden", "bank-z may not read settlement reports. It is not a bank NIBSS knows.")},
 	}
 	for _, r := range rows {
 		status, got := s.call("nip", r.client, http.MethodGet, r.url, "", "")
@@ -93,7 +93,7 @@ func TestSoloNIBSSServesSettlementReportsToTheirBank(t *testing.T) {
 		{"bank a after the first", banks["bank-a"], positionURL + "?after=2026-11-04T12:00", 200, position(79, 0, 0, 2, 2)},
 		{"bank a after the last posted", banks["bank-a"], positionURL + "?after=2026-11-04T18:00", 200, position(9, 0, 0, 1, 1)},
 		{"bank a after a session that is not posted", banks["bank-a"], positionURL + "?after=2026-11-04T23:00", 200, position(579, 200, 0, 4, 3)},
-		{"position of a stranger", banks["bank-z"], positionURL, 403, errBody("forbidden", "This certificate may not read its settlement position. bank-z is not a bank NIBSS knows.")},
+		{"position of a stranger", banks["bank-z"], positionURL, 403, errBody("forbidden", "bank-z may not read its settlement position. It is not a bank NIBSS knows.")},
 	}
 	for _, r := range positions {
 		status, got := s.call("nip", r.client, http.MethodGet, r.url, "", "")

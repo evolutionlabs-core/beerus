@@ -114,10 +114,10 @@ func TestValidateRules(t *testing.T) {
 		{"no partner name", func(s *Spec) { s.Spec.Partners = []Partner{{ID: "balance"}} }, []string{"partners[balance].name is required. Add the partner's name."}},
 		{"bad redirect", func(s *Spec) {
 			s.Spec.Partners = []Partner{{ID: "balance", Name: "Balance", RedirectURIs: []string{"https://ok.example/cb", "ftp://x/cb"}}}
-		}, []string{`partners[balance].redirect_uris "ftp://x/cb" is not an http or https URL. Use a full URL such as https://localhost:3000/callback.`}},
+		}, []string{`partners[balance].redirect_uris "ftp://x/cb" is not an http or https URL. Use a full URL such as http://localhost:3000/callback.`}},
 		{"bad webhook", func(s *Spec) {
 			s.Spec.Partners = []Partner{{ID: "balance", Name: "Balance", WebhookURL: "localhost:3000"}}
-		}, []string{`partners[balance].webhook_url "localhost:3000" is not an http or https URL. Use a full URL such as https://localhost:3000/callback.`}},
+		}, []string{`partners[balance].webhook_url "localhost:3000" is not an http or https URL. Use a full URL such as http://localhost:3000/callback.`}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

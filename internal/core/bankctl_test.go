@@ -91,7 +91,7 @@ func TestBankAdminAgainstABankServer(t *testing.T) {
 				}
 			}
 			return s.ParticipantID + " " + s.Phase + ids, err
-		}, "bank-a active allocate directory database ledger_schema openbanking_schema certs cbn site api"},
+		}, "bank-a active allocate directory database ledger_schema openbanking_schema files cbn site api"},
 		{"customers", func() (string, error) { v, err := c.customers(ctx); return fmt.Sprint(len(v), " ", v[0].Name), err }, "1 Ada Obi"},
 		{"customers by BVN", func() (string, error) { v, err := c.customersByBVN(ctx, made.BVN); return fmt.Sprint(len(v)), err }, "1"},
 		{"customers by unknown BVN", func() (string, error) { v, err := c.customersByBVN(ctx, "22900000000"); return fmt.Sprint(len(v)), err }, "0"},

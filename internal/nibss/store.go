@@ -143,11 +143,11 @@ type querier interface {
 
 const institutionCols = `id, name, nip_code, nuban_code, type, status`
 
-const memberCols = institutionCols + `, credit_url, certificate_identity`
+const memberCols = institutionCols + `, credit_url, caller_id`
 
 func scanMember(row pgx.Row) (Member, error) {
 	var m Member
-	err := row.Scan(&m.ID, &m.Name, &m.NIPCode, &m.NUBANCode, &m.Type, &m.Status, &m.CreditURL, &m.CertificateIdentity)
+	err := row.Scan(&m.ID, &m.Name, &m.NIPCode, &m.NUBANCode, &m.Type, &m.Status, &m.CreditURL, &m.CallerID)
 	return m, err
 }
 
@@ -175,9 +175,9 @@ func (s *Store) MemberAt(ctx context.Context, code string) (Member, error) {
 
 func (s *Store) Admits(ctx context.Context, identity string) (bool, error) {
 	var ok bool
-	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM institutions WHERE certificate_identity = $1 AND status <> 'removed')`, identity).Scan(&ok)
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM institutions WHERE caller_id = $1 AND status <> 'removed')`, identity).Scan(&ok)
 	if err != nil {
-		return false, fmt.Errorf("look up certificate identity %s: %w", identity, err)
+		return false, fmt.Errorf("look up caller %s: %w", identity, err)
 	}
 	return ok, nil
 }

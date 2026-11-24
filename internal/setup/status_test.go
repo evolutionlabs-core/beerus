@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -131,6 +132,28 @@ func TestLoadStatusMissingFile(t *testing.T) {
 	_, err := LoadStatus(t.TempDir())
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestLoadStatusDropsOldPartnerCertificateFields(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"version":2,"setup":"beerus","resources":[{"kind":"Partner","id":"balance","partner":{"cert_cn":"balance","api_key_sha256":"abc","cert_sha256":"def"}}]}`
+	if err := os.WriteFile(filepath.Join(dir, "control.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := LoadStatus(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Resources[0].Partner; got == nil || *got != (PartnerKeys{APIKeySHA256: "abc"}) {
+		t.Fatalf("partner keys %+v, want only the API key hash abc", got)
+	}
+	if err := SaveStatus(dir, st); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(filepath.Join(dir, "control.json"))
+	if err != nil || bytes.Contains(saved, []byte("cert_")) {
+		t.Fatalf("a saved status still holds certificate fields: %v %s", err, saved)
 	}
 }
 

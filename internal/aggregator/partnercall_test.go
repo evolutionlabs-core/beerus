@@ -35,7 +35,7 @@ func (r *partnerReply) WriteHeader(code int) {
 
 func callPartner(t *testing.T, p *config.Partner, h http.HandlerFunc, method, target, body string, path map[string]string) (int, map[string]any) {
 	t.Helper()
-	r, err := http.NewRequestWithContext(context.WithValue(t.Context(), ctxPartner, p), method, "https://connect.localhost"+target, strings.NewReader(body))
+	r, err := http.NewRequestWithContext(context.WithValue(t.Context(), ctxPartner, p), method, "http://connect.localhost"+target, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,23 +4,21 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestCBNFileEnsureAndLoad(t *testing.T) {
-	now := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
 	c := &Config{Dir: t.TempDir(), SetupKey: 7, Connect: Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, CBNPort: 9005, CBNControlPort: 9006, ControlPort: 9002, BrandName: "Connect"}}
-	if err := Prepare(c, now); err != nil {
+	if err := Prepare(c); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadCBNFile(c.Dir); err == nil || err.Error() != "no CBN config at "+CBNFilePath(c.Dir)+"; start Beerus with beerus up first" {
 		t.Fatalf("load before ensure: %v", err)
 	}
-	if err := c.EnsureCBNDir(now); err != nil {
+	if err := c.EnsureCBNDir(); err != nil {
 		t.Fatal(err)
 	}
 	dir := CBNDir(c.Dir)
-	for name, want := range map[string]os.FileMode{CBNFileName: 0o600, CBNTokenFile: 0o600, CBNCAFile: 0o644, "server.key": 0o600} {
+	for name, want := range map[string]os.FileMode{CBNFileName: 0o600, CBNTokenFile: 0o600} {
 		fi, err := os.Stat(filepath.Join(dir, name))
 		if err != nil || fi.Mode().Perm() != want {
 			t.Fatalf("%s: mode %v, error %v, want %v", name, fi, err, want)
@@ -31,7 +29,7 @@ func TestCBNFileEnsureAndLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Connect.CBNControlPort = 9007
-	if err := c.EnsureCBNDir(now); err != nil {
+	if err := c.EnsureCBNDir(); err != nil {
 		t.Fatal(err)
 	}
 	if again, err := os.ReadFile(filepath.Join(dir, CBNTokenFile)); err != nil || string(again) != string(token) {

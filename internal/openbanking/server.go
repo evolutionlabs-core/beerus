@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 )
 
 const (
@@ -139,11 +140,6 @@ func Hash(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func Thumbprint(der []byte) string {
-	sum := sha256.Sum256(der)
-	return b64.EncodeToString(sum[:])
-}
-
 func random(prefix string, n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -185,46 +181,42 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-func (s *Server) caller(w http.ResponseWriter, r *http.Request) (*Client, string, bool) {
-	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		fail(w, http.StatusUnauthorized, "invalid_client", "A client certificate is required.")
-		return nil, "", false
+func (s *Server) caller(w http.ResponseWriter, r *http.Request) (*Client, bool) {
+	id := r.Header.Get(config.CallerHeader)
+	if id == "" {
+		fail(w, http.StatusUnauthorized, "invalid_client", fmt.Sprintf("Send your ID in the %s header.", config.CallerHeader))
+		return nil, false
 	}
-	cert := r.TLS.PeerCertificates[0]
-	c, ok := s.cfg.Registry.ClientByCert(cert.Subject.CommonName)
+	c, ok := s.cfg.Registry.ClientByCaller(id)
 	if !ok {
-		fail(w, http.StatusUnauthorized, "invalid_client", "The certificate is not registered at the Registry.")
-		return nil, "", false
+		fail(w, http.StatusUnauthorized, "invalid_client", fmt.Sprintf("%s is not registered at the Registry.", id))
+		return nil, false
 	}
-	if c.Role == "" || !slices.Contains(cert.Subject.OrganizationalUnit, c.Role) {
-		fail(w, http.StatusForbidden, "forbidden", "The certificate does not carry the role this client is registered with.")
-		return nil, "", false
-	}
-	return c, Thumbprint(cert.Raw), true
+	return c, true
 }
 
-func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*Client, string, bool) {
-	c, thumb, ok := s.caller(w, r)
+func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*Client, bool) {
+	c, ok := s.caller(w, r)
 	if !ok {
-		return nil, "", false
+		return nil, false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxForm)
 	if err := r.ParseForm(); err != nil {
 		fail(w, http.StatusBadRequest, "invalid_request", "The body must be a form.")
-		return nil, "", false
+		return nil, false
 	}
 	if id := r.PostForm.Get("client_id"); id != "" && id != c.ID {
-		fail(w, http.StatusUnauthorized, "invalid_client", "The client_id does not match the certificate.")
-		return nil, "", false
+		fail(w, http.StatusUnauthorized, "invalid_client", "The client_id does not match the Beerus-Caller header.")
+		return nil, false
 	}
 	if r.PostForm.Get("client_assertion_type") != assertionType {
 		fail(w, http.StatusUnauthorized, "invalid_client", "Authenticate with private_key_jwt.")
-		return nil, "", false
+		return nil, false
 	}
 	claims, err := Verify(r.PostForm.Get("client_assertion"), c.Keys)
 	if err != nil {
 		fail(w, http.StatusUnauthorized, "invalid_client", "The client assertion is not valid: "+err.Error()+".")
-		return nil, "", false
+		return nil, false
 	}
 	now := s.cfg.Clock.Real()
 	exp, _ := claims["exp"].(float64)
@@ -232,7 +224,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*Client, 
 	if claims["iss"] != c.ID || claims["sub"] != c.ID || !s.audience(claims["aud"]) || jti == "" ||
 		!assertionWindow(time.Unix(int64(exp), 0), now, s.currentTerms().AssertionLife) {
 		fail(w, http.StatusUnauthorized, "invalid_client", "The client assertion has the wrong issuer, audience or lifetime.")
-		return nil, "", false
+		return nil, false
 	}
 	s.mu.Lock()
 	for k, until := range s.jtis {
@@ -245,9 +237,9 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*Client, 
 	s.mu.Unlock()
 	if seen {
 		fail(w, http.StatusUnauthorized, "invalid_client", "The client assertion was already used.")
-		return nil, "", false
+		return nil, false
 	}
-	return c, thumb, true
+	return c, true
 }
 
 func (s *Server) audience(aud any) bool {
@@ -262,7 +254,7 @@ func (s *Server) audience(aud any) bool {
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := s.caller(w, r); !ok {
+	if _, ok := s.caller(w, r); !ok {
 		return
 	}
 	if err := s.cfg.Data.Ping(r.Context()); err != nil {
@@ -273,7 +265,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := s.caller(w, r); !ok {
+	if _, ok := s.caller(w, r); !ok {
 		return
 	}
 	i := s.cfg.Issuer
@@ -291,7 +283,6 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 		"code_challenge_methods_supported":                 []string{"S256"},
 		"token_endpoint_auth_methods_supported":            []string{"private_key_jwt"},
 		"token_endpoint_auth_signing_alg_values_supported": []string{"ES256"},
-		"tls_client_certificate_bound_access_tokens":       true,
 		"authorization_response_iss_parameter_supported":   true,
 		"scopes_supported":                                 Scopes,
 		"history_days":                                     s.cfg.HistoryDays,
@@ -299,7 +290,7 @@ func (s *Server) discover(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) par(w http.ResponseWriter, r *http.Request) {
-	c, _, ok := s.authenticate(w, r)
+	c, ok := s.authenticate(w, r)
 	if !ok {
 		return
 	}
@@ -524,7 +515,7 @@ func (s *Server) Retry(ctx context.Context, e Event, next time.Time) error {
 }
 
 func (s *Server) revokeConsent(w http.ResponseWriter, r *http.Request) {
-	client, _, ok := s.caller(w, r)
+	client, ok := s.caller(w, r)
 	if !ok {
 		return
 	}
@@ -721,21 +712,21 @@ func (s *Server) live(ctx context.Context, id string) (*Consent, error) {
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	s.sweep(r.Context())
-	c, thumb, ok := s.authenticate(w, r)
+	c, ok := s.authenticate(w, r)
 	if !ok {
 		return
 	}
 	switch r.PostForm.Get("grant_type") {
 	case "authorization_code":
-		s.codeGrant(w, r, c, thumb)
+		s.codeGrant(w, r, c)
 	case "refresh_token":
-		s.refreshGrant(w, r, c, thumb)
+		s.refreshGrant(w, r, c)
 	default:
 		fail(w, http.StatusBadRequest, "unsupported_grant_type", "Use authorization_code or refresh_token.")
 	}
 }
 
-func (s *Server) codeGrant(w http.ResponseWriter, r *http.Request, client *Client, thumb string) {
+func (s *Server) codeGrant(w http.ResponseWriter, r *http.Request, client *Client) {
 	f := r.PostForm
 	h := Hash(f.Get("code"))
 	s.mu.Lock()
@@ -771,21 +762,17 @@ func (s *Server) codeGrant(w http.ResponseWriter, r *http.Request, client *Clien
 			consentFail(w, "The consent is not active.", err)
 			return
 		}
-		s.issue(w, r, consent, client.ID, thumb, "code:"+h, random("fam_", 9))
+		s.issue(w, r, consent, client.ID, "code:"+h, random("fam_", 9))
 	}
 }
 
-func (s *Server) refreshGrant(w http.ResponseWriter, r *http.Request, client *Client, thumb string) {
+func (s *Server) refreshGrant(w http.ResponseWriter, r *http.Request, client *Client) {
 	ctx := r.Context()
 	h := Hash(r.PostForm.Get("refresh_token"))
 	tok, err := s.cfg.Store.Token(ctx, h)
 	now := s.cfg.Clock.Real()
 	if err != nil || tok.Kind != "refresh" || tok.Revoked || tok.ClientID != client.ID || lapsed(now, tok.ExpiresAt) {
 		fail(w, http.StatusBadRequest, "invalid_grant", "The refresh token is not valid.")
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(tok.Thumbprint), []byte(thumb)) != 1 {
-		fail(w, http.StatusBadRequest, "invalid_grant", "The refresh token is bound to another certificate.")
 		return
 	}
 	consent, err := s.live(ctx, tok.ConsentID)
@@ -807,10 +794,10 @@ func (s *Server) refreshGrant(w http.ResponseWriter, r *http.Request, client *Cl
 		}
 		_ = s.cfg.Store.RevokeChildren(ctx, h)
 	}
-	s.issue(w, r, consent, client.ID, thumb, h, tok.Family)
+	s.issue(w, r, consent, client.ID, h, tok.Family)
 }
 
-func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clientID, thumb, parent, family string) {
+func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clientID, parent, family string) {
 	now := s.cfg.Clock.Real()
 	access, refresh := random("oba_", 24), random("obr_", 24)
 	terms := s.currentTerms()
@@ -819,7 +806,7 @@ func (s *Server) issue(w http.ResponseWriter, r *http.Request, c *Consent, clien
 		{Hash: Hash(access), Kind: "access", ExpiresAt: accessUntil},
 		{Hash: Hash(refresh), Kind: "refresh", ExpiresAt: refreshUntil},
 	} {
-		t.ConsentID, t.ClientID, t.Thumbprint, t.Family, t.Parent, t.CreatedAt = c.ID, clientID, thumb, family, parent, now
+		t.ConsentID, t.ClientID, t.Family, t.Parent, t.CreatedAt = c.ID, clientID, family, parent, now
 		if err := s.cfg.Store.PutToken(r.Context(), t); err != nil {
 			fail(w, http.StatusInternalServerError, "server_error", "Something went wrong.")
 			return

@@ -3,9 +3,9 @@ package contracttest
 import (
 	"context"
 	"crypto/ecdsa"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"slices"
@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 )
 
@@ -215,7 +216,7 @@ func mustSigningKey(t *testing.T, s *Stack) *ecdsa.PrivateKey {
 	return k
 }
 
-func TestConsentEventsAreSignedWithTheEventKey(t *testing.T) {
+func TestConsentEventsNeedAKnownBank(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an in-process stack")
 	}
@@ -225,26 +226,41 @@ func TestConsentEventsAreSignedWithTheEventKey(t *testing.T) {
 	if err := s.bankDB("bank-a").QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
 		t.Fatal(err)
 	}
-	tlsRaw, err := os.ReadFile(s.cfg.Path("banks", "bank-a", "server.key"))
-	if err != nil {
-		t.Fatal(err)
+	aURL, bURL, widget := s.cfg.Bank("bank-a").APIURL(), s.cfg.Bank("bank-b").APIURL(), s.cfg.WidgetURL()
+	event := func(iss, aud, jti string) string {
+		return fmt.Sprintf(`{"iss":%q,"aud":%q,"jti":%q,"exp":%d,"consent_id":%q,"status":"Revoked"}`, iss, aud, jti, time.Now().Add(time.Minute).Unix(), consentID)
 	}
-	block, _ := pem.Decode(tlsRaw)
-	k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
+	invalid := `"code":"invalid_request","message":"The event is not valid."`
+	rows := []struct {
+		name   string
+		caller string
+		body   string
+		status int
+		want   string
+	}{
+		{"no caller", "", event(aURL, widget, "j1"), http.StatusUnauthorized, `"code":"unauthenticated","message":"Send your ID in the Beerus-Caller header."`},
+		{"an unknown bank", "bank-z", event(aURL, widget, "j2"), http.StatusForbidden, `"code":"forbidden","message":"bank-z is not a bank Connect knows."`},
+		{"bank-a naming bank-b as issuer", "bank-a", event(bURL, widget, "j3"), http.StatusBadRequest, invalid},
+		{"bank-a naming another audience", "bank-a", event(aURL, "http://other.localhost", "j4"), http.StatusBadRequest, invalid},
+		{"bank-b reporting a consent of bank-a", "bank-b", event(bURL, widget, "j5"), http.StatusNoContent, ""},
 	}
-	forged, err := openbanking.Sign(k.(*ecdsa.PrivateKey), "bank-a", map[string]any{"iss": s.cfg.Bank("bank-a").APIURL(), "aud": s.cfg.WidgetURL(), "jti": "tls-key", "exp": time.Now().Add(time.Minute).Unix(), "consent_id": consentID, "status": "Revoked"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := s.raw.Post(s.cfg.WidgetURL()+"/consent-events", "application/secevent+jwt", strings.NewReader(forged))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode < 400 {
-		t.Fatalf("an event signed with the bank's TLS key was accepted: %d", resp.StatusCode)
+	for _, r := range rows {
+		req, err := http.NewRequest(http.MethodPost, widget+"/consent-events", strings.NewReader(r.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.caller != "" {
+			req.Header.Set(config.CallerHeader, r.caller)
+		}
+		resp, err := s.raw.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != r.status || !strings.Contains(string(body), r.want) {
+			t.Fatalf("%s: %d %s %v, want %d containing %s", r.name, resp.StatusCode, body, err, r.status, r.want)
+		}
 	}
 	if got := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200); got.JSON["status"] != "active" {
 		t.Fatalf("status %v", got.JSON["status"])
@@ -262,19 +278,15 @@ func TestConsentEventsAreKeptAndRetried(t *testing.T) {
 	if err := db.QueryRow(context.Background(), `SELECT id FROM ob_consents WHERE status = 'Authorised' AND partner_id = 'balance'`).Scan(&consentID); err != nil {
 		t.Fatal(err)
 	}
-	cert := s.cfg.Path("banks", "bank-a", "events.crt")
-	if err := os.Rename(cert, cert+".off"); err != nil {
-		t.Fatal(err)
-	}
-	b := s.bankSignIn("adaeze")
-	b.post("/apps/"+consentID+"/revoke", map[string][]string{})
-	var waiting, attempts int
-	if err := db.QueryRow(context.Background(), `SELECT count(*), coalesce(max(attempts), 0) FROM ob_events WHERE delivered_at IS NULL AND consent_id = $1 AND status = 'Revoked'`, consentID).Scan(&waiting, &attempts); err != nil || waiting != 1 || attempts != 1 {
-		t.Fatalf("the undelivered revoke event: %d waiting, %d attempts, %v", waiting, attempts, err)
-	}
-	if err := os.Rename(cert+".off", cert); err != nil {
-		t.Fatal(err)
-	}
+	s.whileConnectIsDown(func() {
+		b := s.bankSignIn("adaeze")
+		b.post("/apps/"+consentID+"/revoke", map[string][]string{})
+		var waiting, attempts int
+		waitFor(t, waitLimit, "the revoke event to fail once", func() bool {
+			err := db.QueryRow(context.Background(), `SELECT count(*), coalesce(max(attempts), 0) FROM ob_events WHERE delivered_at IS NULL AND consent_id = $1 AND status = 'Revoked'`, consentID).Scan(&waiting, &attempts)
+			return err == nil && waiting == 1 && attempts >= 1
+		})
+	})
 	var left, delivered int
 	var err error
 	waitFor(t, waitLimit, "the revoke event to be delivered again", func() bool {

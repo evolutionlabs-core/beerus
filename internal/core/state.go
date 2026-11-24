@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/evolutionlabs-core/beerus/internal/control"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/disk"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
@@ -58,5 +58,5 @@ func saveJSON(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create directory for %s: %w", path, err)
 	}
-	return pki.WriteFile(path, b, 0o600)
+	return disk.Write(path, b, 0o600)
 }

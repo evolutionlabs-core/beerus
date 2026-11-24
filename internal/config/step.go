@@ -8,7 +8,7 @@ const (
 	StepDatabase          = "database"
 	StepLedgerSchema      = "ledger_schema"
 	StepOpenBankingSchema = "openbanking_schema"
-	StepCerts             = "certs"
+	StepFiles             = "files"
 	StepCBN               = "cbn"
 	StepSite              = "site"
 	StepAPI               = "api"
@@ -26,7 +26,7 @@ func BankSteps() []BankStep {
 		{StepDatabase, "Creating the bank database"},
 		{StepLedgerSchema, "Migrating bank ledger"},
 		{StepOpenBankingSchema, "Migrating open banking"},
-		{StepCerts, "Issuing certificates"},
+		{StepFiles, "Writing the bank files"},
 		{StepCBN, "Opening the CBN settlement account"},
 		{StepSite, "Starting online banking"},
 		{StepAPI, "Starting the open banking API"},

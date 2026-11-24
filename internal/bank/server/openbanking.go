@@ -21,7 +21,7 @@ const dataPingTimeout = 3 * time.Second
 
 type Registrar interface {
 	RegistryClient(id string) (*openbanking.RegistryClient, bool)
-	RegistryClientByCert(cn string) (*openbanking.RegistryClient, bool)
+	RegistryClientByCaller(id string) (*openbanking.RegistryClient, bool)
 }
 
 type OpenConfig struct {
@@ -86,8 +86,8 @@ func (r registryView) Client(id string) (*openbanking.Client, bool) {
 	return r.convert(c)
 }
 
-func (r registryView) ClientByCert(cn string) (*openbanking.Client, bool) {
-	c, ok := r.src.RegistryClientByCert(cn)
+func (r registryView) ClientByCaller(id string) (*openbanking.Client, bool) {
+	c, ok := r.src.RegistryClientByCaller(id)
 	if !ok {
 		return nil, false
 	}

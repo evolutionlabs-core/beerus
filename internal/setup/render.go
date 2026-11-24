@@ -30,7 +30,7 @@ var stepParts = map[string]string{
 	config.StepDatabase:          "database",
 	config.StepLedgerSchema:      "ledger schema",
 	config.StepOpenBankingSchema: "open banking schema",
-	config.StepCerts:             "certificates",
+	config.StepFiles:             "bank files",
 	config.StepCBN:               "CBN member",
 	config.StepSite:              "site",
 	config.StepAPI:               "API",

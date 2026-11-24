@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 )
 
@@ -65,7 +66,10 @@ func checkClient(c openbanking.RegistryClient) error {
 		return invalid("client %s needs a name and a legal_name", c.ID)
 	}
 	if c.CertCN == "" {
-		return invalid("client %s needs a cert_cn: the common name of its certificate", c.ID)
+		return invalid("client %s needs a cert_cn: the ID it sends in the Beerus-Caller header", c.ID)
+	}
+	if c.CertCN == config.NIBSSID || c.CertCN == config.CBNID {
+		return invalid("client %s cert_cn %s belongs to a Beerus participant. Use another cert_cn", c.ID, c.CertCN)
 	}
 	if c.Role != aggregatorRole {
 		return invalid("client %s role must be %s, not %q", c.ID, aggregatorRole, c.Role)
@@ -138,10 +142,10 @@ func (s *Store) EnsureClient(ctx context.Context, c openbanking.RegistryClient, 
 		var holder string
 		err = tx.QueryRow(ctx, `SELECT client_id FROM registry_clients WHERE cert_cn = $1`, c.CertCN).Scan(&holder)
 		if err == nil {
-			return &RegistryConflictError{Message: fmt.Sprintf("certificate name %s already belongs to client %s", c.CertCN, holder), Hint: "Use another cert_cn."}
+			return &RegistryConflictError{Message: fmt.Sprintf("cert_cn %s already belongs to client %s", c.CertCN, holder), Hint: "Use another cert_cn."}
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("look up certificate name %s: %w", c.CertCN, err)
+			return fmt.Errorf("look up cert_cn %s: %w", c.CertCN, err)
 		}
 		out, err = scanClient(tx.QueryRow(ctx, `
 INSERT INTO registry_clients (`+clientCols+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)

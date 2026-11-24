@@ -38,7 +38,7 @@ type cbnDesk struct {
 }
 
 func (d cbnDesk) client() CBNClient {
-	return CBNClient{Base: "https://cbn.invalid", Away: "Bank A cannot reach the CBN right now. Try again in a minute.", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+	return CBNClient{Base: "http://cbn.invalid", Away: "Bank A cannot reach the CBN right now. Try again in a minute.", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		var body any = cbnPostingPage{Data: append([]cbnPosting{}, d.postings...)}
 		if strings.HasSuffix(r.URL.Path, "/settlement-balance") {
 			body = map[string]int64{"balance_minor": d.balance}
@@ -52,7 +52,7 @@ func (d cbnDesk) client() CBNClient {
 }
 
 func (d *nibssDesk) client() NIBSSClient {
-	return NIBSSClient{Base: "https://nibss.invalid", Away: "Bank A cannot reach NIBSS right now. Try again in a minute.", HTTP: &http.Client{Transport: roundTrip(d.serve)}}
+	return NIBSSClient{Base: "http://nibss.invalid", Away: "Bank A cannot reach NIBSS right now. Try again in a minute.", HTTP: &http.Client{Transport: roundTrip(d.serve)}}
 }
 
 func (d *nibssDesk) serve(r *http.Request) (*http.Response, error) {

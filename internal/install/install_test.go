@@ -60,7 +60,7 @@ func TestInstall(t *testing.T) {
 		"Checking Postgres||ok",
 		"Writing config||ok",
 		"Reserving CBN and NIBSS database names||ok",
-		"Preparing CBN ports and certificates||ok",
+		"Preparing CBN ports||ok",
 	}
 	resumed := slices.Clone(freshLines)
 	resumed[1] = "Writing config|already written|ok"
@@ -84,13 +84,13 @@ func TestInstall(t *testing.T) {
 			wantResume:  resumed,
 		},
 		{
-			name:        "resume after Preparing CBN ports and certificates fails",
+			name:        "resume after Preparing CBN ports fails",
 			cancelAfter: "Reserving CBN and NIBSS database names",
 			wantFirst: []string{
 				"Checking Postgres||ok",
 				"Writing config||ok",
 				"Reserving CBN and NIBSS database names||ok",
-				"Preparing CBN ports and certificates||failed",
+				"Preparing CBN ports||failed",
 			},
 			wantFirstEr: "context canceled",
 			wantResume:  resumed,

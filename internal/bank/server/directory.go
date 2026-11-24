@@ -2,20 +2,17 @@ package server
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 const (
@@ -36,52 +33,13 @@ func (s *Server) Directory() []*config.Bank {
 	return s.dirBanks
 }
 
-func (s *Server) directoryClient() (*http.Client, error) {
-	s.dirMu.Lock()
-	have := s.dirClient
-	s.dirMu.Unlock()
-	if have != nil {
-		return have, nil
-	}
-	built, err := NIBSSHTTP(s.dir, s.id)
-	if err != nil {
-		return nil, err
-	}
-	s.dirMu.Lock()
-	defer s.dirMu.Unlock()
-	if s.dirClient == nil {
-		s.dirClient = built
-	}
-	return s.dirClient, nil
+func NIBSSHTTP() *http.Client {
+	return peerHTTP(nil)
 }
 
-func NIBSSHTTP(dir, id string) (*http.Client, error) {
-	return peerHTTP(dir, id, config.NIBSSHost, nil)
-}
-
-func peerHTTP(dir, id, host string, dial func(context.Context, string, string) (net.Conn, error)) (*http.Client, error) {
-	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "banks", id, "client.crt"), filepath.Join(dir, "banks", id, "client.key"))
-	if err != nil {
-		return nil, fmt.Errorf("load bank client certificate: %w", err)
-	}
-	pool, err := pki.LoadPool(filepath.Join(dir, "banks", id, config.BankCAFile))
-	if err != nil {
-		return nil, err
-	}
-	tc := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      pool,
-		ServerName:   host,
-		MinVersion:   tls.VersionTLS12,
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 || cs.PeerCertificates[0].Subject.CommonName != host {
-				return fmt.Errorf("the server presented another certificate identity than %s", host)
-			}
-			return nil
-		},
-	}
+func peerHTTP(dial func(context.Context, string, string) (net.Conn, error)) *http.Client {
 	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &http.Client{Timeout: directoryTimeout, CheckRedirect: noRedirect, Transport: &http.Transport{TLSClientConfig: tc, IdleConnTimeout: directoryIdle, MaxIdleConnsPerHost: 1, DialContext: dial}}, nil
+	return &http.Client{Timeout: directoryTimeout, CheckRedirect: noRedirect, Transport: &http.Transport{IdleConnTimeout: directoryIdle, MaxIdleConnsPerHost: 1, DialContext: dial}}
 }
 
 func (s *Server) nibssBase() (string, error) {
@@ -92,7 +50,7 @@ func (s *Server) nibssBase() (string, error) {
 	if s.nibssPort == 0 {
 		return "", fmt.Errorf("%s sets no nibss_port", config.BankFilePath(s.dir, s.id))
 	}
-	return "https://" + net.JoinHostPort(core.Hostname(), strconv.Itoa(s.nibssPort)), nil
+	return "http://" + net.JoinHostPort(core.Hostname(), strconv.Itoa(s.nibssPort)), nil
 }
 
 func (s *Server) directoryFetch(ctx context.Context, c NIBSSClient, cursor string) (directoryAnswer, error) {

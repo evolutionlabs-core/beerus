@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/disk"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 type Partner struct {
@@ -29,18 +29,15 @@ type Partner struct {
 	Name         string   `yaml:"name"`
 	LegalName    string   `yaml:"legal_name"`
 	Purpose      string   `yaml:"purpose"`
-	CertCN       string   `yaml:"cert_cn"`
 	APIKeySHA256 string   `yaml:"api_key_sha256"`
 	RedirectURIs []string `yaml:"redirect_uris"`
 	WebhookURL   string   `yaml:"webhook_url"`
-	CertSHA256   string   `yaml:"cert_sha256"`
 }
 
 type Connect struct {
 	Host               string `yaml:"host"`
 	PartnerPort        int    `yaml:"partner_port"`
 	WidgetPort         int    `yaml:"widget_port"`
-	WidgetTLS          bool   `yaml:"widget_tls"`
 	ControlPort        int    `yaml:"control_port"`
 	HealthPort         int    `yaml:"health_port"`
 	NIBSSPort          int    `yaml:"nibss_port"`
@@ -101,7 +98,7 @@ func BankHost(id string) string {
 }
 
 func (b *Bank) APIURL() string {
-	return fmt.Sprintf("https://%s:%d", BankHost(b.ID), b.APIPort)
+	return fmt.Sprintf("http://%s:%d", BankHost(b.ID), b.APIPort)
 }
 
 func (b *Bank) Style() string {
@@ -200,15 +197,6 @@ func dur(s string, def time.Duration) time.Duration {
 	return d
 }
 
-func (c *Config) PartnerByCN(cn string) *Partner {
-	for _, p := range c.Partners {
-		if p.CertCN == cn {
-			return p
-		}
-	}
-	return nil
-}
-
 func (c *Config) Partner(id string) *Partner {
 	for _, p := range c.Partners {
 		if p.ID == id {
@@ -219,15 +207,11 @@ func (c *Config) Partner(id string) *Partner {
 }
 
 func (c *Config) PartnerURL() string {
-	return fmt.Sprintf("https://%s:%d", c.Connect.Host, c.Connect.PartnerPort)
+	return fmt.Sprintf("http://%s:%d", c.Connect.Host, c.Connect.PartnerPort)
 }
 
 func (c *Config) WidgetURL() string {
-	scheme := "http"
-	if c.Connect.WidgetTLS {
-		scheme = "https"
-	}
-	return fmt.Sprintf("%s://%s:%d", scheme, c.Connect.Host, c.Connect.WidgetPort)
+	return fmt.Sprintf("http://%s:%d", c.Connect.Host, c.Connect.WidgetPort)
 }
 
 func (c *Config) Bank(id string) *Bank {
@@ -273,14 +257,14 @@ func randomToken(prefix string, n int) (string, error) {
 	return prefix + strings.TrimRight(base64.RawURLEncoding.EncodeToString(b), "="), nil
 }
 
-func Prepare(c *Config, now time.Time) error {
-	for _, sub := range []string{"ca", "connect", "partners", "webhook"} {
+func Prepare(c *Config) error {
+	for _, sub := range []string{"connect", "partners", "webhook"} {
 		if err := os.MkdirAll(c.Path(sub), 0o700); err != nil {
 			return fmt.Errorf("create %s: %w", sub, err)
 		}
 	}
-	if err := c.EnsureCertificates(now); err != nil {
-		return fmt.Errorf("issue certificates: %w", err)
+	if _, err := c.SigningKey(); err != nil {
+		return fmt.Errorf("load signing key: %w", err)
 	}
 	if _, err := WebhookKey(c); err != nil {
 		return fmt.Errorf("webhook key: %w", err)
@@ -303,175 +287,15 @@ func NewAPIKey() (string, error) {
 }
 
 func WriteSecret(path, body string) error {
-	return pki.WriteFile(path, []byte(body), 0o600)
+	return disk.Write(path, []byte(body), 0o600)
 }
 
 const (
-	leafLife = 90 * 24 * time.Hour
-	caLife   = 10 * 365 * 24 * time.Hour
+	ConnectID      = "connect"
+	AggregatorRole = "aggregator"
+
+	CallerHeader = "Beerus-Caller"
 )
-
-func (c *Config) EnsureCertificates(now time.Time) error {
-	root, err := loadOrCreateCA(c.Path("ca"), "root", "Beerus CBN Trust Anchor")
-	if err != nil {
-		return fmt.Errorf("load root authority: %w", err)
-	}
-	partnerCA, err := loadOrCreateCA(c.Path("ca"), "connect-partners", "Beerus Connect Partner CA")
-	if err != nil {
-		return fmt.Errorf("load partner authority: %w", err)
-	}
-	server := c.Path("connect", "server.crt")
-	if pki.NeedsRenewal(server, now) {
-		leaf, err := root.IssueServer([]string{c.Connect.Host, "localhost"}, leafLife)
-		if err != nil {
-			return fmt.Errorf("issue connect server certificate: %w", err)
-		}
-		if err := leaf.Save(c.Path("connect"), "server"); err != nil {
-			return fmt.Errorf("save connect server certificate: %w", err)
-		}
-	}
-	if err := c.ensureOpenBanking(root, now); err != nil {
-		return fmt.Errorf("ensure open banking certificates: %w", err)
-	}
-	for _, p := range c.Partners {
-		dir := c.Path("partners", p.ID)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("create partner dir %s: %w", dir, err)
-		}
-		if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
-			leaf, err := partnerCA.IssueClient(p.CertCN, "partner", leafLife)
-			if err != nil {
-				return fmt.Errorf("issue certificate for partner %s: %w", p.ID, err)
-			}
-			if err := leaf.Save(dir, "client"); err != nil {
-				return fmt.Errorf("save certificate for partner %s: %w", p.ID, err)
-			}
-		}
-		fp, err := pki.FileThumbprint(filepath.Join(dir, "client.crt"))
-		if err != nil {
-			return fmt.Errorf("fingerprint certificate for partner %s: %w", p.ID, err)
-		}
-		p.CertSHA256 = fp
-		if err := pki.WriteFile(filepath.Join(dir, "ca.crt"), root.PEM, 0o644); err != nil {
-			return fmt.Errorf("save root certificate for partner %s: %w", p.ID, err)
-		}
-	}
-	return nil
-}
-
-const (
-	AggregatorCN    = "beerus-connect"
-	AggregatorRole  = "aggregator"
-	NIBSSCN         = "beerus-nibss"
-	NIBSSRole       = "nibss"
-	NIBSSHost       = "nibss.localhost"
-	BankRole        = "bank"
-	EventSignerName = "events"
-	EventSignerRole = "event-signer"
-)
-
-func (c *Config) ensureOpenBanking(root *pki.Authority, now time.Time) error {
-	dir := c.Path("connect")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create connect dir: %w", err)
-	}
-	if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
-		leaf, err := root.IssueClient(AggregatorCN, AggregatorRole, leafLife)
-		if err != nil {
-			return fmt.Errorf("issue aggregator certificate: %w", err)
-		}
-		if err := leaf.Save(dir, "client"); err != nil {
-			return fmt.Errorf("save aggregator certificate: %w", err)
-		}
-	}
-	if err := c.ensureNIBSS(root, now); err != nil {
-		return err
-	}
-	if _, err := c.SigningKey(); err != nil {
-		return fmt.Errorf("load signing key: %w", err)
-	}
-	if err := c.EnsureBankCertificates(root, now); err != nil {
-		return fmt.Errorf("ensure bank certificates: %w", err)
-	}
-	return nil
-}
-
-func (c *Config) ensureNIBSS(root *pki.Authority, now time.Time) error {
-	dir := c.Path("nibss")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create nibss dir: %w", err)
-	}
-	if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
-		leaf, err := root.IssueServer([]string{NIBSSHost, "localhost"}, leafLife)
-		if err != nil {
-			return fmt.Errorf("issue NIBSS server certificate: %w", err)
-		}
-		if err := leaf.Save(dir, "server"); err != nil {
-			return fmt.Errorf("save NIBSS server certificate: %w", err)
-		}
-	}
-	if !pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
-		return nil
-	}
-	leaf, err := root.IssueClient(NIBSSCN, NIBSSRole, leafLife)
-	if err != nil {
-		return fmt.Errorf("issue NIBSS client certificate: %w", err)
-	}
-	if err := leaf.Save(dir, "client"); err != nil {
-		return fmt.Errorf("save NIBSS client certificate: %w", err)
-	}
-	return nil
-}
-
-func (c *Config) EnsureBankCertificates(root *pki.Authority, now time.Time) error {
-	if root == nil {
-		var err error
-		if root, err = pki.LoadAuthority(c.Path("ca"), "root"); err != nil {
-			return fmt.Errorf("load root authority: %w", err)
-		}
-	}
-	for _, b := range c.Banks {
-		if err := c.ensureBankCerts(root, b, now); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *Config) ensureBankCerts(root *pki.Authority, b *Bank, now time.Time) error {
-	dir := c.Path("banks", b.ID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create bank dir %s: %w", dir, err)
-	}
-	if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
-		leaf, err := root.IssueServer([]string{BankHost(b.ID), "localhost"}, leafLife)
-		if err != nil {
-			return fmt.Errorf("issue server certificate for bank %s: %w", b.ID, err)
-		}
-		if err := leaf.Save(dir, "server"); err != nil {
-			return fmt.Errorf("save server certificate for bank %s: %w", b.ID, err)
-		}
-	}
-	if pki.NeedsRenewal(filepath.Join(dir, "client.crt"), now) {
-		leaf, err := root.IssueClient(b.ID, BankRole, leafLife)
-		if err != nil {
-			return fmt.Errorf("issue client certificate for bank %s: %w", b.ID, err)
-		}
-		if err := leaf.Save(dir, "client"); err != nil {
-			return fmt.Errorf("save client certificate for bank %s: %w", b.ID, err)
-		}
-	}
-	if pki.NeedsRenewal(filepath.Join(dir, EventSignerName+".crt"), now) {
-		leaf, err := root.IssueSigner(b.ID+"-events", EventSignerRole, leafLife)
-		if err != nil {
-			return fmt.Errorf("issue event signer for bank %s: %w", b.ID, err)
-		}
-		if err := leaf.Save(dir, EventSignerName); err != nil {
-			return fmt.Errorf("save event signer for bank %s: %w", b.ID, err)
-		}
-	}
-	return nil
-}
 
 func (c *Config) SigningKey() (*ecdsa.PrivateKey, error) {
 	path := c.Path("connect", "ob-signing.key")
@@ -501,24 +325,10 @@ func (c *Config) SigningKey() (*ecdsa.PrivateKey, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create signing key dir: %w", err)
 	}
-	if err := pki.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+	if err := disk.Write(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
 		return nil, fmt.Errorf("save signing key: %w", err)
 	}
 	return key, nil
-}
-
-func loadOrCreateCA(dir, name, cn string) (*pki.Authority, error) {
-	if a, err := pki.LoadAuthority(dir, name); err == nil {
-		return a, nil
-	}
-	a, err := pki.NewAuthority(cn, caLife)
-	if err != nil {
-		return nil, fmt.Errorf("create authority %s: %w", name, err)
-	}
-	if err := a.Save(dir, name); err != nil {
-		return nil, fmt.Errorf("save authority %s: %w", name, err)
-	}
-	return a, nil
 }
 
 type SigningKey struct {
@@ -558,10 +368,10 @@ func WebhookKey(c *Config) (SigningKey, error) {
 		return SigningKey{}, fmt.Errorf("generate webhook key id: %w", err)
 	}
 	k := SigningKey{ID: id, Private: priv}
-	if err := pki.WriteFile(path, []byte(id+" "+k.SecretWH()+"\n"), 0o600); err != nil {
+	if err := disk.Write(path, []byte(id+" "+k.SecretWH()+"\n"), 0o600); err != nil {
 		return SigningKey{}, fmt.Errorf("save webhook signing key: %w", err)
 	}
-	if err := pki.WriteFile(c.Path("webhook", "public.key"), []byte(k.PublicWH()+"\n"), 0o644); err != nil {
+	if err := disk.Write(c.Path("webhook", "public.key"), []byte(k.PublicWH()+"\n"), 0o644); err != nil {
 		return SigningKey{}, fmt.Errorf("save webhook public key: %w", err)
 	}
 	return k, nil

@@ -2,13 +2,11 @@ package participant
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
-	"slices"
 	"strconv"
 	"sync"
 
@@ -43,32 +41,21 @@ func (p *Participant) admit(w http.ResponseWriter, r *http.Request, action strin
 }
 
 func (p *Participant) identify(w http.ResponseWriter, r *http.Request, action string) (string, bool) {
-	identity, roles, ok := callerIdentity(r)
-	if !ok {
-		web.WriteError(w, r, http.StatusForbidden, "forbidden", "This certificate may not "+action+". Only banks may.")
+	identity := r.Header.Get(config.CallerHeader)
+	if identity == "" {
+		web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", fmt.Sprintf("Send your ID in the %s header to %s.", config.CallerHeader, action))
 		return "", false
 	}
-	admitted := false
-	if slices.Contains(roles, config.BankRole) {
-		var err error
-		if admitted, err = p.store.Admits(r.Context(), identity); err != nil {
-			p.log.ErrorContext(r.Context(), "certificate identity not checked", "err", err)
-			web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "NIBSS is not available right now. Try again soon.")
-			return "", false
-		}
+	admitted, err := p.store.Admits(r.Context(), identity)
+	if err != nil {
+		p.log.ErrorContext(r.Context(), "caller not checked", "err", err)
+		web.WriteError(w, r, http.StatusServiceUnavailable, "unavailable", "NIBSS is not available right now. Try again soon.")
+		return "", false
 	}
 	if !admitted {
-		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("This certificate may not %s. %s is not a bank NIBSS knows.", action, identity))
+		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not %s. It is not a bank NIBSS knows.", identity, action))
 	}
 	return identity, admitted
-}
-
-func callerIdentity(r *http.Request) (string, []string, bool) {
-	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
-		return "", nil, false
-	}
-	leaf := r.TLS.PeerCertificates[0]
-	return leaf.Subject.CommonName, leaf.Subject.OrganizationalUnit, true
 }
 
 func (p *Participant) listen(port int) ([]net.Listener, error) {
@@ -119,11 +106,8 @@ func (p *Participant) Serve(ctx context.Context) error {
 		p.runSettlement(runCtx)
 	}()
 	failed := make(chan error, len(dirLn)+len(ctlLn))
-	serve := func(s *http.Server, ls []net.Listener, tc *tls.Config) {
+	serve := func(s *http.Server, ls []net.Listener) {
 		for _, ln := range ls {
-			if tc != nil {
-				ln = tls.NewListener(ln, tc)
-			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -133,8 +117,8 @@ func (p *Participant) Serve(ctx context.Context) error {
 			}()
 		}
 	}
-	serve(servers[0], dirLn, p.tls)
-	serve(servers[1], ctlLn, nil)
+	serve(servers[0], dirLn)
+	serve(servers[1], ctlLn)
 	var serr error
 	select {
 	case <-ctx.Done():

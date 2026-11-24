@@ -3,7 +3,6 @@ package participant
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -19,7 +17,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nibss"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 const (
@@ -57,37 +54,14 @@ type bankName struct {
 	AccountName  string `json:"account_name"`
 }
 
-func newBankCaller(own string, remote bool, timeout time.Duration) (*bankCaller, error) {
-	pool, err := pki.LoadPool(filepath.Join(own, config.NIBSSCAFile))
-	if err != nil {
-		return nil, err
-	}
-	certPath, keyPath := filepath.Join(own, "client.crt"), filepath.Join(own, "client.key")
-	tc := &tls.Config{
-		RootCAs:    pool,
-		MinVersion: tls.VersionTLS12,
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 || cs.PeerCertificates[0].Subject.CommonName != cs.ServerName {
-				return fmt.Errorf("bank at %s presented another certificate identity", cs.ServerName)
-			}
-			return nil
-		},
-		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			pair, err := tls.LoadX509KeyPair(certPath, keyPath)
-			if err != nil {
-				return nil, fmt.Errorf("load NIBSS client certificate: %w", err)
-			}
-			return &pair, nil
-		},
-	}
+func newBankCaller(remote bool, timeout time.Duration) *bankCaller {
 	tr := &http.Transport{
-		TLSClientConfig:     tc,
 		IdleConnTimeout:     bankIdleTimeout,
 		MaxIdleConnsPerHost: bankIdleConns,
 		DialContext:         localDial(remote),
 	}
 	redirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &bankCaller{client: &http.Client{Timeout: timeout, Transport: tr, CheckRedirect: redirect}}, nil
+	return &bankCaller{client: &http.Client{Timeout: timeout, Transport: tr, CheckRedirect: redirect}}
 }
 
 func localDial(remote bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -103,8 +77,8 @@ func localDial(remote bool) func(ctx context.Context, network, addr string) (net
 
 func (c *bankCaller) call(ctx context.Context, m nibss.Member, method, path string, in any) (int, []byte, error) {
 	u, err := url.Parse(m.CreditURL)
-	if err != nil || u.Hostname() != config.BankHost(m.CertificateIdentity) {
-		return 0, nil, fmt.Errorf("credit_url of %s is not the host of %s", m.ID, m.CertificateIdentity)
+	if err != nil || u.Hostname() != config.BankHost(m.CallerID) {
+		return 0, nil, fmt.Errorf("credit_url of %s is not the host of %s", m.ID, m.CallerID)
 	}
 	var body io.Reader
 	if in != nil {
@@ -118,6 +92,7 @@ func (c *bankCaller) call(ctx context.Context, m nibss.Member, method, path stri
 	if err != nil {
 		return 0, nil, fmt.Errorf("build the call to %s: %w", m.ID, err)
 	}
+	req.Header.Set(config.CallerHeader, config.NIBSSID)
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

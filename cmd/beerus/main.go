@@ -147,12 +147,12 @@ func printInfo(c *config.Config) error {
 		return err
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintf(w, "Partner API\t%s\t(mTLS + X-Api-Key)\n", c.PartnerURL())
+	fmt.Fprintf(w, "Partner API\t%s\t(X-Api-Key)\n", c.PartnerURL())
 	fmt.Fprintf(w, "Connect widget\t%s\n", c.WidgetURL())
 	for _, b := range c.Banks {
 		fmt.Fprintf(w, "%s online banking\t%s\t(database %s)\n", b.Name, b.URL(), b.Database)
 		if b.APIPort != 0 {
-			fmt.Fprintf(w, "%s open banking API\t%s\t(mTLS)\n", b.Name, b.APIURL())
+			fmt.Fprintf(w, "%s open banking API\t%s\n", b.Name, b.APIURL())
 		}
 	}
 	fmt.Fprintf(w, "Control API\t%s\t(Bearer token in %s)\n", c.ControlURL(), c.Path("control-token"))
@@ -390,7 +390,7 @@ func cmdRegistry(args []string) error {
 
 func cmdRegistryAdd(args []string) error {
 	fs := flag.NewFlagSet("registry add-client", flag.ContinueOnError)
-	cn := fs.String("cert-cn", "", "common name (`CN`) of the client's mTLS certificate")
+	cn := fs.String("cert-cn", "", "`ID` the client sends in the Beerus-Caller header")
 	keyFile := fs.String("public-key", "", "PEM `file` with the client's EC P-256 public key, used to check its private_key_jwt")
 	name := fs.String("name", "", "brand name")
 	legal := fs.String("legal-name", "", "legal `name`")

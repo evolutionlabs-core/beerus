@@ -2,17 +2,14 @@ package participant
 
 import (
 	"context"
-	"crypto/tls"
 	"github.com/evolutionlabs-core/beerus/internal/control"
 	"net"
 	"net/http"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/server"
 	"github.com/evolutionlabs-core/beerus/internal/bank/site"
-	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
 )
 
@@ -53,7 +50,7 @@ func (p *Participant) startProvisioning() error {
 		return err
 	}
 	l := &listeners{site: &http.Server{Handler: p.provisioningHandler(), ReadHeaderTimeout: headerTimeout}}
-	l.serve(l.site, siteLn, nil)
+	l.serve(l.site, siteLn)
 	p.mu.Lock()
 	p.serving = l
 	p.mu.Unlock()
@@ -99,10 +96,6 @@ func (p *Participant) start(ctx context.Context) error {
 		p.log.Error("open banking requests not cleared", "bank", p.id, "err", err)
 	}
 	b := p.srv.Bank()
-	tc, err := server.OpenAPITLS(p.dir, p.id, filepath.Join(p.dir, "banks", p.id, config.BankCAFile))
-	if err != nil {
-		return err
-	}
 	siteLn, err := p.link.Listen(b.Port)
 	if err != nil {
 		return err
@@ -116,8 +109,8 @@ func (p *Participant) start(ctx context.Context) error {
 		site: &http.Server{Handler: p.handler(ob), ReadHeaderTimeout: headerTimeout},
 		api:  &http.Server{Handler: server.OpenAPI(p.srv, ob, p.log), ReadHeaderTimeout: headerTimeout, ReadTimeout: apiReadLimit, WriteTimeout: apiWriteLimit, IdleTimeout: apiIdle, ErrorLog: control.ErrorLog(p.log)},
 	}
-	l.serve(l.site, siteLn, nil)
-	l.serve(l.api, apiLn, tc)
+	l.serve(l.site, siteLn)
+	l.serve(l.api, apiLn)
 	p.mu.Lock()
 	p.open, p.serving = ob, l
 	p.mu.Unlock()
@@ -159,11 +152,8 @@ func closeAll(ls []net.Listener) {
 	}
 }
 
-func (l *listeners) serve(s *http.Server, ls []net.Listener, tc *tls.Config) {
+func (l *listeners) serve(s *http.Server, ls []net.Listener) {
 	for _, ln := range ls {
-		if tc != nil {
-			ln = tls.NewListener(ln, tc)
-		}
 		l.wg.Add(1)
 		go func(ln net.Listener) {
 			defer l.wg.Done()

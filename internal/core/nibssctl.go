@@ -34,14 +34,14 @@ type nibssAdmin struct {
 }
 
 type registerBody struct {
-	NIPCode             string `json:"nip_code"`
-	NUBANCode           string `json:"nuban_code"`
-	Name                string `json:"name"`
-	Type                string `json:"type"`
-	CreditURL           string `json:"credit_url"`
-	CertificateIdentity string `json:"certificate_identity"`
-	NetDebitCap         int64  `json:"net_debit_cap_minor"`
-	Collateral          int64  `json:"collateral_minor"`
+	NIPCode     string `json:"nip_code"`
+	NUBANCode   string `json:"nuban_code"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	CreditURL   string `json:"credit_url"`
+	CallerID    string `json:"caller_id"`
+	NetDebitCap int64  `json:"net_debit_cap_minor"`
+	Collateral  int64  `json:"collateral_minor"`
 }
 
 type clientBody struct {
@@ -74,7 +74,7 @@ func (n *nibssAdmin) enquire(ctx context.Context, code, nuban string) (nip.NameE
 
 func (n *nibssAdmin) register(ctx context.Context, b config.Bank) (nip.Institution, error) {
 	var in nip.Institution
-	body := registerBody{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Name: b.Name, Type: b.Type, CreditURL: b.APIURL(), CertificateIdentity: b.ID, NetDebitCap: b.Cap(), Collateral: b.Collateral}
+	body := registerBody{NIPCode: b.NIPCode, NUBANCode: b.NUBANCode, Name: b.Name, Type: b.Type, CreditURL: b.APIURL(), CallerID: b.ID, NetDebitCap: b.Cap(), Collateral: b.Collateral}
 	return in, n.Call(ctx, http.MethodPut, nibssBanksPath+url.PathEscape(b.ID), nil, body, &in)
 }
 

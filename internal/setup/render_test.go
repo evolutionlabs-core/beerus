@@ -59,7 +59,7 @@ func TestRenderSingularsAndOtherChoices(t *testing.T) {
 		{Op: OpRemove, Kind: KindPartner, ID: "ledgerly", Destructive: true, Impact: &Impact{}},
 		{Op: OpCreate, Kind: KindPartner, ID: "ledgerly2", Fields: []FieldChange{{Path: "name", To: "Ledgerly"}}},
 		{Op: OpDrift, Kind: KindBank, ID: "bank-c", Fields: []FieldChange{
-			{Path: "steps.certs", From: stepDone, To: "missing"},
+			{Path: "steps.files", From: stepDone, To: "missing"},
 			{Path: "steps.site", From: stepDone, To: "missing"},
 			{Path: "steps.api", From: stepDone, To: "missing"},
 		}},
@@ -82,7 +82,7 @@ func TestRenderSingularsAndOtherChoices(t *testing.T) {
   - partner ledgerly       remove   DESTRUCTIVE
         drop its keys and live rows.
   + partner ledgerly2      create   Ledgerly
-  ! bank bank-c            drift    certificates, site and API missing; they will be rebuilt
+  ! bank bank-c            drift    bank files, site and API missing; they will be rebuilt
   ! system nibss           drift    being repaired
 
 Plan: 1 to create, 2 to update, 1 to close, 3 to remove, 2 to repair.

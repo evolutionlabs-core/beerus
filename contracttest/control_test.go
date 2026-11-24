@@ -1,8 +1,6 @@
 package contracttest
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,23 +29,6 @@ type bankProbe struct {
 	plain  *http.Client
 	host   string
 	status string
-}
-
-func mutualClient(t *testing.T, dir, certDir, name string) *http.Client {
-	t.Helper()
-	pair, err := tls.LoadX509KeyPair(filepath.Join(dir, certDir, name+".crt"), filepath.Join(dir, certDir, name+".key"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	root, err := os.ReadFile(filepath.Join(dir, "ca", "root.crt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(root)
-	tr := &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{pair}, RootCAs: pool, ServerName: "bank-a.localhost", MinVersion: tls.VersionTLS12}, IdleConnTimeout: controlProbeTimeout, DisableKeepAlives: true}
-	t.Cleanup(tr.CloseIdleConnections)
-	return &http.Client{Transport: tr, Timeout: controlProbeTimeout}
 }
 
 func (p *bankProbe) get(client *http.Client, url string, header http.Header) (int, string) {
@@ -163,11 +144,11 @@ func TestBankControlOnARealUp(t *testing.T) {
 	p := &bankProbe{
 		t:     t,
 		site:  fmt.Sprintf("http://127.0.0.1:%d", int(bank["port"].(float64))),
-		api:   fmt.Sprintf("https://127.0.0.1:%d", int(bank["api_port"].(float64))),
+		api:   fmt.Sprintf("http://127.0.0.1:%d", int(bank["api_port"].(float64))),
 		nuban: account,
 		token: token,
-		nibss: mutualClient(t, dir, "nibss", "client"),
-		agg:   mutualClient(t, dir, "connect", "client"),
+		nibss: callerClient(t, config.NIBSSID),
+		agg:   callerClient(t, config.ConnectID),
 		plain: &http.Client{Timeout: controlProbeTimeout},
 	}
 	p.want("the bank to open once it has its phase", 200, 200, 404, "active")

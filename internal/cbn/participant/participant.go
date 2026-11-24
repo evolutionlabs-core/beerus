@@ -2,7 +2,6 @@ package participant
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,7 +13,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/cbn"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 const (
@@ -40,7 +38,6 @@ type Participant struct {
 	clock *clock.Clock
 	store *store.Store
 	books *cbn.Books
-	tls   *tls.Config
 
 	mu     sync.Mutex
 	flight map[string]time.Time
@@ -59,11 +56,7 @@ func New(ctx context.Context, dir string, o Options) (*Participant, error) {
 	if err != nil {
 		return nil, fmt.Errorf("control token: %w", err)
 	}
-	tc, err := serverTLS(own)
-	if err != nil {
-		return nil, err
-	}
-	p := &Participant{dir: dir, file: f, log: o.Logger, clock: clock.New(), bind: o.Bind, token: token, tls: tc, flight: map[string]time.Time{}}
+	p := &Participant{dir: dir, file: f, log: o.Logger, clock: clock.New(), bind: o.Bind, token: token, flight: map[string]time.Time{}}
 	if p.log == nil {
 		p.log = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
@@ -89,16 +82,4 @@ func Run(ctx context.Context, dir string, o Options) error {
 
 func (p *Participant) Close() {
 	p.store.Close()
-}
-
-func serverTLS(own string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(filepath.Join(own, "server.crt"), filepath.Join(own, "server.key"))
-	if err != nil {
-		return nil, fmt.Errorf("load CBN server certificate: %w", err)
-	}
-	pool, err := pki.LoadPool(filepath.Join(own, config.CBNCAFile))
-	if err != nil {
-		return nil, err
-	}
-	return &tls.Config{Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12}, nil
 }

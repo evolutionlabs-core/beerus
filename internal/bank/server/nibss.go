@@ -14,6 +14,7 @@ import (
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
+	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/nip"
 )
 
@@ -26,6 +27,7 @@ type NIBSSClient struct {
 	HTTP *http.Client
 	Base string
 	Away string
+	ID   string
 }
 
 func (c NIBSSClient) Do(ctx context.Context, method, path string, query url.Values, in, out any) (int, error) {
@@ -45,6 +47,7 @@ func (c NIBSSClient) Do(ctx context.Context, method, path string, query url.Valu
 	if err != nil {
 		return 0, fmt.Errorf("build the request to %s: %w", path, err)
 	}
+	req.Header.Set(config.CallerHeader, c.ID)
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -117,15 +120,11 @@ func (c NIBSSClient) Enquire(ctx context.Context, code, nuban string) (nip.NameE
 }
 
 func (s *Server) NIBSS() (NIBSSClient, error) {
-	hc, err := s.directoryClient()
-	if err != nil {
-		return NIBSSClient{}, s.coreAway(err)
-	}
 	base, err := s.nibssBase()
 	if err != nil {
 		return NIBSSClient{}, s.coreAway(err)
 	}
-	return NIBSSClient{HTTP: hc, Base: base, Away: s.Bank().Name + " cannot reach NIBSS right now. Try again in a minute."}, nil
+	return NIBSSClient{HTTP: s.dirClient, Base: base, Away: s.Bank().Name + " cannot reach NIBSS right now. Try again in a minute.", ID: s.id}, nil
 }
 
 func (s *Server) coreAway(err error) error {

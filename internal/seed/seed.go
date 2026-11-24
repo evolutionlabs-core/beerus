@@ -74,10 +74,9 @@ func Init(dir string, spec setup.Spec, local setup.Local, today clock.Date) erro
 	if cfg, err = setup.BuildConfig(dir, st, local); err != nil {
 		return err
 	}
-	if err := config.Prepare(cfg, clock.New().Now()); err != nil {
+	if err := config.Prepare(cfg); err != nil {
 		return err
 	}
-	recordCertPrints(cfg, &st)
 	if st.AppliedSHA256, err = setup.SpecSum(st.Applied); err != nil {
 		return err
 	}
@@ -174,19 +173,11 @@ func issuePartnerKeys(dir string, partners []setup.Partner) ([]setup.Resource, e
 			Generation:         1,
 			ObservedGeneration: 1,
 			Phase:              config.PhaseActive,
-			Partner:            &setup.PartnerKeys{CertCN: p.ID, APIKeySHA256: config.HashKey(key)},
+			Partner:            &setup.PartnerKeys{APIKeySHA256: config.HashKey(key)},
 			Owned:              []setup.Owned{{Kind: state.OwnedDir, Name: filepath.Join("partners", p.ID)}},
 		})
 	}
 	return out, nil
-}
-
-func recordCertPrints(cfg *config.Config, st *setup.Status) {
-	for _, p := range cfg.Partners {
-		if r := setup.FindResource(st, setup.KindPartner, p.ID); r != nil && r.Partner != nil {
-			r.Partner.CertSHA256 = p.CertSHA256
-		}
-	}
 }
 
 func newSetupKey() (uint64, error) {

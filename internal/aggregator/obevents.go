@@ -1,25 +1,23 @@
 package aggregator
 
 import (
-	"bytes"
-	"crypto/ecdsa"
-	"crypto/x509"
-	"encoding/pem"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"slices"
 	"sync"
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/openbanking"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
 
-const seenLimit = 10000
+const (
+	seenLimit    = 10000
+	maxEventBody = 16 << 10
+)
 
 type jtiSet struct {
 	mu    sync.Mutex
@@ -59,63 +57,27 @@ func (a *App) bankConfig(id string) *config.Bank {
 	return a.bank(id)
 }
 
-func (a *App) bankVerifyKey(id string) (*ecdsa.PublicKey, error) {
-	if a.bankConfig(id) == nil {
-		return nil, errors.New("unknown bank")
-	}
-	raw, err := os.ReadFile(a.cfg.Path("banks", id, config.EventSignerName+".crt"))
-	if err != nil {
-		return nil, err
-	}
-	block, _ := pem.Decode(raw)
-	if block == nil {
-		return nil, errors.New("the bank's event certificate is malformed")
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	pool, err := pki.LoadPool(a.cfg.Path("ca", "root.crt"))
-	if err != nil {
-		return nil, err
-	}
-	if _, err := cert.Verify(x509.VerifyOptions{Roots: pool, CurrentTime: a.clock.Real(), KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err != nil {
-		return nil, err
-	}
-	if cert.Subject.CommonName != id+"-events" || !slices.Contains(cert.Subject.OrganizationalUnit, config.EventSignerRole) || cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 || len(cert.ExtKeyUsage) > 0 {
-		return nil, errors.New("the certificate is not this bank's event signer")
-	}
-	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
-	if !ok {
-		return nil, errors.New("the bank's event key is not an EC key")
-	}
-	return pub, nil
-}
-
 func (a *App) consentEvents(w http.ResponseWriter, r *http.Request) {
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 16<<10))
-	if err != nil {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The event could not be read.")
-		return
-	}
-	token := string(bytes.TrimSpace(raw))
-	head, _, err := openbanking.Peek(token)
-	kid, _ := head["kid"].(string)
-	if err != nil || kid == "" {
-		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The event is not a signed token.")
-		return
-	}
-	pub, err := a.bankVerifyKey(kid)
-	if err != nil {
-		web.WriteError(w, r, http.StatusUnauthorized, "invalid_signature", "The bank's key could not be checked.")
-		return
-	}
-	claims, err := openbanking.Verify(token, []*ecdsa.PublicKey{pub})
-	if err != nil {
-		web.WriteError(w, r, http.StatusUnauthorized, "invalid_signature", "The signature does not match the bank.")
+	kid := r.Header.Get(config.CallerHeader)
+	if kid == "" {
+		web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", fmt.Sprintf("Send your ID in the %s header.", config.CallerHeader))
 		return
 	}
 	b := a.bankConfig(kid)
+	if b == nil {
+		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("%s is not a bank Connect knows.", kid))
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxEventBody+1))
+	if err != nil || len(raw) > maxEventBody {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The event could not be read.")
+		return
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		web.WriteError(w, r, http.StatusBadRequest, "invalid_request", "The event is not JSON.")
+		return
+	}
 	exp, _ := claims["exp"].(float64)
 	jti, _ := claims["jti"].(string)
 	consentID, _ := claims["consent_id"].(string)

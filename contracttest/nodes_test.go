@@ -176,10 +176,7 @@ type nodes struct {
 func startNodes(cfg *config.Config, opts aggregator.Options) (*nodes, error) {
 	ns := &nodes{}
 	opts.Bind = nodeBind
-	if err := cfg.EnsureCertificates(time.Now()); err != nil {
-		return ns, err
-	}
-	if err := install.PrepareCBN(cfg, time.Now()); err != nil {
+	if err := install.PrepareCBN(cfg); err != nil {
 		return ns, err
 	}
 	cbn, err := cbnparticipant.New(context.Background(), cfg.Dir, cbnparticipant.Options{Bind: nodeBind, DatabaseURL: cfg.DatabaseURL})
@@ -243,4 +240,26 @@ func (ns *nodes) halt() error {
 	}
 	ns.order = nil
 	return errors.Join(errs...)
+}
+
+func (s *Stack) whileConnectIsDown(during func()) {
+	s.t.Helper()
+	if err := s.nodes.connect.halt(); err != nil {
+		s.t.Fatal(err)
+	}
+	s.nodes.connect = nil
+	during()
+	agg, err := aggregator.New(s.cfg.Dir, s.aggOpts)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	token, err := config.ReadSecret(s.cfg.Path("control-token"))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	s.nodes.agg, s.agg = agg, agg
+	s.nodes.connect = spawn("Connect", agg.Serve)
+	if err := s.nodes.connect.await(func(ctx context.Context) bool { return controlAnswers(ctx, s.cfg.Connect.ConnectControlPort, token) }); err != nil {
+		s.t.Fatal(err)
+	}
 }

@@ -71,14 +71,6 @@ func notFound(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "not_found", "This path is not part of the NIBSS API.")
 }
 
-func callerBank(r *http.Request) (string, bool) {
-	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
-		return "", false
-	}
-	leaf := r.TLS.PeerCertificates[0]
-	return leaf.Subject.CommonName, slices.Contains(leaf.Subject.OrganizationalUnit, config.BankRole)
-}
-
 func listed(all []nip.Institution, id string) bool {
 	return slices.ContainsFunc(all, func(in nip.Institution) bool { return in.ID == id && in.Status != nip.StatusRemoved })
 }
@@ -89,9 +81,9 @@ func (s *server) banks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Use GET for this path.")
 		return
 	}
-	id, ok := callerBank(r)
-	if !ok {
-		writeError(w, http.StatusForbidden, "forbidden", "This certificate may not read the bank directory. Only banks may.")
+	id := r.Header.Get(config.CallerHeader)
+	if id == "" {
+		writeError(w, http.StatusUnauthorized, "unauthenticated", fmt.Sprintf("Send your ID in the %s header to read the bank directory.", config.CallerHeader))
 		return
 	}
 	limit, ok := pageLimit(r)
@@ -106,7 +98,7 @@ func (s *server) banks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !listed(all, id) {
-		writeError(w, http.StatusForbidden, "forbidden", fmt.Sprintf("This certificate may not read the bank directory. %s is not a bank NIBSS knows.", id))
+		writeError(w, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not read the bank directory. It is not a bank NIBSS knows.", id))
 		return
 	}
 	page, err := paginate(all, r.URL.Query().Get("cursor"), limit)

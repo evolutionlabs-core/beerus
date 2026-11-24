@@ -67,7 +67,7 @@ func (p *Participant) transfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !p.owns(r.Context(), identity, req.FromCode) {
-		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("This certificate may not send transfers for bank %s.", req.FromCode))
+		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not send transfers for bank %s.", identity, req.FromCode))
 		return
 	}
 	now := p.clock.Now()
@@ -94,9 +94,9 @@ func (p *Participant) transfer(w http.ResponseWriter, r *http.Request) {
 func (p *Participant) owns(ctx context.Context, identity, code string) bool {
 	m, err := p.store.MemberAt(ctx, code)
 	if err != nil && !errors.Is(err, nip.ErrUnknownInstitution) {
-		p.log.ErrorContext(ctx, "certificate identity not checked", "err", err)
+		p.log.ErrorContext(ctx, "caller not checked", "err", err)
 	}
-	return err == nil && m.Status != nip.StatusRemoved && m.CertificateIdentity == identity
+	return err == nil && m.Status != nip.StatusRemoved && m.CallerID == identity
 }
 
 func (p *Participant) beginFailed(w http.ResponseWriter, r *http.Request, req transferRequest, err error) bool {
@@ -175,7 +175,7 @@ func (p *Participant) statusQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !p.owns(r.Context(), identity, sess.FromCode) {
-		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("This certificate may not ask about transfers of bank %s.", sess.FromCode))
+		web.WriteError(w, r, http.StatusForbidden, "forbidden", fmt.Sprintf("%s may not ask about transfers of bank %s.", identity, sess.FromCode))
 		return
 	}
 	sess, err = p.query(context.WithoutCancel(r.Context()), sess)

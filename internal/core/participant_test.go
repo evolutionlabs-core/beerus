@@ -154,7 +154,7 @@ func TestParticipantControlContract(t *testing.T) {
 		{name: "phase with an unreadable config", before: func() { _ = os.Remove(bankFile) }, method: "PUT", path: "/v1/phase", body: `{"phase":"suspended","generation":9,"world_id":"wld_9"}`, token: participantTok, status: 500, want: `{"error":{"code":"config_unreadable","message":"The bank config could not be read. Fix banks/bank-a/bank.json and send the phase again.","request_id":"req_ID"}}`},
 		{name: "status after the refused phase", method: "GET", path: "/v1/status", token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","kind":"bank","phase":"active","generation":4,"observed_generation":4,"steps":[]}`},
 		{name: "phase with a renamed bank", before: func() {
-			if err := cfg.EnsureBankDir(&renamed, clock.New().Real()); err != nil {
+			if err := cfg.EnsureBankDir(&renamed); err != nil {
 				t.Fatal(err)
 			}
 		}, method: "PUT", path: "/v1/phase", body: `{"phase":"suspended","generation":6,"world_id":"wld_1"}`, token: participantTok, validate: true, status: 200, want: `{"participant_id":"bank-a","kind":"bank","phase":"suspended","generation":6,"observed_generation":6,"steps":[]}`},

@@ -2,7 +2,6 @@ package contracttest
 
 import (
 	"bytes"
-	"crypto/tls"
 	"fmt"
 	"net/http"
 	"sort"
@@ -34,12 +33,15 @@ func TestAuthentication(t *testing.T) {
 	if r.Status != 401 || r.Code() != "unauthenticated" {
 		t.Fatalf("wrong key: %d %s", r.Status, r.Body)
 	}
-	noCert := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: s.rootPool()}}, Timeout: 5 * time.Second}
 	req, _ := http.NewRequest("GET", s.cfg.PartnerURL()+"/v1/webhook_keys", nil)
 	req.Header.Set("X-Api-Key", s.apiKey)
-	if resp, err := noCert.Do(req); err == nil {
-		resp.Body.Close()
-		t.Fatalf("a request without a client certificate was accepted: %d", resp.StatusCode)
+	resp, err := s.raw.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("a call with only an API key over plain HTTP got %d, want 200", resp.StatusCode)
 	}
 	s.must(s.call("GET", "/v1/webhook_keys", nil), 200)
 	r = s.call("GET", "/v1/nothing", nil, skipValidation())

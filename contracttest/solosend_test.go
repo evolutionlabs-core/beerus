@@ -45,7 +45,7 @@ func startSoloSend(t *testing.T, tsqAfter time.Duration) *soloSend {
 
 func (s *soloSend) register(id string, cap int64) (int, string) {
 	m := s.members[id]
-	body := fmt.Sprintf(`{"nip_code":%q,"nuban_code":%q,"name":%q,"type":"commercial","credit_url":"https://%s.localhost:%d","certificate_identity":%q,"net_debit_cap_minor":%d,"collateral_minor":0}`, m.bank.NIPCode, m.bank.NUBANCode, m.bank.Name, id, m.bank.APIPort, id, cap)
+	body := fmt.Sprintf(`{"nip_code":%q,"nuban_code":%q,"name":%q,"type":"commercial","credit_url":"http://%s.localhost:%d","caller_id":%q,"net_debit_cap_minor":%d,"collateral_minor":0}`, m.bank.NIPCode, m.bank.NUBANCode, m.bank.Name, id, m.bank.APIPort, id, cap)
 	status, got := s.call("nip", s.plain, http.MethodPut, s.control+"/v1/control/banks/"+id, s.token, body)
 	return status, got
 }
@@ -182,17 +182,17 @@ func TestSoloSendThroughNIBSS(t *testing.T) {
 		}, 422, func() string {
 			return errText("closure_not_allowed", "Bank 000014 is active, so it cannot send a closure transfer. Close the bank first, and send it again when the bank is terminating.")
 		}, func() int64 { return a0 - debit }, func() int64 { return b0 + soloSendAmount }},
-		{"a stranger certificate", func() (int, string) {
+		{"a stranger", func() (int, string) {
 			status, _, got := s.direct("bank-z", "/v1/transfers", s.transferBody("000014261115120000000000000002", soloSendAmount, false))
 			return status, got
 		}, 403, func() string {
-			return errText("forbidden", "This certificate may not send transfers. bank-z is not a bank NIBSS knows.")
+			return errText("forbidden", "bank-z may not send transfers. It is not a bank NIBSS knows.")
 		}, func() int64 { return a0 - debit }, func() int64 { return b0 + soloSendAmount }},
 		{"another bank sending as bank A", func() (int, string) {
 			status, _, got := s.direct("bank-b", "/v1/transfers", s.transferBody("000014261115120000000000000003", soloSendAmount, false))
 			return status, got
 		}, 403, func() string {
-			return errText("forbidden", "This certificate may not send transfers for bank 000014.")
+			return errText("forbidden", "bank-b may not send transfers for bank 000014.")
 		}, func() int64 { return a0 - debit }, func() int64 { return b0 + soloSendAmount }},
 		{"over the cap, reversed", func() (int, string) {
 			s.limit("bank-a", soloBelowCap)

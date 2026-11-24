@@ -35,18 +35,17 @@ func newStage(t *testing.T) *stage {
 	t.Helper()
 	ctx := context.WithoutCancel(t.Context())
 	dbURL := cmp.Or(os.Getenv(config.DatabaseURLEnv), os.Getenv("BEERUS_TEST_DATABASE_URL"), "postgres:///postgres")
-	now := clock.New().Now()
 	dir := filepath.Join(t.TempDir(), "stage")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{Dir: dir, SetupKey: 1<<63 + 5, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", WidgetPort: 17001, ControlPort: 17002, NIBSSPort: 17003}}
-	if err := config.Prepare(cfg, now); err != nil {
+	if err := config.Prepare(cfg); err != nil {
 		t.Fatal(err)
 	}
 	ports := []int{freePort(t), freePort(t)}
 	own := &config.Bank{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: ports[0], APIPort: ports[1], Database: config.DatabaseName(dir, "bank-a")}
-	if err := cfg.EnsureBankDir(own, now); err != nil {
+	if err := cfg.EnsureBankDir(own); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Create(ctx, dbURL, config.DatabaseName(dir, "probe")); err != nil {
@@ -117,7 +116,7 @@ func steps(db, ledger, ob stepRow) []stepRow {
 		{"allocate", "Allocating codes (NIP 000001, NUBAN 001)", true, false},
 		{"directory", "Registering with NIBSS", true, false},
 		db, ledger, ob,
-		{"certs", "Issuing certificates", true, false},
+		{"files", "Writing the bank files", true, false},
 		{"cbn", "Opening the CBN settlement account", true, false},
 		{"site", "Starting online banking", true, false},
 		{"api", "Starting the open banking API", true, false},

@@ -496,13 +496,12 @@ func (s *Banking) NIP(id string) http.Handler {
 	var mu sync.Mutex
 	var cached *bank.Bank
 	var handler http.Handler
-	nibss := inbound.Caller{CommonName: config.NIBSSCN, Role: config.NIBSSRole}
 	serve := func(b *bank.Bank) http.Handler {
 		mu.Lock()
 		defer mu.Unlock()
 		if cached != b {
 			cached = b
-			handler = inbound.New(b, s.Clock, nibss, s.Log)
+			handler = inbound.New(b, s.Clock, s.Log)
 		}
 		return handler
 	}
@@ -518,7 +517,7 @@ func (s *Banking) NIP(id string) http.Handler {
 			return
 		}
 		h := serve(bk.Bank)
-		if holdsCredit(r) && nibss.Allows(r) {
+		if holdsCredit(r) && r.Header.Get(config.CallerHeader) == config.NIBSSID {
 			if outcome, held := s.Src.TakeTimeout(id); held {
 				s.hold(w, r, h, outcome)
 				return

@@ -7,16 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
-
-	"github.com/evolutionlabs-core/beerus/internal/pki"
 )
 
 const (
 	CBNID        = "cbn"
 	CBNFileName  = "cbn.json"
 	CBNTokenFile = "control-token"
-	CBNCAFile    = "ca.crt"
 	CBNHost      = "cbn.localhost"
 	maxCBNFile   = 1 << 20
 )
@@ -96,30 +92,14 @@ func (c *Config) cbnFileBytes() ([]byte, error) {
 	return append(raw, '\n'), nil
 }
 
-func (c *Config) EnsureCBNDir(now time.Time) error {
-	root, err := pki.LoadAuthority(c.Path("ca"), "root")
-	if err != nil {
-		return fmt.Errorf("load root authority: %w", err)
-	}
+func (c *Config) EnsureCBNDir() error {
 	dir := CBNDir(c.Dir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create cbn dir: %w", err)
 	}
-	if pki.NeedsRenewal(filepath.Join(dir, "server.crt"), now) {
-		leaf, err := root.IssueServer([]string{CBNHost, "localhost"}, leafLife)
-		if err != nil {
-			return fmt.Errorf("issue CBN server certificate: %w", err)
-		}
-		if err := leaf.Save(dir, "server"); err != nil {
-			return fmt.Errorf("save CBN server certificate: %w", err)
-		}
-	}
 	raw, err := c.cbnFileBytes()
 	if err != nil {
 		return err
-	}
-	if err := writeIfChanged(filepath.Join(dir, CBNCAFile), root.PEM, 0o644); err != nil {
-		return fmt.Errorf("write %s of CBN: %w", CBNCAFile, err)
 	}
 	if err := writeIfChanged(filepath.Join(dir, CBNFileName), raw, 0o600); err != nil {
 		return fmt.Errorf("write %s of CBN: %w", CBNFileName, err)

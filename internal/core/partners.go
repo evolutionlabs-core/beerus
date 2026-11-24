@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/evolutionlabs-core/beerus/internal/config"
-	"github.com/evolutionlabs-core/beerus/internal/pki"
+	"github.com/evolutionlabs-core/beerus/internal/disk"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
 	"github.com/evolutionlabs-core/beerus/internal/web"
@@ -71,21 +71,15 @@ func (a *App) RotatePartner(ctx context.Context, id string) (key string, err err
 			err = errors.Join(err, writeFiles(dir, saved))
 		}
 	}()
-	if err := os.Remove(filepath.Join(dir, "client.crt")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("remove old certificate of %s: %w", id, err)
-	}
 	key, err = config.WriteAPIKey(a.cfg.Dir, id)
 	if err != nil {
 		return "", err
 	}
 	p := *cur
 	p.APIKeySHA256 = config.HashKey(key)
-	if err := a.issuePartnerCert(&p); err != nil {
-		return "", err
-	}
 	err = a.ctl.Update(func(st *setup.Status) (bool, error) {
 		r := state.EnsureResource(st, setup.KindPartner, id)
-		r.Partner = &setup.PartnerKeys{CertCN: p.CertCN, APIKeySHA256: p.APIKeySHA256, CertSHA256: p.CertSHA256}
+		r.Partner = &setup.PartnerKeys{APIKeySHA256: p.APIKeySHA256}
 		return true, nil
 	})
 	if err != nil {
@@ -135,7 +129,7 @@ func writeFiles(dir string, files map[string][]byte) error {
 		return fmt.Errorf("restore %s: %w", dir, err)
 	}
 	for name, raw := range files {
-		if err := pki.WriteFile(filepath.Join(dir, name), raw, 0o600); err != nil {
+		if err := disk.Write(filepath.Join(dir, name), raw, 0o600); err != nil {
 			return fmt.Errorf("restore %s: %w", name, err)
 		}
 	}
@@ -167,14 +161,6 @@ func (a *App) replacePartner(id string, p *config.Partner) {
 		}
 	}
 	a.cfg.Partners = out
-}
-
-func (a *App) issuePartnerCert(p *config.Partner) error {
-	c := config.Config{Dir: a.cfg.Dir, Connect: a.cfg.Connect, Partners: []*config.Partner{p}}
-	if err := c.EnsureCertificates(a.clock.Real()); err != nil {
-		return fmt.Errorf("issue certificate for %s: %w", p.ID, err)
-	}
-	return nil
 }
 
 func resum(st *setup.Status) error {

@@ -87,7 +87,7 @@ func TestRegistryRefreshServesStaleThenFailsClosed(t *testing.T) {
 	if c, ok := r.RegistryClient("tpp-1"); !ok || c.CertCN != "tpp" {
 		t.Fatalf("client tpp-1 after recovery: %+v, %v", c, ok)
 	}
-	if c, ok := r.RegistryClientByCert("tpp"); !ok || c.ID != "tpp-1" {
+	if c, ok := r.RegistryClientByCaller("tpp"); !ok || c.ID != "tpp-1" {
 		t.Fatalf("client by certificate after recovery: %+v, %v", c, ok)
 	}
 }
@@ -151,7 +151,10 @@ func TestSlowRegistryFetchIsSharedAndHoldsNoLock(t *testing.T) {
 func TestNIBSSClientRegistryAndConsents(t *testing.T) {
 	var seen []string
 	var body string
-	c := NIBSSClient{Base: "https://nibss.invalid", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+	c := NIBSSClient{Base: "http://nibss.invalid", ID: "bank-a", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		if got := r.Header.Get(config.CallerHeader); got != "bank-a" {
+			t.Errorf("%s = %q, want bank-a", config.CallerHeader, got)
+		}
 		seen = append(seen, r.Method+" "+r.URL.RequestURI())
 		switch {
 		case r.URL.Path == "/v1/consents" && r.Header.Get("Content-Type") == "application/json":

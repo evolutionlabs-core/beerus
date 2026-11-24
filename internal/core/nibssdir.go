@@ -18,7 +18,7 @@ func (a *App) ensureNIBSSDir() error {
 	a.mu.Lock()
 	world := a.st.WorldID
 	a.mu.Unlock()
-	if err := a.cfg.EnsureNIBSSDir(world, now); err != nil {
+	if err := a.cfg.EnsureNIBSSDir(world); err != nil {
 		return fmt.Errorf("ensure the NIBSS directory: %w", err)
 	}
 	a.nibssEnsured = now

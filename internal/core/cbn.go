@@ -15,7 +15,7 @@ func (a *App) cbnDue(ctx context.Context) {
 	a.mu.Lock()
 	for _, b := range a.cfg.Banks {
 		st := a.status[b.ID]
-		if st != nil && (st.Phase == PhaseProvisioning || st.Phase == PhaseRepairing) && st.Steps[stepIndex(config.StepCerts)].Done && !st.Steps[stepIndex(config.StepCBN)].Done && (st.NextAttemptAt == nil || !now.Before(*st.NextAttemptAt)) {
+		if st != nil && (st.Phase == PhaseProvisioning || st.Phase == PhaseRepairing) && st.Steps[stepIndex(config.StepFiles)].Done && !st.Steps[stepIndex(config.StepCBN)].Done && (st.NextAttemptAt == nil || !now.Before(*st.NextAttemptAt)) {
 			jobs = append(jobs, provisionJob{*b, st})
 		}
 	}

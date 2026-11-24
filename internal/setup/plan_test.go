@@ -38,7 +38,7 @@ func spec() Spec {
 }
 
 func doneSteps() map[string]string {
-	return map[string]string{config.StepAllocate: stepDone, config.StepDirectory: stepDone, config.StepDatabase: stepDone, config.StepCerts: stepDone, config.StepCBN: stepDone, config.StepSite: stepDone, config.StepAPI: stepDone}
+	return map[string]string{config.StepAllocate: stepDone, config.StepDirectory: stepDone, config.StepDatabase: stepDone, config.StepFiles: stepDone, config.StepCBN: stepDone, config.StepSite: stepDone, config.StepAPI: stepDone}
 }
 
 func status(applied Spec) Status {
@@ -909,10 +909,10 @@ func TestBuildDrift(t *testing.T) {
 			status: func(st *Status) {
 				r := res(st, KindBank, "bank-b")
 				r.Phase = config.PhaseRepairing
-				r.Steps[config.StepCerts], r.Steps[config.StepSite] = "missing", "failed"
+				r.Steps[config.StepFiles], r.Steps[config.StepSite] = "missing", "failed"
 			},
 			want: []Action{{Op: OpDrift, Kind: KindBank, ID: "bank-b", Fields: []FieldChange{
-				{Path: "steps.certs", From: stepDone, To: "missing"},
+				{Path: "steps.files", From: stepDone, To: "missing"},
 				{Path: "steps.site", From: stepDone, To: "failed"},
 			}}},
 		},

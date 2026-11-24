@@ -14,7 +14,6 @@ import (
 	"time"
 
 	cbnparticipant "github.com/evolutionlabs-core/beerus/internal/cbn/participant"
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/install"
 )
@@ -38,11 +37,7 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 	if id := os.Getenv("BEERUS_PARTNER_ID"); ok && os.Getenv("BEERUS_PARTNER_REDIRECT_URI") != "" && c.Partner(id) == nil {
 		log.Warn("BEERUS_PARTNER_* only applies when the setup is first made; register the partner with beerus partner add once Beerus is running", "partner", id)
 	}
-	now := clock.New().Real()
-	if err := c.EnsureCertificates(now); err != nil {
-		return err
-	}
-	if err := install.PrepareCBN(c, now); err != nil {
+	if err := install.PrepareCBN(c); err != nil {
 		return err
 	}
 	if c.Connect.HealthPort <= 0 {
@@ -62,18 +57,17 @@ func runCBN(ctx context.Context, dir, bind string, log *slog.Logger) error {
 	healthed := make(chan error, 1)
 	go func() {
 		defer cancel()
-		healthed <- serveHealth(runCtx, ln, c.Path("ca", "root.crt"))
+		healthed <- serveHealth(runCtx, ln)
 	}()
-	log.Info("cbn: certificates issued", "dir", dir)
+	log.Info("cbn: prepared", "dir", dir)
 	serr := p.Serve(runCtx)
 	cancel()
 	return errors.Join(serr, <-healthed)
 }
 
-func serveHealth(ctx context.Context, ln net.Listener, ca string) error {
+func serveHealth(ctx context.Context, ln net.Listener) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
-	mux.HandleFunc("GET /ca.crt", func(w http.ResponseWriter, r *http.Request) { http.ServeFile(w, r, ca) })
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()

@@ -9,19 +9,18 @@ import (
 )
 
 func TestNIBSSFileEnsureAndLoad(t *testing.T) {
-	now := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
 	c := &Config{Dir: t.TempDir(), Connect: Connect{Host: "connect.localhost", WidgetPort: 9000, NIBSSPort: 9001, NIBSSControlPort: 9003, CBNPort: 9005, ControlPort: 9002, BrandName: "Connect"}, TSQAfter: 2 * time.Minute, NIPSessions: 6}
-	if err := Prepare(c, now); err != nil {
+	if err := Prepare(c); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadNIBSSFile(c.Dir); err == nil || err.Error() != "no NIBSS config at "+NIBSSFilePath(c.Dir)+"; start Beerus with beerus up first" {
 		t.Fatalf("load before ensure: %v", err)
 	}
-	if err := c.EnsureNIBSSDir("wld_a", now); err != nil {
+	if err := c.EnsureNIBSSDir("wld_a"); err != nil {
 		t.Fatal(err)
 	}
 	dir := NIBSSDir(c.Dir)
-	for name, want := range map[string]os.FileMode{NIBSSFileName: 0o600, NIBSSTokenFile: 0o600, NIBSSCAFile: 0o644, "server.key": 0o600, "client.key": 0o600} {
+	for name, want := range map[string]os.FileMode{NIBSSFileName: 0o600, NIBSSTokenFile: 0o600} {
 		fi, err := os.Stat(filepath.Join(dir, name))
 		if err != nil || fi.Mode().Perm() != want {
 			t.Fatalf("%s: mode %v, error %v, want %v", name, fi, err, want)
@@ -32,7 +31,7 @@ func TestNIBSSFileEnsureAndLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Connect.NIBSSControlPort = 9004
-	if err := c.EnsureNIBSSDir("wld_b", now); err != nil {
+	if err := c.EnsureNIBSSDir("wld_b"); err != nil {
 		t.Fatal(err)
 	}
 	if again, err := os.ReadFile(filepath.Join(dir, NIBSSTokenFile)); err != nil || string(again) != string(token) {
