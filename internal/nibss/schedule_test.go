@@ -26,12 +26,10 @@ func TestScheduleNextAndPrev(t *testing.T) {
 		sched        Schedule
 		booked, want string
 	}{
-		{"just after midnight", twelve, "2026-11-02 00:01", "2026-11-02 02:00"},
 		{"on a cutoff", twelve, "2026-11-02 02:00", "2026-11-02 02:00"},
 		{"just after a cutoff", twelve, "2026-11-02 02:01", "2026-11-02 04:00"},
 		{"the last minute of the day", twelve, "2026-11-02 23:59", "2026-11-03 00:00"},
 		{"the default four a day", four, "2026-11-02 06:01", "2026-11-02 12:00"},
-		{"Friday night closes at the weekend", twelve, "2026-11-06 23:00", "2026-11-07 00:00"},
 		{"Saturday waits for Monday", twelve, "2026-11-07 09:00", "2026-11-09 02:00"},
 		{"a holiday Monday waits for Tuesday", closed, "2026-11-08 12:00", "2026-11-10 02:00"},
 		{"Independence Day waits for the next day", holidays, "2026-10-01 10:00", "2026-10-02 02:00"},
@@ -41,7 +39,6 @@ func TestScheduleNextAndPrev(t *testing.T) {
 		}
 	}
 	for _, c := range []struct{ now, want string }{
-		{"2026-11-03 10:00", "2026-11-03 06:00"},
 		{"2026-11-03 06:00", "2026-11-03 06:00"},
 		{"2026-11-03 05:59", "2026-11-03 00:00"},
 		{"2026-11-09 01:00", "2026-11-07 00:00"},

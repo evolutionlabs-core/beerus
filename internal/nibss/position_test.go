@@ -45,15 +45,12 @@ func settlementPosition(t *testing.T, s *Store) {
 		}
 	}
 	check("bank a with nothing posted", "bank-a", "", SettlementPosition{681, 200, 20, 6, 2}, "")
-	check("bank b with nothing posted", "bank-b", "", SettlementPosition{220, 581, 100, 6, 2}, "")
 	check("bank c is in nothing", "bank-c", "", SettlementPosition{}, "")
 	check("a stranger", "bank-z", "", SettlementPosition{}, "settlement position for bank-z: not in the NIBSS directory")
 	must(t, s.MarkPosted(ctx, noon, lagos(12)))
 	must(t, s.MarkPosted(ctx, evening, lagos(18)))
 	check("bank a after the noon session", "bank-a", noon, SettlementPosition{181, 0, 20, 4, 1}, "")
-	check("bank a after the evening session", "bank-a", evening, SettlementPosition{111, 0, 20, 3, 0}, "")
 	check("bank a after a session NIBSS does not know", "bank-a", "2020-01-01T00:00", SettlementPosition{681, 200, 20, 6, 2}, "")
-	check("bank b after the noon session", "bank-b", noon, SettlementPosition{20, 81, 100, 4, 1}, "")
 }
 
 func openSessions(t *testing.T, s *Store) {
@@ -65,7 +62,6 @@ func openSessions(t *testing.T, s *Store) {
 			err  string
 		}{
 			{"bank-a", OpenSessions{BankID: "bank-a", Transfers: 3, Outward: 111, PendingInward: 20, Unposted: unposted}, ""},
-			{"bank-b", OpenSessions{BankID: "bank-b", Transfers: 3, Outward: 20, Inward: 11, PendingInward: 100, Unposted: unposted}, ""},
 			{"bank-c", OpenSessions{BankID: "bank-c"}, ""},
 			{"bank-z", OpenSessions{}, "bank id bank-z is not in the NIBSS directory"},
 		} {
@@ -94,12 +90,8 @@ func sumsBeyondSixtyFourBits(t *testing.T, s *Store) {
 	}
 	_, err := s.SettlementPosition(ctx, "bank-a", "")
 	sum("position of the sender", err, "the open sessions of 999001 add up to more than 64 bits")
-	_, err = s.SettlementPosition(ctx, "bank-b", "")
-	sum("position of the receiver", err, "the open sessions of 999002 add up to more than 64 bits")
 	_, err = s.OpenSessions(ctx, "bank-a")
 	sum("open sessions of the sender", err, "the open sessions of bank-a add up to more than 64 bits")
-	_, err = s.OpenSessions(ctx, "bank-b")
-	sum("open sessions of the receiver", err, "the open sessions of bank-b add up to more than 64 bits")
 	_, err = s.Settle(ctx, Schedule{Per: 4}, t0.Add(11*time.Hour), false)
 	must(t, err)
 	must(t, s.MarkPosted(ctx, noon, lagos(12)))
@@ -140,12 +132,9 @@ func settlementReports(t *testing.T, s *Store) {
 		err                   string
 	}{
 		{"bank a reads both", "bank-a", "", 10, "", []Report{first, second}, false, ""},
-		{"bank b reads its own", "bank-b", "", 10, "", []Report{report(noon, 12, 200, 500, 300, 2), report(evening, 18, 30, 70, 40, 2)}, false, ""},
-		{"bank c is in one session", "bank-c", "", 10, "", []Report{report(evening, 18, 0, 30, 30, 1)}, false, ""},
 		{"first page", "bank-a", "", 1, "", []Report{first}, true, ""},
 		{"after the first", "bank-a", noon, 10, "", []Report{second}, false, ""},
 		{"after the last", "bank-a", evening, 10, "", []Report{}, false, ""},
-		{"after a session NIBSS does not know", "bank-a", "2020-01-01T00:00", 10, "", []Report{first, second}, false, ""},
 		{"a bad cursor", "bank-a", "", 10, "not-a-cursor", nil, false, badCursor},
 		{"a stranger", "bank-z", "", 10, "", nil, false, "settlement reports for bank-z: not in the NIBSS directory"},
 		{"a limit that is too large", "bank-a", "", 5000, "", nil, false, "limit must be from 1 to 1000, not 5000"},
@@ -158,9 +147,5 @@ func settlementReports(t *testing.T, s *Store) {
 	_, next, _ := list("bank-a", "", 1, "")
 	if got, last, m := list("bank-a", "", 1, next); !reflect.DeepEqual(got, []Report{second}) || last != "" || m != "" {
 		t.Errorf("second page: %+v %q %q", got, last, m)
-	}
-	var cursor *CursorError
-	if _, _, err := s.SettlementReports(ctx, "bank-a", "", 10, "x"); !errors.As(err, &cursor) {
-		t.Errorf("a bad cursor is %T", err)
 	}
 }

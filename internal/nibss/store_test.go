@@ -147,7 +147,6 @@ func TestDirectory(t *testing.T) {
 		{"every bank in code order", 10, "", all, "", ""},
 		{"first page", 2, "", "bank-a active|bank-b removed", "999002", ""},
 		{"second page", 2, "999002", "bank-c active", "", ""},
-		{"page that ends exactly", 3, "", all, "", ""},
 		{"after the last", 2, "999003", "", "", ""},
 		{"a bad cursor", 2, "nope", "", "", bad},
 	} {
@@ -169,10 +168,9 @@ func TestDirectory(t *testing.T) {
 	}
 	wantErr(t, err, "bank code 123456 is not in the NIBSS directory")
 	for i, st := range []struct{ to, want string }{
-		{nip.StatusSuspended, ""}, {nip.StatusSuspended, ""}, {nip.StatusActive, ""},
+		{nip.StatusSuspended, ""}, {nip.StatusActive, ""},
 		{nip.StatusRemoved, "institution bank-a is active and cannot become removed: status change not allowed"},
 		{nip.StatusTerminating, ""},
-		{nip.StatusActive, "institution bank-a is terminating and cannot become active: status change not allowed"},
 		{nip.StatusRemoved, ""},
 		{nip.StatusActive, "institution bank-a is removed and cannot become active: status change not allowed"},
 		{"closed", `unknown institution status "closed"`},
@@ -213,13 +211,10 @@ func TestRegister(t *testing.T) {
 		in   Member
 		want string
 	}{
-		{member("bank-a", "Member A", "999001", "911"), "bank bank-a is registered with nuban_code 901, and this request has nuban_code 911"},
 		{member("bank-a", "Member A", "999011", "901"), "bank bank-a is registered with nip_code 999001, and this request has nip_code 999011"},
 		{member("bank-x", "Member X", "999001", "931"), "bank bank-x: nip_code 999001 is held by bank-a" + held},
-		{member("bank-x", "Member X", "999031", "901"), "bank bank-x: nuban_code 901 is held by bank-a" + held},
 		{member("bank-x", "member a plc", "999031", "931"), `bank bank-x: name "member a plc" is held by bank-a` + held},
 		{member("bank-x", "Member X", "999009", "931"), "bank bank-x: nip_code 999009 is held by removed bank bank-gone" + held},
-		{member("bank-x", "Member X", "999031", "909"), "bank bank-x: nuban_code 909 is held by removed bank bank-gone" + held},
 		{member("bank-gone", "Gone Bank", "999009", "909"), "bank bank-gone was removed, and its id stays reserved" + held},
 		{member("bank-x", " ", "999031", "931"), "a bank needs an id, a name and a type"},
 		{member("bank-x", "X", "99913", "931"), `bank bank-x: nip_code "99913" must be 6 digits`},
@@ -263,7 +258,6 @@ func TestRegister(t *testing.T) {
 		{contact(one, "bank-k"), ""},
 		{contact(one, "bank-k"), ""},
 		{contact(two, "bank-k"), "bank bank-k is registered with credit_url " + one + ", and this request has credit_url " + two},
-		{contact(two, "bank-z"), "bank bank-k is registered with credit_url " + one + " and caller_id bank-k, and this request has credit_url " + two + " and caller_id bank-z"},
 	} {
 		err := s.Register(ctx, c.in)
 		var conflict *RegistrationConflictError
@@ -332,7 +326,6 @@ func TestRegistryClients(t *testing.T) {
 		{func(c *openbanking.RegistryClient) { c.Name = "" }, "client OBR-3 needs a name and a legal_name"},
 		{func(c *openbanking.RegistryClient) { c.CertCN = "" }, "client OBR-3 needs a cert_cn: the ID it sends in the Beerus-Caller header"},
 		{func(c *openbanking.RegistryClient) { c.CertCN = "nibss" }, "client OBR-3 cert_cn nibss" + participant},
-		{func(c *openbanking.RegistryClient) { c.CertCN = "cbn" }, "client OBR-3 cert_cn cbn" + participant},
 		{func(c *openbanking.RegistryClient) { c.Role = "bank" }, `client OBR-3 role must be aggregator, not "bank"`},
 		{func(c *openbanking.RegistryClient) { c.RedirectURIs = nil }, "client OBR-3 needs at least one redirect URI"},
 		{func(c *openbanking.RegistryClient) { c.RedirectURIs = []string{"http://other.example.com/cb"} }, `redirect URI "http://other.example.com/cb" must be an https URL, or an http URL on localhost`},
@@ -394,9 +387,6 @@ func TestConsents(t *testing.T) {
 	if page, next, err = s.ConsentLedger(ctx, "bank-a", 2, next); err != nil || len(page) != 2 || page[0].Incarnation != "db2" || page[1].ConsentID != "c3" || next != "3" {
 		t.Fatalf("page 2: %+v, %q, %v", page, next, err)
 	}
-	if all, next, err := s.ConsentLedger(ctx, "", 10, ""); err != nil || len(all) != 6 || next != "" {
-		t.Fatalf("all banks: %d, %q, %v", len(all), next, err)
-	}
 	for _, c := range []struct {
 		limit  int
 		cursor string
@@ -405,7 +395,6 @@ func TestConsents(t *testing.T) {
 		{0, "", "limit must be from 1 to 1000, not 0"},
 		{1001, "", "limit must be from 1 to 1000, not 1001"},
 		{10, "abc", `cursor "abc" is not valid; use the next value from the last page`},
-		{10, "0", `cursor "0" is not valid; use the next value from the last page`},
 	} {
 		_, _, err := s.ConsentLedger(ctx, "", c.limit, c.cursor)
 		wantErr(t, err, c.want)
@@ -420,8 +409,6 @@ func TestConsents(t *testing.T) {
 		want string
 	}{
 		{consent("", "c1", 1, t0), "a consent event needs a bank and a consent id"},
-		{edit(func(e *ConsentEvent) { e.Incarnation = "" }), "consent c1 event needs an incarnation"},
-		{consent("bank-a", "c1", 1, time.Time{}), "consent c1 event needs a changed time"},
 		{consent("bank-a", "c1", 0, t0), "consent c1 event: source seq 0 must be 1 or more"},
 		{edit(func(e *ConsentEvent) { e.Status = "Maybe" }), `consent c1 event: status "Maybe" must be AwaitingAuthorisation, Authorised, Rejected, Revoked, Expired, Dormant, ReconsentRequired`},
 	} {

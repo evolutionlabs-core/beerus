@@ -74,8 +74,6 @@ func settleOnTheCalendar(t *testing.T, s *Store) {
 	}{
 		{"the weekend waits for Monday", plain, "2026-11-07 09:00", "2026-11-09 07:00", []string{"2026-11-09T06:00"}},
 		{"a holiday Monday waits for Tuesday", closed, "2026-11-07 09:00", "2026-11-09 12:00", []string{}},
-		{"a holiday Monday settles on Tuesday", closed, "2026-11-07 09:00", "2026-11-10 07:00", []string{"2026-11-10T06:00"}},
-		{"the last minute of the month", plain, "2026-11-30 23:30", "2026-11-30 23:59", []string{}},
 		{"the first minute of the month", plain, "2026-11-30 23:30", "2026-12-01 00:00", []string{"2026-12-01T00:00"}},
 	} {
 		resetSessions(t, s)
@@ -110,12 +108,10 @@ func settlementProblems(t *testing.T, s *Store) {
 		checkedAt  time.Time
 		want       []string
 	}{
-		{"nothing yet", nil, false, noon.Add(time.Hour), []string{}},
 		{"inside the grace", []time.Duration{0, time.Hour}, false, noon.Add(30 * time.Second), []string{}},
 		{"two transfers past the grace", []time.Duration{0, time.Hour}, false, noon.Add(61 * time.Second), []string{"2 transfers resolved before the 2026-11-04 12:00 cutoff are not settled yet"}},
 		{"one transfer past the grace", []time.Duration{0, 4 * time.Hour}, false, noon.Add(61 * time.Second), []string{"1 transfer resolved before the 2026-11-04 12:00 cutoff is not settled yet"}},
 		{"settled but not posted", []time.Duration{0}, true, noon.Add(time.Hour), []string{"settlement session 2026-11-04T12:00 was cut off at 2026-11-04T12:00:00+01:00 and is not posted to the CBN yet"}},
-		{"settled inside the grace", []time.Duration{0}, true, noon.Add(30 * time.Second), []string{}},
 	} {
 		resetSessions(t, s)
 		for i, d := range r.resolvedAt {

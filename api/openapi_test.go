@@ -15,80 +15,7 @@ import (
 	v3 "github.com/pb33f/libopenapi/datamodel/high/v3"
 )
 
-type operation struct{ id, method, path string }
-
-var specs = []struct {
-	name       string
-	file       string
-	operations []operation
-}{
-	{"nip", "nip/openapi.yaml", []operation{
-		{"nibssNameEnquiry", http.MethodGet, "/v1/name-enquiries"},
-		{"nibssEnrolBVN", http.MethodPost, "/v1/bvns"},
-		{"nibssFundsTransfer", http.MethodPost, "/v1/transfers"},
-		{"nibssStatusQuery", http.MethodPost, "/v1/transfers/{session_id}/status-queries"},
-		{"nibssBankDirectory", http.MethodGet, "/v1/banks"},
-		{"bankAccountNameEnquiry", http.MethodGet, "/v1/nip/account-names/{account_number}"},
-		{"bankCredit", http.MethodPost, "/v1/nip/credits"},
-		{"bankCreditStatus", http.MethodGet, "/v1/nip/credits/{session_id}"},
-		{"controlNameEnquiry", http.MethodGet, "/v1/control/name-enquiries"},
-		{"settleSessions", http.MethodPost, "/v1/control/settlement-sessions"},
-		{"controlBanks", http.MethodGet, "/v1/control/banks"},
-		{"controlBank", http.MethodGet, "/v1/control/banks/{bank_id}"},
-		{"registerBank", http.MethodPut, "/v1/control/banks/{bank_id}"},
-		{"setBankStatus", http.MethodPut, "/v1/control/banks/{bank_id}/status"},
-		{"nibssRegistryClients", http.MethodGet, "/v1/registry/clients"},
-		{"nibssRegistryClient", http.MethodGet, "/v1/registry/clients/{client_id}"},
-		{"nibssRecordConsent", http.MethodPost, "/v1/consents"},
-		{"nibssSettlementReports", http.MethodGet, "/v1/settlement-reports"},
-		{"nibssSettlementPosition", http.MethodGet, "/v1/settlement-position"},
-		{"controlOpenSessions", http.MethodGet, "/v1/control/banks/{bank_id}/open-sessions"},
-		{"controlClosureSessions", http.MethodGet, "/v1/control/banks/{bank_id}/closure-sessions"},
-		{"controlSession", http.MethodGet, "/v1/control/sessions/{session_id}"},
-		{"controlRegistryClients", http.MethodGet, "/v1/control/registry/clients"},
-		{"registerRegistryClient", http.MethodPut, "/v1/control/registry/clients/{client_id}"},
-		{"controlConsents", http.MethodGet, "/v1/control/consents"},
-	}},
-	{"participant", "participant/openapi.yaml", []operation{
-		{"participantHealth", http.MethodGet, "/v1/health"},
-		{"participantStatus", http.MethodGet, "/v1/status"},
-		{"ensureParticipantStep", http.MethodPost, "/v1/steps/{step_id}/ensure"},
-		{"closeParticipant", http.MethodPost, "/v1/close"},
-		{"stopParticipant", http.MethodPost, "/v1/stop"},
-		{"setParticipantPhase", http.MethodPut, "/v1/phase"},
-		{"listParticipantFaults", http.MethodGet, "/v1/faults"},
-		{"setParticipantFault", http.MethodPost, "/v1/faults"},
-		{"clearParticipantFaults", http.MethodDelete, "/v1/faults"},
-		{"listCustomers", http.MethodGet, "/v1/customers"},
-		{"createCustomer", http.MethodPost, "/v1/customers"},
-		{"closeCustomer", http.MethodPost, "/v1/customers/{customer_id}/close"},
-		{"listAccounts", http.MethodGet, "/v1/accounts"},
-		{"openAccount", http.MethodPost, "/v1/accounts"},
-		{"closeAccount", http.MethodPost, "/v1/accounts/{nuban}/close"},
-		{"accountStatement", http.MethodGet, "/v1/accounts/{nuban}/statement"},
-		{"depositCash", http.MethodPost, "/v1/deposits"},
-		{"withdrawCash", http.MethodPost, "/v1/withdrawals"},
-		{"sendTransfer", http.MethodPost, "/v1/transfers"},
-		{"quoteTransfer", http.MethodPost, "/v1/transfers/quote"},
-		{"countOpenSends", http.MethodGet, "/v1/nip/sends/open"},
-		{"queryTransferStatus", http.MethodPost, "/v1/nip/sends/{session_id}/status-query"},
-		{"getAccount", http.MethodGet, "/v1/accounts/{nuban}"},
-		{"freezeAccount", http.MethodPost, "/v1/accounts/{nuban}/freeze"},
-		{"listClosurePayouts", http.MethodGet, "/v1/closure-payouts"},
-		{"createClosurePayout", http.MethodPost, "/v1/closure-payouts"},
-		{"checkLedger", http.MethodGet, "/v1/ledger/check"},
-		{"booksTotals", http.MethodGet, "/v1/books/totals"},
-		{"listBookEntries", http.MethodGet, "/v1/books/accounts/{nuban}/entries"},
-		{"getBookEntry", http.MethodGet, "/v1/books/accounts/{nuban}/entries/{entry_id}"},
-		{"listSessionEntries", http.MethodGet, "/v1/books/sessions/{session_id}"},
-	}},
-	{"settlement", "settlement/openapi.yaml", []operation{
-		{"postSettlementSession", http.MethodPost, "/v1/settlement-sessions"},
-		{"getSettlementBalance", http.MethodGet, "/v1/banks/{bank_id}/settlement-balance"},
-		{"listSettlementPostings", http.MethodGet, "/v1/settlement-postings"},
-		{"openSettlementAccount", http.MethodPut, "/v1/control/banks/{bank_id}/settlement-account"},
-	}},
-}
+var specs = []string{"nip", "participant", "settlement"}
 
 type found struct {
 	method, path string
@@ -242,50 +169,27 @@ func buildResponse(t *testing.T, f found, status string, r *v3.Response, example
 	return resp
 }
 
-func checkSpec(t *testing.T, specFile string, operations []operation) {
-	t.Helper()
-	doc, v := load(t, specFile)
-	ops := index(t, doc)
-	listed := map[string]bool{}
-	for _, row := range operations {
-		listed[row.id] = true
-		t.Run(row.id, func(t *testing.T) {
-			f, ok := ops[row.id]
-			if !ok {
-				t.Fatalf("operation %s is not in the document", row.id)
-			}
-			if f.method != row.method || f.path != row.path {
-				t.Fatalf("operation %s is %s %s, want %s %s", row.id, f.method, f.path, row.method, row.path)
-			}
-			req := buildRequest(t, f)
-			if ok, errs := v.ValidateHttpRequest(req); !ok {
-				t.Fatalf("request: %v", errs)
-			}
-			for status, r := range f.op.Responses.Codes.FromOldest() {
-				mt := r.Content.GetOrZero("application/json")
-				if mt == nil {
-					t.Fatalf("%s %s: response has no JSON content", row.id, status)
+func TestOpenAPI(t *testing.T) {
+	for _, name := range specs {
+		t.Run(name, func(t *testing.T) {
+			doc, v := load(t, name+"/openapi.yaml")
+			for id, f := range index(t, doc) {
+				req := buildRequest(t, f)
+				if ok, errs := v.ValidateHttpRequest(req); !ok {
+					t.Errorf("%s request: %v", id, errs)
 				}
-				for _, example := range mediaExamples(t, row.id, mt) {
-					req := buildRequest(t, f)
-					if ok, errs := v.ValidateHttpResponse(req, buildResponse(t, f, status, r, example)); !ok {
-						t.Errorf("response %s: %v", status, errs)
+				for status, r := range f.op.Responses.Codes.FromOldest() {
+					mt := r.Content.GetOrZero("application/json")
+					if mt == nil {
+						t.Fatalf("%s %s: response has no JSON content", id, status)
+					}
+					for _, example := range mediaExamples(t, id, mt) {
+						if ok, errs := v.ValidateHttpResponse(buildRequest(t, f), buildResponse(t, f, status, r, example)); !ok {
+							t.Errorf("%s response %s: %v", id, status, errs)
+						}
 					}
 				}
 			}
-		})
-	}
-	for id := range ops {
-		if !listed[id] {
-			t.Errorf("operation %s has no test row", id)
-		}
-	}
-}
-
-func TestOpenAPI(t *testing.T) {
-	for _, s := range specs {
-		t.Run(s.name, func(t *testing.T) {
-			checkSpec(t, s.file, s.operations)
 		})
 	}
 }

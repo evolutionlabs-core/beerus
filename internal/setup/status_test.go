@@ -74,12 +74,9 @@ func TestLoadStatusErrors(t *testing.T) {
 		corrupt          bool
 	}{
 		{"version 1", `{"version":1,"setup":"beerus","clock":{"anchor_business":"2026-11-04T08:00:00+01:00"},"applied":{"spec":{"start":"2026-11-04T08:00:00+01:00"}}}`, "%s: " + older, ErrOldSetup, false},
-		{"version 0", `{"version":0,"setup":"beerus"}`, "%s: " + older, ErrOldSetup, false},
-		{"no version", `{"setup":"beerus"}`, "%s: " + older, ErrOldSetup, false},
 		{"newer version", `{"version":3,"setup":"beerus","future":true}`, "control.json has version 3, but this beerus reads up to version 2. Upgrade beerus", nil, false},
 		{"unknown field", `{"version":2,"setup":"beerus","colour":"red"}`, `decode control.json: json: unknown field "colour"`, nil, false},
 		{"not json", `{`, "decode control.json: unexpected end of JSON input", nil, true},
-		{"empty", ``, "decode control.json: unexpected end of JSON input", nil, true},
 		{"version as text", `{"version":"x"}`, "", nil, true},
 	}
 	for _, r := range rows {

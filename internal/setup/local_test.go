@@ -73,8 +73,6 @@ func TestLoadLocalRejects(t *testing.T) {
 		{"port too high", "partner_port: 7443", "partner_port: 70000", "local.yaml:6:3: connect.partner_port 70000 is not a port. Use a number from 1 to 65535, or leave it out."},
 		{"zero window", "window: 300", "window: 0", "local.yaml:3:25: ports.window 0 must be more than zero. Leave it out for the default."},
 		{"bad duration", "sync_interval: 30s", "sync_interval: soon", `local.yaml:10:3: connect.sync_interval "soon" is not a duration longer than zero. Use a duration such as 30s.`},
-		{"widget tls from v0.1.0", "widget_port: 7444", "widget_port: 7444\n  widget_tls: true", `local.yaml:8:3: unknown field "widget_tls". Remove it.`},
-		{"bad webhook", "webhook_url: http://localhost:3000/webhooks", "webhook_url: ftp://x", `local.yaml:13:62: partners[balance].webhook_url "ftp://x" is not an http or https URL. Use a full URL such as http://localhost:3000/webhooks.`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

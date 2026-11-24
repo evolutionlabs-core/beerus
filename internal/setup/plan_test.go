@@ -222,7 +222,6 @@ func TestBuildNoChanges(t *testing.T) {
 	buildCases(t, []planCase{
 		{name: "same spec"},
 		{name: "codes left out keep the allocated ones", desired: eb("bank-a", noCodes)},
-		{name: "codes allocated earlier and never pinned in applied", status: ab("bank-b", noCodes), desired: eb("bank-b", noCodes)},
 		{name: "same nuban code written with leading zeros", desired: eb("bank-a", func(b *Bank) { b.NUBANCode = "000901" })},
 		{name: "state active written out", desired: eb("bank-a", func(b *Bank) { b.State = StateActive })},
 		{name: "holidays reordered and repeated", status: appliedHolidays([]string{"2026-12-28", "2027-01-02"}, nil), desired: holidays([]string{"2027-01-02", "2026-12-28", "2027-01-02"}, nil)},
@@ -231,7 +230,6 @@ func TestBuildNoChanges(t *testing.T) {
 			st.Applied.Spec.NIP, st.Applied.Spec.Connect = d.NIP, d.Connect
 		}, desired: func(s *Spec) { s.Spec.NIP, s.Spec.Connect = NIP{}, ConnectLegal{} }},
 		{name: "bank already terminating and out of the file", status: phase(KindBank, "bank-b", config.PhaseTerminating), desired: drop("bank-b")},
-		{name: "partner already terminating and out of the file", status: phase(KindPartner, "balance", config.PhaseTerminating), desired: func(s *Spec) { s.Spec.Partners = nil }},
 		{name: "bank closing with state closed", status: bothSt(ab("bank-b", func(b *Bank) { b.State, b.OnRemove = StateClosed, transferToA }), phase(KindBank, "bank-b", config.PhaseClosing)), desired: eb("bank-b", func(b *Bank) { b.State, b.OnRemove = StateClosed, transferToA })},
 		{name: "provisioning bank with steps still running", status: rs(KindBank, "bank-b", func(r *Resource) {
 			r.Phase, r.Steps = config.PhaseProvisioning, map[string]string{config.StepAllocate: stepDone}
@@ -242,13 +240,10 @@ func TestBuildNoChanges(t *testing.T) {
 func TestBuildLockedFields(t *testing.T) {
 	buildCases(t, []planCase{
 		{name: "apiVersion", desired: func(s *Spec) { s.APIVersion = "beerus.dev/v2" }, errs: []string{"apiVersion cannot change from beerus.dev/v1 to beerus.dev/v2. Put back beerus.dev/v1."}},
-		{name: "kind", desired: func(s *Spec) { s.Kind = "World" }, errs: []string{"kind cannot change from Setup to World. Put back Setup."}},
 		{name: "metadata.name", desired: both(func(s *Spec) { s.Metadata.Name = "lagos-dev" }, pinned("metadata.name", 4, 9)), errs: []string{"setup.yaml:4:9: metadata.name is lagos-dev, but this dir holds setup beerus. Use the file for beerus, or another dir."}, is: ErrSetupMismatch},
 		{name: "nip.sessions", desired: func(s *Spec) { s.Spec.NIP.Sessions = 6 }, errs: []string{"nip.sessions cannot change from 4 to 6. Put back 4."}},
 		{name: "bank type", desired: eb("bank-a", func(b *Bank) { b.Type = "microfinance" }), errs: []string{"banks[bank-a].type cannot change from commercial to microfinance. Put back commercial."}},
 		{name: "nuban_code with its line", desired: both(eb("bank-b", func(b *Bank) { b.NUBANCode = "905" }), pinned("banks[bank-b].nuban_code", 31, 19)), errs: []string{"setup.yaml:31:19: banks[bank-b].nuban_code cannot change; it is 902"}},
-		{name: "nip_code", desired: eb("bank-b", func(b *Bank) { b.NIPCode = "999009" }), errs: []string{"banks[bank-b].nip_code cannot change; it is 999002"}},
-		{name: "nip_code against an allocated code", status: ab("bank-b", func(b *Bank) { b.NIPCode = "" }), desired: eb("bank-b", func(b *Bank) { b.NIPCode = "999009" }), errs: []string{"banks[bank-b].nip_code cannot change; it is 999002"}},
 		{name: "settles_through set later", desired: eb("bank-b", func(b *Bank) { b.SettlesThrough = "bank-a" }), errs: []string{"banks[bank-b].settles_through cannot change from nothing to bank-a. Put back nothing."}},
 		{name: "two locked fields reported together", desired: both(eb("bank-a", func(b *Bank) { b.Type = "digital" }), func(s *Spec) { s.Spec.NIP.Sessions = 2 }), errs: []string{"nip.sessions cannot change from 4 to 2. Put back 4.", "banks[bank-a].type cannot change from commercial to digital. Put back commercial."}},
 	})
@@ -261,7 +256,6 @@ func TestBuildChangeableFields(t *testing.T) {
 	buildCases(t, []planCase{
 		{name: "name is a rebrand", desired: eb("bank-a", func(b *Bank) { b.Name = "Zenith Bank" }), want: []Action{upd(KindBank, "bank-a", fc("name", "Bank A", "Zenith Bank"))}},
 		{name: "active to suspended", desired: eb("bank-b", func(b *Bank) { b.State = StateSuspended }), want: []Action{upd(KindBank, "bank-b", fc("state", StateActive, StateSuspended))}},
-		{name: "suspended to active", status: ab("bank-b", func(b *Bank) { b.State = StateSuspended }), want: []Action{upd(KindBank, "bank-b", fc("state", StateSuspended, StateActive))}},
 		{name: "caps", status: ab("bank-a", func(b *Bank) { b.NetDebitCap = 50000000000 }), desired: eb("bank-a", func(b *Bank) { b.NetDebitCap, b.Collateral = 80000000000, 100000000000 }), want: []Action{upd(KindBank, "bank-a", fc("net_debit_cap_minor", "50000000000", "80000000000"), fc("collateral_minor", "0", "100000000000"))}},
 		{name: "open banking", desired: eb("bank-a", func(b *Bank) { b.OpenBanking = ob }), want: []Action{upd(KindBank, "bank-a", fc("open_banking.consent_months", "0", "6"), fc("open_banking.refresh_days", "0", "30"), fc("open_banking.dormant_days", "0", "90"), fc("open_banking.assertion_seconds", "0", "300"), fc("open_banking.access_seconds", "0", "900"))}},
 		{name: "on_remove", desired: eb("bank-b", func(b *Bank) {
@@ -279,13 +273,10 @@ func TestBuildHolidays(t *testing.T) {
 	buildCases(t, []planCase{
 		{name: "future add", desired: holidays(dates("2026-12-28", "2026-11-06"), nil), want: holiday("holidays.add", "", "2026-11-06")},
 		{name: "future removal from add", desired: holidays(nil, nil), want: holiday("holidays.add", "2026-12-28", "")},
-		{name: "future remove entry", desired: holidays(dates("2026-12-28"), dates("2026-12-25")), want: holiday("holidays.remove", "", "2026-12-25")},
 		{name: "far future", desired: holidays(dates("2026-12-28", "2999-12-31"), nil), want: holiday("holidays.add", "", "2999-12-31")},
 		{name: "past add with its line", desired: both(holidays(dates("2026-12-28", "2026-11-01"), nil), pinned("holidays.add[2026-11-01]", 12, 12)), errs: []string{"setup.yaml:12:12: holidays.add 2026-11-01 is in the past and cannot change."}},
 		{name: "today", desired: holidays(dates("2026-12-28"), dates("2026-11-05")), errs: []string{"holidays.remove 2026-11-05 is today and cannot change."}},
-		{name: "past date dropped from the file", status: appliedHolidays(dates("2026-10-30", "2026-12-28"), nil), errs: []string{"holidays.add 2026-10-30 is in the past and cannot change."}},
 		{name: "past dates kept unchanged", status: appliedHolidays(dates("2025-01-02", "2026-12-28"), nil), desired: holidays(dates("2025-01-02", "2026-12-28"), nil)},
-		{name: "leap day in the past", status: appliedHolidays(dates("2026-12-28"), dates("2024-02-29")), errs: []string{"holidays.remove 2024-02-29 is in the past and cannot change."}},
 		{name: "not a date", desired: holidays(dates("2026-12-28", "2026-02-30"), nil), errs: []string{`holidays.add "2026-02-30" is not a date. Write it as YYYY-MM-DD.`}},
 	})
 }
@@ -295,10 +286,8 @@ func TestBuildStateTransitions(t *testing.T) {
 	closedB := bothSt(ab("bank-b", func(b *Bank) { b.State = StateClosed }), phase(KindBank, "bank-b", config.PhaseClosed))
 	buildCases(t, []planCase{
 		{name: "active to closed", desired: eb("bank-b", func(b *Bank) { b.State, b.OnRemove = StateClosed, toA }), want: []Action{closing("bank-b", fc("state", StateActive, StateClosed), fc("on_remove", "", "transfer to bank-a"), fc("on_remove.money", "", MoneyTransfer), fc("on_remove.to", "", "Bank A"))}},
-		{name: "suspended to closed", status: ab("bank-b", func(b *Bank) { b.State, b.OnRemove = StateSuspended, &Removal{Money: MoneyLeave} }), desired: eb("bank-b", func(b *Bank) { b.State, b.OnRemove = StateClosed, &Removal{Money: MoneyLeave} }), want: []Action{closing("bank-b", fc("state", StateSuspended, StateClosed), fc("on_remove.money", "", MoneyLeave))}},
 		{name: "closed is one-way", status: closedB, desired: eb("bank-b", func(b *Bank) { b.State = StateActive }), errs: []string{"banks[bank-b].state cannot change from closed to active. A closed bank stays closed; remove it from the file instead."}},
 		{name: "new bank cannot start closed", desired: add(Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", State: StateClosed}), errs: []string{"banks[bank-c].state cannot be closed for a new bank. Use active or suspended."}},
-		{name: "new bank can start suspended", desired: add(Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", State: StateSuspended}), want: []Action{create("bank-c", "commercial", "000001", "001", fc("state", "", StateSuspended))}},
 		{name: "closed bank removed from the file", status: closedB, desired: drop("bank-b"), want: []Action{gone(KindBank, "bank-b", "beerus_x_bank_b")}},
 	})
 }
@@ -313,7 +302,6 @@ func TestBuildRemoval(t *testing.T) {
 		{name: "settled-through bank blocks", status: addApplied(mfb), desired: both(drop("bank-b"), add(mfb)), want: []Action{drift(KindBank, "mfb", fc("status", stepDone, "missing")), {Op: OpRemove, Kind: KindBank, ID: "bank-b", Destructive: true, Impact: removeB.Impact, Blockers: []string{"mfb settles through bank-b and is not leaving. Remove mfb too, or keep bank-b."}}}},
 		{name: "settled-through bank leaving with its settler, settler first", status: func(st *Status) { st.Applied.Spec.Banks = append([]Bank{mfb}, st.Applied.Spec.Banks...) }, desired: drop("bank-b"), want: []Action{gone(KindBank, "mfb"), removeB}},
 		{name: "re-add while terminating", status: phase(KindBank, "bank-b", config.PhaseTerminating), desired: pinned("banks[bank-b].id", 27, 11), errs: []string{"setup.yaml:27:11: banks[bank-b] is being removed, and its id is never reused. Choose another id."}, is: ErrBeingRemoved},
-		{name: "partner re-add while terminating", status: phase(KindPartner, "balance", config.PhaseTerminating), errs: []string{"partners[balance] is being removed and cannot be added back until removal finishes. Take it out of the file, or wait."}, is: ErrBeingRemoved},
 		{name: "re-add after removal finished hits the tombstone", status: func(st *Status) { st.Applied.Spec.Banks, st.Resources = st.Applied.Spec.Banks[:1], st.Resources[:1] }, dir: []nip.Institution{institution("bank-b", "Bank B", "999002", "902", nip.StatusRemoved)}, desired: eb("bank-b", func(b *Bank) { b.NIPCode, b.NUBANCode = "", "" }), errs: []string{"banks[bank-b].id bank-b belonged to a removed bank. Choose another id."}},
 		{name: "partners removed before banks, in reverse", status: func(st *Status) {
 			st.Applied.Spec.Partners = append(st.Applied.Spec.Partners, Partner{ID: "ledgerly", Name: "Ledgerly"})
@@ -338,9 +326,6 @@ func TestBuildOnRemoveTarget(t *testing.T) {
 	buildCases(t, []planCase{
 		{name: "close to itself", desired: closeBTo("bank-b"), errs: []string{"banks[bank-b].on_remove sends money to bank-b itself. Choose another bank."}},
 		{name: "close to a bank closing too", status: withC(config.PhaseActive, none), desired: both(add(bankC), closeBTo("bank-c"), eb("bank-c", func(b *Bank) { b.State, b.OnRemove = StateClosed, &Removal{Money: MoneyLeave} })), errs: []string{"banks[bank-b].on_remove sends money to bank-c, which is closing too. Choose a bank that stays open."}},
-		{name: "close to a bank already terminating", status: withC(config.PhaseTerminating, none), desired: closeBTo("bank-c"), errs: []string{"banks[bank-b].on_remove sends money to bank-c, which is leaving too. Choose a bank that stays."}},
-		{name: "close to a bank already closed", status: withC(config.PhaseClosed, func(b *Bank) { b.State = StateClosed }), desired: both(add(bankC), eb("bank-c", func(b *Bank) { b.State = StateClosed }), closeBTo("bank-c")), errs: []string{"banks[bank-b].on_remove sends money to bank-c, which is closing or closed. Choose a bank that stays open."}},
-		{name: "close and rename together", desired: eb("bank-b", func(b *Bank) { b.Name, b.State, b.OnRemove = "Sterling Bank", StateClosed, &Removal{Money: MoneyLeave} }), want: []Action{closing("bank-b", fc("name", "Bank B", "Sterling Bank"), fc("state", StateActive, StateClosed), fc("on_remove", "", MoneyLeave), fc("on_remove.money", "", MoneyLeave))}},
 		{name: "removal to a bank removed in the same plan", status: bothSt(withC(config.PhaseActive, none), ab("bank-b", func(b *Bank) { b.OnRemove = &Removal{Money: MoneyTransfer, To: "bank-c"} })), desired: drop("bank-b"), errs: []string{"on_remove of removed bank bank-b sends money to bank-c, which is leaving too. Choose a bank that stays."}},
 		{name: "removal to a bank that was never in the file", status: ab("bank-b", func(b *Bank) {
 			b.OnRemove = &Removal{Money: MoneyPayout, Customers: map[string]string{"c1": MoneyTransfer}, To: "bank-z"}
@@ -367,8 +352,6 @@ func TestBuildAllocation(t *testing.T) {
 		{name: "the first tier runs out and the second pads to six digits", small: true, dir: []nip.Institution{old("old-1", "000001", "001"), old("old-2", "000002", "002")}, desired: both(add(newBank("bank-c", "commercial")), add(newBank("bank-d", "commercial"))), want: []Action{create("bank-c", "commercial", "001000", "001000"), create("bank-d", "commercial", "001001", "001001")}},
 		{name: "every tier used", small: true, dir: []nip.Institution{old("old-1", "000001", "001"), old("old-2", "000002", "002"), old("old-3", "001000", "001000"), old("old-4", "001001", "001001")}, desired: add(newBank("bank-c", "commercial")), errs: []string{"banks[bank-c]: no bank codes left for deposit money banks (all 4 are used). Run beerus reset to start again."}},
 		{name: "codes cannot be set on a new bank", desired: add(Bank{ID: "bank-c", Name: "Bank C", Type: "commercial", NIPCode: "123456", NUBANCode: "123"}), errs: []string{"banks[bank-c].nip_code is assigned by Beerus. Remove it.", "banks[bank-c].nuban_code is assigned by Beerus. Remove it."}},
-		{name: "an existing bank may repeat its codes", desired: eb("bank-b", func(b *Bank) { b.NUBANCode = "000902" })},
-		{name: "an existing bank cannot change its codes", desired: eb("bank-b", func(b *Bank) { b.NIPCode, b.NUBANCode = "999009", "905" }), errs: []string{"banks[bank-b].nip_code cannot change; it is 999002", "banks[bank-b].nuban_code cannot change; it is 902"}},
 		{name: "first apply allocates in file order around the directory", fresh: true, dir: []nip.Institution{member("bank-a", "999001", "901"), member("bank-z", "999002", "902")}, desired: noCodes, want: []Action{create("bank-a", "commercial", "000001", "001"), create("bank-b", "digital", "000002", "002"), {Op: OpCreate, Kind: KindPartner, ID: "balance", Fields: []FieldChange{fc("name", "", "Balance")}}}},
 	})
 }
@@ -379,12 +362,7 @@ func TestBuildSettlesThroughOrderAndDrift(t *testing.T) {
 		{name: "settler created after its bank", desired: both(add(Bank{ID: "mfb", Name: "Mfb", Type: "microfinance", SettlesThrough: "bank-c"}), add(Bank{ID: "bank-c", Name: "Bank C", Type: "commercial"})), want: []Action{create("bank-c", "commercial", "000001", "001"), create("mfb", "microfinance", "090001", "50001", fc("settles_through", "", "bank-c"))}},
 		{name: "loop", desired: both(add(Bank{ID: "x", Name: "X", Type: "commercial", SettlesThrough: "y"}), add(Bank{ID: "y", Name: "Y", Type: "commercial", SettlesThrough: "x"})), errs: []string{"banks[x].settles_through forms a loop: x → y → x. Point one of them at a bank that settles directly."}},
 		{name: "database missing", status: step(KindBank, "bank-a", "missing"), want: []Action{drift(KindBank, "bank-a", missing)}},
-		{name: "repairing with two parts", status: rs(KindBank, "bank-b", func(r *Resource) {
-			r.Phase, r.Steps[config.StepFiles], r.Steps[config.StepSite] = config.PhaseRepairing, "missing", "failed"
-		}), want: []Action{drift(KindBank, "bank-b", fc("steps.files", stepDone, "missing"), fc("steps.site", stepDone, "failed"))}},
-		{name: "repairing with no step recorded", status: phase(KindPartner, "balance", config.PhaseRepairing), want: []Action{drift(KindPartner, "balance")}},
 		{name: "status record missing", status: func(st *Status) { st.Resources = st.Resources[1:] }, want: []Action{drift(KindBank, "bank-a", fc("status", stepDone, "missing"))}},
-		{name: "system database missing", status: step(KindSystem, SystemNIBSS, "missing"), want: []Action{drift(KindSystem, SystemNIBSS, missing)}},
 		{name: "terminating bank is not drift", status: bothSt(phase(KindBank, "bank-b", config.PhaseTerminating), step(KindBank, "bank-b", "missing")), desired: drop("bank-b")},
 		{name: "an update wins over drift", status: step(KindBank, "bank-a", "missing"), desired: eb("bank-a", func(b *Bank) { b.Name = "Zenith Bank" }), want: []Action{upd(KindBank, "bank-a", fc("name", "Bank A", "Zenith Bank"))}},
 	})

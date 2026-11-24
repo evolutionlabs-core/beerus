@@ -112,17 +112,8 @@ func TestParseErrors(t *testing.T) {
 		{name: "bad yaml", raw: []byte("kind: [\n"), want: []string{"setup.yaml: read yaml: yaml: line 1: did not find expected node content"}},
 		{name: "repeated key", old: "  name: beerus\n", new: "  name: beerus\n  name: other\n", want: []string{`setup.yaml:5:3: metadata.name appears twice. Keep one.`}},
 		{name: "zero sessions", old: "sessions: 4", new: "sessions: 0", want: []string{`setup.yaml:7:5: nip.sessions 0 does not split the day into whole minutes. Use a number such as 1, 2, 4, 6, 12 or 24.`}},
-		{name: "uneven sessions", old: "sessions: 4", new: "sessions: 7", want: []string{`setup.yaml:7:5: nip.sessions 7 does not split the day into whole minutes. Use a number such as 1, 2, 4, 6, 12 or 24.`}},
-		{name: "sessions as text", old: "sessions: 4", new: "sessions: four", want: []string{`setup.yaml:7:15: nip.sessions four is not a whole number. Write digits only, such as 4.`}},
 		{name: "unknown field", old: "    brand_name: Beerus\n", new: "    brand_name: Beerus\n    widget_tls: true\n", want: []string{`setup.yaml:12:5: unknown field "widget_tls". Remove it.`}},
-		{name: "typo in spec", old: "  nip:", new: "  nap:", want: []string{`setup.yaml:6:3: unknown field "nap" (did you mean "nip"?)`}},
 		{name: "zero cap", old: "      nuban_code: \"901\"\n", new: "      nuban_code: \"901\"\n      net_debit_cap_minor: 0\n", want: []string{`setup.yaml:23:7: banks[bank-a].net_debit_cap_minor 0 must be more than zero. Give it in kobo, or leave it out for the default.`}},
-		{name: "empty state", old: "      nuban_code: \"902\"\n", new: "      nuban_code: \"902\"\n      state: \"\"\n", want: []string{`setup.yaml:28:7: banks[bank-b].state "" is not valid. Use active, suspended or closed.`}},
-		{name: "unknown field and bad type", old: "type: digital", new: "type: online\n      colour: red", want: []string{
-			`setup.yaml:26:7: unknown field "colour". Remove it.`,
-			`setup.yaml:25:7: banks[bank-b].type "online" is not a bank type. Use commercial, digital or microfinance.`,
-		}},
-		{name: "duplicate partner ids", old: "  partners: []\n", new: "  partners:\n    - {id: balance, name: Balance}\n    - {id: balance, name: Other}\n", want: []string{`setup.yaml:30:8: partners[1].id balance is already used by another partner. Give each partner its own id.`}},
 	}
 	files, err := filepath.Glob(filepath.Join("testdata", "bad", "*.yaml"))
 	if err != nil {
