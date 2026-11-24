@@ -39,7 +39,7 @@ type ConnectionView struct {
 	ID                 string         `json:"id"`
 	Status             string         `json:"status"`
 	Institution        InstitutionRef `json:"institution"`
-	WorkspaceID        string         `json:"workspace_id"`
+	UserID             string         `json:"user_id"`
 	StartDate          string         `json:"start_date"`
 	EffectiveStartDate *string        `json:"effective_start_date"`
 	ConsentExpiresAt   *string        `json:"consent_expires_at"`

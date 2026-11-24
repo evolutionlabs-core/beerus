@@ -21,6 +21,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/disk"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 	"github.com/evolutionlabs-core/beerus/internal/state"
@@ -42,6 +43,7 @@ type App struct {
 	dir         string
 	cfg         *config.Config
 	clock       *clock.Clock
+	linkDays    int
 	st          *State
 	key         config.SigningKey
 	log         *slog.Logger
@@ -81,6 +83,10 @@ func New(dir string, o Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		return nil, fmt.Errorf("load country pack: %w", err)
+	}
 	key, err := config.WebhookKey(cfg)
 	if err != nil {
 		return nil, err
@@ -95,6 +101,7 @@ func New(dir string, o Options) (*App, error) {
 	a := &App{
 		dir:       dir,
 		cfg:       cfg,
+		linkDays:  pack.Link.HistoryDays,
 		key:       key,
 		log:       o.Logger,
 		limiters:  map[string]*rate.Limiter{},

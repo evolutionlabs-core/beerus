@@ -286,7 +286,7 @@ func TestStory(t *testing.T) {
 	sh.expect("beerus nip settlement", `\{\n  "problems": \[\],\n  "sessions": 3\n\}\n`)
 	sh.expect("beerus accounts", `NUBAN +OWNER +CUSTOMER +TYPE +STATUS +BALANCE\n`+nubA+` +Adaeze Okafor +`+adaA+` +current +active +₦488,989\.25\n(\d{10}) +Tunde Motors +`+`cus_\w+`+` +current +active +₦7,000\.00\n2 accounts on this page\.\n`)
 	s.people["adaeze@bank-b"] = persona{ID: "adaeze", Bank: "bank-b", Name: "Adaeze Okafor", Username: "adaeze", Password: "beerus-test-adaeze", Customer: adaB, BVN: bvn, Accounts: []string{nubAdaB}}
-	conn := s.connect("adaeze", "bank-b", s.today().AddDays(-3))
+	conn := s.connect("adaeze", "bank-b")
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
 
 	sh.expect("beerus transfer --from "+nubA+" --to "+nubChidi+" --to-bank bank-b --amount 2000", `Sending ₦2,000\.00 to Chidi Okafor at Bank B\.\nSession \d+: success at `+hm+` WAT\nNo charges\. Total debit ₦2,000\.00\. Balance ₦486,989\.25\.\n`)
@@ -314,7 +314,7 @@ func TestStory(t *testing.T) {
 		})
 	}
 	waitFor(t, waitLimit, "one connection.revoked webhook", func() bool { return len(revoked()) == 1 })
-	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil), 409)
+	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil, withToken(conn.AccessToken)), 409)
 	if got := c.ok("get", "banks"); !regexp.MustCompile(`bank-b +Bank B +terminating +no +2 +bank bank-b: ` + quote(settlePending)).MatchString(got) {
 		t.Errorf("get banks while terminating: %q", got)
 	}

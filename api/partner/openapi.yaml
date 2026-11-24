@@ -8,12 +8,12 @@ info:
 
     ## Flow
 
-    1. The partner's server creates a link session with a start date and gets a short-lived link token.
-    2. The partner opens the Connect widget in the customer's browser with that link token.
-    3. The customer picks a bank, signs in at the bank with 2FA and chooses the accounts to share.
-    4. The widget redirects the browser to the partner's `redirect_uri` with `code`, `link_session_id` and the partner's `state`. If the customer cancels or the session fails, it redirects with `error` (`access_denied`, `link_session_expired` or `institution_down`), `link_session_id` and `state` instead.
-    5. The partner's server exchanges the code and the link session ID for a permanent connection ID. If the response is lost, `GET /v1/link_sessions/{id}` shows the `connection_id`.
-    6. Connect syncs the accounts and sends webhooks. The partner always pulls data through `/transactions/sync`.
+    1. The partner's server creates a link token with `POST /v1/link/token/create`, giving its own `user_id` for the customer.
+    2. The partner opens the Connect widget in the customer's browser at `/link?token=<link_token>`.
+    3. The customer picks a bank, signs in at the bank with 2FA and approves the accounts to share. Connect then lists those accounts and the customer ticks the ones the partner may see. Only ticked accounts appear in the connection; any other account answers `404 not_found` like an unknown account.
+    4. The widget redirects the browser to the partner's `redirect_uri` with `public_token`, `link_session_id` and the partner's `state`. If the customer cancels or the session fails, it redirects with `error` (`access_denied`, `link_session_expired` or `institution_down`), `link_session_id` and `state` instead.
+    5. The partner's server exchanges the `public_token` for an `access_token` and a `connection_id` at `POST /v1/public_token/exchange`. If the response is lost, `GET /v1/link_sessions/{id}` shows the `connection_id`.
+    6. Connect syncs the accounts and sends webhooks. The partner always pulls data through `/transactions/sync`. Every call that reads or ends the connection sends its `access_token` in the `Beerus-Access-Token` header, next to `Beerus-Client-ID` and `Beerus-Secret`.
 
     ## Guarantees
 
@@ -59,8 +59,10 @@ servers:
   - url: http://connect.localhost:7443
     description: Beerus Connect on the local machine
 tags:
+  - name: Institutions
+    description: The banks a customer can link.
   - name: Link sessions
-    description: Start the Connect widget and exchange its one-time code.
+    description: Start the Connect widget and exchange its `public_token`.
   - name: Connections
     description: A partner's link to one customer's bank, backed by one consent.
   - name: Accounts
@@ -68,14 +70,15 @@ tags:
   - name: Transactions
     description: The bank feed, read with a cursor.
 security:
-  - apiKey: []
+  - clientID: []
+    secret: []
 paths:
-  /v1/link_sessions:
+  /v1/link/token/create:
     post:
       tags: [Link sessions]
-      operationId: createLinkSession
-      summary: Create a link session
-      description: Creates a link session and returns a short-lived link token for the Connect widget. The session moves through `created`, `bank_chosen`, `at_bank`, `authorised` and `exchanged`, or ends `expired`.
+      operationId: createLinkToken
+      summary: Create a link token
+      description: Starts a link and returns a short-lived `link_token`, like Plaid's `/link/token/create`. Open Connect for the customer at `{connect URL}/link?token=<link_token>`. Connect shares history from 90 days before today's Lagos date, or less if the bank keeps less. When Connect redirects the customer back, the redirect URI carries a `public_token` and the `link_session_id`; swap the `public_token` for an `access_token` and a connection at `/v1/public_token/exchange`.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -83,19 +86,19 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/LinkSessionCreate'
+              $ref: '#/components/schemas/LinkTokenCreate'
             example:
-              start_date: '2026-07-01'
-              workspace_id: ws_adaeze_bakery
+              user_id: ws_adaeze_bakery
+              institution_id: bank-a
               redirect_uri: http://localhost:3000/bank_connections/callback
               state: 9f86d081884c7d65
       responses:
         '201':
-          description: The link session was created.
+          description: The link token was created.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LinkSession'
+                $ref: '#/components/schemas/LinkToken'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -162,12 +165,52 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
-  /v1/connections/exchange:
+  /v1/institutions:
+    get:
+      tags: [Institutions]
+      operationId: listInstitutions
+      summary: List institutions
+      description: Returns the banks a customer can link, sorted by `institution_id`. Use it to show your own bank list. The `institution_id` is the same value the link flow uses. Call again with `next_cursor` while it is present.
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: The `next_cursor` from the previous call.
+          schema:
+            type: string
+          example: bank-a
+        - name: limit
+          in: query
+          required: false
+          description: The most institutions to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+      responses:
+        '200':
+          description: One page of institutions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstitutionList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/public_token/exchange:
     post:
       tags: [Link sessions]
-      operationId: exchangeCode
-      summary: Exchange a one-time code for a connection
-      description: Exchanges the widget's one-time code for a permanent connection ID. The request must carry the link session ID. Connect checks that the code belongs to that session and that the session was created by the same partner, so a code cannot be injected into another session. A code can be exchanged once. A new connection returns 201; a reauthorised connection returns 200.
+      operationId: exchangePublicToken
+      summary: Exchange a public_token for an access_token
+      description: Swaps the `public_token` the widget returned for an `access_token` and a `connection_id`, like Plaid's `/item/public_token/exchange`. A `public_token` lasts 10 minutes and works once. The token finds its own link session, so the request carries nothing else. Keep the `access_token` on your server; Connect stores only its hash and never shows it again. Repeating the request with the same `Idempotency-Key` answers `409` instead of returning the `access_token` again, because Connect does not keep it. Exchanging the `public_token` of a reauthorisation returns only the `connection_id`; the connection's existing `access_token` keeps working.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -175,23 +218,19 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CodeExchange'
+              $ref: '#/components/schemas/PublicTokenExchange'
             example:
-              code: oc_8f2e61b0c4d94a57
-              link_session_id: lks_01JBC7Q2W8M4
+              public_token: public-8f2e61b0c4d94a57
       responses:
         '200':
-          description: The existing connection was reauthorised.
+          description: The connection is ready.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Connection'
-        '201':
-          description: The connection was created.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Connection'
+                $ref: '#/components/schemas/ExchangeResult'
+              example:
+                access_token: access-3c9a41d07be84f25a1e6b0d8c7f35e92
+                connection_id: con_01JBC7Q2W8M4
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -199,7 +238,30 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: The `public_token` is not known, has expired or was already used (`invalid_public_token`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                unknown:
+                  value:
+                    error:
+                      code: invalid_public_token
+                      message: This public_token is not known.
+                      request_id: req_01JBC9X5
+                expired:
+                  value:
+                    error:
+                      code: invalid_public_token
+                      message: This public_token has expired. Start a new link.
+                      request_id: req_01JBC9X5
+                used:
+                  value:
+                    error:
+                      code: invalid_public_token
+                      message: This public_token was already used.
+                      request_id: req_01JBC9X5
         '409':
           $ref: '#/components/responses/Conflict'
         '422':
@@ -208,14 +270,16 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
-  /v1/connections/{connection_id}:
-    parameters:
-      - $ref: '#/components/parameters/ConnectionId'
+  /v1/connection:
     get:
       tags: [Connections]
       operationId: getConnection
-      summary: Get a connection
-      description: Returns a connection and its status.
+      summary: Get the connection
+      description: Returns the connection the `access_token` belongs to, and its status, like Plaid's `/item/get`. A connection that the customer or the bank revoked still answers, with status `revoked`.
+      security:
+        - clientID: []
+          secret: []
+          accessToken: []
       responses:
         '200':
           description: The connection.
@@ -223,32 +287,37 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Connection'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
-          $ref: '#/components/responses/Unauthenticated'
+          $ref: '#/components/responses/InvalidAccessToken'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
-    delete:
+  /v1/connections/remove:
+    post:
       tags: [Connections]
-      operationId: deleteConnection
-      summary: Disconnect
-      description: Disconnects the connection. Connect revokes the consent at the bank, which records it at NIBSS. The connection's status becomes `revoked`. Deleting a revoked connection succeeds again with no change.
+      operationId: removeConnection
+      summary: Remove the connection
+      description: Ends the connection the `access_token` belongs to. Connect revokes the consent at the bank, which records it at NIBSS, and the connection's status becomes `revoked`. The `access_token` then stops working and answers `401 invalid_access_token`. The request has no body. Removing a connection that the customer or the bank already revoked succeeds with no other change.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
+      security:
+        - clientID: []
+          secret: []
+          accessToken: []
       responses:
         '204':
-          description: The connection is revoked.
+          description: The connection is removed.
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
-          $ref: '#/components/responses/Unauthenticated'
+          $ref: '#/components/responses/InvalidAccessToken'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
         '422':
           $ref: '#/components/responses/Unprocessable'
         '429':
@@ -257,43 +326,18 @@ paths:
           $ref: '#/components/responses/InternalError'
         '503':
           $ref: '#/components/responses/InstitutionDown'
-  /v1/connections/{connection_id}/accounts:
-    parameters:
-      - $ref: '#/components/parameters/ConnectionId'
-    get:
-      tags: [Connections]
-      operationId: listConnectionAccounts
-      summary: List a connection's accounts
-      description: Returns the accounts the customer shared under this connection.
-      responses:
-        '200':
-          description: The accounts.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AccountList'
-        '401':
-          $ref: '#/components/responses/Unauthenticated'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '429':
-          $ref: '#/components/responses/RateLimited'
-        '500':
-          $ref: '#/components/responses/InternalError'
-  /v1/connections/{connection_id}/reauth:
-    parameters:
-      - $ref: '#/components/parameters/ConnectionId'
+  /v1/connection/reauth:
     post:
       tags: [Connections]
       operationId: reauthConnection
       summary: Start reauthorisation
-      description: Creates a link session for the customer to consent again, for example after `reauth_required` or `expired`. The partner opens the Connect widget with its link token and exchanges the returned code as usual. The connection ID and account IDs stay the same. A revoked connection cannot be reauthorised; create a new link session instead.
+      description: Creates a link session for the customer to consent again, for example after `reauth_required` or `expired`. The partner opens the Connect widget with its link token and exchanges the returned `public_token` as usual. The connection ID and account IDs stay the same, and the exchange returns no new `access_token`, and the existing one keeps working. A revoked connection cannot be reauthorised; create a new link session instead.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
+      security:
+        - clientID: []
+          secret: []
+          accessToken: []
       requestBody:
         required: false
         content:
@@ -310,16 +354,45 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LinkSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
-          $ref: '#/components/responses/Unauthenticated'
+          $ref: '#/components/responses/InvalidAccessToken'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/Unprocessable'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/accounts:
+    get:
+      tags: [Accounts]
+      operationId: listAccounts
+      summary: List the connection's accounts
+      description: Returns the accounts the customer shared under the connection the `access_token` belongs to.
+      security:
+        - clientID: []
+          secret: []
+          accessToken: []
+      responses:
+        '200':
+          description: The accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/InvalidAccessToken'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -332,6 +405,10 @@ paths:
       operationId: getAccount
       summary: Get an account
       description: Returns an account with its current and available balances.
+      security:
+        - clientID: []
+          secret: []
+          accessToken: []
       responses:
         '200':
           description: The account.
@@ -339,8 +416,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
-          $ref: '#/components/responses/Unauthenticated'
+          $ref: '#/components/responses/InvalidAccessToken'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
@@ -359,6 +438,10 @@ paths:
       operationId: getBalanceAsOf
       summary: Get the ledger balance at the end of a business day
       description: Returns the ledger balance at the end of the business day `as_of`, in Africa/Lagos. If the bank's history limit cut the history, `effective_start_date` is the first date Connect holds lines for; otherwise it is null.
+      security:
+        - clientID: []
+          secret: []
+          accessToken: []
       parameters:
         - name: as_of
           in: query
@@ -378,7 +461,7 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
-          $ref: '#/components/responses/Unauthenticated'
+          $ref: '#/components/responses/InvalidAccessToken'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
@@ -404,6 +487,10 @@ paths:
         Lines in `added` and `modified` are ordered by `sequence`. Upsert by `id`. Only pending lines appear in `removed`.
 
         A cursor belongs to one world. When Beerus starts after an unclean shutdown, it starts a new world and an old cursor returns `409 cursor_reset`. Start again with no cursor and replace the account's feed with the rebuilt one. Upserting by `id` gives no duplicates.
+      security:
+        - clientID: []
+          secret: []
+          accessToken: []
       parameters:
         - name: cursor
           in: query
@@ -431,7 +518,7 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
-          $ref: '#/components/responses/Unauthenticated'
+          $ref: '#/components/responses/InvalidAccessToken'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
@@ -450,6 +537,10 @@ paths:
       operationId: refreshAccount
       summary: Request a refresh
       description: Queues a job that fetches the latest data from the bank. The job runs asynchronously and ends with the `refresh.completed` webhook, then `sync.available` if anything changed. Refreshes are rate-limited per account in real time; past the limit the response is `429 rate_limited` with `Retry-After`.
+      security:
+        - clientID: []
+          secret: []
+          accessToken: []
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
@@ -459,8 +550,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Refresh'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
-          $ref: '#/components/responses/Unauthenticated'
+          $ref: '#/components/responses/InvalidAccessToken'
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
@@ -596,11 +689,21 @@ webhooks:
           $ref: '#/components/responses/WebhookAccepted'
 components:
   securitySchemes:
-    apiKey:
+    clientID:
       type: apiKey
       in: header
-      name: X-Api-Key
-      description: The partner's secret API key. Connect finds the partner by it.
+      name: Beerus-Client-ID
+      description: The partner's client ID. It is not secret.
+    secret:
+      type: apiKey
+      in: header
+      name: Beerus-Secret
+      description: The partner's secret. Connect stores only its hash.
+    accessToken:
+      type: apiKey
+      in: header
+      name: Beerus-Access-Token
+      description: The connection's `access_token`, from `/v1/public_token/exchange`. Send it in this header, never in a URL. Connect stores only its hash.
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
@@ -612,14 +715,6 @@ components:
         minLength: 1
         maxLength: 255
       example: 5c0d8a3e-7a1f-4f7e-9d0b-2a4c6e8f1b3d
-    ConnectionId:
-      name: connection_id
-      in: path
-      required: true
-      description: The connection ID.
-      schema:
-        type: string
-      example: con_01JBC8A5T3ZK
     AccountId:
       name: account_id
       in: path
@@ -655,7 +750,7 @@ components:
       example: v1a,hnO3f9T8Ytu9HwrXslvumlUpqtNVqkhqw/enGzPCXe5BdqzCInXqYXFymVJaA7AZdpXwVLPo3mNl8EM+m7TBAg==
   responses:
     BadRequest:
-      description: The request is malformed.
+      description: The request is malformed. A call that needs an `access_token` and has no `Beerus-Access-Token` header answers `invalid_request` with the message `Send the connection's access_token in the Beerus-Access-Token header.`
       content:
         application/json:
           schema:
@@ -663,10 +758,10 @@ components:
           example:
             error:
               code: invalid_request
-              message: start_date must be a date in YYYY-MM-DD form.
+              message: redirect_uri must exactly match a registered redirect URI.
               request_id: req_01JBC9X1
     Unauthenticated:
-      description: The API key is missing or invalid.
+      description: The client ID or secret is missing or does not match.
       content:
         application/json:
           schema:
@@ -674,7 +769,18 @@ components:
           example:
             error:
               code: unauthenticated
-              message: The API key is not valid.
+              message: The client ID and secret do not match.
+              request_id: req_01JBC9X2
+    InvalidAccessToken:
+      description: The client ID or secret is missing or does not match, or the `access_token` is not valid (`invalid_access_token`). The `access_token` is not valid when it is unknown, belongs to another partner, or belongs to a connection that was removed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: invalid_access_token
+              message: This access_token is not valid.
               request_id: req_01JBC9X2
     Forbidden:
       description: The caller may not do this.
@@ -696,10 +802,10 @@ components:
           example:
             error:
               code: not_found
-              message: No such connection.
+              message: No such account.
               request_id: req_01JBC9X4
     Conflict:
-      description: The resource is not in a state that allows this request, for example `connection_revoked` or `reauth_required` when no active consent covers the account, or `account_not_shared` when the customer dropped the account at reauthorisation.
+      description: The resource is not in a state that allows this request, for example `connection_revoked` or `reauth_required` when the connection has no active consent.
       content:
         application/json:
           schema:
@@ -710,7 +816,7 @@ components:
               message: The connection was revoked. Create a new link session.
               request_id: req_01JBC9X5
     CursorReset:
-      description: The cursor belongs to a world that was replaced after an unclean shutdown or a reset (`cursor_reset`); start again with no cursor. The same status is used when no consent covers the account any more (`connection_revoked` or `reauth_required`).
+      description: The cursor belongs to a world that was replaced after an unclean shutdown or a reset (`cursor_reset`); start again with no cursor. The same status is used when the connection has no active consent any more (`connection_revoked` or `reauth_required`).
       content:
         application/json:
           schema:
@@ -811,18 +917,17 @@ components:
       description: |
         A stable error code. The list below is not closed; treat an unknown code as its HTTP status.
 
-        - `invalid_request` (400): the request is malformed.
+        - `invalid_request` (400 or 422): the request is malformed (400), or the `Beerus-Access-Token` header is missing (400), or a value must change, such as a missing `user_id` or an unknown `institution_id` (422).
         - `invalid_cursor` (400): the cursor cannot be read.
-        - `unauthenticated` (401): the API key is missing or invalid.
+        - `unauthenticated` (401): the client ID or secret is missing or does not match.
+        - `invalid_access_token` (401): the `access_token` is unknown, belongs to another partner, or belongs to a removed connection.
         - `forbidden` (403): the caller may not do this.
         - `not_found` (404): the resource does not exist for this partner.
-        - `invalid_code` (404): the one-time code is unknown, used or expired.
+        - `invalid_public_token` (404): the `public_token` is unknown, used or expired.
         - `cursor_reset` (409): the world was replaced after an unclean shutdown or a reset.
         - `connection_revoked` (409): the connection was revoked.
         - `reauth_required` (409): the customer must consent again.
-        - `account_not_shared` (409): the customer no longer shares this account. Ask them to reconnect and share it.
         - `link_session_expired` (409): the link session expired.
-        - `link_session_mismatch` (403): the code or session belongs to another partner or workspace.
         - `idempotency_key_reused` (422): the key was used with a different body.
         - `as_of_out_of_range` (422): `as_of` is outside the dates Connect holds.
         - `rate_limited` (429): too many requests.
@@ -831,10 +936,18 @@ components:
         - `not_ready` (503): Connect has not finished registering with NIBSS.
       examples:
         - cursor_reset
-    LinkSessionCreate:
+    LinkTokenCreate:
       type: object
-      required: [start_date, workspace_id, redirect_uri]
+      required: [user_id, redirect_uri]
       properties:
+        user_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The partner's own ID for its customer, such as a Balance business. The `public_token` exchange is checked against it.
+        institution_id:
+          type: string
+          description: A bank to open Connect on, from `GET /v1/institutions`. Omit it to let the customer pick.
         redirect_uri:
           type: string
           format: uri
@@ -843,21 +956,26 @@ components:
           type: string
           maxLength: 512
           description: An opaque value returned unchanged on the redirect. Use it to protect against cross-site request forgery.
-        start_date:
+    LinkToken:
+      type: object
+      required: [link_token, expiration]
+      properties:
+        link_token:
           type: string
-          format: date
-          description: The first business date of history the partner wants. The bank's history limit may cut it.
-        workspace_id:
+          description: Opens the Connect widget at `/link?token=<link_token>`. Short-lived. It is swapped for a widget session on first use.
+        expiration:
           type: string
-          minLength: 1
-          maxLength: 128
-          description: The partner's own ID for the workspace, such as a Balance business. The code exchange is checked against it.
+          format: date-time
+          description: When the link token stops working.
+      example:
+        link_token: lt_7c1e9a2f5b8d4e60
+        expiration: '2026-10-28T12:30:00+01:00'
     LinkSessionStatus:
       type: string
-      enum: [created, bank_chosen, at_bank, authorised, exchanged, expired]
+      enum: [created, bank_chosen, at_bank, picking, authorised, exchanged, expired]
     LinkSessionView:
       type: object
-      required: [id, status, start_date, workspace_id, connection_id, created_at]
+      required: [id, status, start_date, user_id, connection_id, created_at]
       properties:
         id:
           type: string
@@ -866,11 +984,11 @@ components:
         start_date:
           type: string
           format: date
-        workspace_id:
+        user_id:
           type: string
         connection_id:
           type: [string, 'null']
-          description: Set once the session reauthorises a connection or its code is exchanged.
+          description: Set once the session reauthorises a connection or its `public_token` is exchanged.
         created_at:
           type: string
           format: date-time
@@ -878,12 +996,12 @@ components:
         id: lks_01JBC7Q2W8M4
         status: exchanged
         start_date: '2026-07-01'
-        workspace_id: ws_adaeze_bakery
+        user_id: ws_adaeze_bakery
         connection_id: con_01JBC8A5T3ZK
         created_at: '2026-10-28T12:00:00+01:00'
     LinkSession:
       type: object
-      required: [id, status, link_token, link_token_expires_at, widget_url, start_date, workspace_id, connection_id, created_at]
+      required: [id, status, link_token, link_token_expires_at, widget_url, start_date, user_id, connection_id, created_at]
       properties:
         id:
           type: string
@@ -902,7 +1020,7 @@ components:
         start_date:
           type: string
           format: date
-        workspace_id:
+        user_id:
           type: string
         connection_id:
           type: [string, 'null']
@@ -917,9 +1035,33 @@ components:
         link_token_expires_at: '2026-10-28T12:30:00+01:00'
         widget_url: http://connect.localhost:7444/link?token=lt_7c1e9a2f5b8d4e60
         start_date: '2026-07-01'
-        workspace_id: ws_adaeze_bakery
+        user_id: ws_adaeze_bakery
         connection_id: null
         created_at: '2026-10-28T12:00:00+01:00'
+    ListedInstitution:
+      type: object
+      required: [institution_id, name]
+      properties:
+        institution_id:
+          type: string
+        name:
+          type: string
+    InstitutionList:
+      type: object
+      required: [institutions]
+      properties:
+        institutions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ListedInstitution'
+        next_cursor:
+          type: string
+          description: Present when more institutions follow.
+      example:
+        institutions:
+          - institution_id: bank-a
+            name: Bank A
+        next_cursor: bank-a
     WebhookKey:
       type: object
       required: [key_id, public_key, status]
@@ -956,14 +1098,21 @@ components:
           type: string
           maxLength: 512
           description: An opaque value returned unchanged on the redirect.
-    CodeExchange:
+    PublicTokenExchange:
       type: object
-      required: [code, link_session_id]
+      required: [public_token]
       properties:
-        code:
+        public_token:
           type: string
-          description: The one-time code the widget returned.
-        link_session_id:
+          description: The one-time `public_token` the widget returned.
+    ExchangeResult:
+      type: object
+      required: [connection_id]
+      properties:
+        access_token:
+          type: string
+          description: The secret for this connection. Keep it on your server. Connect shows it once. A reauthorisation exchange omits it, and the connection's existing `access_token` keeps working.
+        connection_id:
           type: string
     ConnectionStatus:
       type: string
@@ -986,7 +1135,7 @@ components:
           type: string
     Connection:
       type: object
-      required: [id, status, institution, workspace_id, start_date, effective_start_date, consent_expires_at, last_synced_at, created_at]
+      required: [id, status, institution, user_id, start_date, effective_start_date, consent_expires_at, last_synced_at, created_at]
       properties:
         id:
           type: string
@@ -994,7 +1143,7 @@ components:
           $ref: '#/components/schemas/ConnectionStatus'
         institution:
           $ref: '#/components/schemas/Institution'
-        workspace_id:
+        user_id:
           type: string
         start_date:
           type: string
@@ -1019,7 +1168,7 @@ components:
         institution:
           id: bank-a
           name: Bank A
-        workspace_id: ws_adaeze_bakery
+        user_id: ws_adaeze_bakery
         start_date: '2026-07-01'
         effective_start_date: null
         consent_expires_at: '2027-10-28T12:04:00+01:00'

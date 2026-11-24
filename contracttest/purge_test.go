@@ -49,7 +49,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	home := s.persona("adaeze")
 	target := s.openAccount(s.join("adaeze", "abuja-digital"), "current")
 	s.pay("bank-a", home.Accounts[0], "abuja-digital", target, "25000")
-	conn := s.connect("adaeze", "abuja-digital", s.today().AddDays(-3))
+	conn := s.connect("adaeze", "abuja-digital")
 	acct := fmt.Sprint(conn.Accounts[0]["id"])
 	s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "abuja-digital", "outcome": "credited", "count": 1})
 	sent, _ := s.payTry("bank-a", home.Accounts[0], "abuja-digital", target, "100", nil)
@@ -93,7 +93,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if got := s.eventsOf("account.removed", func(d map[string]any) bool { return d["account_id"] == acct }); len(got) != 1 {
 		t.Fatalf("account.removed webhooks: %v", got)
 	}
-	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil), 409)
+	s.must(s.call("GET", "/v1/accounts/"+acct+"/balance", nil, withToken(conn.AccessToken)), 409)
 	if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Abuja Digital", "id": "abuja-digital"}); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
 		t.Fatalf("re-adding a bank that is being removed: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestPurgeLeavesNothingBehind(t *testing.T) {
 	if _, err := s.ctlTry("GET", "/banks/abuja-digital/purge", nil); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("preview after the purge: %v", err)
 	}
-	if r := s.call("GET", "/v1/accounts/"+acct+"/balance", nil); r.Status != 404 && r.Status != 409 {
+	if r := s.call("GET", "/v1/accounts/"+acct+"/balance", nil, withToken(conn.AccessToken)); r.Status != 404 && r.Status != 409 {
 		t.Fatalf("partner balance after the purge: %d", r.Status)
 	}
 	for _, req := range []map[string]any{{"name": "Another", "nip_code": bank.NIPCode}, {"name": "Another", "nuban_code": bank.NUBANCode}} {

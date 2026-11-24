@@ -121,6 +121,11 @@ func New(cfg *config.Config, o Options) (*App, error) {
 			return nil, err
 		}
 	}
+	for _, p := range cfg.Partners {
+		if err := config.CarryOverSecret(cfg.Dir, p.ID); err != nil {
+			return nil, err
+		}
+	}
 	if err := a.prepareNIBSS(); err != nil {
 		return nil, err
 	}

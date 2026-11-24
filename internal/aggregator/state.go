@@ -1,6 +1,7 @@
 package aggregator
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +17,7 @@ import (
 type LinkSession struct {
 	ID            string        `json:"id"`
 	PartnerID     string        `json:"partner_id"`
-	WorkspaceID   string        `json:"workspace_id"`
+	UserID        string        `json:"user_id"`
 	Status        string        `json:"status"`
 	StartDate     clock.Date    `json:"start_date"`
 	RedirectURI   string        `json:"redirect_uri"`
@@ -26,12 +27,14 @@ type LinkSession struct {
 	TokenExpires  time.Time     `json:"token_expires"`
 	TokenUsed     bool          `json:"token_used"`
 	Institution   string        `json:"institution"`
+	Fixed         bool          `json:"fixed,omitempty"`
+	Overlay       bool          `json:"overlay,omitempty"`
 	CustomerID    string        `json:"customer_id"`
 	Accounts      []string      `json:"accounts"`
 	Analytics     bool          `json:"analytics"`
-	CodeHash      string        `json:"code_hash"`
-	CodeExpires   time.Time     `json:"code_expires"`
-	CodeUsed      bool          `json:"code_used"`
+	PublicHash    string        `json:"public_token_hash"`
+	PublicExpires time.Time     `json:"public_token_expires"`
+	PublicUsed    bool          `json:"public_token_used"`
 	CreatedAt     time.Time     `json:"created_at"`
 	ExpiresReal   time.Time     `json:"expires_real"`
 	OTP           string        `json:"otp"`
@@ -47,6 +50,19 @@ type LinkSession struct {
 	BankAccounts  []bankAccount `json:"bank_accounts,omitempty"`
 }
 
+func (ls *LinkSession) UnmarshalJSON(raw []byte) error {
+	type plain LinkSession
+	v := struct {
+		*plain
+		WorkspaceID string `json:"workspace_id"`
+	}{plain: (*plain)(ls)}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	ls.UserID = cmp.Or(ls.UserID, v.WorkspaceID)
+	return nil
+}
+
 type WidgetSession struct {
 	ID            string    `json:"id"`
 	LinkSessionID string    `json:"link_session_id"`
@@ -57,7 +73,7 @@ type WidgetSession struct {
 type Connection struct {
 	ID               string      `json:"id"`
 	PartnerID        string      `json:"partner_id"`
-	WorkspaceID      string      `json:"workspace_id"`
+	UserID           string      `json:"user_id"`
 	Institution      string      `json:"institution"`
 	CustomerID       string      `json:"customer_id"`
 	Status           string      `json:"status"`
@@ -66,6 +82,7 @@ type Connection struct {
 	EffectiveStart   *clock.Date `json:"effective_start"`
 	AccountIDs       []string    `json:"account_ids"`
 	ConsentID        string      `json:"consent_id"`
+	AccessHash       string      `json:"access_token_hash"`
 	AuthorisedAt     time.Time   `json:"authorised_at"`
 	ExpiresAt        time.Time   `json:"expires_at"`
 	LastSyncedAt     *time.Time  `json:"last_synced_at"`
@@ -73,6 +90,19 @@ type Connection struct {
 	CreatedAt        time.Time   `json:"created_at"`
 	SyncDueReal      time.Time   `json:"sync_due_real"`
 	FullDue          bool        `json:"full_due,omitempty"`
+}
+
+func (c *Connection) UnmarshalJSON(raw []byte) error {
+	type plain Connection
+	v := struct {
+		*plain
+		WorkspaceID string `json:"workspace_id"`
+	}{plain: (*plain)(c)}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	c.UserID = cmp.Or(c.UserID, v.WorkspaceID)
+	return nil
 }
 
 type AccountRec struct {

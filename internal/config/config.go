@@ -29,7 +29,7 @@ type Partner struct {
 	Name         string   `yaml:"name"`
 	LegalName    string   `yaml:"legal_name"`
 	Purpose      string   `yaml:"purpose"`
-	APIKeySHA256 string   `yaml:"api_key_sha256"`
+	SecretSHA256 string   `yaml:"secret_sha256"`
 	RedirectURIs []string `yaml:"redirect_uris"`
 	WebhookURL   string   `yaml:"webhook_url"`
 }
@@ -282,7 +282,7 @@ func Prepare(c *Config) error {
 	return nil
 }
 
-func NewAPIKey() (string, error) {
+func NewSecret() (string, error) {
 	return randomToken("bk_test_", 24)
 }
 
@@ -294,7 +294,11 @@ const (
 	ConnectID      = "connect"
 	AggregatorRole = "aggregator"
 
-	CallerHeader = "Beerus-Caller"
+	CallerHeader   = "Beerus-Caller"
+	ClientIDHeader = "Beerus-Client-ID"
+	SecretHeader   = "Beerus-Secret"
+
+	AccessTokenHeader = "Beerus-Access-Token"
 )
 
 func (c *Config) SigningKey() (*ecdsa.PrivateKey, error) {

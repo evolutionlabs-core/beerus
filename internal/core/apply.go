@@ -34,7 +34,6 @@ const (
 	codeBeingRemoved   = "being_removed"
 	codeMoneyMoved     = "money_moved"
 	codeNotReady       = "not_ready"
-	partnerKeyFile     = "api-key"
 	fieldNIPCode       = "nip_code"
 	fieldNUBANCode     = "nuban_code"
 	resourceSettleWait = 15 * time.Second
@@ -559,11 +558,11 @@ func bankCount(n int) string {
 
 func (a *App) makePartner(desired setup.Spec, id string) (*config.Partner, error) {
 	sp, _ := partnerIn(desired, id)
-	key, err := config.WriteAPIKey(a.cfg.Dir, id)
+	key, err := config.IssueSecret(a.cfg.Dir, id)
 	if err != nil {
 		return nil, err
 	}
-	p := setup.RuntimePartner(sp, setup.PartnerKeys{APIKeySHA256: config.HashKey(key)}, setup.PartnerLocal{})
+	p := setup.RuntimePartner(sp, setup.PartnerKeys{SecretSHA256: config.HashKey(key)}, setup.PartnerLocal{})
 	return p, nil
 }
 
@@ -736,7 +735,7 @@ func admitPartner(st *setup.Status, act setup.Action, ad *admission) {
 			Generation:         gen,
 			ObservedGeneration: gen,
 			Phase:              config.PhaseActive,
-			Partner:            &setup.PartnerKeys{APIKeySHA256: p.APIKeySHA256},
+			Partner:            &setup.PartnerKeys{SecretSHA256: p.SecretSHA256},
 			Owned:              []setup.Owned{{Kind: state.OwnedDir, Name: "partners/" + act.ID}},
 		}
 	case setup.OpUpdate:
@@ -867,7 +866,7 @@ type planBody struct {
 	setup.Plan
 	Text     string   `json:"text"`
 	Changed  bool     `json:"changed"`
-	KeyFiles []string `json:"api_key_files,omitempty"`
+	KeyFiles []string `json:"secret_files,omitempty"`
 	Warning  string   `json:"warning,omitempty"`
 }
 
@@ -875,7 +874,7 @@ func (a *App) planBody(p setup.Plan) planBody {
 	out := planBody{Plan: p, Text: setup.Render(p), Changed: p.Changes()}
 	for _, act := range p.Actions {
 		if act.Kind == setup.KindPartner && act.Op == setup.OpCreate {
-			out.KeyFiles = append(out.KeyFiles, filepath.Join(a.cfg.Path("partners", act.ID), partnerKeyFile))
+			out.KeyFiles = append(out.KeyFiles, filepath.Join(a.cfg.Path("partners", act.ID), config.PartnerSecretFile))
 		}
 	}
 	return out

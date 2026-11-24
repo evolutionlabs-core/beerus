@@ -42,7 +42,7 @@ func TestDoneStory(t *testing.T) {
 		}
 	}
 	today := s.today()
-	start := today.AddDays(-365)
+	start := s.linkStart()
 	limited := start.Before(today.AddDays(-s.cfg.Bank("bank-a").HistoryDays))
 
 	step(1, "Adaeze's Bakery banks with Bank A and Bank B")
@@ -59,9 +59,8 @@ func TestDoneStory(t *testing.T) {
 	check(resolved["status"] == "25" && resolved["outcome"] == "failed" && resolved["resolved_at"] != nil, "the status check did not fail the transfer: %v", resolved)
 
 	step(2, "Connect bank, pick Bank A, redirect to the bank")
-	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": start.String(), "workspace_id": "ws_adaeze_bakery", "redirect_uri": s.redirect, "state": "st-done"}), 201)
 	b := s.browser()
-	b.get(fmt.Sprint(ls.JSON["widget_url"]))
+	b.get(s.linkURL("ws_adaeze_bakery", "st-done"))
 	check(strings.Contains(b.last, "Bank A") && strings.Contains(b.last, "Bank B"), "the widget does not offer both banks: %.300s", b.last)
 	b.post("/link/institution", url.Values{"institution": {"bank-a"}})
 	check(b.result == nil && b.atBank(), "the widget did not send her to the bank: %v %.200s", b.cur, b.last)
@@ -82,22 +81,25 @@ func TestDoneStory(t *testing.T) {
 	}
 	check(len(offered) == len(pa.Accounts), "the bank offered %d accounts, want %d", len(offered), len(pa.Accounts))
 	b.postTo(base, "/authorize/consent", url.Values{"account": {current}, "action": {"approve"}})
-	check(b.result != nil && b.result.Query().Get("code") != "", "no code on the redirect to Balance: %.300s", b.last)
+	check(b.result == nil && strings.Contains(b.last, "Pick accounts"), "the widget did not ask which accounts to share: %.300s", b.last)
+	b.pickAccounts()
+	check(b.result != nil && b.result.Query().Get("public_token") != "", "no public_token on the redirect to Balance: %.300s", b.last)
 	q := b.result.Query()
-	check(q.Get("state") == "st-done" && q.Get("link_session_id") == ls.JSON["id"], "redirect: %v", b.result)
-	conn := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": q.Get("code"), "link_session_id": q.Get("link_session_id")}), 201)
-	connA := fmt.Sprint(conn.JSON["id"])
+	check(q.Get("state") == "st-done" && q.Get("link_session_id") != "", "redirect: %v", b.result)
+	conn := s.must(s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": q.Get("public_token")}), 200)
+	connA := fmt.Sprint(conn.JSON["connection_id"])
+	tokA := fmt.Sprint(conn.JSON["access_token"])
 	s.syncNow()
-	check(s.must(s.call("GET", "/v1/connections/"+connA, nil), 200).JSON["status"] == "active", "Bank A connection not active")
-	accts := s.must(s.call("GET", "/v1/connections/"+connA+"/accounts", nil), 200).JSON["data"].([]any)
+	check(s.must(s.call("GET", "/v1/connection", nil, withToken(tokA)), 200).JSON["status"] == "active", "Bank A connection not active")
+	accts := s.must(s.call("GET", "/v1/accounts", nil, withToken(tokA)), 200).JSON["data"].([]any)
 	check(len(accts) == 1 && accts[0].(map[string]any)["type"] == "current", "only the picked account should be shared: %v", accts)
 	idA := fmt.Sprint(accts[0].(map[string]any)["id"])
 
 	step(4, "opening balance and history up to the bank's limit")
-	feedA, _ := s.syncAll(idA, "", 500)
+	feedA, _ := s.syncAll(tokA, idA, "", 500)
 	eff := s.firstDate(idA, start)
 	check(!limited || eff.After(start), "history was not limited: effective start %s, asked %s", eff, start)
-	opening := num(s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", idA, eff.AddDays(-1)), nil), 200).JSON["ledger_balance"].(map[string]any)["amount_minor"])
+	opening := num(s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", idA, eff.AddDays(-1)), nil, withToken(tokA)), 200).JSON["ledger_balance"].(map[string]any)["amount_minor"])
 	posted := []map[string]any{}
 	kinds, reversal := map[string]bool{}, false
 	var sum int64
@@ -117,7 +119,7 @@ func TestDoneStory(t *testing.T) {
 		run += num(l["amount_minor"])
 		check(num(l["balance_after_minor"]) == run, "balance chain broken at %v", l["id"])
 	}
-	now := num(s.must(s.call("GET", "/v1/accounts/"+idA, nil), 200).JSON["balances"].(map[string]any)["current"].(map[string]any)["amount_minor"])
+	now := num(s.must(s.call("GET", "/v1/accounts/"+idA, nil, withToken(tokA)), 200).JSON["balances"].(map[string]any)["current"].(map[string]any)["amount_minor"])
 	check(opening == 0 && opening+sum == now, "opening %d + history %d != current %d", opening, sum, now)
 	for _, want := range []string{"Transfer fee", "VAT on transfer fee", "Stamp duty"} {
 		check(kinds[want], "no %q line in the history", want)
@@ -127,10 +129,9 @@ func TestDoneStory(t *testing.T) {
 		checkSettled(t, s.app)
 	}
 
-	b2 := s.connect("adaeze", "bank-b", start)
+	b2 := s.connect("adaeze", "bank-b")
 	idB := fmt.Sprint(b2.Accounts[0]["id"])
-	connB := b2.ConnectionID
-	feedB, _ := s.syncAll(idB, "", 500)
+	feedB, _ := s.syncAll(b2.AccessToken, idB, "", 500)
 	check(len(feedB.lines) > 0, "no history from Bank B")
 
 	step(5, "a customer at Bank B pays her through the NIP switch")
@@ -162,7 +163,7 @@ func TestDoneStory(t *testing.T) {
 	sid := fmt.Sprint(pay["session_id"])
 	check(len(sid) == 30 && pay["response_code"] == "00" && strings.HasPrefix(sid, "000002"), "payment reply: %v", pay)
 	s.syncNow()
-	feedA, _ = s.syncMore(idA, feedA, 500)
+	feedA, _ = s.syncMore(tokA, idA, feedA, 500)
 	findBySession := func(st *feedState) map[string]any {
 		for _, l := range st.lines {
 			if l["references"].(map[string]any)["session_id"] == sid && num(l["amount_minor"]) == 250000 {
@@ -178,7 +179,7 @@ func TestDoneStory(t *testing.T) {
 	check(num(after["sessions"]) > num(before["sessions"]), "no settlement session ran: %v then %v", before["sessions"], after["sessions"])
 	check(len(after["problems"].([]any)) == 0, "settlement problems: %v", after["problems"])
 	check(fmt.Sprint(s.ctl("GET", "/nip/sessions/"+sid, nil)["status"]) == "00", "the switch lost the transfer")
-	feedA, _ = s.syncMore(idA, feedA, 500)
+	feedA, _ = s.syncMore(tokA, idA, feedA, 500)
 	line := findBySession(feedA)
 	check(line != nil && line["status"] == "posted", "the payment is not posted after settlement: %v", line)
 	postedKeys(t, feedA)
@@ -191,8 +192,8 @@ func TestDoneStory(t *testing.T) {
 	ownSID := []string{"", fmt.Sprint(own["session_id"])}
 	check(len(ownSID[1]) == 30, "the transfer did not report a session ID: %v", own)
 	s.syncNow()
-	feedA, _ = s.syncMore(idA, feedA, 500)
-	feedB, _ = s.syncMore(idB, feedB, 500)
+	feedA, _ = s.syncMore(tokA, idA, feedA, 500)
+	feedB, _ = s.syncMore(b2.AccessToken, idB, feedB, 500)
 	bySession := func(st *feedState) []map[string]any {
 		out := []map[string]any{}
 		for _, l := range st.lines {
@@ -213,13 +214,13 @@ func TestDoneStory(t *testing.T) {
 	check(consent != nil, "the connected apps page has no consent to revoke: %.300s", app.last)
 	app.post("/apps/"+consent[1]+"/revoke", url.Values{})
 	check(strings.Contains(app.last, "Access withdrawn"), "revoke page: %.300s", app.last)
-	check(s.must(s.call("GET", "/v1/connections/"+connA, nil), 200).JSON["status"] == "revoked", "Balance does not show the revoke")
+	check(s.must(s.call("GET", "/v1/connection", nil, withToken(tokA)), 200).JSON["status"] == "revoked", "Balance does not show the revoke")
 	check(len(s.eventsOf("connection.status_changed", func(d map[string]any) bool {
 		return d["connection_id"] == connA && d["status"] == "revoked" && d["error_code"] == "connection_revoked"
 	})) > 0, "no reconnect-needed webhook")
-	r := s.call("GET", "/v1/accounts/"+idA+"/transactions/sync", nil)
+	r := s.call("GET", "/v1/accounts/"+idA+"/transactions/sync", nil, withToken(tokA))
 	check(r.Status == 409 && r.Code() == "connection_revoked", "sync after revoke: %d %s", r.Status, r.Body)
-	check(s.must(s.call("GET", "/v1/connections/"+connB, nil), 200).JSON["status"] == "active", "the revoke touched the other bank")
+	check(s.must(s.call("GET", "/v1/connection", nil, withToken(b2.AccessToken)), 200).JSON["status"] == "active", "the revoke touched the other bank")
 
 	step(8, "every response so far matched the OpenAPI contract the stub is held to")
 	s.vmu.Lock()

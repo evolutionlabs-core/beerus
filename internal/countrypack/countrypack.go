@@ -112,6 +112,11 @@ type Fees struct {
 	VATRateBasisPoints Figure  `yaml:"vat_rate_basis_points"`
 }
 
+type Link struct {
+	HistoryDays int    `yaml:"history_days"`
+	Source      string `yaml:"source"`
+}
+
 type Pack struct {
 	Country string `yaml:"country"`
 	Version string `yaml:"version"`
@@ -121,6 +126,7 @@ type Pack struct {
 	Phone            Phone            `yaml:"phone"`
 	DepositInsurance DepositInsurance `yaml:"deposit_insurance"`
 	Fees             Fees             `yaml:"fees"`
+	Link             Link             `yaml:"link"`
 }
 
 func Nigeria() (*Pack, error) {
@@ -142,6 +148,9 @@ func Nigeria() (*Pack, error) {
 	}
 	if err := p.Fees.check(); err != nil {
 		return nil, fmt.Errorf("country pack NG: %w", err)
+	}
+	if p.Link.HistoryDays <= 0 || p.Link.Source == "" {
+		return nil, fmt.Errorf("country pack NG: link needs history_days above zero and a source")
 	}
 	return &p, nil
 }

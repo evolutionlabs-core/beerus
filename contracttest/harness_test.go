@@ -39,6 +39,7 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/core"
+	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
@@ -80,7 +81,7 @@ type Stack struct {
 	aggOpts    aggregator.Options
 	api        *http.Client
 	raw        *http.Client
-	apiKey     string
+	secret     string
 	ctlToken   string
 	sink       *sink
 	external   bool
@@ -247,11 +248,11 @@ func startStackWith(t *testing.T, opts aggregator.Options, edits ...func(*config
 		}
 	}
 	s.redirect = s.cfg.Partners[0].RedirectURIs[0]
-	key, err := config.ReadSecret(s.cfg.Path("partners", "balance", "api-key"))
+	secret, err := config.ReadSecret(s.cfg.Path("partners", "balance", config.PartnerSecretFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.apiKey = key
+	s.secret = secret
 	if s.ctlToken, err = config.ReadSecret(s.cfg.Path("control-token")); err != nil {
 		t.Fatal(err)
 	}
@@ -430,6 +431,10 @@ func withKey(k string) callOpt {
 	return func(r *http.Request) { r.Header.Set("Idempotency-Key", k) }
 }
 
+func withToken(token string) callOpt {
+	return func(r *http.Request) { r.Header.Set(config.AccessTokenHeader, token) }
+}
+
 func noIdem() callOpt {
 	return func(r *http.Request) { r.Header.Del("Idempotency-Key") }
 }
@@ -438,12 +443,15 @@ func skipValidation() callOpt {
 	return func(r *http.Request) { r.Header.Set("X-Test-Skip-Validation", "1") }
 }
 
-func apiKey(k string) callOpt {
+func credentials(clientID, secret string) callOpt {
 	return func(r *http.Request) {
-		if k == "" {
-			r.Header.Del("X-Api-Key")
-		} else {
-			r.Header.Set("X-Api-Key", k)
+		r.Header.Del(config.ClientIDHeader)
+		r.Header.Del(config.SecretHeader)
+		if clientID != "" {
+			r.Header.Set(config.ClientIDHeader, clientID)
+		}
+		if secret != "" {
+			r.Header.Set(config.SecretHeader, secret)
 		}
 	}
 }
@@ -464,7 +472,8 @@ func (s *Stack) call(method, path string, body any, opts ...callOpt) Resp {
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	req.Header.Set("X-Api-Key", s.apiKey)
+	req.Header.Set(config.ClientIDHeader, "balance")
+	req.Header.Set(config.SecretHeader, s.secret)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -679,6 +688,7 @@ type browser struct {
 	last   string
 	result *url.URL
 	cur    *url.URL
+	picked func([]string) []string
 }
 
 func (s *Stack) browser() *browser {
@@ -784,10 +794,29 @@ func (b *browser) bankSignIn(personaID string, accounts func([]string) []string)
 		pick = accounts(all)
 	}
 	b.postTo(base, "/authorize/consent", url.Values{"account": pick, "action": {"approve"}})
+	if b.result == nil {
+		b.pickAccounts()
+	}
+}
+
+func (b *browser) pickAccounts() {
+	b.s.t.Helper()
+	all := []string{}
+	for _, m := range reAccount.FindAllStringSubmatch(b.last, -1) {
+		all = append(all, m[1])
+	}
+	if len(all) == 0 {
+		b.s.t.Fatalf("no accounts on the Pick accounts screen: %.400s", b.last)
+	}
+	pick := all
+	if b.picked != nil {
+		pick = b.picked(all)
+	}
+	b.post("/link/accounts", url.Values{"account": pick})
 }
 
 type linkResult struct {
-	Code, SessionID, State, Error string
+	PublicToken, SessionID, State, Error string
 }
 
 func (s *Stack) completeLink(widgetURL, institution, personaID string, accounts func([]string) []string) linkResult {
@@ -804,34 +833,50 @@ func (s *Stack) completeLink(widgetURL, institution, personaID string, accounts 
 		s.t.Fatalf("widget did not redirect to the partner: %.400s", b.last)
 	}
 	q := b.result.Query()
-	return linkResult{Code: q.Get("code"), SessionID: q.Get("link_session_id"), State: q.Get("state"), Error: q.Get("error")}
+	return linkResult{PublicToken: q.Get("public_token"), SessionID: q.Get("link_session_id"), State: q.Get("state"), Error: q.Get("error")}
 }
 
 type connected struct {
 	ConnectionID string
+	AccessToken  string
 	Accounts     []map[string]any
 	StartDate    clock.Date
 }
 
-func (s *Stack) connect(personaID, institution string, start clock.Date) connected {
+func (s *Stack) linkStart() clock.Date {
 	s.t.Helper()
-	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": start.String(), "workspace_id": "ws_" + personaID, "redirect_uri": s.redirect, "state": "st-" + personaID}), 201)
-	res := s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), institution, personaID, nil)
-	if res.Error != "" || res.Code == "" {
+	pack, err := countrypack.Nigeria()
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return s.today().AddDays(-pack.Link.HistoryDays)
+}
+
+func (s *Stack) linkURL(userID, state string) string {
+	s.t.Helper()
+	lt := s.must(s.call("POST", "/v1/link/token/create", map[string]any{"user_id": userID, "redirect_uri": s.redirect, "state": state}), 201)
+	return s.cfg.WidgetURL() + "/link?token=" + fmt.Sprint(lt.JSON["link_token"])
+}
+
+func (s *Stack) connect(personaID, institution string) connected {
+	s.t.Helper()
+	res := s.completeLink(s.linkURL("ws_"+personaID, "st-"+personaID), institution, personaID, nil)
+	if res.Error != "" || res.PublicToken == "" {
 		s.t.Fatalf("link failed: %+v", res)
 	}
-	if res.SessionID != ls.JSON["id"] || res.State != "st-"+personaID {
+	if res.SessionID == "" || res.State != "st-"+personaID {
 		s.t.Fatalf("redirect carried the wrong session or state: %+v", res)
 	}
-	conn := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 201)
-	id := fmt.Sprint(conn.JSON["id"])
+	conn := s.must(s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": res.PublicToken}), 200)
+	id := fmt.Sprint(conn.JSON["connection_id"])
+	token := fmt.Sprint(conn.JSON["access_token"])
 	s.syncNow()
-	got := s.must(s.call("GET", "/v1/connections/"+id, nil), 200)
+	got := s.must(s.call("GET", "/v1/connection", nil, withToken(token)), 200)
 	if got.JSON["status"] != "active" {
 		s.t.Fatalf("connection not active after sync: %s", got.Body)
 	}
-	accts := s.must(s.call("GET", "/v1/connections/"+id+"/accounts", nil), 200)
-	out := connected{ConnectionID: id, StartDate: start}
+	accts := s.must(s.call("GET", "/v1/accounts", nil, withToken(token)), 200)
+	out := connected{ConnectionID: id, AccessToken: token, StartDate: s.linkStart()}
 	for _, a := range accts.JSON["data"].([]any) {
 		out.Accounts = append(out.Accounts, a.(map[string]any))
 	}
@@ -847,20 +892,20 @@ type feedState struct {
 	pages    int
 }
 
-func (s *Stack) syncAll(accountID, cursor string, limit int) (*feedState, Resp) {
+func (s *Stack) syncAll(token, accountID, cursor string, limit int) (*feedState, Resp) {
 	s.t.Helper()
 	st := &feedState{lines: map[string]map[string]any{}, removed: map[string]bool{}, cursor: cursor}
-	return s.syncMore(accountID, st, limit)
+	return s.syncMore(token, accountID, st, limit)
 }
 
-func (s *Stack) syncMore(accountID string, st *feedState, limit int) (*feedState, Resp) {
+func (s *Stack) syncMore(token, accountID string, st *feedState, limit int) (*feedState, Resp) {
 	s.t.Helper()
 	for i := 0; i < 10000; i++ {
 		q := url.Values{"limit": {strconv.Itoa(limit)}}
 		if st.cursor != "" {
 			q.Set("cursor", st.cursor)
 		}
-		r := s.call("GET", "/v1/accounts/"+accountID+"/transactions/sync?"+q.Encode(), nil)
+		r := s.call("GET", "/v1/accounts/"+accountID+"/transactions/sync?"+q.Encode(), nil, withToken(token))
 		if r.Status != 200 {
 			return st, r
 		}

@@ -29,26 +29,27 @@ func idemOwner(r *http.Request) string {
 	return web.ControlOwner
 }
 
-func keyMatches(key, hash string) bool {
-	got := config.HashKey(key)
+func secretMatches(secret, hash string) bool {
+	got := config.HashKey(secret)
 	return subtle.ConstantTimeCompare([]byte(got), []byte(hash)) == 1
 }
 
 func (a *App) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.Header.Get("X-Api-Key")
-		if key == "" {
-			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "The X-Api-Key header is required.")
+		clientID := r.Header.Get(config.ClientIDHeader)
+		secret := r.Header.Get(config.SecretHeader)
+		if clientID == "" || secret == "" {
+			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "Send your Beerus-Client-ID and Beerus-Secret headers.")
 			return
 		}
 		var p *config.Partner
 		for _, x := range a.partnersSnapshot() {
-			if keyMatches(key, x.APIKeySHA256) {
+			if x.ID == clientID {
 				p = x
 			}
 		}
-		if p == nil {
-			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "The API key is not valid.")
+		if p == nil || !secretMatches(secret, p.SecretSHA256) {
+			web.WriteError(w, r, http.StatusUnauthorized, "unauthenticated", "The client ID and secret do not match.")
 			return
 		}
 		a.mu.Lock()
@@ -104,4 +105,12 @@ func (a *App) idemPutLocked(scope, hash string, status int, contentType string, 
 
 func (a *App) idempotent(next http.HandlerFunc) http.HandlerFunc {
 	return a.idem.Wrap(idemStore{a}, idemOwner, a.log, next)
+}
+
+func connectionOwner(r *http.Request) string {
+	return idemOwner(r) + " " + web.HashSecret(r.Header.Get(config.AccessTokenHeader))
+}
+
+func (a *App) idempotentConnection(next http.HandlerFunc) http.HandlerFunc {
+	return a.idem.Wrap(idemStore{a}, connectionOwner, a.log, next)
 }

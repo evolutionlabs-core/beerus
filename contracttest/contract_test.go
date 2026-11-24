@@ -25,80 +25,107 @@ func accountAt(t *testing.T, c connected, typ string) map[string]any {
 
 func TestAuthentication(t *testing.T) {
 	s := newStack(t)
-	r := s.call("GET", "/v1/webhook_keys", nil, apiKey(""), skipValidation())
-	if r.Status != 401 || r.Code() != "unauthenticated" {
-		t.Fatalf("missing key: %d %s", r.Status, r.Body)
+	const missing = "Send your Beerus-Client-ID and Beerus-Secret headers."
+	const mismatch = "The client ID and secret do not match."
+	for _, c := range []struct{ name, clientID, secret, message string }{
+		{"no headers", "", "", missing},
+		{"no secret", "balance", "", missing},
+		{"no client ID", "", s.secret, missing},
+		{"wrong secret", "balance", "bk_test_wrong", mismatch},
+		{"unknown client ID", "nobody", s.secret, mismatch},
+	} {
+		r := s.call("GET", "/v1/webhook_keys", nil, credentials(c.clientID, c.secret), skipValidation())
+		if r.Status != 401 || r.Code() != "unauthenticated" || !strings.Contains(string(r.Body), c.message) {
+			t.Fatalf("%s: %d %s, want 401 %q", c.name, r.Status, r.Body, c.message)
+		}
 	}
-	r = s.call("GET", "/v1/webhook_keys", nil, apiKey("bk_test_wrong"), skipValidation())
-	if r.Status != 401 || r.Code() != "unauthenticated" {
-		t.Fatalf("wrong key: %d %s", r.Status, r.Body)
-	}
-	req, _ := http.NewRequest("GET", s.cfg.PartnerURL()+"/v1/webhook_keys", nil)
-	req.Header.Set("X-Api-Key", s.apiKey)
-	resp, err := s.raw.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("a call with only an API key over plain HTTP got %d, want 200", resp.StatusCode)
+	if code := rawGet(t, s, "balance", s.secret, "", "/v1/webhook_keys"); code != http.StatusOK {
+		t.Fatalf("a call with the client ID and secret over plain HTTP got %d, want 200", code)
 	}
 	s.must(s.call("GET", "/v1/webhook_keys", nil), 200)
-	r = s.call("GET", "/v1/nothing", nil, skipValidation())
+	r := s.call("GET", "/v1/nothing", nil, skipValidation())
 	if r.Status != 404 || r.Code() != "not_found" {
 		t.Fatalf("unknown path: %d %s", r.Status, r.Body)
 	}
 }
 
-func TestLinkSessionValidation(t *testing.T) {
+func TestInstitutions(t *testing.T) {
 	s := newStack(t)
-	today := s.today()
-	cases := []map[string]any{
-		{"start_date": "2026-13-01", "workspace_id": "w", "redirect_uri": s.redirect},
-		{"start_date": today.String(), "workspace_id": "", "redirect_uri": s.redirect},
-		{"start_date": today.String(), "workspace_id": "w", "redirect_uri": s.redirect + "/extra"},
-		{"start_date": today.AddDays(5).String(), "workspace_id": "w", "redirect_uri": s.redirect},
-	}
-	for i, body := range cases {
-		r := s.call("POST", "/v1/link_sessions", body)
-		if r.Status != 400 || r.Code() != "invalid_request" {
-			t.Errorf("case %d: %d %s", i, r.Status, r.Body)
+	for _, c := range []struct{ name, path, want string }{
+		{"full list", "/v1/institutions", `{"institutions":[{"institution_id":"bank-a","name":"Bank A"},{"institution_id":"bank-b","name":"Bank B"}]}`},
+		{"first page", "/v1/institutions?limit=1", `{"institutions":[{"institution_id":"bank-a","name":"Bank A"}],"next_cursor":"bank-a"}`},
+		{"second page", "/v1/institutions?limit=1&cursor=bank-a", `{"institutions":[{"institution_id":"bank-b","name":"Bank B"}]}`},
+	} {
+		r := s.must(s.call("GET", c.path, nil), 200)
+		if string(bytes.TrimSpace(r.Body)) != c.want {
+			t.Fatalf("%s: %s, want %s", c.name, r.Body, c.want)
 		}
 	}
-	r := s.call("POST", "/v1/link_sessions", map[string]any{"start_date": today.String(), "workspace_id": "w", "redirect_uri": s.redirect}, noIdem())
+	for _, c := range []struct{ name, path, code, message string }{
+		{"bad limit", "/v1/institutions?limit=0", "invalid_request", "limit must be a number from 1 to 500."},
+		{"bad cursor", "/v1/institutions?cursor=nope", "invalid_cursor", "That cursor is not valid. Use the next_cursor value from the last page."},
+	} {
+		r := s.call("GET", c.path, nil)
+		if r.Status != 400 || r.Code() != c.code || !strings.Contains(string(r.Body), c.message) {
+			t.Fatalf("%s: %d %s, want 400 %s %q", c.name, r.Status, r.Body, c.code, c.message)
+		}
+	}
+	r := s.call("GET", "/v1/institutions", nil, credentials("", ""), skipValidation())
+	if r.Status != 401 || r.Code() != "unauthenticated" {
+		t.Fatalf("no credentials: %d %s", r.Status, r.Body)
+	}
+}
+
+func TestLinkTokenCreate(t *testing.T) {
+	s := newStack(t)
+	for _, c := range []struct {
+		name    string
+		body    map[string]any
+		status  int
+		code    string
+		message string
+	}{
+		{"no user", map[string]any{"redirect_uri": s.redirect}, 422, "invalid_request", "user_id is required."},
+		{"unknown bank", map[string]any{"user_id": "w", "institution_id": "bank-z", "redirect_uri": s.redirect}, 422, "invalid_request", "There is no bank bank-z in this setup. Use an institution_id from GET /v1/institutions."},
+		{"other redirect", map[string]any{"user_id": "w", "redirect_uri": s.redirect + "/extra"}, 400, "invalid_request", "redirect_uri must exactly match a registered redirect URI."},
+		{"user only", map[string]any{"user_id": "w", "redirect_uri": s.redirect}, 201, "", ""},
+		{"user and bank", map[string]any{"user_id": "w", "institution_id": "bank-a", "redirect_uri": s.redirect}, 201, "", ""},
+	} {
+		r := s.call("POST", "/v1/link/token/create", c.body)
+		if r.Status != c.status || r.Code() != c.code || !strings.Contains(string(r.Body), c.message) {
+			t.Errorf("%s: %d %s, want %d %s %q", c.name, r.Status, r.Body, c.status, c.code, c.message)
+		}
+	}
+	r := s.call("POST", "/v1/link/token/create", map[string]any{"user_id": "w", "redirect_uri": s.redirect}, noIdem())
 	if r.Status != 400 {
 		t.Fatalf("missing Idempotency-Key: %d", r.Status)
 	}
-	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": today.String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
-	if !strings.HasPrefix(fmt.Sprint(ls.JSON["widget_url"]), s.cfg.WidgetURL()+"/link?token=") {
-		t.Fatalf("widget_url: %v", ls.JSON["widget_url"])
-	}
-	got := s.must(s.call("GET", "/v1/link_sessions/"+fmt.Sprint(ls.JSON["id"]), nil), 200)
-	if _, leaked := got.JSON["link_token"]; leaked || got.JSON["status"] != "created" {
-		t.Fatalf("link session view: %s", got.Body)
+	lt := s.must(s.call("POST", "/v1/link/token/create", map[string]any{"user_id": "w", "redirect_uri": s.redirect}), 201)
+	if !strings.HasPrefix(fmt.Sprint(lt.JSON["link_token"]), "lt_") || lt.JSON["expiration"] == nil || len(lt.JSON) != 2 {
+		t.Fatalf("link token response: %s", lt.Body)
 	}
 }
 
 func TestIdempotency(t *testing.T) {
 	s := newStack(t)
-	body := map[string]any{"start_date": s.today().AddDays(-30).String(), "workspace_id": "ws_idem", "redirect_uri": s.redirect}
+	body := map[string]any{"user_id": "ws_idem", "redirect_uri": s.redirect}
 	key := randomKey()
-	a := s.must(s.call("POST", "/v1/link_sessions", body, withKey(key)), 201)
-	b := s.must(s.call("POST", "/v1/link_sessions", body, withKey(key)), 201)
+	a := s.must(s.call("POST", "/v1/link/token/create", body, withKey(key)), 201)
+	b := s.must(s.call("POST", "/v1/link/token/create", body, withKey(key)), 201)
 	if !bytes.Equal(a.Body, b.Body) {
 		t.Fatalf("replay differs:\n%s\n%s", a.Body, b.Body)
 	}
 	if b.Header.Get("Idempotent-Replayed") != "true" {
 		t.Fatal("replay not marked")
 	}
-	body["workspace_id"] = "ws_other"
-	r := s.call("POST", "/v1/link_sessions", body, withKey(key))
+	body["user_id"] = "ws_other"
+	r := s.call("POST", "/v1/link/token/create", body, withKey(key))
 	if r.Status != 422 || r.Code() != "idempotency_key_reused" {
 		t.Fatalf("reused key: %d %s", r.Status, r.Body)
 	}
-	c := s.must(s.call("POST", "/v1/link_sessions", body), 201)
-	if c.JSON["id"] == a.JSON["id"] {
-		t.Fatal("a new key returned the old session")
+	c := s.must(s.call("POST", "/v1/link/token/create", body), 201)
+	if c.JSON["link_token"] == a.JSON["link_token"] {
+		t.Fatal("a new key returned the old token")
 	}
 }
 
@@ -106,14 +133,14 @@ func TestConnectAndSync(t *testing.T) {
 	s := newBankStack(t)
 	today := s.today()
 	s.spend(s.persona("adaeze"), 4)
-	conn := s.connect("adaeze", "bank-a", today.AddDays(-60))
+	conn := s.connect("adaeze", "bank-a")
 	if len(conn.Accounts) != 2 {
 		t.Fatalf("want 2 Bank A accounts, got %d", len(conn.Accounts))
 	}
 	acct := accountAt(t, conn, "current")
 	id := fmt.Sprint(acct["id"])
-	small, _ := s.syncAll(id, "", 7)
-	big, last := s.syncAll(id, "", 500)
+	small, _ := s.syncAll(conn.AccessToken, id, "", 7)
+	big, last := s.syncAll(conn.AccessToken, id, "", 500)
 	if len(big.lines) != 17 {
 		t.Fatalf("%d lines, want a deposit and 4 transfers of 4 lines", len(big.lines))
 	}
@@ -128,7 +155,7 @@ func TestConnectAndSync(t *testing.T) {
 	if last.JSON["has_more"] != false || last.JSON["world_id"] == "" {
 		t.Fatalf("last page: %s", last.Body)
 	}
-	again, r := s.syncMore(id, big, 100)
+	again, r := s.syncMore(conn.AccessToken, id, big, 100)
 	if r.Status != 200 || len(r.JSON["added"].([]any))+len(r.JSON["modified"].([]any))+len(r.JSON["removed"].([]any)) != 0 || len(again.lines) != len(big.lines) {
 		t.Fatalf("a second sync with no changes returned data: %s", r.Body)
 	}
@@ -148,7 +175,7 @@ func TestConnectAndSync(t *testing.T) {
 	}
 	sort.Slice(posted, func(i, j int) bool { return num(posted[i]["sequence"]) < num(posted[j]["sequence"]) })
 	start := s.firstDate(id, conn.StartDate)
-	open := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, start.AddDays(-1)), nil), 200)
+	open := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, start.AddDays(-1)), nil, withToken(conn.AccessToken)), 200)
 	opening := num(open.JSON["ledger_balance"].(map[string]any)["amount_minor"])
 	run := opening
 	for _, l := range posted {
@@ -157,12 +184,12 @@ func TestConnectAndSync(t *testing.T) {
 			t.Fatalf("balance_after chain broken at %v", l["id"])
 		}
 	}
-	got := s.must(s.call("GET", "/v1/accounts/"+id, nil), 200)
+	got := s.must(s.call("GET", "/v1/accounts/"+id, nil, withToken(conn.AccessToken)), 200)
 	current := num(got.JSON["balances"].(map[string]any)["current"].(map[string]any)["amount_minor"])
 	if opening+sum != current {
 		t.Fatalf("opening %d + posted %d != current %d", opening, sum, current)
 	}
-	yesterday := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, today.AddDays(-1)), nil), 200)
+	yesterday := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, today.AddDays(-1)), nil, withToken(conn.AccessToken)), 200)
 	var upto int64 = opening
 	for _, l := range posted {
 		bt, _ := time.Parse(time.RFC3339, fmt.Sprint(l["booked_at"]))
@@ -215,84 +242,85 @@ func TestConnectAndSync(t *testing.T) {
 	}
 }
 
-func TestBalanceRangeAndHistoryLimit(t *testing.T) {
+func TestBalanceRange(t *testing.T) {
 	if testingExternal() {
 		t.Skip("needs an account no earlier consent covered")
 	}
 	s := newStack(t)
 	today := s.today()
-	conn := s.connect("ngozi", "bank-b", today.AddDays(-365))
+	start := s.linkStart()
+	conn := s.connect("ngozi", "bank-b")
 	id := fmt.Sprint(conn.Accounts[0]["id"])
-	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
-	eff := fmt.Sprint(c.JSON["effective_start_date"])
-	want := today.AddDays(-s.cfg.Bank("bank-b").HistoryDays)
-	if eff != want.String() {
-		t.Fatalf("effective_start_date %s, want %s", eff, want)
+	c := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
+	if c.JSON["effective_start_date"] != nil {
+		t.Fatalf("effective_start_date %v, want null", c.JSON["effective_start_date"])
 	}
-	effDate, _ := clock.ParseDate(eff)
-	ok := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, effDate.AddDays(-1)), nil), 200)
-	if ok.JSON["effective_start_date"] != eff {
+	ok := s.must(s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, start.AddDays(-1)), nil, withToken(conn.AccessToken)), 200)
+	if ok.JSON["effective_start_date"] != nil {
 		t.Fatalf("balance effective_start_date: %s", ok.Body)
 	}
-	for _, d := range []clock.Date{effDate.AddDays(-2), today} {
-		r := s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, d), nil)
+	for _, d := range []clock.Date{start.AddDays(-2), today} {
+		r := s.call("GET", fmt.Sprintf("/v1/accounts/%s/balance?as_of=%s", id, d), nil, withToken(conn.AccessToken))
 		if r.Status != 422 || r.Code() != "as_of_out_of_range" {
 			t.Errorf("as_of %s: %d %s", d, r.Status, r.Body)
 		}
 	}
-	r := s.call("GET", "/v1/accounts/"+id+"/balance?as_of=yesterday", nil)
+	r := s.call("GET", "/v1/accounts/"+id+"/balance?as_of=yesterday", nil, withToken(conn.AccessToken))
 	if r.Status != 400 {
 		t.Errorf("bad as_of: %d", r.Status)
-	}
-	if s.sink != nil && len(s.eventsOf("historical_sync.completed", func(d map[string]any) bool { return d["effective_start_date"] == eff })) == 0 {
-		t.Error("historical_sync.completed did not carry effective_start_date")
 	}
 }
 
 func TestExchangeErrors(t *testing.T) {
 	s := newStack(t)
-	start := s.today().AddDays(-10)
-	mk := func() (string, linkResult) {
-		ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": start.String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
-		return fmt.Sprint(ls.JSON["id"]), s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), "bank-a", "tunde", nil)
+	mk := func() linkResult {
+		return s.completeLink(s.linkURL("w", ""), "bank-a", "tunde", nil)
 	}
-	id1, r1 := mk()
-	id2, r2 := mk()
-	r := s.call("POST", "/v1/connections/exchange", map[string]any{"code": r1.Code, "link_session_id": id2})
-	if r.Status != 403 || r.Code() != "link_session_mismatch" {
-		t.Fatalf("crossed code: %d %s", r.Status, r.Body)
+	r1 := mk()
+	id1 := r1.SessionID
+	exchange := func(token string) Resp {
+		return s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": token})
 	}
-	r = s.call("POST", "/v1/connections/exchange", map[string]any{"code": "oc_nope", "link_session_id": id1})
-	if r.Status != 404 || r.Code() != "invalid_code" {
-		t.Fatalf("unknown code: %d %s", r.Status, r.Body)
+	ok := s.must(exchange(r1.PublicToken), 200)
+	if !strings.HasPrefix(fmt.Sprint(ok.JSON["access_token"]), "access-") || !strings.HasPrefix(fmt.Sprint(ok.JSON["connection_id"]), "con_") {
+		t.Fatalf("exchange body: %s", ok.Body)
 	}
-	s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": r1.Code, "link_session_id": id1}), 201)
-	r = s.call("POST", "/v1/connections/exchange", map[string]any{"code": r1.Code, "link_session_id": id1})
-	if r.Status != 404 || r.Code() != "invalid_code" {
-		t.Fatalf("reused code: %d %s", r.Status, r.Body)
+	rows := []struct {
+		name    string
+		token   string
+		status  int
+		message string
+	}{
+		{"unknown", "public-nope", 404, "This public_token is not known."},
+		{"reused", r1.PublicToken, 404, "This public_token was already used."},
+	}
+	for _, c := range rows {
+		r := exchange(c.token)
+		if r.Status != c.status || r.Code() != "invalid_public_token" || !strings.Contains(string(r.Body), c.message) {
+			t.Fatalf("%s: %d %s, want %d invalid_public_token %q", c.name, r.Status, r.Body, c.status, c.message)
+		}
 	}
 	view := s.must(s.call("GET", "/v1/link_sessions/"+id1, nil), 200)
 	if view.JSON["status"] != "exchanged" || view.JSON["connection_id"] == nil {
 		t.Fatalf("exchanged session view: %s", view.Body)
 	}
-	_ = r2
-	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": start.String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
+	linkURL := s.linkURL("w", "")
 	b := s.browser()
-	b.get(fmt.Sprint(ls.JSON["widget_url"]))
+	b.get(linkURL)
 	b.post("/link/cancel", map[string][]string{})
-	if b.result == nil || b.result.Query().Get("error") != "access_denied" || b.result.Query().Get("link_session_id") != ls.JSON["id"] {
+	if b.result == nil || b.result.Query().Get("error") != "access_denied" || b.result.Query().Get("link_session_id") == "" {
 		t.Fatalf("cancel redirect: %v", b.result)
 	}
-	if code := b.get(fmt.Sprint(ls.JSON["widget_url"])); code != 409 && b.result == nil {
+	if code := b.get(linkURL); code != 409 && b.result == nil {
 		t.Fatalf("reused link token: %d", code)
 	}
 }
 
 func TestGarbageCursorIsRejected(t *testing.T) {
 	s := newStack(t)
-	conn := s.connect("tunde", "bank-a", s.today().AddDays(-30))
+	conn := s.connect("tunde", "bank-a")
 	id := fmt.Sprint(conn.Accounts[0]["id"])
-	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync?cursor=cur_garbage", nil)
+	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync?cursor=cur_garbage", nil, withToken(conn.AccessToken))
 	if r.Status != 400 || r.Code() != "invalid_cursor" {
 		t.Fatalf("garbage cursor: %d %s", r.Status, r.Body)
 	}
@@ -303,20 +331,19 @@ func TestRevokeAndReconnectKeepsIDs(t *testing.T) {
 		t.Skip("needs accounts no other connection covers")
 	}
 	s := newStack(t)
-	start := s.today().AddDays(-30)
-	conn := s.connect("adaeze", "bank-a", start)
+	conn := s.connect("adaeze", "bank-a")
 	id := fmt.Sprint(accountAt(t, conn, "current")["id"])
-	before, _ := s.syncAll(id, "", 500)
+	before, _ := s.syncAll(conn.AccessToken, id, "", 500)
 	s.ctl("POST", "/connections/"+conn.ConnectionID+"/revoke", nil)
-	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+	c := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 	if c.JSON["status"] != "revoked" {
 		t.Fatalf("status after revoke: %v", c.JSON["status"])
 	}
-	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync", nil)
+	r := s.call("GET", "/v1/accounts/"+id+"/transactions/sync", nil, withToken(conn.AccessToken))
 	if r.Status != 409 || r.Code() != "connection_revoked" {
 		t.Fatalf("sync after revoke: %d %s", r.Status, r.Body)
 	}
-	r = s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", nil)
+	r = s.call("POST", "/v1/connection/reauth", nil, withToken(conn.AccessToken))
 	if r.Status != 409 || r.Code() != "connection_revoked" {
 		t.Fatalf("reauth after revoke: %d %s", r.Status, r.Body)
 	}
@@ -325,7 +352,7 @@ func TestRevokeAndReconnectKeepsIDs(t *testing.T) {
 	})) == 0 {
 		t.Fatal("no revoked webhook")
 	}
-	again := s.connect("adaeze", "bank-a", start)
+	again := s.connect("adaeze", "bank-a")
 	if again.ConnectionID == conn.ConnectionID {
 		t.Fatal("reconnect reused the connection ID")
 	}
@@ -333,7 +360,7 @@ func TestRevokeAndReconnectKeepsIDs(t *testing.T) {
 	if id2 != id {
 		t.Fatalf("account ID changed across consents: %s vs %s", id, id2)
 	}
-	after, _ := s.syncAll(id2, before.cursor, 500)
+	after, _ := s.syncAll(again.AccessToken, id2, before.cursor, 500)
 	for lid, l := range after.lines {
 		if _, ok := before.lines[lid]; !ok && l["status"] == "posted" {
 			bt, _ := time.Parse(time.RFC3339, fmt.Sprint(l["booked_at"]))
@@ -342,50 +369,51 @@ func TestRevokeAndReconnectKeepsIDs(t *testing.T) {
 			}
 		}
 	}
-	d := s.call("DELETE", "/v1/connections/"+again.ConnectionID, nil)
+	d := s.call("POST", "/v1/connections/remove", nil, withToken(again.AccessToken))
 	s.must(d, 204)
-	s.must(s.call("DELETE", "/v1/connections/"+again.ConnectionID, nil), 204)
-	c = s.must(s.call("GET", "/v1/connections/"+again.ConnectionID, nil), 200)
-	if c.JSON["status"] != "revoked" {
-		t.Fatalf("status after delete: %v", c.JSON["status"])
+	if r := s.call("POST", "/v1/connections/remove", nil, withToken(again.AccessToken)); r.Status != 401 || r.Code() != "invalid_access_token" {
+		t.Fatalf("remove again: %d %s", r.Status, r.Body)
 	}
 }
 
 func TestReauthKeepsTheConnection(t *testing.T) {
 	s := newStack(t)
-	conn := s.connect("tunde", "bank-a", s.today().AddDays(-30))
+	conn := s.connect("tunde", "bank-a")
 	id := fmt.Sprint(conn.Accounts[0]["id"])
-	ls := s.must(s.call("POST", "/v1/connections/"+conn.ConnectionID+"/reauth", map[string]string{"state": "again"}), 201)
+	ls := s.must(s.call("POST", "/v1/connection/reauth", map[string]string{"state": "again"}, withToken(conn.AccessToken)), 201)
 	if ls.JSON["connection_id"] != conn.ConnectionID {
 		t.Fatalf("reauth session: %s", ls.Body)
 	}
 	res := s.completeLink(fmt.Sprint(ls.JSON["widget_url"]), "", "tunde", nil)
-	if res.Code == "" || res.State != "again" {
+	if res.PublicToken == "" || res.State != "again" {
 		t.Fatalf("reauth link: %+v", res)
 	}
-	ex := s.must(s.call("POST", "/v1/connections/exchange", map[string]any{"code": res.Code, "link_session_id": res.SessionID}), 200)
-	if ex.JSON["id"] != conn.ConnectionID {
+	ex := s.must(s.call("POST", "/v1/public_token/exchange", map[string]any{"public_token": res.PublicToken}), 200)
+	if ex.JSON["connection_id"] != conn.ConnectionID {
 		t.Fatal("reauth created a new connection")
 	}
+	if _, ok := ex.JSON["access_token"]; ok {
+		t.Fatalf("reauth exchange issued an access_token: %s", ex.Body)
+	}
 	s.syncNow()
-	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+	c := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 	if c.JSON["status"] != "active" {
 		t.Fatalf("status after reauth: %v", c.JSON["status"])
 	}
-	accts := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID+"/accounts", nil), 200)
+	accts := s.must(s.call("GET", "/v1/accounts", nil, withToken(conn.AccessToken)), 200)
 	if fmt.Sprint(accts.JSON["data"].([]any)[0].(map[string]any)["id"]) != id {
 		t.Fatal("account ID changed after reauth")
 	}
-	s.must(s.call("GET", "/v1/accounts/"+id+"/transactions/sync?limit=5", nil), 200)
+	s.must(s.call("GET", "/v1/accounts/"+id+"/transactions/sync?limit=5", nil, withToken(conn.AccessToken)), 200)
 }
 
 func TestRefreshAndRateLimit(t *testing.T) {
 	s := newStack(t)
-	conn := s.connect("ngozi", "bank-b", s.today().AddDays(-10))
+	conn := s.connect("ngozi", "bank-b")
 	id := fmt.Sprint(conn.Accounts[0]["id"])
-	r := s.must(s.call("POST", "/v1/accounts/"+id+"/refresh", nil), 202)
+	r := s.must(s.call("POST", "/v1/accounts/"+id+"/refresh", nil, withToken(conn.AccessToken)), 202)
 	ref := fmt.Sprint(r.JSON["id"])
-	r = s.call("POST", "/v1/accounts/"+id+"/refresh", nil)
+	r = s.call("POST", "/v1/accounts/"+id+"/refresh", nil, withToken(conn.AccessToken))
 	if r.Status != 429 || r.Code() != "rate_limited" || r.Header.Get("Retry-After") == "" {
 		t.Fatalf("second refresh: %d %s", r.Status, r.Body)
 	}
@@ -401,14 +429,15 @@ func TestRefreshAndRateLimit(t *testing.T) {
 
 func TestBankOutage(t *testing.T) {
 	s := newStack(t)
-	conn := s.connect("chidi", "bank-b", s.today().AddDays(-10))
+	conn := s.connect("chidi", "bank-b")
 	s.ctl("POST", "/faults", map[string]any{"kind": "down", "bank": "bank-b"})
-	s.syncNow()
-	c := s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
-	if c.JSON["status"] != "institution_down" {
-		t.Fatalf("status during outage: %v", c.JSON["status"])
-	}
-	r := s.call("DELETE", "/v1/connections/"+conn.ConnectionID, nil)
+	var c Resp
+	waitFor(t, 15*time.Second, "the connection to be institution_down during the outage", func() bool {
+		s.syncNow()
+		c = s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
+		return c.JSON["status"] == "institution_down"
+	})
+	r := s.call("POST", "/v1/connections/remove", nil, withToken(conn.AccessToken))
 	if r.Status != 503 || r.Code() != "institution_down" {
 		t.Fatalf("delete during outage: %d %s", r.Status, r.Body)
 	}
@@ -420,9 +449,8 @@ func TestBankOutage(t *testing.T) {
 	if after := s.balances(tunde); fmt.Sprint(after) != fmt.Sprint(before) {
 		t.Fatalf("a refused transfer moved money: %v then %v", before, after)
 	}
-	ls := s.must(s.call("POST", "/v1/link_sessions", map[string]any{"start_date": s.today().String(), "workspace_id": "w", "redirect_uri": s.redirect}), 201)
 	b := s.browser()
-	b.get(fmt.Sprint(ls.JSON["widget_url"]))
+	b.get(s.linkURL("w", ""))
 	b.post("/link/institution", map[string][]string{"institution": {"bank-b"}})
 	if b.result == nil || b.result.Query().Get("error") != "institution_down" {
 		t.Fatalf("widget during outage: %v", b.result)
@@ -430,24 +458,23 @@ func TestBankOutage(t *testing.T) {
 	s.ctl("DELETE", "/faults?bank=bank-b", nil)
 	waitFor(t, 15*time.Second, "the connection to be active after the outage", func() bool {
 		s.syncNow()
-		c = s.must(s.call("GET", "/v1/connections/"+conn.ConnectionID, nil), 200)
+		c = s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
 		return c.JSON["status"] == "active"
 	})
 }
 
 func TestOwnAccountTransferMatchesBySessionID(t *testing.T) {
 	s := newStack(t)
-	start := s.today().AddDays(-5)
-	a := s.connect("adaeze", "bank-a", start)
-	b := s.connect("adaeze", "bank-b", start)
+	a := s.connect("adaeze", "bank-a")
+	b := s.connect("adaeze", "bank-b")
 	pa, pb := s.personaAt("adaeze", "bank-a"), s.personaAt("adaeze", "bank-b")
 	if pa.BVN != pb.BVN {
 		t.Fatalf("one customer has BVNs %s and %s", pa.BVN, pb.BVN)
 	}
 	s.pay("bank-a", pa.Accounts[0], "bank-b", pb.Accounts[0], "100000")
 	s.syncNow()
-	fa, _ := s.syncAll(fmt.Sprint(accountAt(t, a, "current")["id"]), "", 500)
-	fb, _ := s.syncAll(fmt.Sprint(b.Accounts[0]["id"]), "", 500)
+	fa, _ := s.syncAll(a.AccessToken, fmt.Sprint(accountAt(t, a, "current")["id"]), "", 500)
+	fb, _ := s.syncAll(b.AccessToken, fmt.Sprint(b.Accounts[0]["id"]), "", 500)
 	sessions := map[string]int64{}
 	for _, l := range fa.lines {
 		if l["channel"] == "nip" && num(l["amount_minor"]) == -10000000 {

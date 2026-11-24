@@ -190,38 +190,76 @@ Connect your existing app to Beerus, the way you would connect it to Mono or Okr
 beerus partner add myapp --redirect-uri http://localhost:3000/callback --webhook-url http://localhost:3000/webhooks
 ```
 
-Your app's API key lands in `.beerus/partners/myapp`. Every call to the Partner API at `http://connect.localhost:7443` sends it in the `X-Api-Key` header. To try calls from a terminal:
+Your app's client ID and secret land in `.beerus/partners/myapp`. Every call to the Partner API at `http://connect.localhost:7443` sends them in the `Beerus-Client-ID` and `Beerus-Secret` headers. To try calls from a terminal:
 
 ```bash
 P=.beerus/partners/myapp
-api() { curl -sS -H "X-Api-Key: $(cat $P/api-key)" -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "http://connect.localhost:7443$1" "${@:2}"; echo; }
+api() { curl -sS -H "Beerus-Client-ID: myapp" -H "Beerus-Secret: $(cat $P/secret)" ${TOKEN:+-H "Beerus-Access-Token: $TOKEN"} -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "http://connect.localhost:7443$1" "${@:2}"; echo; }
+```
+
+To list the banks your customers can link, for your own bank picker:
+
+```bash
+api "/v1/institutions?limit=50"
 ```
 
 ## 2. Let a customer link their bank
 
-Your app creates a link session:
+Your app creates a link token. `user_id` is your own ID for the customer. `institution_id` is optional; give one from `GET /v1/institutions` to open Connect on that bank.
 
 ```bash
-api /v1/link_sessions -d '{"start_date":"2026-11-01","workspace_id":"ws_1","redirect_uri":"http://localhost:3000/callback"}'
+api /v1/link/token/create -d '{"user_id":"user_1","institution_id":"bank-a","redirect_uri":"http://localhost:3000/callback"}'
 ```
 
-Send the customer to its `widget_url`. They pick their bank, log in with their online banking details and approve. Beerus Connect then sends them to your redirect URI with a `code`.
+The response holds a `link_token` and its `expiration`. Open Connect over your page with one script tag and one call:
+
+```html
+<script src="http://connect.localhost:7444/connect.js"></script>
+<script>BeerusConnect.open(LINK_TOKEN, {
+  onSuccess: (publicToken, metadata) => fetch('/exchange', {method: 'POST', body: JSON.stringify({public_token: publicToken})}),
+  onExit: error => {}
+})</script>
+```
+
+Connect opens on the bank list, or goes straight to the bank when the link token has an `institution_id`. The customer logs in on the bank's own page in a popup and approves. Then:
+
+- `onSuccess(publicToken, metadata)` runs when they finish. `publicToken` works once and lasts 10 minutes. `metadata` holds `institution` and `accounts` (`account_id`, `name` and `mask` for each account the customer picked).
+- `onExit(error)` runs when they close Connect (`error` is `null`) or it fails (`error` has a `code` and `message`).
+
+The page that calls `open` must be served from the origin of the `redirect_uri` you registered with `beerus partner add --redirect-uri`. Connect only lets that origin frame it, and sends results only to it. To keep the handle, use `const connect = BeerusConnect.create({token, onSuccess, onExit}); connect.open();`.
+
+Without the script, send the customer to `http://connect.localhost:7444/link?token=LINK_TOKEN`. Beerus Connect then redirects them to your redirect URI with a `public_token` and a `link_session_id`. The customer picks which of the bank's accounts to share, and only those accounts appear in your data. Connect shares history from 90 days before today, or less if the bank keeps less.
 
 ## 3. Get the connection
 
-Exchange the code within 10 minutes:
+Exchange the `public_token` within 10 minutes:
 
 ```bash
-api /v1/connections/exchange -d '{"code":"CODE","link_session_id":"LINK_SESSION_ID"}'
+api /v1/public_token/exchange -d '{"public_token":"PUBLIC_TOKEN"}'
 ```
+
+The response holds an `access_token` and a `connection_id`. Keep the `access_token` on your server: Beerus shows it once and your app sends it in the `Beerus-Access-Token` header, never in a URL. After a reauth (`POST /v1/connection/reauth`), exchanging the new `public_token` returns only the `connection_id`, and the existing `access_token` keeps working.
 
 ## 4. Read customer data
 
+Set `TOKEN` to the `access_token`. `api` then sends it in the `Beerus-Access-Token` header.
+
 ```bash
-api /v1/connections/CONNECTION_ID/accounts
-api /v1/accounts/ACCOUNT_ID/balance
+TOKEN=ACCESS_TOKEN
+api /v1/accounts
+api "/v1/accounts/ACCOUNT_ID/balance?as_of=2026-01-31"
 api /v1/accounts/ACCOUNT_ID/transactions/sync
 ```
+
+An account outside the connection answers 404.
+
+## 5. Remove the connection
+
+```bash
+api /v1/connections/remove -X POST
+```
+
+The connection ends and its `access_token` stops working (401).
 
 ## Manage it
 
@@ -232,6 +270,8 @@ beerus webhooks
 beerus revoke CONNECTION_ID
 beerus partner rotate-key myapp
 ```
+
+`partner rotate-key` issues a new secret and the old one stops working at once.
 
 The customer needs an online banking login: create them with `--username`. Full API: [api/partner/openapi.yaml](api/partner/openapi.yaml).
 
