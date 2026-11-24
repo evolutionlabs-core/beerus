@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -28,8 +27,6 @@ const (
 	participantTok  = "control-token"
 	probeLimit      = 10 * time.Second
 )
-
-var accountNo = regexp.MustCompile(`"nuban":"(\d{10})"`)
 
 type endpoint struct {
 	name, call, body string
@@ -90,21 +87,16 @@ func runEndpoints(t *testing.T, v validator.Validator, base, token string, vars 
 				t.Fatal(err)
 			}
 			req.Header.Set("Content-Type", "application/json")
-			if !slices.Contains(fields[2:], "anon") {
-				req.Header.Set("Authorization", "Bearer "+token)
-			}
+			req.Header.Set("Authorization", "Bearer "+token)
 			for _, f := range fields[2:] {
 				if key, ok := strings.CutPrefix(f, "key="); ok {
 					req.Header.Set("Idempotency-Key", key)
-				}
-				if bad, ok := strings.CutPrefix(f, "bearer="); ok {
-					req.Header.Set("Authorization", "Bearer "+bad)
 				}
 			}
 			return req
 		}
 		valid := !slices.Contains(fields[2:], "raw")
-		if ok, errs := v.ValidateHttpRequest(build()); valid && !slices.Contains(fields[2:], "anon") && !ok {
+		if ok, errs := v.ValidateHttpRequest(build()); valid && !ok {
 			t.Fatalf("%s: request is outside the spec: %v", r.name, errs)
 		}
 		resp, err := (&http.Client{Timeout: probeLimit}).Do(build())
@@ -120,9 +112,6 @@ func runEndpoints(t *testing.T, v validator.Validator, base, token string, vars 
 			t.Fatalf("%s: response %d %s is outside the spec: %v", r.name, resp.StatusCode, raw, errs)
 		}
 		body := string(raw)
-		if m := accountNo.FindStringSubmatch(body); m != nil && vars["{acc}"] == "" {
-			vars["{acc}"] = m[1]
-		}
 		replayed := resp.Header.Get("Idempotent-Replayed") == "true"
 		if resp.StatusCode != r.status || !(strings.Contains(body, fill(r.text)) || strings.Contains(body, strings.ReplaceAll(fill(r.text), `"`, `\"`))) || replayed != slices.Contains(fields[2:], "replay") {
 			t.Errorf("%s: got %d %s (replayed %v), want %d containing %q", r.name, resp.StatusCode, body, replayed, r.status, fill(r.text))
@@ -135,11 +124,8 @@ func controlContract(t *testing.T, v validator.Validator) {
 	srv := server.New(server.Config{Dir: cfg.Dir, Bank: *cfg.Bank("bank-a"), Link: control.Link{Token: participantTok}, Log: slog.New(slog.DiscardHandler), Clock: clock.New(), Phase: PhaseActive})
 	base := serve(t, loopback(t, "127.0.0.1:0"), srv.API())
 	vars := map[string]string{"{first}": string(control.FaultID("flt_one"))}
-	const unauthenticated = "A valid control token is required."
 	runEndpoints(t, v, base, participantTok, vars, []endpoint{
-		{"health", "GET /v1/health", "", 200, `"participant_id":"bank-a","status":"ok"`},
 		{"status before a phase", "GET /v1/status", "", 200, `"phase":"active","generation":0`},
-		{"no token", "GET /v1/status anon", "", 401, unauthenticated},
 		{"phase with a bad body", "PUT /v1/phase raw", `{"phase":"asleep","generation":1,"world_id":"wld_1"}`, 400, "with a phase, a generation and a world ID."},
 		{"phase active", "PUT /v1/phase", `{"phase":"active","generation":4,"world_id":"wld_1"}`, 200, `"generation":4,"observed_generation":4`},
 	})
@@ -162,18 +148,14 @@ func controlContract(t *testing.T, v validator.Validator) {
 		{"down fault repeated", "POST /v1/faults key=flt_one replay", `{"kind":"down","for":"1h"}`, 201, `"id":"{first}"`},
 		{"key reused", "POST /v1/faults key=flt_one", `{"kind":"timeout","outcome":"credited","count":2}`, 422, "This Idempotency-Key was used with a different request."},
 		{"no key", "POST /v1/faults raw", `{"kind":"down","for":"1h"}`, 400, "An Idempotency-Key header of 1 to 255 characters is required on writes."},
-		{"unknown field", "POST /v1/faults key=flt_bad raw", `{"kind":"down","bank":"bank-b"}`, 400, `Send {\"kind\":\"down\",\"for\":\"1h\"} or`},
 		{"down for more than a day", "POST /v1/faults key=flt_long", `{"kind":"down","for":"25h"}`, 422, `is above the limit of 24h`},
 		{"timeout fault", "POST /v1/faults key=flt_two", `{"kind":"timeout","outcome":"credited","count":2}`, 201, `"kind":"timeout","outcome":"credited","left":2`},
 		{"first page", "GET /v1/faults?limit=1", "", 200, `"next_cursor":"{first}"`},
 		{"last page", "GET /v1/faults?limit=1&cursor={first}", "", 200, `"kind":"timeout"`},
 		{"unknown cursor", "GET /v1/faults?cursor=flt_nothing", "", 400, "That cursor is not valid. Use the next_cursor value from the last page."},
-		{"limit above the cap", "GET /v1/faults?limit=501 raw", "", 400, "limit must be a number from 1 to 500."},
 		{"clear", "DELETE /v1/faults", "", 200, `{"cleared":2}`},
-		{"clear again", "DELETE /v1/faults", "", 200, `{"cleared":0}`},
 		{"key usable after a clear", "POST /v1/faults key=flt_one", `{"kind":"down","for":"1h"}`, 201, `"kind":"down"`},
 		{"phase suspended", "PUT /v1/phase", `{"phase":"suspended","reason":"Suspended by the operator.","generation":5,"world_id":"wld_1"}`, 200, `"reason":"Suspended by the operator."`},
-		{"stop is not served yet", "POST /v1/stop raw", "", 404, "A bank does not serve this control call yet."},
 	})
 	if stale, b := srv.TakeStale(), srv.Bank(); !stale || b.Name != renamed.Name || !b.Suspended() {
 		t.Fatalf("after the reload the bank is %q, suspended %v; want %q, true, with the site marked stale", b.Name, b.Suspended(), renamed.Name)

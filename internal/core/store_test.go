@@ -28,11 +28,6 @@ func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	local := setup.DefaultLocal()
 	ports := testPorts(t, 2)
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort, local.Connect.CBNPort, local.Connect.ConnectControlPort = ports[0], ports[1], ports[2], ports[3], ports[4], ports[5], ports[7]
-	return initConfigWith(t, today, local)
-}
-
-func initConfigWith(t *testing.T, today clock.Date, local setup.Local) *config.Config {
-	t.Helper()
 	dir := t.TempDir()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u

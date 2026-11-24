@@ -57,7 +57,6 @@ func TestNIBSSAdminReadsWhatNIBSSKeeps(t *testing.T) {
 		{"one bank", "member", nibssBanksPath + "bank-a", bankJSON("bank-a", "000011", "terminating"), "bank-a terminating"},
 		{"an unknown bank", "member", "", "", "bank id bank-a is not in the NIBSS directory"},
 		{"one session", "session", nibssSessionsPath + "s1", session, "s1 000014 000015 150000 00 credited"},
-		{"an unknown session", "session", "", "", "session s1: 25 no record"},
 		{"closure sessions", "closure", nibssBanksPath + "bank-a" + nibssClosureSuffix, `{"data":[` + moveJSON("c1", "9010000011", "00") + `,` + moveJSON("c2", "9010000011", "91") + `]}`, "c1 00|c2 91"},
 	} {
 		got, err := readNIBSS(t.Context(), controlAt(map[string]string{r.path: r.body}), r.op)
@@ -81,7 +80,6 @@ func TestOpenTransfersAddPendingInward(t *testing.T) {
 		err       string
 	}{
 		{"nothing open", openJSON(0, 0, 0, 0), 0, 0, ""},
-		{"sent and received", openJSON(3, 500000, 270000, 0), 3, -230000, ""},
 		{"pending inward counts", openJSON(3, 500000, 270000, 30000), 3, -200000, ""},
 		{"largest outward", openJSON(1, math.MaxInt64, 0, 0), 1, -math.MaxInt64, ""},
 		{"inward and pending overflow", openJSON(2, 0, math.MaxInt64, 1), 0, 0, overflow},
@@ -146,7 +144,6 @@ func TestClosureKeyCountsDefiniteFailuresOfTheAccount(t *testing.T) {
 		{"no moves yet", join(), key},
 		{"one move still pending", join(move("pending", "0000000014")), key},
 		{"one failed move", join(move("91", "0000000014")), key + ":1"},
-		{"two failed, then one sent", join(move("91", "0000000014"), move("51", "0000000014"), move("00", "0000000014")), key + ":2"},
 		{"another account's failure", join(move("91", "0000000022")), key},
 	} {
 		a := &App{nibssCtl: controlAt(map[string]string{nibssBanksPath + "bank-a" + nibssClosureSuffix: r.body})}

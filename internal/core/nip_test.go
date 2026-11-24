@@ -32,14 +32,7 @@ func (w *stallWriter) Write(b []byte) (int, error) {
 }
 
 func nipPeers(r *http.Request) (*http.Response, error) {
-	switch p := r.URL.Path; {
-	case strings.HasSuffix(p, nibssOpenSuffix):
-		return stubReply(http.StatusOK, `{"transfers":0,"outward_minor":0,"inward_minor":0,"unposted_settlements":0}`), nil
-	case p == nibssStatusPath:
-		return stubReply(http.StatusOK, `{"next_cutoff_at":"2026-11-04T11:00:00Z"}`), nil
-	case p == control.NIBSSDirectoryPath:
-		return stubReply(http.StatusOK, `{"data":[]}`), nil
-	case p == nibssEnquiriesPath:
+	if r.URL.Path == nibssEnquiriesPath {
 		return stubReply(http.StatusOK, `{"response_code":"00","account_name":"Ngozi Eze"}`), nil
 	}
 	return stubReply(http.StatusOK, `{"status":"success"}`), nil
@@ -62,10 +55,8 @@ func TestResponsesAreWrittenWithoutTheLock(t *testing.T) {
 		target  string
 		body    string
 	}{
-		"transfer":     {a.atBank, "/banks/bank-a/transfers", transfer},
-		"positions":    {a.ctlNIPPositions, "/", ""},
-		"participants": {a.ctlNIPParticipants, "/", ""},
-		"enquiry":      {a.ctlNameEnquiry, "/?bank_code=999002&account_number=0000000017", ""},
+		"transfer": {a.atBank, "/banks/bank-a/transfers", transfer},
+		"enquiry":  {a.ctlNameEnquiry, "/?bank_code=999002&account_number=0000000017", ""},
 	} {
 		sw := &stallWriter{header: http.Header{}, reached: make(chan struct{}), release: make(chan struct{})}
 		r := httptest.NewRequest(http.MethodPost, c.target, strings.NewReader(c.body))

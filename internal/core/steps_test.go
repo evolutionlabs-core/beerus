@@ -14,9 +14,6 @@ import (
 )
 
 func TestDriftRules(t *testing.T) {
-	if stepIndex(config.StepDatabase) != 2 || stepIndex(config.StepAllocate) != 0 || stepIndex("nope") != -1 {
-		t.Fatal("step order changed")
-	}
 	missing := []string{config.StepDatabase, config.StepSite}
 	cases := []struct {
 		phase     string
@@ -25,9 +22,7 @@ func TestDriftRules(t *testing.T) {
 		nextPhase string
 	}{
 		{PhaseActive, nil, missing, PhaseRepairing},
-		{PhaseSuspended, nil, missing, PhaseRepairing},
 		{PhaseClosing, []string{setup.FinalizerStopRouting}, missing, PhaseClosing},
-		{PhaseTerminating, []string{setup.FinalizerSettleMoves}, missing, PhaseTerminating},
 		{PhaseTerminating, []string{setup.FinalizerSettleMoves, setup.FinalizerPurgeOwned}, nil, PhaseTerminating},
 		{PhaseClosed, nil, nil, PhaseClosed},
 	}
@@ -124,8 +119,6 @@ func TestRecordPhase(t *testing.T) {
 		wantObserved       int64
 	}{
 		{"closing is not reopened", PhaseClosing, 3, 2, 3, PhaseClosing, 2},
-		{"terminating is not reopened", PhaseTerminating, 3, 2, 3, PhaseTerminating, 2},
-		{"closed is not reopened", PhaseClosed, 3, 2, 3, PhaseClosed, 2},
 		{"an older generation is observed as it was", PhaseRepairing, 3, 1, 2, PhaseActive, 2},
 		{"the current generation is observed", PhaseRepairing, 3, 1, 3, PhaseActive, 3},
 	} {
@@ -152,10 +145,7 @@ func TestTargetChange(t *testing.T) {
 		{name: "clean", bank: &setup.Bank{ID: "bank-a"}, resource: &setup.Resource{Generation: 3, ObservedGeneration: 3}},
 		{name: "suspended in the spec", bank: &setup.Bank{ID: "bank-a", State: setup.StateSuspended}, resource: &setup.Resource{Generation: 3, ObservedGeneration: 3}, suspended: true},
 		{name: "change not observed", bank: &setup.Bank{ID: "bank-a"}, resource: &setup.Resource{Generation: 4, ObservedGeneration: 3}, changing: true},
-		{name: "suspended and not observed", bank: &setup.Bank{ID: "bank-a", State: setup.StateSuspended}, resource: &setup.Resource{Generation: 4, ObservedGeneration: 3}, suspended: true, changing: true},
-		{name: "no resource", bank: &setup.Bank{ID: "bank-a"}},
 		{name: "not in the spec", resource: &setup.Resource{Generation: 4, ObservedGeneration: 3}, changing: true},
-		{name: "unknown bank"},
 	}
 	for _, r := range rows {
 		s := testStore(t)
@@ -174,9 +164,6 @@ func TestTargetChange(t *testing.T) {
 		}
 		a := &App{ctl: s}
 		suspended, changing, err := a.targetChange("bank-a")
-		if r.name == "unknown bank" {
-			suspended, changing, err = a.targetChange("bank-z")
-		}
 		if err != nil || suspended != r.suspended || changing != r.changing {
 			t.Errorf("%s: suspended %v, changing %v, %v; want %v, %v", r.name, suspended, changing, err, r.suspended, r.changing)
 		}

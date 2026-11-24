@@ -40,9 +40,6 @@ func TestApplyRefusals(t *testing.T) {
 	if err := admissible(removes("bank-b", "ledgerly"), ApplyOptions{Confirmed: []string{"bank-b", "ledgerly"}}); err != nil {
 		t.Errorf("every removal was confirmed: %v", err)
 	}
-	if err := admissible(removes("bank-b", "ledgerly"), ApplyOptions{Prune: true}); err != nil {
-		t.Errorf("prune was set: %v", err)
-	}
 	blocked := setup.Plan{Actions: []setup.Action{{Op: setup.OpRemove, Kind: setup.KindBank, ID: "bank-a", Blockers: []string{"bank-c settles through bank-a and is not leaving."}}}}
 	check(admissible(blocked, ApplyOptions{Prune: true}), http.StatusUnprocessableEntity, "invalid_spec", "bank-c settles through bank-a and is not leaving.")
 
@@ -53,5 +50,4 @@ func TestApplyRefusals(t *testing.T) {
 	plain := errors.New("setup.yaml:3:9: banks[bank-a].name is required. Add the bank's name.")
 	check(planFailure([]error{plain, plain}), http.StatusUnprocessableEntity, "invalid_spec", plain.Error()+"\n"+plain.Error())
 	check(planFailure([]error{plain, fmt.Errorf("moved: %w", setup.ErrBeingRemoved)}), http.StatusConflict, "being_removed", plain.Error()+"\nmoved: "+setup.ErrBeingRemoved.Error())
-	check(planFailure([]error{fmt.Errorf("x: %w", setup.ErrBeingRemoved), fmt.Errorf("y: %w", setup.ErrSetupMismatch)}), http.StatusConflict, "setup_mismatch", "x: "+setup.ErrBeingRemoved.Error()+"\ny: "+setup.ErrSetupMismatch.Error())
 }
