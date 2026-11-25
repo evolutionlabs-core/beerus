@@ -7,21 +7,27 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/evolutionlabs-core/beerus/internal/aggregator"
+	"github.com/evolutionlabs-core/beerus/internal/bank/ledger"
+	"github.com/evolutionlabs-core/beerus/internal/bank/store"
 	"github.com/evolutionlabs-core/beerus/internal/config"
+	"github.com/evolutionlabs-core/beerus/internal/control"
+	"github.com/evolutionlabs-core/beerus/internal/core"
+	"github.com/evolutionlabs-core/beerus/internal/nip"
 	"github.com/evolutionlabs-core/beerus/internal/setup"
 )
 
-func TestApplyFromTheSpec(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs an in-process stack")
-	}
-	s := newBankStack(t)
+func TestSetupChanges(t *testing.T) {
+	s := ownStack(t, aggregator.Options{})
+	s.needsNodes()
+	c := newCLIAt(t, s.cfg.Dir)
 	applied := func() setup.Spec { return storedStatus(t, s.cfg.Dir).Applied }
 	post := func(path string, spec setup.Spec, extra map[string]any) (map[string]any, error) {
 		raw, err := setup.Export(spec)
@@ -40,7 +46,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 		return out
 	}
 	settled := func(kind, id string) map[string]any {
-		return s.waitResource(kind, id, 60*time.Second, func(r map[string]any) bool {
+		return s.waitResource(kind, id, func(r map[string]any) bool {
 			return r != nil && r["phase"] == config.PhaseActive && r["observed_generation"] == r["generation"]
 		})
 	}
@@ -61,6 +67,39 @@ func TestApplyFromTheSpec(t *testing.T) {
 	}
 	if after := generations(); !maps.Equal(before, after) || storedStatus(t, s.cfg.Dir).AppliedSHA256 != sum {
 		t.Fatalf("a repeat apply moved generations %v to %v or the applied sum", before, after)
+	}
+
+	renamedSpec := applied()
+	renamedSpec.Spec.Banks[0].Name = "Abuja Digital"
+	renamedRaw, err := setup.Export(renamedSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamedFile := filepath.Join(t.TempDir(), "renamed.yaml")
+	if err := os.WriteFile(renamedFile, renamedRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, code := c.run("diff", "-f", renamedFile); code != 2 || !strings.Contains(got, "bank-a") || !strings.Contains(got, "Abuja Digital") || strings.Contains(got, "No changes.") {
+		t.Errorf("diff of a rename: exit %d, %q", code, got)
+	}
+	if got := c.ok("diff"); got != "No changes.\n" {
+		t.Errorf("diff of the applied file: %q", got)
+	}
+	if got := c.ok("apply"); got != "No changes.\n" {
+		t.Errorf("a repeat apply: %q", got)
+	}
+	holiday := applied()
+	holiday.Spec.Holidays.Add = []string{time.Now().AddDate(0, 0, -30).Format("2006-01-02")}
+	holidayRaw, err := setup.Export(holiday)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holidayFile := filepath.Join(t.TempDir(), "holiday.yaml")
+	if err := os.WriteFile(holidayFile, holidayRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.fails("diff", "-f", holidayFile); !strings.Contains(got, "holidays") || !strings.Contains(got, "is in the past and cannot change") {
+		t.Errorf("a holiday in the past: %q", got)
 	}
 
 	locked := applied()
@@ -123,7 +162,7 @@ func TestApplyFromTheSpec(t *testing.T) {
 	}
 	var page []byte
 	waitFor(t, waitLimit, "the bank site to show the new name", func() bool {
-		resp, err := http.Get(site + "/login")
+		resp, err := s.raw.Get(site + "/login")
 		if err != nil {
 			return false
 		}
@@ -145,6 +184,17 @@ func TestApplyFromTheSpec(t *testing.T) {
 	byeC.Spec.Banks = byeC.Spec.Banks[:2]
 	if _, err := post("/apply", byeC, nil); err == nil || !strings.Contains(err.Error(), "HTTP 409") || !strings.Contains(err.Error(), "prune_required") || !strings.Contains(err.Error(), "The plan removes bank-c. Nothing was changed. Run again with --prune to remove it.") {
 		t.Fatalf("a removal without prune: %v", err)
+	}
+	byeCRaw, err := setup.Export(byeC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byeCFile := filepath.Join(t.TempDir(), "bye-c.yaml")
+	if err := os.WriteFile(byeCFile, byeCRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.fails("apply", "-f", byeCFile); !strings.Contains(got, "--prune") {
+		t.Errorf("apply of a removal without --prune: %q", got)
 	}
 	if applied().Spec.Banks[2].ID != "bank-c" || generations()["Bank/bank-c"] != 2 {
 		t.Fatal("a refused removal changed the store")
@@ -207,14 +257,14 @@ func TestApplyFromTheSpec(t *testing.T) {
 	if pr["secret_sha256"] != config.HashKey(key) || strings.Contains(fmt.Sprint(pr), key) {
 		t.Fatalf("partner status: %v", pr)
 	}
-	if code := rawGet(t, s, "ledgerly", key, "", "/v1/webhook_keys"); code != 200 {
+	if code := rawGet(s, "ledgerly", key, "", "/v1/webhook_keys"); code != 200 {
 		t.Fatalf("the partner made from the spec got %d", code)
 	}
 	withP.Spec.Partners[len(withP.Spec.Partners)-1].WebhookURL = "https://ledgerly.localhost/hook"
 	if _, err := post("/apply", withP, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.waitResource("partner", "ledgerly", 60*time.Second, func(r map[string]any) bool { return r["observed_generation"] == float64(2) }); got["phase"] != config.PhaseActive {
+	if got := s.waitResource("partner", "ledgerly", func(r map[string]any) bool { return r["observed_generation"] == float64(2) }); got["phase"] != config.PhaseActive {
 		t.Fatalf("partner update: %v", got)
 	}
 	if got := s.loadConfig().Partner("ledgerly"); got == nil || got.WebhookURL != "https://ledgerly.localhost/hook" {
@@ -277,4 +327,97 @@ func TestApplyFromTheSpec(t *testing.T) {
 	if rows := s.ctl("GET", "/connections", nil)["data"].([]any); len(rows) != 0 {
 		t.Fatalf("the removed partner's connections are still stored: %v", rows)
 	}
+
+	s.t.Log("purge rules")
+	{
+		s.ctl("POST", "/banks", map[string]any{"name": "Acme Bank", "type": "digital"})
+		s.waitPhase("acme-bank", core.PhaseActive)
+		oldBank, err := s.app.Resource(setup.KindBank, "acme-bank")
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldCode := oldBank.Allocated.NIPCode
+		home := s.persona("adaeze")
+		target := s.openAccount(s.join("adaeze", "acme-bank"), "current")
+		s.payListed("bank-a", home.Accounts[0], "acme-bank", target, "1000")
+		s.ctl("POST", "/nip/settle-now", nil)
+		s.ctl("POST", "/faults", map[string]any{"kind": "timeout", "bank": "acme-bank", "outcome": "credited", "count": 5})
+		s.ctl("POST", "/banks/acme-bank/close", map[string]any{"money": "leave"})
+		s.waitPhase("acme-bank", core.PhaseClosed)
+		oldBalance := cbnBalance(t, s.cfg, "acme-bank")
+		s.ctl("POST", "/banks/acme-bank/purge", nil)
+		s.waitGone("bank", "acme-bank")
+		if tombs := storedStatus(t, s.cfg.Dir).Tombstones; !slices.ContainsFunc(tombs, func(tb nip.Institution) bool {
+			return tb.ID == "acme-bank" && tb.NIPCode == oldCode && tb.Status == "removed"
+		}) {
+			t.Fatalf("tombstones after the purge: %+v", tombs)
+		}
+		if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Acme Two", "id": "acme-bank"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "banks[acme-bank].id acme-bank belonged to a removed bank. Choose another id.") {
+			t.Fatalf("create with a purged id: %v", err)
+		}
+		if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Acme Three", "nip_code": "123456"}); err == nil || !strings.Contains(err.Error(), "HTTP 422") || !strings.Contains(err.Error(), "nip_code and nuban_code are assigned by Beerus; leave them out") {
+			t.Fatalf("create with a chosen code: %v", err)
+		}
+		s.ctl("POST", "/banks", map[string]any{"name": "Acme Bank", "type": "digital"})
+		s.waitPhase("acme-bank-2", core.PhaseActive)
+		s.ctl("POST", "/banks", map[string]any{"name": "Bank-B", "type": "digital"})
+		s.waitPhase("bank-b-2", core.PhaseActive)
+		fresh, err := s.app.Resource(setup.KindBank, "acme-bank-2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fresh.Allocated.NIPCode == oldCode {
+			t.Fatalf("the recreated bank reused the code %s", oldCode)
+		}
+		if got := cbnBalance(t, s.cfg, "acme-bank-2"); got != control.GenesisSettlement {
+			t.Fatalf("the recreated bank has %d at the CBN, want %d", got, control.GenesisSettlement)
+		}
+		if got := cbnBalance(t, s.cfg, "acme-bank"); got != oldBalance {
+			t.Fatalf("the purged bank's CBN account holds %d, want %d", got, oldBalance)
+		}
+		if faults := s.ctl("GET", "/faults", nil); strings.Contains(fmt.Sprint(faults), "acme-bank") {
+			t.Fatalf("a fault of the purged bank survives: %v", faults)
+		}
+		for _, id := range []string{"acme-bank-2", "bank-b-2", "bank-b", "bank-a"} {
+			s.ctl("POST", "/banks/"+id+"/close", map[string]any{"money": "leave"})
+			s.waitPhase(id, core.PhaseClosed)
+			if imp := s.ctl("GET", "/banks/"+id+"/purge", nil); fmt.Sprint(imp["blockers"]) != "[]" {
+				t.Fatalf("purge preview of %s: %v", id, imp)
+			}
+			s.ctl("POST", "/banks/"+id+"/purge", nil)
+			s.waitGone("bank", id)
+		}
+		if left := s.ctl("GET", "/banks", nil)["data"].([]any); len(left) != 0 {
+			t.Fatalf("banks after purging every bank: %v", left)
+		}
+		if err := s.app.Save(); err != nil {
+			t.Fatal(err)
+		}
+		saved := s.loadConfig()
+		if len(saved.Banks) != 0 {
+			t.Fatal("the setup still lists a purged bank")
+		}
+		again, err := core.New(saved, core.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if left := again.BankStatuses(); len(left) != 0 {
+			t.Fatalf("purged banks came back after a restart: %v", left)
+		}
+	}
+}
+
+func cbnBalance(t *testing.T, cfg *config.Config, account string) int64 {
+	t.Helper()
+	ctx := t.Context()
+	st, err := store.Open(ctx, cfg.DatabaseURL, config.DatabaseName(cfg.Dir, setup.SystemCBN))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	bal, err := ledger.New(st.Pool, nil).Balance(ctx, "SETTLEMENT/"+account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bal
 }

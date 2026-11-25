@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  go:
+  unit:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -30,43 +30,73 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Resolve connect.localhost
+          cache: false
+      - name: Restore the Go build cache
+        id: gocache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-unit-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-unit-${{ runner.os }}-${{ hashFiles('go.sum') }}-
+      - name: Resolve local names
         run: echo "127.0.0.1 connect.localhost cbn.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
       - name: gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: go vet
         run: go vet ./...
       - name: go test
-        run: go test -race -count=1 -timeout 25m ./...
+        run: go test -race -short -count=1 $(go list ./... | grep -v /contracttest)
+      - name: Save the Go build cache
+        if: always() && steps.gocache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-unit-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
-  contract-full:
+  contract:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
       BEERUS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
-      BEERUS_CONTRACT_FULL: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Start Postgres
+        run: |
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16 -c max_connections=300 -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+          until docker exec pg pg_isready -U postgres; do sleep 1; done
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Restore the Go build cache
+        id: gocache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-contract-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-contract-${{ runner.os }}-${{ hashFiles('go.sum') }}-
       - name: Resolve local names
         run: echo "127.0.0.1 connect.localhost cbn.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
-      - name: Contract suite on the full stack
-        run: go test -count=1 -timeout 25m ./contracttest
+      - name: Contract suite
+        run: go test -race -count=1 -timeout 5m ./contracttest
+      - name: Save the Go build cache
+        if: always() && steps.gocache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-contract-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   multi-process:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -124,10 +154,10 @@ jobs:
             echo "BEERUS_SETUP_FILE=/state/setup.yaml"
           } >> "$GITHUB_ENV"
           COMPOSE_FILE=compose.ci.yaml BEERUS_STATE="$RUNNER_TEMP/beerus-state" BEERUS_UID="$(id -u)" BEERUS_GID="$(id -g)" BEERUS_SETUP_FILE=/state/setup.yaml docker compose up -d --build --wait --wait-timeout 300
-      - name: Done test against the containers
+      - name: Journey test against the containers
         env:
           BEERUS_CONTRACT_DIR: ${{ runner.temp }}/beerus-state
-        run: go test -count=1 -timeout 15m -v -run TestDoneStory ./contracttest
+        run: go test -count=1 -timeout 15m -v -run TestJourney ./contracttest
       - name: Container logs
         if: failure()
         run: docker compose logs --no-color

@@ -14,10 +14,7 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestHungBankDoesNotStallPartnerAPI(t *testing.T) {
-	if testingExternal() {
-		t.Skip("needs the in-process stack")
-	}
+func TestHungBank(t *testing.T) {
 	var hang atomic.Bool
 	var held atomic.Int32
 	release := make(chan struct{})
@@ -34,7 +31,8 @@ func TestHungBankDoesNotStallPartnerAPI(t *testing.T) {
 			return base.RoundTrip(r)
 		})
 	}}
-	s := startStackWith(t, opts)
+	s := ownStack(t, opts)
+	s.needsNodes()
 	t.Cleanup(func() {
 		select {
 		case <-release:
