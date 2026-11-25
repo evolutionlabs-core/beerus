@@ -36,12 +36,8 @@
   --neg: #e8907a;
   --warn: #e0b45c;
   --bank: #edecec;
-  --mark-top-1: #f7f6f3;
-  --mark-top-2: #dad9d4;
-  --mark-left-1: #b0afa9;
-  --mark-left-2: #86857f;
-  --mark-right-1: #64635e;
-  --mark-right-2: #42413d;
+  --mark-ink: #edecec;
+  --mark-accent: #2fa3b8;
   color-scheme: dark;
 }
 
@@ -61,12 +57,8 @@
     --pos: #2f7d50;
     --neg: #b4513a;
     --warn: #9a6b12;
-    --mark-top-1: #adaca6;
-    --mark-top-2: #8e8d87;
-    --mark-left-1: #55544f;
-    --mark-left-2: #3a3935;
-    --mark-right-1: #252422;
-    --mark-right-2: #121210;
+    --mark-ink: #14120b;
+    --mark-accent: #0f7082;
     color-scheme: light;
   }
 }
@@ -86,12 +78,8 @@
   --pos: #2f7d50;
   --neg: #b4513a;
   --warn: #9a6b12;
-  --mark-top-1: #adaca6;
-  --mark-top-2: #8e8d87;
-  --mark-left-1: #55544f;
-  --mark-left-2: #3a3935;
-  --mark-right-1: #252422;
-  --mark-right-2: #121210;
+  --mark-ink: #14120b;
+  --mark-accent: #0f7082;
   color-scheme: light;
 }
 
@@ -213,23 +201,13 @@
   @apply font-mono text-[0.93em] tracking-normal tabular-nums;
 }
 
-.mark-top-1 {
-  stop-color: var(--mark-top-1);
+.mark-ink {
+  fill: var(--mark-ink);
+  stroke: var(--mark-ink);
 }
-.mark-top-2 {
-  stop-color: var(--mark-top-2);
-}
-.mark-left-1 {
-  stop-color: var(--mark-left-1);
-}
-.mark-left-2 {
-  stop-color: var(--mark-left-2);
-}
-.mark-right-1 {
-  stop-color: var(--mark-right-1);
-}
-.mark-right-2 {
-  stop-color: var(--mark-right-2);
+.mark-accent {
+  fill: var(--mark-accent);
+  stroke: var(--mark-accent);
 }
 
 @utility dialog {
