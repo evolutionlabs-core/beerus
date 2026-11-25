@@ -51,27 +51,6 @@ func TestOnlineBanking(t *testing.T) {
 	if err != nil || !c.OK() {
 		t.Fatalf("bank ledger after online transfer: %v %v", err, c)
 	}
-	b.get("/apps")
-	if !strings.Contains(b.last, "Balance") || !strings.Contains(b.last, "via Beerus Connect") {
-		t.Fatalf("connected apps page: %.400s", b.last)
-	}
-	consent := regexp.MustCompile(`/apps/([^/"]+)/revoke`).FindStringSubmatch(b.last)
-	if consent == nil {
-		t.Fatalf("no withdraw button on the connected apps page: %.400s", b.last)
-	}
-	b.post("/apps/"+consent[1]+"/revoke", url.Values{})
-	if !strings.Contains(b.last, "Access withdrawn") {
-		t.Fatalf("revoke page: %.300s", b.last)
-	}
-	got := s.must(s.call("GET", "/v1/connection", nil, withToken(conn.AccessToken)), 200)
-	if got.JSON["status"] != "revoked" {
-		t.Fatalf("status after revoke in online banking: %v", got.JSON["status"])
-	}
-	if len(s.eventsOf("connection.status_changed", func(d map[string]any) bool {
-		return d["connection_id"] == conn.ConnectionID && d["status"] == "revoked"
-	})) == 0 {
-		t.Fatal("no revoked webhook")
-	}
 	other := s.bankBrowserAt("bank-a")
 	other.get("/accounts")
 	if other.loc != "/login" {

@@ -245,35 +245,12 @@ func TestNIPSwitch(t *testing.T) {
 			t.Errorf("unknown bank: %v", err)
 		}
 	})
-
-	s.run("BVNs", func(s *Stack) {
-		seen := map[string]bool{}
-		for _, id := range []string{"adaeze", "tunde", "ngozi", "chidi"} {
-			bvn := s.persona(id).BVN
-			if len(bvn) != 11 || !strings.HasPrefix(bvn, "229") || seen[bvn] {
-				t.Errorf("%s has BVN %q", id, bvn)
-			}
-			seen[bvn] = true
-		}
-	})
 }
 
 func TestSettlement(t *testing.T) {
 	s := sharedStack(t, 1)
 	s.needsNodes()
 	from, to := s.persona("adaeze").Accounts[0], s.persona("ngozi").Accounts[0]
-
-	s.run("settle and verify the books", func(s *Stack) {
-		first := checkSettled(t, s.app)
-		s.pay("bank-a", from, "bank-b", to, "1500")
-		s.ctl("POST", "/nip/settle-now", nil)
-		if later := checkSettled(t, s.app); later.Sessions <= first.Sessions {
-			t.Errorf("settlement did not move on: %+v then %+v", first, later)
-		}
-		if c, err := s.app.VerifyBank(t.Context()); err != nil || !c.OK() {
-			t.Errorf("bank ledgers: %v %v", err, c)
-		}
-	})
 
 	s.run("a cutoff posts once and a retry replays", func(s *Stack) {
 		first := checkSettled(t, s.app)

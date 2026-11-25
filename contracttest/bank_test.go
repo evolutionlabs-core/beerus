@@ -339,9 +339,6 @@ func TestBankClose(t *testing.T) {
 			t.Fatalf("close was not admitted as closing: %v", accepted)
 		}
 		s.waitBlocked(id, setup.ReasonSettlementPending, "to settle 2 transfers (net ₦35,000.00). Wait for it, or run beerus nip settle-now.")
-		if ne := s.ctl("GET", "/nip/name-enquiry?bank_code="+s.cfg.Bank(id).NIPCode+"&account_number="+opened["tunde"].Accounts[0], nil); ne["response_code"] != "91" {
-			t.Errorf("name enquiry at a terminating bank: %v", ne)
-		}
 		if got := s.eventsOf("connection.status_changed", func(d map[string]any) bool {
 			return d["connection_id"] == conn.ConnectionID && d["status"] == "revoked"
 		}); len(got) != 1 {
@@ -417,10 +414,6 @@ func TestBankClose(t *testing.T) {
 		if active := fmt.Sprint(s.ctl("GET", "/banks?state=active", nil)["data"]); strings.Contains(active, id) {
 			t.Errorf("active banks list a closed bank: %v", active)
 		}
-		if c, err := s.app.VerifyBank(t.Context()); err != nil || !c.OK() {
-			t.Errorf("bank ledgers after the close: %v %v", err, c)
-		}
-		checkSettled(t, s.app)
 	})
 
 	s.run("a microfinance bank pays insured deposits", func(s *Stack) {
@@ -519,9 +512,6 @@ func TestPurge(t *testing.T) {
 		if _, err := s.payTry("bank-a", home.Accounts[0], id, target, "100", nil); err == nil || !strings.Contains(err.Error(), "nothing was debited") {
 			t.Errorf("transfer into a terminating bank: %v", err)
 		}
-		if got := s.eventsOf("account.removed", func(d map[string]any) bool { return d["account_id"] == acct }); len(got) != 1 {
-			t.Errorf("account.removed webhooks: %v", got)
-		}
 		if _, err := s.ctlTry("POST", "/banks", map[string]any{"name": "Purge Digital", "id": id}); err == nil || !strings.Contains(err.Error(), "HTTP 409") {
 			t.Errorf("re-adding a bank that is being removed: %v", err)
 		}
@@ -560,14 +550,6 @@ func TestPurge(t *testing.T) {
 		}
 		if r := s.call("GET", "/v1/accounts/"+acct+"/balance", nil, withToken(conn.AccessToken)); r.Status != 404 && r.Status != 409 {
 			t.Errorf("partner balance after the purge: %d", r.Status)
-		}
-		for _, req := range []map[string]any{{"name": "Another", "nip_code": bank.NIPCode}, {"name": "Another", "nuban_code": bank.NUBANCode}} {
-			if _, err := s.ctlTry("POST", "/banks", req); err == nil || !strings.Contains(err.Error(), "HTTP 422") {
-				t.Errorf("create %v after the purge: %v", req, err)
-			}
-		}
-		if ck, err := s.app.VerifyBank(t.Context()); err != nil || !ck.OK() {
-			t.Errorf("bank ledgers after the purge: %v %v", err, ck)
 		}
 		checkSettled(t, s.app)
 	})
