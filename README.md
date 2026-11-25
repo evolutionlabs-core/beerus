@@ -9,6 +9,31 @@ Nigeria's banking infrastructure on your machine: banks, NIBSS, CBN settlement a
 
 Banks start empty. Money moves only when you or your app move it. Time is real Lagos time.
 
+## Contents
+
+- [Install](#install)
+- [Start](#start)
+- [Usage](#usage)
+  - [Banks](#banks)
+  - [Customers and accounts](#customers-and-accounts)
+  - [Cash](#cash)
+  - [Transfers](#transfers)
+  - [Settlement](#settlement)
+  - [Faults](#faults)
+  - [Close a bank](#close-a-bank)
+  - [Setup file](#setup-file)
+  - [Clean up](#clean-up)
+- [Connect](#connect)
+  - [How it works](#how-it-works)
+  - [1. Register your app](#1-register-your-app)
+  - [2. Link a customer's bank](#2-link-a-customers-bank)
+  - [3. Exchange the public token](#3-exchange-the-public-token)
+  - [4. Read their data](#4-read-their-data)
+  - [Manage connections](#manage-connections)
+  - [Good to know](#good-to-know)
+- [Reference](#reference)
+- [License](#license)
+
 ## Install
 
 Beerus needs a running Postgres server. It connects to `postgres:///postgres`; set `BEERUS_DATABASE_URL` if yours is elsewhere.
@@ -20,8 +45,6 @@ brew install evolutionlabs-core/tap/beerus
 ```
 
 Update with `brew upgrade beerus`.
-
-If you ran `beerus trust` on v0.1.0, remove the old root: `security delete-certificate -c "Beerus CBN Trust Anchor" ~/Library/Keychains/login.keychain-db`. You can also delete the old certificate files: `ca/` and the `*.crt` and `*.key` files under the Beerus directory.
 
 Without Homebrew, download the archive for your system from [Releases](https://github.com/evolutionlabs-core/beerus/releases), unpack it and put `beerus` on your `PATH`.
 
@@ -40,7 +63,11 @@ beerus info
 
 Prints every address and the control room link.
 
-## Banks
+## Usage
+
+`beerus help` lists every command. `beerus <command> --help` shows its flags.
+
+### Banks
 
 ```bash
 beerus bank create --name "Bank A"
@@ -54,7 +81,7 @@ beerus bank resume bank-b
 
 Types: `commercial`, `digital`, `microfinance`.
 
-## Customers and accounts
+### Customers and accounts
 
 ```bash
 printf '%s' 'PASSWORD' | beerus customer create --bank bank-a --name "Ada Obi" --phone 08031234567 --dob 1990-05-14 --username ada --password-stdin
@@ -63,7 +90,7 @@ beerus customers --bank bank-a
 beerus accounts --bank bank-a
 ```
 
-`--username` gives the customer an online banking login. Leave it and `--password-stdin` out if you don't need one.
+`--username` gives the customer an online banking login, which they need to link their bank through [Connect](#connect). Leave it and `--password-stdin` out if you don't need one.
 
 Skip `--bank` on every command:
 
@@ -71,7 +98,7 @@ Skip `--bank` on every command:
 beerus use bank-a
 ```
 
-## Cash
+### Cash
 
 ```bash
 beerus deposit NUBAN --bank bank-a --amount 50000
@@ -81,7 +108,7 @@ beerus statement NUBAN --bank bank-a
 
 Amounts are in naira.
 
-## Transfers
+### Transfers
 
 See the charges first:
 
@@ -110,7 +137,7 @@ beerus nip name-enquiry 000002 NUBAN
 
 Sources: CBN 2026 draft Guide to Charges, Nigeria Tax Act 2025.
 
-## Settlement
+### Settlement
 
 The receiver is credited at once. Banks settle with each other later, through their CBN accounts, at 06:00, 12:00, 18:00 and 24:00 on business days.
 
@@ -120,7 +147,7 @@ beerus nip settle-now
 beerus nip settlement
 ```
 
-## Create faults
+### Faults
 
 ```bash
 beerus fault down --bank bank-b --for 10m
@@ -131,7 +158,7 @@ beerus fault clear --bank bank-b
 
 Timeout outcomes: `credited`, `failed`, `unknown`. Check a timed-out transfer with `beerus nip status`.
 
-## Close a bank
+### Close a bank
 
 Choose what happens to customers' money: `transfer` to another bank, `payout` in cash, or `leave` it frozen.
 
@@ -142,7 +169,7 @@ beerus bank purge bank-b --yes
 
 Purge deletes the bank's database. It cannot be undone.
 
-## Setup file
+### Setup file
 
 Save the running setup, edit it, then apply it:
 
@@ -169,7 +196,7 @@ spec:
 
 Start a new Beerus from a file with `beerus init -f my-setup.yaml`.
 
-## Clean up
+### Clean up
 
 ```bash
 beerus doctor
@@ -178,40 +205,57 @@ beerus reset beerus
 
 `reset` drops the setup's databases and keys. It cannot be undone.
 
----
+## Connect
 
-# Beerus Connect
+Beerus Connect lets your app read a customer's bank data, the way Mono or Okra do. The customer links their bank, and your app reads their accounts, balances and transactions and gets webhooks when something changes.
 
-Connect your existing app to Beerus, the way you would connect it to Mono or Okra. Your customers link their bank accounts through Beerus Connect. Your app then reads their accounts, balances and transactions, and gets webhooks when something changes.
+### How it works
 
-## 1. Register your app
+1. Your server creates a **link token**.
+2. Your page opens Connect with it. The customer signs in at their bank and picks accounts. Connect hands your page a **public token**.
+3. Your server exchanges the public token for an **access token**, and reads the data with it.
+
+Every call to the Partner API at `http://connect.localhost:7443` sends these headers:
+
+| Header | Value | Sent on |
+| --- | --- | --- |
+| `Beerus-Client-ID` | your app's ID | every call |
+| `Beerus-Secret` | your app's secret | every call |
+| `Beerus-Access-Token` | the connection's access token | reading or removing a connection |
+| `Idempotency-Key` | a new unique value | every `POST` |
+
+### 1. Register your app
 
 ```bash
 beerus partner add myapp --redirect-uri http://localhost:3000/callback --webhook-url http://localhost:3000/webhooks
 ```
 
-Your app's client ID and secret land in `.beerus/partners/myapp`. Every call to the Partner API at `http://connect.localhost:7443` sends them in the `Beerus-Client-ID` and `Beerus-Secret` headers. To try calls from a terminal:
+The secret is saved in `.beerus/partners/myapp/secret`. To follow the examples below from a terminal:
 
 ```bash
-P=.beerus/partners/myapp
-api() { curl -sS -H "Beerus-Client-ID: myapp" -H "Beerus-Secret: $(cat $P/secret)" ${TOKEN:+-H "Beerus-Access-Token: $TOKEN"} -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" "http://connect.localhost:7443$1" "${@:2}"; echo; }
+URL=http://connect.localhost:7443
+AUTH=(-H "Beerus-Client-ID: myapp" -H "Beerus-Secret: $(cat .beerus/partners/myapp/secret)")
 ```
 
-To list the banks your customers can link, for your own bank picker:
+The examples make each `Idempotency-Key` with `uuidgen`, which comes with macOS and most Linux systems.
+
+List the banks a customer can link, for your own bank picker:
 
 ```bash
-api "/v1/institutions?limit=50"
+curl -s "$URL/v1/institutions?limit=50" "${AUTH[@]}"
 ```
 
-## 2. Let a customer link their bank
+### 2. Link a customer's bank
 
-Your app creates a link token. `user_id` is your own ID for the customer. `institution_id` is optional; give one from `GET /v1/institutions` to open Connect on that bank.
+Create a link token. `user_id` is your own ID for the customer. `institution_id` is optional and opens Connect straight on that bank.
 
 ```bash
-api /v1/link/token/create -d '{"user_id":"user_1","institution_id":"bank-a","redirect_uri":"http://localhost:3000/callback"}'
+curl -s "$URL/v1/link/token/create" "${AUTH[@]}" \
+  -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \
+  -d '{"user_id":"user_1","institution_id":"bank-a","redirect_uri":"http://localhost:3000/callback"}'
 ```
 
-The response holds a `link_token` and its `expiration`. Open Connect over your page with one script tag and one call:
+Open Connect on your page with the `link_token` from the response:
 
 ```html
 <script src="http://connect.localhost:7444/connect.js"></script>
@@ -221,47 +265,39 @@ The response holds a `link_token` and its `expiration`. Open Connect over your p
 })</script>
 ```
 
-Connect opens as a 448×640 dialog over your page, or full screen below 480px wide. It opens on the bank list, or goes straight to the bank when the link token has an `institution_id`. The customer signs in on the bank's own page in a popup, picks the accounts to share, and taps Done. Each screen has a top bar and the footer "Connected securely by Beerus Connect". If the bank does not answer, Connect offers Try again or Pick another bank. Then:
-
-- `onSuccess(publicToken, metadata)` runs when they finish. `publicToken` works once and lasts 10 minutes. `metadata` holds `institution` and `accounts` (`account_id`, `name` and `mask` for each account the customer picked).
+- `onSuccess(publicToken, metadata)` runs when the customer finishes. `metadata` holds the `institution` and the `accounts` they picked.
 - `onExit(error)` runs when they close Connect (`error` is `null`) or it fails (`error` has a `code` and `message`).
 
-The page that calls `open` must be served from the origin of the `redirect_uri` you registered with `beerus partner add --redirect-uri`. Connect only lets that origin frame it, and sends results only to it. To keep the handle, use `const connect = BeerusConnect.create({token, onSuccess, onExit}); connect.open();`.
+Without the script, send the customer to `http://connect.localhost:7444/link?token=LINK_TOKEN`. Connect redirects them back to your `redirect_uri` with a `public_token`.
 
-Without the script, send the customer to `http://connect.localhost:7444/link?token=LINK_TOKEN`. Beerus Connect then redirects them to your redirect URI with a `public_token` and a `link_session_id`. The customer picks which of the bank's accounts to share, and only those accounts appear in your data. Connect shares history from 90 days before today, or less if the bank keeps less.
-
-## 3. Get the connection
-
-Exchange the `public_token` within 10 minutes:
+### 3. Exchange the public token
 
 ```bash
-api /v1/public_token/exchange -d '{"public_token":"PUBLIC_TOKEN"}'
+curl -s "$URL/v1/public_token/exchange" "${AUTH[@]}" \
+  -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \
+  -d '{"public_token":"PUBLIC_TOKEN"}'
 ```
 
-The response holds an `access_token` and a `connection_id`. Keep the `access_token` on your server: Beerus shows it once and your app sends it in the `Beerus-Access-Token` header, never in a URL. After a reauth (`POST /v1/connection/reauth`), exchanging the new `public_token` returns only the `connection_id`, and the existing `access_token` keeps working.
+The response holds an `access_token` and a `connection_id`. Keep the `access_token` on your server: Connect shows it only once.
 
-## 4. Read customer data
-
-Set `TOKEN` to the `access_token`. `api` then sends it in the `Beerus-Access-Token` header.
+### 4. Read their data
 
 ```bash
-TOKEN=ACCESS_TOKEN
-api /v1/accounts
-api "/v1/accounts/ACCOUNT_ID/balance?as_of=2026-01-31"
-api /v1/accounts/ACCOUNT_ID/transactions/sync
+TOKEN=(-H "Beerus-Access-Token: ACCESS_TOKEN")
+curl -s "$URL/v1/accounts" "${AUTH[@]}" "${TOKEN[@]}"
+curl -s "$URL/v1/accounts/ACCOUNT_ID/balance?as_of=2026-01-31" "${AUTH[@]}" "${TOKEN[@]}"
+curl -s "$URL/v1/accounts/ACCOUNT_ID/transactions/sync" "${AUTH[@]}" "${TOKEN[@]}"
 ```
 
-An account outside the connection answers 404.
+### Manage connections
 
-## 5. Remove the connection
+Remove a connection from your app:
 
 ```bash
-api /v1/connections/remove -X POST
+curl -s -X POST "$URL/v1/connections/remove" "${AUTH[@]}" "${TOKEN[@]}" -H "Idempotency-Key: $(uuidgen)"
 ```
 
-The connection ends and its `access_token` stops working (401).
-
-## Manage it
+From the command line:
 
 ```bash
 beerus connections
@@ -271,16 +307,21 @@ beerus revoke CONNECTION_ID
 beerus partner rotate-key myapp
 ```
 
-`partner rotate-key` issues a new secret and the old one stops working at once.
+`partner rotate-key` issues a new secret, and the old one stops working at once.
 
-The customer needs an online banking login: create them with `--username`. Full API: [api/partner/openapi.yaml](api/partner/openapi.yaml).
+### Good to know
 
----
+- A `public_token` works once and lasts 10 minutes.
+- The page that opens Connect must be served from the origin of the `redirect_uri` you registered. Connect only lets that origin frame it.
+- Only the accounts the customer picked appear in your data. History starts 90 days before today, or less if the bank keeps less.
+- An account outside the connection answers `404`. A removed connection's `access_token` answers `401`.
+- After a reauth (`POST /v1/connection/reauth`), the exchange returns only the `connection_id`, and the existing `access_token` keeps working.
+- Full API: [api/partner/openapi.yaml](api/partner/openapi.yaml).
 
-## More
+## Reference
 
-- `beerus help` lists every command. `beerus <command> --help` shows its flags.
 - State lives in `.beerus`. Use another folder with `BEERUS_DIR=path`.
+- Postgres: set `BEERUS_DATABASE_URL` if it isn't at `postgres:///postgres`.
 - Docker: `beerus compose > compose.yaml` prints a Compose file for your setup.
 - Placeholders: net debit caps, daily limits and CBN opening balances are invented figures, not CBN or NIBSS values.
 
