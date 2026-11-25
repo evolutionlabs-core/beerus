@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -146,19 +147,24 @@ func printInfo(c *config.Config) error {
 	if err != nil {
 		return err
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	var out bytes.Buffer
+	w := tabwriter.NewWriter(&out, 0, 2, 2, ' ', 0)
 	fmt.Fprintf(w, "Partner API\t%s\t(Beerus-Client-ID, Beerus-Secret)\n", c.PartnerURL())
 	fmt.Fprintf(w, "Connect widget\t%s\n", c.WidgetURL())
 	for _, b := range c.Banks {
-		fmt.Fprintf(w, "%s online banking\t%s\t(database %s)\n", b.Name, b.URL(), b.Database)
+		fmt.Fprintf(w, "%s\t\t\n", b.Name)
+		fmt.Fprintf(w, "  online banking\t%s\t(database %s)\n", b.URL(), b.Database)
 		if b.APIPort != 0 {
-			fmt.Fprintf(w, "%s open banking API\t%s\n", b.Name, b.APIURL())
+			fmt.Fprintf(w, "  open banking\t%s\t(used by Connect)\n", b.APIURL())
 		}
 	}
 	fmt.Fprintf(w, "Control API\t%s\t(Bearer token in %s)\n", c.ControlURL(), c.Path("control-token"))
 	fmt.Fprintf(w, "Webhook public key\t%s\n", k.PublicWH())
 	if err := w.Flush(); err != nil {
 		return err
+	}
+	for line := range strings.Lines(out.String()) {
+		fmt.Println(strings.TrimRight(line, " \n"))
 	}
 	if len(c.Partners) == 0 {
 		fmt.Println("\nNo partner apps yet. Register one when it is ready to connect:\n  beerus partner add balance --redirect-uri http://localhost:3000/bank_connections/callback --webhook-url http://localhost:3000/webhooks/beerus")
