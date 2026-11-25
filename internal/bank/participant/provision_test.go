@@ -36,18 +36,12 @@ func newStage(t *testing.T) *stage {
 	ctx := context.WithoutCancel(t.Context())
 	dbURL := cmp.Or(os.Getenv(config.DatabaseURLEnv), os.Getenv("BEERUS_TEST_DATABASE_URL"), "postgres:///postgres")
 	dir := filepath.Join(t.TempDir(), "stage")
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, os.Mkdir(dir, 0o700))
 	cfg := &config.Config{Dir: dir, SetupKey: 1<<63 + 5, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", WidgetPort: 17001, ControlPort: 17002, NIBSSPort: 17003}}
-	if err := config.Prepare(cfg); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, config.Prepare(cfg))
 	ports := []int{freePort(t), freePort(t)}
 	own := &config.Bank{ID: "bank-a", Name: "Bank A", Type: "commercial", NIPCode: "000001", NUBANCode: "001", HistoryDays: 730, Port: ports[0], APIPort: ports[1], Database: config.DatabaseName(dir, "bank-a")}
-	if err := cfg.EnsureBankDir(own); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, cfg.EnsureBankDir(own))
 	if err := store.Create(ctx, dbURL, config.DatabaseName(dir, "probe")); err != nil {
 		t.Skipf("no Postgres for the provisioning test (%v); set BEERUS_TEST_DATABASE_URL", err)
 	}
@@ -55,18 +49,14 @@ func newStage(t *testing.T) *stage {
 		_ = postgres.DropDatabases(ctx, dbURL, []string{config.DatabaseName(dir, "probe"), own.Database})
 	})
 	token, err := config.ReadSecret(filepath.Join(config.BankDir(dir, own.ID), config.BankTokenFile))
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	return &stage{dir, dbURL, token, ports[0], ports[1]}
 }
 
 func (s *stage) start(t *testing.T, url string) *Participant {
 	t.Helper()
 	p, err := New(t.Context(), s.dir, Options{BankID: "bank-a", DatabaseURL: url, Bind: "127.0.0.1"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	t.Cleanup(p.Close)
 	return p
 }
@@ -124,12 +114,25 @@ func steps(db, ledger, ob stepRow) []stepRow {
 }
 
 func TestBankProvisionsItsOwnDatabase(t *testing.T) {
+	t.Parallel()
 	s := newStage(t)
 	first := s.start(t, s.dbURL)
 	if st := s.status(t, first); st.Phase != config.PhaseProvisioning || st.Steps[2].Done {
 		t.Fatalf("before the first ensure: phase %s, steps %+v", st.Phase, rows(st))
 	}
-	first.Ensure(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		first.Ensure(t.Context())
+	}()
+	for finished := false; !finished; {
+		s.status(t, first)
+		select {
+		case <-done:
+			finished = true
+		default:
+		}
+	}
 	st := s.status(t, first)
 	migrations := st.Steps[3].Name
 	if !strings.HasPrefix(migrations, "Migrating bank ledger (") || strings.Contains(migrations, "no new") {
@@ -155,6 +158,7 @@ func TestBankProvisionsItsOwnDatabase(t *testing.T) {
 }
 
 func TestFailedStepRetriesWithBackoff(t *testing.T) {
+	t.Parallel()
 	s := newStage(t)
 	p := s.start(t, unreachableURL)
 	p.ensureDue(t.Context())
@@ -200,9 +204,7 @@ func TestFailedStepRetriesWithBackoff(t *testing.T) {
 func freePort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port
 }
@@ -210,9 +212,7 @@ func freePort(t *testing.T) int {
 func (s *stage) get(t *testing.T, port int, path string) (int, string) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+path, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	req.Header.Set("Authorization", "Bearer "+s.token)
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
@@ -220,20 +220,17 @@ func (s *stage) get(t *testing.T, port int, path string) (int, string) {
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	return resp.StatusCode, strings.TrimSpace(string(raw))
 }
 
 func TestSetupPageGivesWayToTheBankWithoutLeavingThePortUnserved(t *testing.T) {
+	t.Parallel()
 	s := newStage(t)
 	own := struct{ Port, APIPort int }{s.port, s.apiPort}
 	p := s.start(t, s.dbURL)
 	ctx := t.Context()
-	if err := p.start(ctx); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, p.start(ctx))
 	t.Cleanup(func() { p.stop(context.WithoutCancel(ctx)) })
 	if status, body := s.get(t, own.Port, "/health"); status != http.StatusServiceUnavailable || body != "Bank A is setting up its database. Try again in a minute." {
 		t.Fatalf("setup page: %d %q", status, body)
@@ -243,9 +240,7 @@ func TestSetupPageGivesWayToTheBankWithoutLeavingThePortUnserved(t *testing.T) {
 	}
 	p.Ensure(ctx)
 	blocker, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(own.APIPort))
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	if p.promote(ctx) {
 		t.Fatal("the bank started on a port that is taken")
 	}
@@ -264,76 +259,6 @@ func TestSetupPageGivesWayToTheBankWithoutLeavingThePortUnserved(t *testing.T) {
 	}
 }
 
-func TestStatusCanBeReadWhileTheBankProvisions(t *testing.T) {
-	s := newStage(t)
-	p := s.start(t, s.dbURL)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		p.Ensure(t.Context())
-	}()
-	for {
-		st := s.status(t, p)
-		select {
-		case <-done:
-			if st = s.status(t, p); st.Phase != config.PhaseActive {
-				t.Fatalf("after provisioning: phase %s, steps %+v", st.Phase, rows(st))
-			}
-			return
-		default:
-		}
-	}
-}
-
-func TestBankRebuildsADroppedDatabase(t *testing.T) {
-	s := newStage(t)
-	p := s.start(t, s.dbURL)
-	ctx := t.Context()
-	p.Ensure(ctx)
-	if p.booksLost(ctx) {
-		t.Fatal("a healthy database was reported lost")
-	}
-	if err := postgres.DropDatabases(ctx, s.dbURL, []string{p.cfg.Banks[0].Database}); err != nil {
-		t.Fatal(err)
-	}
-	if !p.booksLost(ctx) {
-		t.Fatal("a dropped database was not reported lost")
-	}
-	p.forgetBooks()
-	st := s.status(t, p)
-	if st.Phase != config.PhaseActive || st.Steps[2].Done || st.Steps[3].Done || st.Steps[4].Done || st.Steps[2].CompletedAt != nil {
-		t.Fatalf("after the loss: phase %s, steps %+v", st.Phase, rows(st))
-	}
-	p.Ensure(ctx)
-	st = s.status(t, p)
-	if st.Phase != config.PhaseActive || !st.Steps[2].Done || !st.Steps[3].Done || !st.Steps[4].Done || st.Steps[2].CompletedAt == nil || p.booksLost(ctx) {
-		t.Fatalf("after the rebuild: phase %s, steps %+v", st.Phase, rows(st))
-	}
-}
-
-func TestLaterStepFailureRedoesTheDatabaseStep(t *testing.T) {
-	s := newStage(t)
-	p := s.start(t, s.dbURL)
-	ctx := t.Context()
-	p.Ensure(ctx)
-	p.forgetBooks()
-	p.steps[2].Done = true
-	if err := postgres.DropDatabases(ctx, s.dbURL, []string{p.cfg.Banks[0].Database}); err != nil {
-		t.Fatal(err)
-	}
-	p.ensureDue(ctx)
-	st := s.status(t, p)
-	if st.Steps[2].Done || st.Steps[3].Done || st.Steps[3].Error == "" {
-		t.Fatalf("after the failed step: steps %+v", rows(st))
-	}
-	p.retryAt = p.clock.Real()
-	p.ensureDue(ctx)
-	st = s.status(t, p)
-	if !st.Steps[2].Done || !st.Steps[3].Done || !st.Steps[4].Done || p.booksLost(ctx) {
-		t.Fatalf("after the retry: steps %+v", rows(st))
-	}
-}
-
 func (s *stage) setPhase(t *testing.T, p *Participant, phase string) {
 	t.Helper()
 	body := `{"phase":"` + phase + `","generation":5,"world_id":"wld_1"}`
@@ -348,39 +273,69 @@ func (s *stage) setPhase(t *testing.T, p *Participant, phase string) {
 	}
 }
 
-func TestClosedBankDoesNotRebuildItsDatabase(t *testing.T) {
+func TestBankRebuildsADroppedDatabase(t *testing.T) {
+	t.Parallel()
 	s := newStage(t)
 	p := s.start(t, s.dbURL)
 	ctx := t.Context()
-	p.Ensure(ctx)
 	name := p.cfg.Banks[0].Database
-	if err := postgres.DropDatabases(ctx, s.dbURL, []string{name}); err != nil {
-		t.Fatal(err)
+	drop := func() {
+		t.Helper()
+		chk(t, postgres.DropDatabases(ctx, s.dbURL, []string{name}))
 	}
-	p.forgetBooks()
-	s.setPhase(t, p, config.PhaseClosed)
 	p.Ensure(ctx)
-	st := s.status(t, p)
-	if st.Steps[2].Done || st.Steps[3].Done || st.Steps[4].Done {
-		t.Fatalf("a closed bank rebuilt: %+v", rows(st))
+	if p.booksLost(ctx) {
+		t.Fatal("a healthy database was reported lost")
 	}
-	if got, err := postgres.List(ctx, s.dbURL, name); err != nil || len(got) != 0 {
-		t.Fatalf("databases of a closed bank: %v, %v", got, err)
-	}
-	if msg := st.Steps[2].Error; msg != "the bank is closed, so its database is left alone" {
-		t.Fatalf("step error %q", msg)
-	}
-}
-
-func TestBankRefusesRequestsWhileItsBooksAreRebuilt(t *testing.T) {
-	s := newStage(t)
-	p := s.start(t, s.dbURL)
-	p.Ensure(t.Context())
-	if _, err := p.Server().Books(); err != nil {
-		t.Fatal(err)
+	drop()
+	if !p.booksLost(ctx) {
+		t.Fatal("a dropped database was not reported lost")
 	}
 	p.forgetBooks()
 	if _, err := p.Server().Books(); err == nil {
 		t.Fatal("the closed books were still handed out")
+	}
+	st := s.status(t, p)
+	if st.Phase != config.PhaseActive || st.Steps[2].Done || st.Steps[3].Done || st.Steps[4].Done || st.Steps[2].CompletedAt != nil {
+		t.Fatalf("after the loss: phase %s, steps %+v", st.Phase, rows(st))
+	}
+	p.Ensure(ctx)
+	st = s.status(t, p)
+	if st.Phase != config.PhaseActive || !st.Steps[2].Done || !st.Steps[3].Done || !st.Steps[4].Done || st.Steps[2].CompletedAt == nil || p.booksLost(ctx) {
+		t.Fatalf("after the rebuild: phase %s, steps %+v", st.Phase, rows(st))
+	}
+
+	p.forgetBooks()
+	p.steps[2].Done = true
+	drop()
+	p.ensureDue(ctx)
+	st = s.status(t, p)
+	if st.Steps[2].Done || st.Steps[3].Done || st.Steps[3].Error == "" {
+		t.Fatalf("after the failed step: steps %+v", rows(st))
+	}
+	p.retryAt = p.clock.Real()
+	p.ensureDue(ctx)
+	st = s.status(t, p)
+	if !st.Steps[2].Done || !st.Steps[3].Done || !st.Steps[4].Done || p.booksLost(ctx) {
+		t.Fatalf("after the retry: steps %+v", rows(st))
+	}
+
+	drop()
+	p.forgetBooks()
+	s.setPhase(t, p, config.PhaseClosed)
+	p.Ensure(ctx)
+	st = s.status(t, p)
+	if st.Steps[2].Done || st.Steps[3].Done || st.Steps[4].Done || st.Steps[2].Error != "the bank is closed, so its database is left alone" {
+		t.Fatalf("a closed bank rebuilt: %+v, step error %q", rows(st), st.Steps[2].Error)
+	}
+	if got, err := postgres.List(ctx, s.dbURL, name); err != nil || len(got) != 0 {
+		t.Fatalf("databases of a closed bank: %v, %v", got, err)
+	}
+}
+
+func chk(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

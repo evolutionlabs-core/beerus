@@ -10,16 +10,12 @@ import (
 	"time"
 )
 
-func TestVaultSealsEachTokenWithItsOwnKey(t *testing.T) {
+func TestVault(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vault.key")
 	v, err := loadVault(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	e, err := v.put("con_1", "oba_secret", "obr_secret", time.Now(), time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	raw, _ := json.Marshal(e)
 	if bytes.Contains(raw, []byte("oba_secret")) || bytes.Contains(raw, []byte("obr_secret")) {
 		t.Fatal("tokens are stored in the clear")
@@ -38,9 +34,7 @@ func TestVaultSealsEachTokenWithItsOwnKey(t *testing.T) {
 		t.Fatal("an access token opened as a refresh token")
 	}
 	again, err := loadVault(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chk(t, err)
 	if got, err := again.open(e.Access, "con_1/access"); err != nil || got != "oba_secret" {
 		t.Fatalf("after reload: %q %v", got, err)
 	}
@@ -48,14 +42,7 @@ func TestVaultSealsEachTokenWithItsOwnKey(t *testing.T) {
 	if _, err := other.open(e.Access, "con_1/access"); err == nil {
 		t.Fatal("a different master key opened the token")
 	}
-}
-
-func TestVaultKeyIsCreatedOnlyWhenMissing(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "vault.key")
-	if _, err := loadVault(path); err != nil {
-		t.Fatal(err)
-	}
+	dir := filepath.Dir(path)
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("key file: %v %v", info, err)
@@ -66,9 +53,7 @@ func TestVaultKeyIsCreatedOnlyWhenMissing(t *testing.T) {
 	}
 
 	bad := filepath.Join(dir, "bad.key")
-	if err := os.WriteFile(bad, []byte("not hex\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, os.WriteFile(bad, []byte("not hex\n"), 0o600))
 	if _, err := loadVault(bad); err == nil || err.Error() != "the vault key is malformed" {
 		t.Fatalf("malformed key: %v", err)
 	}
@@ -77,9 +62,7 @@ func TestVaultKeyIsCreatedOnlyWhenMissing(t *testing.T) {
 	}
 
 	unreadable := filepath.Join(dir, "dir.key")
-	if err := os.Mkdir(unreadable, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	chk(t, os.Mkdir(unreadable, 0o700))
 	_, err = loadVault(unreadable)
 	if err == nil || !strings.HasPrefix(err.Error(), "read vault key: ") {
 		t.Fatalf("unreadable key: %v", err)
