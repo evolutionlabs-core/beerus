@@ -87,6 +87,9 @@ func soloErr(code, message string) string {
 
 func newSolo(t *testing.T, withNIBSS bool, tsqAfter time.Duration, state string, ids ...string) *solo {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("starts a full stack; run without -short")
+	}
 	ctx := context.WithoutCancel(t.Context())
 	dbURL := cmp.Or(os.Getenv(config.DatabaseURLEnv), os.Getenv("BEERUS_TEST_DATABASE_URL"), "postgres:///postgres")
 	dir := filepath.Join(t.TempDir(), "stage")

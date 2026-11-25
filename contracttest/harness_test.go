@@ -162,7 +162,11 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	go buildBinary()
+	flag.Parse()
+	building := !testing.Short()
+	if building {
+		go buildBinary()
+	}
 	code := m.Run()
 	for i := range lanes {
 		if lanes[i].env == nil {
@@ -173,9 +177,11 @@ func TestMain(m *testing.M) {
 			code = 1
 		}
 	}
-	if err := waitBinary(); err != nil && code == 0 {
-		fmt.Fprintln(os.Stderr, err)
-		code = 1
+	if building {
+		if err := waitBinary(); err != nil && code == 0 {
+			fmt.Fprintln(os.Stderr, err)
+			code = 1
+		}
 	}
 	if binDir != "" {
 		if err := os.RemoveAll(binDir); err != nil {

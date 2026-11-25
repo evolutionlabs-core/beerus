@@ -30,6 +30,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Restore the Go build cache
+        id: gocache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-unit-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-unit-${{ runner.os }}-${{ hashFiles('go.sum') }}-
       - name: Resolve local names
         run: echo "127.0.0.1 connect.localhost cbn.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
       - name: gofmt
@@ -37,7 +48,15 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: go test
-        run: go test -race -short -count=1 ./...
+        run: go test -race -short -count=1 $(go list ./... | grep -v /contracttest)
+      - name: Save the Go build cache
+        if: always() && steps.gocache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-unit-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   contract:
     runs-on: ubuntu-latest
@@ -60,10 +79,29 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Restore the Go build cache
+        id: gocache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-contract-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-contract-${{ runner.os }}-${{ hashFiles('go.sum') }}-
       - name: Resolve local names
         run: echo "127.0.0.1 connect.localhost cbn.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
       - name: Contract suite
         run: go test -race -count=1 -timeout 10m ./contracttest
+      - name: Save the Go build cache
+        if: always() && steps.gocache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-contract-${{ runner.os }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
 
   multi-process:
     if: github.event_name == 'push'
