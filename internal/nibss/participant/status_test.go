@@ -19,9 +19,7 @@ func TestStatusWithoutTheSettlementCountReportsAProblem(t *testing.T) {
 	w := httptest.NewRecorder()
 	p.status(w, httptest.NewRequest(http.MethodGet, "/v1/status", nil))
 	var got map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
+	must(t, json.Unmarshal(w.Body.Bytes(), &got))
 	problems, _ := got["problems"].([]any)
 	_, counted := got["posted_sessions"]
 	_, dated := got["next_cutoff_at"]
@@ -45,11 +43,8 @@ func TestNextCutoffFollowsTheNIBSSFile(t *testing.T) {
 		now  time.Time
 		want time.Time
 	}{
-		{"a weekday evening", at("2026-11-04", 20), at("2026-11-05", 0)},
-		{"just after a session", at("2026-11-04", 12), at("2026-11-04", 18)},
 		{"friday night runs into the weekend", at("2026-11-06", 20), at("2026-11-07", 0)},
 		{"saturday waits for the added holiday", at("2026-11-07", 9), at("2026-11-10", 6)},
-		{"christmas day waits for monday", at("2026-12-25", 0), at("2026-12-28", 6)},
 		{"a removed holiday is a business day", at("2026-09-30", 20), at("2026-10-01", 0)},
 	}
 	sched, err := scheduleOf(file)

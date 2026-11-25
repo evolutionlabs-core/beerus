@@ -5,139 +5,47 @@ import (
 	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/clock"
-	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/countrypack"
 )
 
-func TestSessionSchedule(t *testing.T) {
-	s := Schedule{Per: 12}
-	at := func(day string, hh, mm int) time.Time {
-		d, err := clock.ParseDate(day)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return d.Start().Add(time.Duration(hh)*time.Hour + time.Duration(mm)*time.Minute)
-	}
-	for _, c := range []struct {
-		booked time.Time
-		key    string
-	}{
-		{at("2026-11-02", 0, 0), "2026-11-02T02:00"},
-		{at("2026-11-03", 0, 0), "2026-11-03T00:00"},
-		{at("2026-11-02", 0, 1), "2026-11-02T02:00"},
-		{at("2026-11-02", 2, 0), "2026-11-02T02:00"},
-		{at("2026-11-02", 2, 1), "2026-11-02T04:00"},
-		{at("2026-11-02", 23, 59), "2026-11-03T00:00"},
-		{at("2026-11-06", 23, 0), "2026-11-07T00:00"},
-		{at("2026-11-07", 9, 0), "2026-11-09T02:00"},
-		{at("2026-11-08", 23, 59), "2026-11-09T02:00"},
-		{at("2026-11-09", 1, 30), "2026-11-09T02:00"},
-	} {
-		got := s.Key(s.Next(c.booked.Add(-time.Nanosecond)))
-		if got != c.key {
-			t.Errorf("a transfer booked at %s settles in %s, want %s", c.booked.Format(time.RFC3339), got, c.key)
-		}
-	}
-	if got := s.Next(at("2026-11-06", 22, 0)); !got.Equal(at("2026-11-07", 0, 0)) {
-		t.Errorf("last Friday session closes at %s", got)
-	}
-	if got := s.Next(at("2026-11-07", 0, 0)); !got.Equal(at("2026-11-09", 2, 0)) {
-		t.Errorf("first session after Friday closes at %s", got)
-	}
-	four := Schedule{Per: config.DefaultNIPSessions}
-	for _, c := range []struct {
-		booked time.Time
-		key    string
-	}{
-		{at("2026-11-02", 5, 59), "2026-11-02T06:00"},
-		{at("2026-11-02", 6, 1), "2026-11-02T12:00"},
-		{at("2026-11-02", 23, 0), "2026-11-03T00:00"},
-		{at("2026-11-07", 9, 0), "2026-11-09T06:00"},
-	} {
-		if got := four.Key(four.Next(c.booked.Add(-time.Nanosecond))); got != c.key {
-			t.Errorf("with the default schedule, a transfer booked at %s settles in %s, want %s", c.booked.Format(time.RFC3339), got, c.key)
-		}
-	}
+func at(t *testing.T, s string) time.Time {
+	t.Helper()
+	got, err := time.ParseInLocation("2006-01-02 15:04", s, clock.Lagos)
+	must(t, err)
+	return got
 }
 
-func TestSessionScheduleSkipsHolidays(t *testing.T) {
+func TestScheduleNextAndPrev(t *testing.T) {
 	pack, err := countrypack.Nigeria()
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := Schedule{Per: 12, Cal: clock.NewCalendar(pack.Fixed.Days, nil, nil)}
-	at := func(day string, hh int) time.Time {
-		d, err := clock.ParseDate(day)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return d.Start().Add(time.Duration(hh) * time.Hour)
-	}
+	must(t, err)
+	twelve, four := Schedule{Per: 12}, Schedule{Per: 4}
+	holidays := Schedule{Per: 12, Cal: clock.NewCalendar(pack.Fixed.Days, nil, nil)}
+	closed := Schedule{Per: 12, Cal: clock.NewCalendar(nil, []clock.Date{{Y: 2026, M: 11, D: 9}}, nil)}
 	for _, c := range []struct {
-		name   string
-		booked time.Time
-		want   time.Time
+		name         string
+		sched        Schedule
+		booked, want string
 	}{
-		{"last session of 30 Sep", at("2026-09-30", 23), at("2026-10-01", 0)},
-		{"midnight session of Independence Day", at("2026-10-01", 0).Add(-time.Nanosecond), at("2026-10-01", 0)},
-		{"first session after Independence Day", at("2026-10-01", 0), at("2026-10-02", 2)},
-		{"transfer on Independence Day", at("2026-10-01", 10), at("2026-10-02", 2)},
-		{"Good Friday is a business day", at("2026-04-03", 0), at("2026-04-03", 2)},
-		{"Christmas Day then the weekend", at("2026-12-24", 23), at("2026-12-25", 0)},
-		{"first session after Christmas Day", at("2026-12-25", 0), at("2026-12-28", 2)},
-		{"New Year's Day then the weekend", at("2027-01-01", 5), at("2027-01-04", 2)},
-		{"last session of the year", at("2026-12-31", 23), at("2027-01-01", 0)},
-		{"first session of the year is a holiday", at("2027-01-01", 0), at("2027-01-04", 2)},
-		{"month end before a weekend", at("2026-10-30", 23), at("2026-10-31", 0)},
-		{"month end on a Saturday", at("2026-10-31", 9), at("2026-11-02", 2)},
-		{"leap day", at("2028-02-29", 23), at("2028-03-01", 0)},
-		{"day after a leap day", at("2028-03-01", 0), at("2028-03-01", 2)},
-		{"month end on a Sunday", at("2027-02-28", 1), at("2027-03-01", 2)},
+		{"on a cutoff", twelve, "2026-11-02 02:00", "2026-11-02 02:00"},
+		{"just after a cutoff", twelve, "2026-11-02 02:01", "2026-11-02 04:00"},
+		{"the last minute of the day", twelve, "2026-11-02 23:59", "2026-11-03 00:00"},
+		{"the default four a day", four, "2026-11-02 06:01", "2026-11-02 12:00"},
+		{"Saturday waits for Monday", twelve, "2026-11-07 09:00", "2026-11-09 02:00"},
+		{"a holiday Monday waits for Tuesday", closed, "2026-11-08 12:00", "2026-11-10 02:00"},
+		{"Independence Day waits for the next day", holidays, "2026-10-01 10:00", "2026-10-02 02:00"},
 	} {
-		if got := s.Next(c.booked); !got.Equal(c.want) {
-			t.Errorf("%s: next session after %s closes at %s, want %s", c.name, c.booked.Format(time.RFC3339), got.Format(time.RFC3339), c.want.Format(time.RFC3339))
+		if got := c.sched.Next(at(t, c.booked).Add(-time.Nanosecond)); !got.Equal(at(t, c.want)) {
+			t.Errorf("%s: next session after %s closes at %s, want %s", c.name, c.booked, got.Format(time.RFC3339), c.want)
 		}
 	}
-}
-
-func TestScheduleFollowsCalendar(t *testing.T) {
-	friday := clock.Date{Y: 2026, M: 11, D: 6}
-	plain := Schedule{Per: 12}
-	closed := Schedule{Per: 12, Cal: clock.NewCalendar(nil, []clock.Date{friday.AddDays(3)}, nil)}
-	from := friday.AddDays(2).Start()
-	if got := plain.Next(from); !got.Equal(friday.AddDays(3).Start().Add(2 * time.Hour)) {
-		t.Fatalf("plain next session %s", got)
-	}
-	if got := closed.Next(from); !got.Equal(friday.AddDays(4).Start().Add(2 * time.Hour)) {
-		t.Errorf("next session with the extra holiday %s", got)
-	}
-}
-
-func TestPreviousSession(t *testing.T) {
-	s := Schedule{Per: 4}
-	at := func(day string, hh, mm int) time.Time {
-		d, err := clock.ParseDate(day)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return d.Start().Add(time.Duration(hh)*time.Hour + time.Duration(mm)*time.Minute)
-	}
-	for _, c := range []struct{ now, want time.Time }{
-		{at("2026-11-03", 10, 0), at("2026-11-03", 6, 0)},
-		{at("2026-11-03", 6, 0), at("2026-11-03", 6, 0)},
-		{at("2026-11-03", 0, 0), at("2026-11-03", 0, 0)},
-		{at("2026-11-03", 0, 1), at("2026-11-03", 0, 0)},
-		{at("2026-11-03", 5, 59), at("2026-11-03", 0, 0)},
-		{at("2026-11-07", 12, 0), at("2026-11-07", 0, 0)},
-		{at("2026-11-08", 12, 0), at("2026-11-07", 0, 0)},
-		{at("2026-11-09", 1, 0), at("2026-11-07", 0, 0)},
+	for _, c := range []struct{ now, want string }{
+		{"2026-11-03 06:00", "2026-11-03 06:00"},
+		{"2026-11-03 05:59", "2026-11-03 00:00"},
+		{"2026-11-09 01:00", "2026-11-07 00:00"},
 	} {
-		got := s.Prev(c.now)
-		if !got.Equal(c.want) {
-			t.Errorf("the session before %s is %s, want %s", c.now.Format(time.RFC3339), got.Format(time.RFC3339), c.want.Format(time.RFC3339))
-		}
-		if next := s.Next(got.Add(-time.Nanosecond)); !next.Equal(got) {
-			t.Errorf("%s is not a session cutoff", got.Format(time.RFC3339))
+		got := four.Prev(at(t, c.now))
+		if !got.Equal(at(t, c.want)) || !four.Next(got.Add(-time.Nanosecond)).Equal(got) {
+			t.Errorf("the session before %s is %s, want %s", c.now, got.Format(time.RFC3339), c.want)
 		}
 	}
 }

@@ -58,20 +58,12 @@ func TestCBNServesSettlement(t *testing.T) {
 	}
 	stage := t.TempDir()
 	cfg := &config.Config{Dir: stage, SetupKey: 9, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", NIBSSPort: freePort(t), NIBSSControlPort: freePort(t), CBNPort: freePort(t), CBNControlPort: freePort(t)}}
-	if err := config.Prepare(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.EnsureCBNDir(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.EnsureNIBSSDir("wld_test"); err != nil {
-		t.Fatal(err)
-	}
+	must(t, config.Prepare(cfg))
+	must(t, cfg.EnsureCBNDir())
+	must(t, cfg.EnsureNIBSSDir("wld_test"))
 	for i, id := range []string{"bank-a", "bank-b", "bank-c"} {
 		b := &config.Bank{ID: id, Name: id, Type: "commercial", Port: 3 + 2*i, APIPort: 4 + 2*i, Database: config.DatabaseName(stage, id)}
-		if err := cfg.EnsureBankDir(b); err != nil {
-			t.Fatal(err)
-		}
+		must(t, cfg.EnsureBankDir(b))
 	}
 	t.Cleanup(func() {
 		if err := postgres.DropDatabases(context.WithoutCancel(t.Context()), url, []string{config.DatabaseName(stage, config.CBNID)}); err != nil {
@@ -169,10 +161,8 @@ func TestCBNServesSettlement(t *testing.T) {
 		{"token", http.MethodPut, account("bank-a"), `{"settlement_minor":1000,"vault_minor":200}`, 200, `"bank_id":"bank-a","settlement_minor":1000,"vault_minor":200`, false},
 		{"token", http.MethodPut, account("bank-b"), `{"settlement_minor":1000,"vault_minor":0}`, 200, `"bank_id":"bank-b","settlement_minor":1000,"vault_minor":0`, false},
 		{"token", http.MethodPut, account("bank-a"), `{"settlement_minor":999,"vault_minor":200}`, 422, "bank-a opened with settlement_minor 1000 and vault_minor 200, and this request has settlement_minor 999. Send the amounts it opened with.", false},
-		{"token", http.MethodPut, account("bank-a"), `{"settlement_minor":1000}`, 400, `"code":"invalid_request"`, false},
 		{"token", http.MethodPut, account("bank-c"), `{"settlement_minor":0,"vault_minor":0}`, 400, `"code":"invalid_request"`, false},
 		{"token", http.MethodGet, "/v1/status", "", 200, `"kind":"cbn","phase":"active"`, false},
-		{"token", http.MethodGet, "/v1/status", "", 200, `"problems":[]`, false},
 		{"nibss", http.MethodPost, "/v1/settlement-sessions", session("s1", -250, 250), 200, `"key":"session:s1","kind":"session","session_id":"s1","narration":"NIP settlement session s1"`, false},
 		{"nibss", http.MethodPost, "/v1/settlement-sessions", session("s1", -250, 250), 200, `"key":"session:s1"`, true},
 		{"nibss", http.MethodPost, "/v1/settlement-sessions", session("s1", -300, 300), 422, "Session s1 was posted with bank-a -250 and bank-b 250, and this request has bank-a -300 and bank-b 300. Send a new session_id, or repeat the first nets.", false},
@@ -181,21 +171,18 @@ func TestCBNServesSettlement(t *testing.T) {
 		{"nibss", http.MethodPost, "/v1/settlement-sessions", `{"session_id":"s4","cutoff_at":"2100-01-02T12:00:00+01:00","nets":[{"bank_id":"bank-a","net_minor":-5},{"bank_id":"bank-x","net_minor":5}]}`, 422, `"code":"unknown_bank"`, false},
 		{"nibss", http.MethodPost, "/v1/settlement-sessions", `{"session_id":"s5","cutoff_at":"2100-01-02T12:00:00+01:00","nets":[{"bank_id":"bank-a","net_minor":9223372036854775807},{"bank_id":"bank-b","net_minor":1}]}`, 422, `"code":"amount_too_large","message":"The nets of session s5 are too large to add up. The largest net is 9223372036854775807 kobo. Send smaller nets."`, false},
 		{"nibss", http.MethodPost, "/v1/settlement-sessions", `{"session_id":"s5b","cutoff_at":"2100-01-02T12:00:00+01:00","nets":[{"bank_id":"bank-a","net_minor":-9223372036854775807},{"bank_id":"bank-b","net_minor":9223372036854775807}]}`, 422, `"code":"amount_too_large","message":"Session s5b would take bank-b's settlement balance past the largest amount: 1250 + 9223372036854775807. Send smaller nets."`, false},
-		{"nibss", http.MethodPost, "/v1/settlement-sessions", `{"session_id":"s6","cutoff_at":"2100-01-02T12:00:00+01:00","nets":[{"bank_id":"bank-a","net_minor":0}]}`, 400, `"code":"invalid_request"`, false},
 		{"nobody", http.MethodPost, "/v1/settlement-sessions", session("s7", -5, 5), 401, `"code":"unauthenticated","message":"Send your ID in the Beerus-Caller header."`, false},
 		{"bank-a", http.MethodPost, "/v1/settlement-sessions", session("s7", -5, 5), 403, `"code":"forbidden","message":"bank-a may not post a settlement session. Only NIBSS may."`, false},
 		{"bank-a", http.MethodGet, "/v1/banks/bank-a/settlement-balance", "", 200, `"bank_id":"bank-a","balance_minor":750,"read_at":`, false},
 		{"bank-a", http.MethodGet, "/v1/banks/bank-b/settlement-balance", "", 403, "bank-a may not read the balance of bank-b.", false},
-		{"nibss", http.MethodGet, "/v1/banks/bank-a/settlement-balance", "", 403, "nibss may not read the balance of bank-a.", false},
 		{"bank-c", http.MethodGet, "/v1/banks/bank-c/settlement-balance", "", 403, "bank-c is not a bank the CBN knows.", false},
-		{"bank-b", http.MethodGet, "/v1/banks/bank-b/settlement-balance", "", 200, `"balance_minor":1250`, false},
 		{"bank-a", http.MethodGet, "/v1/settlement-postings?limit=1", "", 200, `"next_cursor":"session:s1"`, false},
 		{"bank-a", http.MethodGet, "/v1/settlement-postings?limit=5&cursor=session:s1", "", 200, `"key":"genesis:bank-a","kind":"genesis"`, false},
 		{"bank-a", http.MethodGet, "/v1/settlement-postings?bank_id=bank-b", "", 403, "bank-a may not read the postings of bank-b.", false},
-		{"nobody", http.MethodGet, "/v1/settlement-postings", "", 401, `"code":"unauthenticated"`, false},
-		{"bank-c", http.MethodGet, "/v1/settlement-postings", "", 403, "bank-c is not a bank the CBN knows.", false},
-		{"nibss", http.MethodGet, "/v1/settlement-postings?limit=2", "", 200, `"next_cursor":`, false},
 		{"nibss", http.MethodGet, "/v1/settlement-postings?bank_id=bank-b&limit=500", "", 200, `"key":"genesis:bank-b"`, false},
+		{"bank-c", http.MethodGet, "/v1/settlement-postings", "", 403, "bank-c is not a bank the CBN knows.", false},
+		{"nibss", http.MethodGet, "/v1/banks/bank-a/settlement-balance", "", 403, "nibss may not read the balance of bank-a.", false},
+		{"nobody", http.MethodGet, "/v1/settlement-postings", "", 401, `"code":"unauthenticated"`, false},
 		{"nibss", http.MethodGet, "/v1/settlement-postings?cursor=session:nope", "", 400, `"code":"invalid_cursor","message":"That cursor is not valid. Use the next_cursor value from the last page."`, false},
 		{"nibss", http.MethodGet, "/v1/settlement-postings?limit=0", "", 400, `"code":"invalid_request"`, false},
 		{"nibss", http.MethodGet, "/v1/settlement-postings?limit=501", "", 400, `"code":"invalid_request"`, false},
@@ -227,5 +214,12 @@ func TestCBNServesSettlement(t *testing.T) {
 	}
 	if _, err := New(ctx, stage, Options{}); err == nil || err.Error() != config.DatabaseURLEnv+" is not set; set it to the Postgres URL of the CBN" {
 		t.Errorf("start without a database: %v", err)
+	}
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

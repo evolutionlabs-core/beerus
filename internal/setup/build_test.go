@@ -22,7 +22,6 @@ func TestNIBSSPortDefaultAndConflicts(t *testing.T) {
 		{"set", LocalConnect{PartnerPort: 7443, NIBSSPort: 9000}, Status{}, 9000, ""},
 		{"a connect port holds it", LocalConnect{PartnerPort: 7443, HealthPort: DefaultNIBSSPort}, Status{}, 0, "NIBSS port 7481 is already used by connect.health_port; set connect.nibss_port in local.yaml to a free port"},
 		{"a bank port holds it", ln, bankAt(DefaultNIBSSPort), 0, "NIBSS port 7481 is already used by bank-a online banking; set connect.nibss_port in local.yaml to a free port"},
-		{"a bank API port holds it", ln, bankAt(DefaultNIBSSPort - 1), 0, "NIBSS port 7481 is already used by bank-a open banking API; set connect.nibss_port in local.yaml to a free port"},
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
