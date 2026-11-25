@@ -66,7 +66,10 @@ func checkSettled(t *testing.T, app *core.App) core.SettlementCheck {
 func (s *Stack) suspended(bank string) {
 	s.t.Helper()
 	s.ctl("POST", "/banks/"+bank+"/suspend", nil)
-	s.t.Cleanup(func() { s.ctl("POST", "/banks/"+bank+"/resume", nil) })
+	s.t.Cleanup(func() {
+		s.ctl("POST", "/banks/"+bank+"/resume", nil)
+		s.waitPhase(bank, core.PhaseActive)
+	})
 }
 
 func TestNIPSwitch(t *testing.T) {
