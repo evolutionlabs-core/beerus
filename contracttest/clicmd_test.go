@@ -138,6 +138,12 @@ func TestBankCLI(t *testing.T) {
 		t.Errorf("customer with a username: %q", out)
 	}
 	c.in = ""
+	if got := c.fails("customer", "create", "--bank", "bank-a", "--name", "Ngozi Eze", "--phone", "08033456789", "--dob", "1985-03-09", "--username", "ngozi", "--password", "x", "--password-stdin"); got != "beerus: --password and --password-stdin cannot be used together" {
+		t.Errorf("both password flags: %q", got)
+	}
+	if out := c.ok("customer", "create", "--bank", "bank-a", "--name", "Ngozi Eze", "--phone", "08033456789", "--dob", "1985-03-09", "--username", "ngozi", "--password", "a-long-test-password"); !strings.Contains(out, "Ngozi Eze can sign in to online banking as ngozi.\n") {
+		t.Errorf("customer with --password: %q", out)
+	}
 
 	api := s.ctl("GET", "/resources?kind=bank&limit=1", nil)
 	if got := c.json("get", "banks", "--limit", "1"); fmt.Sprint(got) != fmt.Sprint(api) || api["next_cursor"] == nil {

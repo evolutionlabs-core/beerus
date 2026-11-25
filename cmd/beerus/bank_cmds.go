@@ -153,6 +153,7 @@ func cmdCustomer(args []string) error {
 		phone := f.fs.String("phone", "", "phone number")
 		dob := f.fs.String("dob", "", "`date` of birth, as YYYY-MM-DD")
 		user := f.fs.String("username", "", "online banking username")
+		pw := f.fs.String("password", "", "online banking password")
 		pwIn := f.fs.Bool("password-stdin", false, "read the online banking password from stdin")
 		if _, err := f.parse("customer create", args, 1); err != nil {
 			return err
@@ -160,11 +161,17 @@ func cmdCustomer(args []string) error {
 		if *name == "" || *phone == "" || *dob == "" {
 			return fmt.Errorf("--name, --phone and --dob are required; %w", usageError("customer create"))
 		}
+		if *pw != "" && *pwIn {
+			return errors.New("--password and --password-stdin cannot be used together")
+		}
 		id, err := resolveBank(*f.bank)
 		if err != nil {
 			return err
 		}
 		body := map[string]string{"name": *name, "phone": *phone, "dob": *dob, "username": *user}
+		if *pw != "" {
+			body["password"] = *pw
+		}
 		if *pwIn {
 			if body["password"], err = readPassword(os.Stdin); err != nil {
 				return err
