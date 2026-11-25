@@ -85,7 +85,7 @@ func soloErr(code, message string) string {
 	return fmt.Sprintf(`{"error":{"code":%q,"message":%q,"request_id":"req_ID"}}`, code, message)
 }
 
-func newSolo(t *testing.T, withNIBSS bool, state string, ids ...string) *solo {
+func newSolo(t *testing.T, withNIBSS bool, tsqAfter time.Duration, state string, ids ...string) *solo {
 	t.Helper()
 	ctx := context.WithoutCancel(t.Context())
 	dbURL := cmp.Or(os.Getenv(config.DatabaseURLEnv), os.Getenv("BEERUS_TEST_DATABASE_URL"), "postgres:///postgres")
@@ -94,7 +94,7 @@ func newSolo(t *testing.T, withNIBSS bool, state string, ids ...string) *solo {
 		t.Fatal(err)
 	}
 	ports := freePorts(t, 5+2*len(ids))
-	cfg := &config.Config{Dir: dir, SetupKey: soloSetupKey, TSQAfter: time.Minute, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", WidgetPort: ports[0], ControlPort: ports[1], NIBSSPort: ports[2], NIBSSControlPort: ports[3], CBNPort: ports[4]}}
+	cfg := &config.Config{Dir: dir, SetupKey: soloSetupKey, TSQAfter: tsqAfter, Connect: config.Connect{Host: "connect.localhost", BrandName: "Connect", WidgetPort: ports[0], ControlPort: ports[1], NIBSSPort: ports[2], NIBSSControlPort: ports[3], CBNPort: ports[4]}}
 	if err := config.Prepare(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +372,7 @@ func (s *solo) onlyFiles(want []string, modes ...string) {
 func TestSoloBank(t *testing.T) {
 	t.Parallel()
 	t.Run("serves with nothing else running", func(t *testing.T) {
-		s := newSolo(t, false, "", "bank-a")
+		s := newSolo(t, false, time.Minute, "", "bank-a")
 		a := s.banks["bank-a"]
 		nibssClient := callerClient(t, config.NIBSSID)
 		session := func(n int) string { return banktest.Session(a.cfg.NIPCode, n) }
@@ -473,7 +473,7 @@ func TestSoloBank(t *testing.T) {
 	})
 
 	t.Run("a closed bank refuses everything", func(t *testing.T) {
-		s := newSolo(t, false, "closed", "bank-a")
+		s := newSolo(t, false, time.Minute, "closed", "bank-a")
 		a := s.banks["bank-a"]
 		closed := func(name, method, url, body string, client *http.Client, want string) soloRow {
 			return soloRow{name: name, client: client, method: method, url: url, body: body, status: http.StatusConflict, want: want}
@@ -499,7 +499,7 @@ func TestSoloBank(t *testing.T) {
 func TestSoloNIBSS(t *testing.T) {
 	t.Parallel()
 	t.Run("directory, names and consents", func(t *testing.T) {
-		s := newSolo(t, true, "", "bank-a", "bank-b")
+		s := newSolo(t, true, time.Minute, "", "bank-a", "bank-b")
 		s.register("bank-a", soloCap)
 		s.register("bank-b", soloCap)
 		a, b := s.banks["bank-a"], s.banks["bank-b"]
@@ -667,7 +667,7 @@ func TestSoloNIBSS(t *testing.T) {
 	})
 
 	t.Run("settlement reports reach their own bank", func(t *testing.T) {
-		s := newSolo(t, true, "")
+		s := newSolo(t, true, time.Minute, "")
 		s.banks["bank-a"] = &soloBank{cfg: &config.Bank{ID: "bank-a", Name: "Bank A", NIPCode: "000014", NUBANCode: "014", APIPort: 1}}
 		s.banks["bank-b"] = &soloBank{cfg: &config.Bank{ID: "bank-b", Name: "Bank B", NIPCode: "000015", NUBANCode: "015", APIPort: 2}}
 		s.clients["bank-a"], s.clients["bank-b"] = callerClient(t, "bank-a"), callerClient(t, "bank-b")

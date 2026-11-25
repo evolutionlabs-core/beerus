@@ -74,9 +74,6 @@ func processesIn(t *testing.T, dir string) map[string]int {
 
 func blankDir(t *testing.T) string {
 	t.Helper()
-	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
-		t.Setenv(config.DatabaseURLEnv, u)
-	}
 	dir := filepath.Join(t.TempDir(), "beerus")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)

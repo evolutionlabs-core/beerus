@@ -2,6 +2,7 @@ package contracttest
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"os"
@@ -38,10 +39,13 @@ func newCLIAt(t *testing.T, dir string) *cli {
 
 func (c *cli) env(extra ...string) []string {
 	env := []string{"PATH=" + filepath.Dir(c.bin) + ":" + os.Getenv("PATH"), "HOME=" + c.home, "TMPDIR=" + os.TempDir(), "BEERUS_DIR=" + c.dir, "TERM=xterm", "LANG=en_US.UTF-8", "BASH_SILENCE_DEPRECATION_WARNING=1"}
-	for _, key := range []string{config.DatabaseURLEnv, "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD"} {
+	for _, key := range []string{"PGHOST", "PGPORT", "PGUSER", "PGPASSWORD"} {
 		if v := os.Getenv(key); v != "" {
 			env = append(env, key+"="+v)
 		}
+	}
+	if v := cmp.Or(os.Getenv(config.DatabaseURLEnv), os.Getenv("BEERUS_TEST_DATABASE_URL")); v != "" {
+		env = append(env, config.DatabaseURLEnv+"="+v)
 	}
 	return append(env, extra...)
 }
