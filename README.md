@@ -101,9 +101,9 @@ beerus use bank-a
 ### Cash
 
 ```bash
-beerus deposit NUBAN --bank bank-a --amount 50000
-beerus withdraw NUBAN --bank bank-a --amount 1500.50
-beerus statement NUBAN --bank bank-a
+beerus deposit <Account_number> --bank bank-a --amount 50000
+beerus withdraw <Account_number> --bank bank-a --amount 1500.50
+beerus statement <Account_number> --bank bank-a
 ```
 
 Amounts are in naira.
@@ -113,7 +113,7 @@ Amounts are in naira.
 See the charges first:
 
 ```bash
-beerus transfer --from NUBAN --from-bank bank-a --to NUBAN --to-bank bank-b --amount 10000 --dry-run
+beerus transfer --from <Account_number> --from-bank bank-a --to <Account_number> --to-bank bank-b --amount 10000 --dry-run
 ```
 
 ```text
@@ -123,9 +123,9 @@ Charges: fee ₦10.00, VAT ₦0.75 and stamp duty ₦50.00. Total debit ₦10,06
 Send it:
 
 ```bash
-beerus transfer --from NUBAN --from-bank bank-a --to NUBAN --to-bank bank-b --amount 10000 --narration "Rent"
+beerus transfer --from <Account_number> --from-bank bank-a --to <Account_number> --to-bank bank-b --amount 10000 --narration "Rent"
 beerus nip status SESSION_ID
-beerus nip name-enquiry 000002 NUBAN
+beerus nip name-enquiry 000002 <Account_number>
 ```
 
 | Amount | Fee | VAT | Stamp duty |
