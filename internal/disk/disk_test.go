@@ -10,22 +10,19 @@ import (
 func TestWriteReplacesAtomically(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secret")
-	if err := Write(path, []byte("one"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := Write(path, []byte("two"), 0o600); err != nil {
-		t.Fatal(err)
+	for _, s := range []string{"one", "two"} {
+		if err := Write(path, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	b, err := os.ReadFile(path)
 	if err != nil || string(b) != "two" {
-		t.Fatalf("content = %q, err %v", b, err)
+		t.Fatalf("content %q, %v", b, err)
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("dir entries = %d, err %v", len(entries), err)
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 1 {
+		t.Fatalf("%d entries, %v", len(entries), err)
 	}
-	err = Write(filepath.Join(dir, "missing", "secret"), []byte("x"), 0o600)
-	if err == nil || !strings.HasPrefix(err.Error(), "create temp file for ") {
+	if err := Write(filepath.Join(dir, "missing", "secret"), nil, 0o600); err == nil || !strings.HasPrefix(err.Error(), "create temp file for ") {
 		t.Fatalf("error = %v", err)
 	}
 }

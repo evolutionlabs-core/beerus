@@ -1,17 +1,13 @@
 package aggregator
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/evolutionlabs-core/beerus/internal/clock"
 	"github.com/evolutionlabs-core/beerus/internal/config"
 	"github.com/evolutionlabs-core/beerus/internal/web"
 )
@@ -24,36 +20,25 @@ func TestConsentExpiryAtTheBankExpiresTheConnectionUntilReauth(t *testing.T) {
 	)
 	renewed := false
 	partner := &config.Partner{ID: "p1", RedirectURIs: []string{"https://app.example.localhost/cb"}, WebhookURL: "https://hooks.example.localhost/wh"}
-	a := &App{
-		cfg:   &config.Config{Banks: []*config.Bank{{ID: "bank-a", Port: 7001, APIPort: 7011, HistoryDays: 36500}}, Partners: []*config.Partner{partner}},
-		st:    newState(),
-		log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-		clock: clock.New(),
-		vault: &vault{master: bytes.Repeat([]byte{7}, vaultKeyBytes)},
-		obHTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
-			switch {
-			case r.Method == http.MethodDelete:
-				return bankReply(http.StatusNoContent, ""), nil
-			case !renewed:
-				return bankReply(http.StatusForbidden, expiredReply), nil
-			case strings.HasSuffix(r.URL.Path, "/transactions"):
-				return bankReply(http.StatusOK, okReply), nil
-			case strings.HasSuffix(r.URL.Path, "/balances"):
-				return bankReply(http.StatusOK, balanceReply), nil
-			}
-			return bankReply(http.StatusNotFound, "{}"), nil
-		})},
-	}
+	a := newApp(t, func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodDelete:
+			return bankReply(http.StatusNoContent, ""), nil
+		case !renewed:
+			return bankReply(http.StatusForbidden, expiredReply), nil
+		case strings.HasSuffix(r.URL.Path, "/transactions"):
+			return bankReply(http.StatusOK, okReply), nil
+		case strings.HasSuffix(r.URL.Path, "/balances"):
+			return bankReply(http.StatusOK, balanceReply), nil
+		}
+		return bankReply(http.StatusNotFound, "{}"), nil
+	}, partner)
 	now := a.clock.Real()
-	account := acctKey("bank-a", "0123456789")
-	accID := AccountID("p1", "bank-a", "0123456789")
-	c := &Connection{ID: "con_1", PartnerID: "p1", Institution: "bank-a", Status: "active", ConsentID: "obc_1", AccountIDs: []string{accID}, AccessHash: web.HashSecret(testToken)}
-	acct := &AccountRec{ID: accID, PartnerID: "p1", Key: account, ConnectionID: "con_1", NUBAN: "0123456789", Grants: []string{"con_1"}, HistoryDone: true}
-	a.st.Connections[c.ID] = c
-	a.st.Accounts[acct.ID] = acct
-	if err := a.vaultPut(c.ID, bankToken{Access: "at", Refresh: "rt", AccessExpires: now.Add(time.Hour), RefreshExpires: now.Add(2 * time.Hour)}); err != nil {
-		t.Fatal(err)
-	}
+	c := &Connection{ID: "con_1", PartnerID: "p1", Institution: "bank-a", Status: "active", ConsentID: "obc_1", AccessHash: web.HashSecret(testToken)}
+	acct := a.seedAccount(c, "0123456789")
+	acct.HistoryDone = true
+	accID, account := acct.ID, acct.Key
+	a.seedToken(t, c.ID, "at", time.Hour)
 
 	if a.syncConnection(c, a.clock.Now()) {
 		t.Fatal("a sync that the bank refused with consent_reconsent_required finished")
@@ -70,9 +55,7 @@ func TestConsentExpiryAtTheBankExpiresTheConnectionUntilReauth(t *testing.T) {
 			var e struct {
 				Data map[string]any `json:"data"`
 			}
-			if err := json.Unmarshal(d.Body, &e); err != nil {
-				t.Fatal(err)
-			}
+			chk(t, json.Unmarshal(d.Body, &e))
 			if d.PartnerID != "p1" || d.Status != "pending" {
 				t.Fatalf("delivery for %s with status %s, want a pending one for p1", d.PartnerID, d.Status)
 			}
@@ -101,9 +84,7 @@ func TestConsentExpiryAtTheBankExpiresTheConnectionUntilReauth(t *testing.T) {
 	renewed = true
 	ls.Status, ls.PublicHash, ls.PublicExpires = "authorised", web.HashSecret("public-1"), now.Add(time.Minute)
 	ls.Accounts, ls.BankConsentID, ls.ConsentEnds = []string{account}, "obc_2", now.Add(24*time.Hour)
-	if err := a.vaultPut(linkVaultPrefix+ls.ID, bankToken{Access: "at2", Refresh: "rt2", AccessExpires: now.Add(time.Hour), RefreshExpires: now.Add(2 * time.Hour)}); err != nil {
-		t.Fatal(err)
-	}
+	a.seedToken(t, linkVaultPrefix+ls.ID, "at2", time.Hour)
 	status, body = callPartner(t, partner, a.exchange, http.MethodPost, "/v1/public_token/exchange", `{"public_token":"public-1"}`, "", nil)
 	if _, issued := body["access_token"]; status != http.StatusOK || body["connection_id"] != "con_1" || issued {
 		t.Fatalf("exchange after reauth: %d %v, want 200 with connection con_1 and no new access token", status, body)

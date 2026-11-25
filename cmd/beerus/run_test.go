@@ -9,73 +9,53 @@ import (
 )
 
 func TestEnvNumberRejectsBadValues(t *testing.T) {
-	t.Setenv("BEERUS_SEED", "")
-	if n, err := envNumber("BEERUS_SEED", false); n != 0 || err != nil {
-		t.Errorf("unset: %d %v", n, err)
-	}
-	t.Setenv("BEERUS_SEED", "-42")
-	if n, err := envNumber("BEERUS_SEED", false); n != -42 || err != nil {
-		t.Errorf("seed: %d %v", n, err)
-	}
 	for _, c := range []struct {
 		value    string
 		positive bool
-	}{{"12a", false}, {"1.5", true}, {"0", true}, {"-3", true}} {
+		want     int64
+		bad      bool
+	}{{"", false, 0, false}, {"-42", false, -42, false}, {"12a", false, 0, true}, {"1.5", true, 0, true}, {"0", true, 0, true}, {"-3", true, 0, true}} {
 		t.Setenv("BEERUS_SEED", c.value)
-		if _, err := envNumber("BEERUS_SEED", c.positive); err == nil || !strings.Contains(err.Error(), "BEERUS_SEED") || !strings.Contains(err.Error(), c.value) {
-			t.Errorf("%q accepted or unnamed: %v", c.value, err)
+		n, err := envNumber("BEERUS_SEED", c.positive)
+		if c.bad != (err != nil) || n != c.want || (c.bad && (!strings.Contains(err.Error(), "BEERUS_SEED") || !strings.Contains(err.Error(), c.value))) {
+			t.Errorf("%q: %d, %v", c.value, n, err)
 		}
 	}
 }
 
 func TestInitFromEnvReadsTheSetupFile(t *testing.T) {
-	good := "apiVersion: beerus.dev/v1\nkind: Setup\nmetadata:\n  name: beerus\nspec:\n  banks:\n    - id: bank-a\n      name: Bank A\n      type: commercial\n    - id: bank-b\n      name: Bank B\n      type: digital\n"
+	good := "apiVersion: beerus.dev/v1\nkind: Setup\nmetadata:\n  name: beerus\nspec:\n  banks:\n    - id: bank-a\n      name: Bank A\n      type: commercial\n"
+	t.Setenv("BEERUS_PARTNER_REDIRECT_URI", "")
 	for _, c := range []struct {
-		name    string
-		content string
-		missing bool
-		banks   int
-		err     string
+		name, content, err string
+		banks              int
 	}{
-		{name: "no file"},
-		{name: "two banks", content: good, banks: 2},
-		{name: "bad file", content: "kind: Setup\n", err: "BEERUS_SETUP_FILE: "},
-		{name: "missing file", missing: true, err: "BEERUS_SETUP_FILE: read "},
+		{"no file", "", "", 0},
+		{"one bank", good, "", 1},
+		{"bad file", "kind: Setup\n", "BEERUS_SETUP_FILE: ", 0},
+		{"missing file", "missing", "BEERUS_SETUP_FILE: read ", 0},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Setenv("BEERUS_PARTNER_REDIRECT_URI", "")
-			path := ""
-			if c.missing {
+		path := filepath.Join(t.TempDir(), "setup.yaml")
+		if c.content == "" || c.content == "missing" {
+			path = ""
+			if c.content != "" {
 				path = filepath.Join(t.TempDir(), "missing.yaml")
 			}
-			if c.content != "" {
-				path = filepath.Join(t.TempDir(), "setup.yaml")
-				if err := os.WriteFile(path, []byte(c.content), 0o600); err != nil {
-					t.Fatal(err)
-				}
+		} else if err := os.WriteFile(path, []byte(c.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("BEERUS_SETUP_FILE", path)
+		dir := filepath.Join(t.TempDir(), "state")
+		err := initFromEnv(dir)
+		if c.err != "" {
+			if ok, initErr := setup.Initialized(dir); err == nil || !strings.Contains(err.Error(), c.err) || ok || initErr != nil {
+				t.Errorf("%s: error %v, want %q and no state (%v, %v)", c.name, err, c.err, ok, initErr)
 			}
-			t.Setenv("BEERUS_SETUP_FILE", path)
-			dir := filepath.Join(t.TempDir(), "state")
-			err := initFromEnv(dir)
-			if c.err != "" {
-				if err == nil || !strings.Contains(err.Error(), c.err) {
-					t.Fatalf("error %v, want %q", err, c.err)
-				}
-				if ok, _ := setup.Initialized(dir); ok {
-					t.Fatal("a bad setup file still created the state")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			cfg, err := setup.LoadConfig(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(cfg.Banks) != c.banks {
-				t.Fatalf("%d banks, want %d", len(cfg.Banks), c.banks)
-			}
-		})
+			continue
+		}
+		cfg, loadErr := setup.LoadConfig(dir)
+		if err != nil || loadErr != nil || len(cfg.Banks) != c.banks {
+			t.Errorf("%s: %v, %v", c.name, err, loadErr)
+		}
 	}
 }

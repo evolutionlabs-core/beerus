@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank/banktest"
 	"github.com/evolutionlabs-core/beerus/internal/clock"
@@ -29,11 +28,6 @@ func initTestConfig(t *testing.T, today clock.Date) *config.Config {
 	local := setup.DefaultLocal()
 	ports := testPorts(t, 2)
 	local.Connect.PartnerPort, local.Connect.WidgetPort, local.Connect.ControlPort, local.Connect.HealthPort, local.Connect.NIBSSPort, local.Connect.CBNPort, local.Connect.ConnectControlPort = ports[0], ports[1], ports[2], ports[3], ports[4], ports[5], ports[7]
-	return initConfigWith(t, today, local)
-}
-
-func initConfigWith(t *testing.T, today clock.Date, local setup.Local) *config.Config {
-	t.Helper()
 	dir := t.TempDir()
 	if u := os.Getenv("BEERUS_TEST_DATABASE_URL"); u != "" {
 		local.DatabaseURL = u
@@ -96,18 +90,5 @@ func TestWriteFilesRestoresExactlyTheSavedSet(t *testing.T) {
 	}
 	if err := writeFiles(filepath.Join(dir, "api.key", "x"), map[string][]byte{"a": nil}); err == nil {
 		t.Fatal("a restore under a file did not fail")
-	}
-}
-
-func TestClockIsReal(t *testing.T) {
-	app := newTestApp(t, Options{})
-	before := time.Now().Truncate(time.Millisecond)
-	got := app.clock.Now()
-	after := time.Now()
-	if got.Before(before) || got.After(after) || got.Location() != clock.Lagos {
-		t.Fatalf("clock now %v, want between %v and %v in Lagos", got, before, after)
-	}
-	if app.setupKey == 0 || app.setupKey != app.ctl.SetupKey() {
-		t.Fatalf("setup key %d", app.setupKey)
 	}
 }

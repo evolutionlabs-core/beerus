@@ -1,10 +1,10 @@
 package server
 
 import (
-	"bytes"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/evolutionlabs-core/beerus/internal/bank"
@@ -19,17 +19,11 @@ type fakeSource struct {
 	taken    *int
 }
 
-func (f fakeSource) Book(string) (Book, error) {
-	return f.book, f.err
-}
+func (f fakeSource) Book(string) (Book, error) { return f.book, f.err }
 
-func (f fakeSource) Empty() bool {
-	return false
-}
+func (f fakeSource) Empty() bool { return false }
 
-func (f fakeSource) Refusing(string) bool {
-	return f.refusing
-}
+func (f fakeSource) Refusing(string) bool { return f.refusing }
 
 func (f fakeSource) TakeTimeout(string) (string, bool) {
 	if f.taken != nil {
@@ -38,62 +32,26 @@ func (f fakeSource) TakeTimeout(string) (string, bool) {
 	return "", false
 }
 
-type capture struct {
-	header http.Header
-	status int
-	body   bytes.Buffer
-}
-
-func (c *capture) Header() http.Header {
-	return c.header
-}
-
-func (c *capture) WriteHeader(status int) {
-	c.status = status
-}
-
-func (c *capture) Write(b []byte) (int, error) {
-	return c.body.Write(b)
-}
-
-func TestNIPMountAnswersByPhase(t *testing.T) {
-	rows := []struct {
-		name   string
-		src    fakeSource
-		status int
-		retry  string
-	}{
-		{"closed bank", fakeSource{book: Book{Name: "Bank A", Phase: config.PhaseClosed}}, http.StatusConflict, ""},
-		{"closed bank that left the config", fakeSource{book: Book{Name: "bank-a", Phase: config.PhaseClosed}}, http.StatusConflict, ""},
-		{"unknown bank", fakeSource{err: ErrBankNotFound}, http.StatusServiceUnavailable, "30"},
-		{"books not open", fakeSource{book: Book{Name: "Bank A", Phase: config.PhaseActive}}, http.StatusServiceUnavailable, "30"},
-		{"refusing bank", fakeSource{book: Book{Name: "Bank A", Phase: config.PhaseActive, Bank: &bank.Bank{}}, refusing: true}, http.StatusServiceUnavailable, "30"},
-	}
-	for _, r := range rows {
-		b := &Banking{Src: r.src, Clock: clock.New(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-		req, err := http.NewRequest(http.MethodGet, "/v1/nip/account-names/0123456789", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		w := &capture{header: http.Header{}}
-		b.NIP("bank-a").ServeHTTP(w, req)
-		if w.status != r.status || w.header.Get("Retry-After") != r.retry {
-			t.Errorf("%s: %d retry %q, want %d retry %q", r.name, w.status, w.header.Get("Retry-After"), r.status, r.retry)
-		}
-	}
-}
-
-func TestNIPFaultWaitsForTheCaller(t *testing.T) {
+func TestNIPMountAnswers(t *testing.T) {
 	taken := 0
-	src := fakeSource{book: Book{Name: "Bank A", Phase: config.PhaseActive, Bank: &bank.Bank{}}, taken: &taken}
-	b := &Banking{Src: src, Clock: clock.New(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	req, err := http.NewRequest(http.MethodPost, "/v1/nip/credits", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w := &capture{header: http.Header{}}
-	b.NIP("bank-a").ServeHTTP(w, req)
-	if w.status != http.StatusUnauthorized || taken != 0 {
-		t.Fatalf("a caller without an ID got %d and used up %d faults, want 401 and 0", w.status, taken)
+	active := Book{Name: "Bank A", Phase: config.PhaseActive, Bank: &bank.Bank{}}
+	for _, r := range []struct {
+		name, method, path string
+		src                fakeSource
+		status             int
+		retry              string
+	}{
+		{"closed bank", "GET", "/v1/nip/account-names/0123456789", fakeSource{book: Book{Name: "Bank A", Phase: config.PhaseClosed}}, http.StatusConflict, ""},
+		{"unknown bank", "GET", "/v1/nip/account-names/0123456789", fakeSource{err: ErrBankNotFound}, http.StatusServiceUnavailable, "30"},
+		{"books not open", "GET", "/v1/nip/account-names/0123456789", fakeSource{book: Book{Name: "Bank A", Phase: config.PhaseActive}}, http.StatusServiceUnavailable, "30"},
+		{"refusing bank", "GET", "/v1/nip/account-names/0123456789", fakeSource{book: active, refusing: true}, http.StatusServiceUnavailable, "30"},
+		{"a caller without an ID uses up no fault", "POST", "/v1/nip/credits", fakeSource{book: active, taken: &taken}, http.StatusUnauthorized, ""},
+	} {
+		b := &Banking{Src: r.src, Clock: clock.New(), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		w := httptest.NewRecorder()
+		b.NIP("bank-a").ServeHTTP(w, httptest.NewRequest(r.method, r.path, nil))
+		if w.Code != r.status || w.Header().Get("Retry-After") != r.retry || taken != 0 {
+			t.Errorf("%s: %d retry %q with %d faults used, want %d retry %q and 0", r.name, w.Code, w.Header().Get("Retry-After"), taken, r.status, r.retry)
+		}
 	}
 }

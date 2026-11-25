@@ -8,7 +8,6 @@ import (
 	"github.com/evolutionlabs-core/beerus/internal/control"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -603,23 +602,25 @@ func (b *Bank) NameEnquiry(ctx context.Context, nuban string) (string, error) {
 	return a.Name, nil
 }
 
-var decoyHash = sync.OnceValues(func() ([]byte, error) {
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		return nil, fmt.Errorf("read random: %w", err)
-	}
-	h, err := bcrypt.GenerateFromPassword(secret, bcrypt.DefaultCost)
-	if err != nil {
-		return nil, fmt.Errorf("hash decoy: %w", err)
-	}
-	return h, nil
-})
+func (b *Bank) decoy() ([]byte, error) {
+	b.decoyOnce.Do(func() {
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			b.decoyErr = fmt.Errorf("read random: %w", err)
+			return
+		}
+		if b.decoyHash, b.decoyErr = bcrypt.GenerateFromPassword(secret, b.P.PasswordCost); b.decoyErr != nil {
+			b.decoyErr = fmt.Errorf("hash decoy: %w", b.decoyErr)
+		}
+	})
+	return b.decoyHash, b.decoyErr
+}
 
 func (b *Bank) Authenticate(ctx context.Context, username, password string) (Customer, error) {
 	var hash string
 	c, err := scanCustomer(b.L.Pool().QueryRow(ctx, `SELECT `+customerCols+`, password_hash FROM customers WHERE username = $1`, username), &hash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		decoy, derr := decoyHash()
+		decoy, derr := b.decoy()
 		if derr != nil {
 			return Customer{}, derr
 		}

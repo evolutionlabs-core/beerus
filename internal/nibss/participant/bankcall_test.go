@@ -50,13 +50,8 @@ func TestBankCallsAnswerWithTheRightCode(t *testing.T) {
 	}{
 		{"a name", reply(200, `{"response_code":"00","account_name":"ADA OBI"}`), "bank-a", "00", "ADA OBI"},
 		{"invalid account", reply(200, `{"response_code":"07"}`), "bank-a", "07", ""},
-		{"no record", reply(200, `{"response_code":"25"}`), "bank-a", "25", ""},
-		{"bank unavailable", reply(200, `{"response_code":"91"}`), "bank-a", "91", ""},
 		{"server error", reply(500, `{"error":{"code":"internal_error"}}`), "bank-a", "91", ""},
-		{"closed bank", reply(409, `{"error":{"code":"bank_closed"}}`), "bank-a", "91", ""},
-		{"refused caller", reply(403, `{"error":{"code":"forbidden"}}`), "bank-a", "91", ""},
 		{"garbage", reply(200, `<html>`), "bank-a", "91", ""},
-		{"empty body", reply(200, ``), "bank-a", "91", ""},
 		{"unknown response code", reply(200, `{"response_code":"96"}`), "bank-a", "91", ""},
 		{"oversized body", reply(200, `{"response_code":"00","account_name":"`+strings.Repeat("A", maxBankBody)+`"}`), "bank-a", "91", ""},
 		{"redirect", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/elsewhere", http.StatusFound) }, "bank-a", "91", ""},

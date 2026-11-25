@@ -1,4 +1,4 @@
-package settlement_test
+package api_test
 
 import (
 	"bytes"
@@ -15,14 +15,7 @@ import (
 	v3 "github.com/pb33f/libopenapi/datamodel/high/v3"
 )
 
-const specFile = "openapi.yaml"
-
-var operations = []struct{ id, method, path string }{
-	{"postSettlementSession", http.MethodPost, "/v1/settlement-sessions"},
-	{"getSettlementBalance", http.MethodGet, "/v1/banks/{bank_id}/settlement-balance"},
-	{"listSettlementPostings", http.MethodGet, "/v1/settlement-postings"},
-	{"openSettlementAccount", http.MethodPut, "/v1/control/banks/{bank_id}/settlement-account"},
-}
+var specs = []string{"nip", "participant", "settlement"}
 
 type found struct {
 	method, path string
@@ -31,7 +24,7 @@ type found struct {
 	doc          *v3.Document
 }
 
-func load(t *testing.T) (*v3.Document, validator.Validator) {
+func load(t *testing.T, specFile string) (*v3.Document, validator.Validator) {
 	t.Helper()
 	spec, err := os.ReadFile(specFile)
 	if err != nil {
@@ -78,9 +71,7 @@ func exampleJSON(t *testing.T, v any) []byte {
 func decode(t *testing.T, n interface{ Decode(any) error }) any {
 	t.Helper()
 	var v any
-	if err := n.Decode(&v); err != nil {
-		t.Fatal(err)
-	}
+	must(t, n.Decode(&v))
 	return v
 }
 
@@ -178,41 +169,34 @@ func buildResponse(t *testing.T, f found, status string, r *v3.Response, example
 	return resp
 }
 
-func TestOperations(t *testing.T) {
-	doc, v := load(t)
-	ops := index(t, doc)
-	listed := map[string]bool{}
-	for _, row := range operations {
-		listed[row.id] = true
-		t.Run(row.id, func(t *testing.T) {
-			f, ok := ops[row.id]
-			if !ok {
-				t.Fatalf("operation %s is not in the document", row.id)
-			}
-			if f.method != row.method || f.path != row.path {
-				t.Fatalf("operation %s is %s %s, want %s %s", row.id, f.method, f.path, row.method, row.path)
-			}
-			req := buildRequest(t, f)
-			if ok, errs := v.ValidateHttpRequest(req); !ok {
-				t.Fatalf("request: %v", errs)
-			}
-			for status, r := range f.op.Responses.Codes.FromOldest() {
-				mt := r.Content.GetOrZero("application/json")
-				if mt == nil {
-					t.Fatalf("%s %s: response has no JSON content", row.id, status)
+func TestOpenAPI(t *testing.T) {
+	for _, name := range specs {
+		t.Run(name, func(t *testing.T) {
+			doc, v := load(t, name+"/openapi.yaml")
+			for id, f := range index(t, doc) {
+				req := buildRequest(t, f)
+				if ok, errs := v.ValidateHttpRequest(req); !ok {
+					t.Errorf("%s request: %v", id, errs)
 				}
-				for _, example := range mediaExamples(t, row.id, mt) {
-					req := buildRequest(t, f)
-					if ok, errs := v.ValidateHttpResponse(req, buildResponse(t, f, status, r, example)); !ok {
-						t.Errorf("response %s: %v", status, errs)
+				for status, r := range f.op.Responses.Codes.FromOldest() {
+					mt := r.Content.GetOrZero("application/json")
+					if mt == nil {
+						t.Fatalf("%s %s: response has no JSON content", id, status)
+					}
+					for _, example := range mediaExamples(t, id, mt) {
+						if ok, errs := v.ValidateHttpResponse(buildRequest(t, f), buildResponse(t, f, status, r, example)); !ok {
+							t.Errorf("%s response %s: %v", id, status, errs)
+						}
 					}
 				}
 			}
 		})
 	}
-	for id := range ops {
-		if !listed[id] {
-			t.Errorf("operation %s has no test row", id)
-		}
+}
+
+func must(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

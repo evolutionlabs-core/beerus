@@ -39,18 +39,21 @@ func TestGenesisIsPostedAtTheProvisioningTimeOnce(t *testing.T) {
 	fees := banktest.Fees(t)
 	for _, at := range []time.Time{first, second} {
 		books, err := store.OpenBooks(t.Context(), url, name, profile, fees, at, openbanking.Migrate)
-		if err != nil {
-			t.Fatal(err)
-		}
+		chk(t, err)
 		var got time.Time
 		var n int
 		err = books.Pool().QueryRow(t.Context(), `SELECT min(posted_at), count(*) FROM journal_entries WHERE idempotency_key = $1`, "genesis").Scan(&got, &n)
 		books.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
+		chk(t, err)
 		if !got.Equal(first) || n != 1 {
 			t.Fatalf("bank genesis opened at %v: posted at %v, %d entries; want %v, 1", at, got, n, first)
 		}
+	}
+}
+
+func chk(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

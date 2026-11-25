@@ -23,9 +23,8 @@ func setup(t *testing.T) (*ledger.Ledger, context.Context) {
 		{Code: "C1", Name: "One", Kind: ledger.Liability, Customer: true, NUBAN: "0000000011", KYCTier: 3},
 		{Code: "C2", Name: "Two", Kind: ledger.Liability, Customer: true, NUBAN: "0000000022", KYCTier: 1},
 	} {
-		if _, err := l.OpenAccount(ctx, a); err != nil {
-			t.Fatal(err)
-		}
+		_, err := l.OpenAccount(ctx, a)
+		chk(t, err)
 	}
 	return l, ctx
 }
@@ -50,11 +49,22 @@ func verify(t *testing.T, l *ledger.Ledger) {
 	}
 }
 
+func mustPost(t *testing.T, l *ledger.Ledger, en ledger.Entry) {
+	t.Helper()
+	_, err := l.Post(context.Background(), en)
+	chk(t, err)
+}
+
+func failPost(t *testing.T, l *ledger.Ledger, en ledger.Entry, want error) {
+	t.Helper()
+	if _, err := l.Post(context.Background(), en); !errors.Is(err, want) {
+		t.Fatalf("%s: %v, want %v", en.Key, err, want)
+	}
+}
+
 func TestPostingAndBalances(t *testing.T) {
 	l, ctx := setup(t)
-	if _, err := l.Post(ctx, e("dep", ln("CASH", 100000), ln("C1", -100000))); err != nil {
-		t.Fatal(err)
-	}
+	mustPost(t, l, e("dep", ln("CASH", 100000), ln("C1", -100000)))
 	if b, _ := l.Balance(ctx, "C1"); b != 100000 {
 		t.Fatalf("customer balance %d", b)
 	}
@@ -65,26 +75,16 @@ func TestPostingAndBalances(t *testing.T) {
 	if err != nil || len(evs) != 1 || evs[0].Amount != 100000 || evs[0].BalanceAfter != 100000 {
 		t.Fatalf("events %v %v", evs, err)
 	}
-	if _, err := l.Post(ctx, e("bad", ln("CASH", 1), ln("C1", -2))); !errors.Is(err, ledger.ErrUnbalanced) {
-		t.Fatalf("unbalanced: %v", err)
-	}
-	if _, err := l.Post(ctx, e("one", ln("CASH", 1))); !errors.Is(err, ledger.ErrInvalid) {
-		t.Fatalf("one line: %v", err)
-	}
-	if _, err := l.Post(ctx, e("nope", ln("CASH", 1), ln("MISSING", -1))); !errors.Is(err, ledger.ErrUnknownAccount) {
-		t.Fatalf("unknown account: %v", err)
-	}
+	failPost(t, l, e("bad", ln("CASH", 1), ln("C1", -2)), ledger.ErrUnbalanced)
+	failPost(t, l, e("one", ln("CASH", 1)), ledger.ErrInvalid)
+	failPost(t, l, e("nope", ln("CASH", 1), ln("MISSING", -1)), ledger.ErrUnknownAccount)
 	verify(t, l)
 }
 
 func TestBalancesReadSeveralAccountsAtOnce(t *testing.T) {
 	l, ctx := setup(t)
-	if _, err := l.Post(ctx, e("dep", ln("CASH", 100000), ln("C1", -100000))); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := l.Post(ctx, e("fee", ln("C1", 300), ln("INCOME", -300))); err != nil {
-		t.Fatal(err)
-	}
+	mustPost(t, l, e("dep", ln("CASH", 100000), ln("C1", -100000)))
+	mustPost(t, l, e("fee", ln("C1", 300), ln("INCOME", -300)))
 	rows := []struct {
 		name  string
 		codes []string
@@ -111,9 +111,7 @@ func TestBalancesReadSeveralAccountsAtOnce(t *testing.T) {
 
 func TestAppendOnlyAndDeferredBalanceCheck(t *testing.T) {
 	l, ctx := setup(t)
-	if _, err := l.Post(ctx, e("dep", ln("CASH", 500), ln("C1", -500))); err != nil {
-		t.Fatal(err)
-	}
+	mustPost(t, l, e("dep", ln("CASH", 500), ln("C1", -500)))
 	for _, q := range []string{`UPDATE journal_lines SET amount = 1`, `DELETE FROM journal_entries`, `UPDATE account_events SET amount = 0`} {
 		if _, err := l.Pool().Exec(ctx, q); err == nil {
 			t.Fatalf("%s was allowed", q)
@@ -127,9 +125,8 @@ func TestAppendOnlyAndDeferredBalanceCheck(t *testing.T) {
 	if err := tx.QueryRow(ctx, `INSERT INTO journal_entries (idempotency_key, request_hash, kind, posting_date, value_date, posted_at, narration) VALUES ('raw', 'h', 'raw', now(), now(), now(), 'raw') RETURNING id`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO journal_lines (entry_id, line_no, account_id, amount, currency, narration) SELECT $1, 1, id, 7, 'NGN', 'x' FROM gl_accounts WHERE code = 'CASH'`, id); err != nil {
-		t.Fatal(err)
-	}
+	_, err = tx.Exec(ctx, `INSERT INTO journal_lines (entry_id, line_no, account_id, amount, currency, narration) SELECT $1, 1, id, 7, 'NGN', 'x' FROM gl_accounts WHERE code = 'CASH'`, id)
+	chk(t, err)
 	if err := tx.Commit(ctx); err == nil {
 		t.Fatal("an unbalanced entry committed")
 	}
@@ -146,9 +143,7 @@ func TestIdempotentPosting(t *testing.T) {
 	if err != nil || !b.Replayed || b.EntryID != a.EntryID {
 		t.Fatalf("replay %+v %v", b, err)
 	}
-	if _, err := l.Post(ctx, e("k1", ln("CASH", 200), ln("C1", -200))); !errors.Is(err, ledger.ErrIdempotency) {
-		t.Fatalf("changed body: %v", err)
-	}
+	failPost(t, l, e("k1", ln("CASH", 200), ln("C1", -200)), ledger.ErrIdempotency)
 	if bal, _ := l.Balance(ctx, "C1"); bal != 100 {
 		t.Fatalf("balance %d after replay", bal)
 	}
@@ -157,61 +152,40 @@ func TestIdempotentPosting(t *testing.T) {
 
 func TestFundsStatusesAndLimits(t *testing.T) {
 	l, ctx := setup(t)
-	if _, err := l.Post(ctx, e("dep1", ln("CASH", 10000000), ln("C1", -10000000))); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := l.Post(ctx, e("dep2", ln("CASH", 10000000), ln("C2", -10000000))); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := l.Post(ctx, e("over", ln("C1", 10000001), ln("CASH", -10000001))); !errors.Is(err, ledger.ErrInsufficientFunds) {
-		t.Fatalf("overdraw: %v", err)
-	}
+	mustPost(t, l, e("dep1", ln("CASH", 10000000), ln("C1", -10000000)))
+	mustPost(t, l, e("dep2", ln("CASH", 10000000), ln("C2", -10000000)))
+	failPost(t, l, e("over", ln("C1", 10000001), ln("CASH", -10000001)), ledger.ErrInsufficientFunds)
 	tr := e("t1", ln("C2", 3000000), ln("C1", -3000000))
 	tr.Kind, tr.LimitedAmount = "transfer", 3000000
-	if _, err := l.Post(ctx, tr); err != nil {
-		t.Fatal(err)
-	}
+	mustPost(t, l, tr)
 	tr2 := e("t2", ln("C2", 2500000), ln("C1", -2500000))
 	tr2.Kind, tr2.LimitedAmount = "transfer", 2500000
-	if _, err := l.Post(ctx, tr2); !errors.Is(err, ledger.ErrDailyLimit) {
-		t.Fatalf("tier 1 daily limit: %v", err)
-	}
+	failPost(t, l, tr2, ledger.ErrDailyLimit)
 	if err := l.SetStatus(ctx, "C1", "pnd"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.Post(ctx, e("pnd-debit", ln("C1", 1), ln("CASH", -1))); !errors.Is(err, ledger.ErrPostNoDebit) {
-		t.Fatalf("pnd debit: %v", err)
-	}
-	if _, err := l.Post(ctx, e("pnd-credit", ln("CASH", 1), ln("C1", -1))); err != nil {
-		t.Fatalf("pnd credit: %v", err)
-	}
+	failPost(t, l, e("pnd-debit", ln("C1", 1), ln("CASH", -1)), ledger.ErrPostNoDebit)
+	mustPost(t, l, e("pnd-credit", ln("CASH", 1), ln("C1", -1)))
 	if err := l.SetStatus(ctx, "C1", "frozen"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.Post(ctx, e("frozen-credit", ln("CASH", 1), ln("C1", -1))); !errors.Is(err, ledger.ErrAccountFrozen) {
-		t.Fatalf("frozen credit: %v", err)
-	}
+	failPost(t, l, e("frozen-credit", ln("CASH", 1), ln("C1", -1)), ledger.ErrAccountFrozen)
 	if err := l.SetStatus(ctx, "C1", "closed"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.Post(ctx, e("closed", ln("CASH", 1), ln("C1", -1))); !errors.Is(err, ledger.ErrAccountClosed) {
-		t.Fatalf("closed: %v", err)
-	}
+	failPost(t, l, e("closed", ln("CASH", 1), ln("C1", -1)), ledger.ErrAccountClosed)
 	verify(t, l)
 }
 
 func TestReverseOnce(t *testing.T) {
 	l, ctx := setup(t)
-	if _, err := l.Post(ctx, e("dep", ln("CASH", 5000), ln("C1", -5000))); err != nil {
-		t.Fatal(err)
-	}
+	mustPost(t, l, e("dep", ln("CASH", 5000), ln("C1", -5000)))
 	p, err := l.Post(ctx, e("fee", ln("C1", 50), ln("INCOME", -50)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.Reverse(ctx, p.EntryID, "rev1", at.Add(time.Hour), ""); err != nil {
-		t.Fatal(err)
-	}
+	_, err = l.Reverse(ctx, p.EntryID, "rev1", at.Add(time.Hour), "")
+	chk(t, err)
 	if _, err := l.Reverse(ctx, p.EntryID, "rev2", at.Add(2*time.Hour), ""); !errors.Is(err, ledger.ErrAlreadyReversed) {
 		t.Fatalf("second reversal: %v", err)
 	}
@@ -223,4 +197,11 @@ func TestReverseOnce(t *testing.T) {
 		t.Fatalf("reversal is not a separate statement line: %+v", evs)
 	}
 	verify(t, l)
+}
+
+func chk(t testing.TB, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
 }

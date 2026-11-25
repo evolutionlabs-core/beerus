@@ -127,9 +127,9 @@ func newestPosted(t *testing.T, b *Books) time.Time {
 
 func waitPast(t *testing.T, clk *clock.Clock, at time.Time) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := clk.Real().Add(time.Second)
 	for !clk.Now().After(at) {
-		if time.Now().After(deadline) {
+		if clk.Real().After(deadline) {
 			t.Fatal("the clock did not move")
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -32,12 +33,18 @@ type Profile struct {
 	Name      string
 	NIPCode   string
 	NUBANCode string
+
+	PasswordCost int
 }
 
 type Bank struct {
 	L    *ledger.Ledger
 	P    Profile
 	fees *charges.Schedule
+
+	decoyOnce sync.Once
+	decoyHash []byte
+	decoyErr  error
 }
 
 func New(l *ledger.Ledger, p Profile, fees *charges.Schedule) *Bank {
