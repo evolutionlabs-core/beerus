@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="web/brand/mark-dark.svg">
-    <img src="web/brand/mark-light.svg" alt="Beerus" width="88">
+    <source media="(prefers-color-scheme: dark)" srcset="web/brand/logo-dark.svg">
+    <img src="web/brand/logo-light.svg" alt="Beerus" width="88">
   </picture>
 </p>
 

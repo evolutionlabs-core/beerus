@@ -39,10 +39,10 @@ def inline(size, pad):
 
 
 d = sys.argv[1]
-open(f"{d}/mark-light.svg", "w").write(mark(512, 40, INK_LIGHT, ACCENT_LIGHT))
-open(f"{d}/mark-dark.svg", "w").write(mark(512, 40, INK_DARK, ACCENT_DARK))
-open(f"{d}/mark-small-light.svg", "w").write(mark(512, 24, INK_LIGHT, ACCENT_LIGHT))
-open(f"{d}/mark-small-dark.svg", "w").write(mark(512, 24, INK_DARK, ACCENT_DARK))
+open(f"{d}/logo-light.svg", "w").write(mark(512, 40, INK_LIGHT, ACCENT_LIGHT))
+open(f"{d}/logo-dark.svg", "w").write(mark(512, 40, INK_DARK, ACCENT_DARK))
+open(f"{d}/logo-small-light.svg", "w").write(mark(512, 24, INK_LIGHT, ACCENT_LIGHT))
+open(f"{d}/logo-small-dark.svg", "w").write(mark(512, 24, INK_DARK, ACCENT_DARK))
 open(f"{d}/app-icon.svg", "w").write(mark(512, 104, INK_DARK, ACCENT_DARK, TILE))
 open(f"{d}/avatar.svg", "w").write(mark(1024, 190, INK_DARK, ACCENT_DARK, TILE, 0))
 open(f"{d}/inline.svg", "w").write(inline(24, 1))
