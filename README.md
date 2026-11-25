@@ -92,7 +92,7 @@ beerus accounts --bank bank-a
 
 `--username` gives the customer an online banking login, which they need to link their bank through [Connect](#connect). Leave it and `--password-stdin` out if you don't need one.
 
-Skip `--bank` on every command:
+Make `bank-a` the default bank, so later commands can leave out `--bank`:
 
 ```bash
 beerus use bank-a
