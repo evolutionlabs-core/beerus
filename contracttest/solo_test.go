@@ -196,7 +196,10 @@ func (s *solo) run(id, healthURL, token string) (*lockedBuffer, func()) {
 		t.Fatal(err)
 	}
 	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
+	go func() {
+		exited <- cmd.Wait()
+		close(exited)
+	}()
 	var once sync.Once
 	stop := func() {
 		once.Do(func() {

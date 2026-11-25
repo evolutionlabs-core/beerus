@@ -60,22 +60,14 @@ jobs:
 
   contract:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
       BEERUS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@v4
+      - name: Start Postgres
+        run: |
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16 -c max_connections=300 -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+          until docker exec pg pg_isready -U postgres; do sleep 1; done
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -93,7 +85,7 @@ jobs:
       - name: Resolve local names
         run: echo "127.0.0.1 connect.localhost cbn.localhost bank-a.localhost bank-b.localhost" | sudo tee -a /etc/hosts
       - name: Contract suite
-        run: go test -race -count=1 -timeout 10m ./contracttest
+        run: go test -race -count=1 -timeout 5m ./contracttest
       - name: Save the Go build cache
         if: always() && steps.gocache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4

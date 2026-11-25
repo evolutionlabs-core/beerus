@@ -42,7 +42,7 @@ Fast run, under 10 seconds:
 go test -short -count=1 ./...
 ```
 
-Full run, as CI does it. It starts one shared stack for the contract tests:
+Full run, as CI does it. It starts one shared stack for the contract tests, and needs `max_connections` of 300 in Postgres (the default 100 is too few):
 
 ```bash
 go test -race -count=1 ./...
