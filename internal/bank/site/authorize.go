@@ -81,7 +81,7 @@ func sharedData(scopes []string) string {
 
 type consentChoice struct {
 	ID, Name, Type, Last4 string
-	Checked        bool
+	Checked               bool
 }
 
 func (s *site) renderConsent(ctx context.Context, w http.ResponseWriter, sess *session, status int, req *openbanking.Request, errMsg string) {
