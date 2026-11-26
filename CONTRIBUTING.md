@@ -1,91 +1,90 @@
 # Contributing to Beerus
 
-Bug reports, fixes and features are welcome.
+Thanks for helping. Bug reports, fixes, docs and features are all welcome.
+
+## Contents
+
+- [Report a bug](#report-a-bug)
+- [Suggest a feature](#suggest-a-feature)
+- [Set up](#set-up)
+- [Make your change](#make-your-change)
+- [Open a pull request](#open-a-pull-request)
+- [What we expect in a pull request](#what-we-expect-in-a-pull-request)
+- [Review](#review)
+- [License](#license)
 
 ## Report a bug
 
-Open an [issue](https://github.com/evolutionlabs-core/beerus/issues) with:
+Search the [issues](https://github.com/evolutionlabs-core/beerus/issues) first. If it's new, open one with:
 
 - the command you ran
 - what it printed
 - what you expected
-- `beerus version`
+- `beerus version` and `beerus doctor`
+
+## Suggest a feature
+
+Open an issue before you write code. Say what you want to do and why. Agree the approach with a maintainer first, so your work isn't wasted.
 
 ## Set up
 
-Needs Go (the version in `go.mod`), Postgres, and Node for the CSS.
+You need Go (the version in `go.mod`), Postgres, and Node for the CSS.
 
 ```bash
-git clone https://github.com/evolutionlabs-core/beerus
+git clone https://github.com/YOUR_USERNAME/beerus
 cd beerus
 go build -o beerus ./cmd/beerus
 ```
 
-Run your build with a separate state folder, so it doesn't touch your installed Beerus:
+Run your build with its own state folder, so it doesn't touch your installed Beerus:
 
 ```bash
 BEERUS_DIR=.beerus-dev ./beerus init
 BEERUS_DIR=.beerus-dev ./beerus up
 ```
 
-## Test
+## Make your change
 
-Point the tests at Postgres:
+1. Fork the repo and branch from `main`.
+2. Read [CLAUDE.md](CLAUDE.md). It holds the code rules, and a review bot checks every PR against them.
+3. Add or update tests for your change.
+4. If you change a command, update [README.md](README.md).
+5. If you change a template or CSS class, rebuild the CSS and commit the result:
+
+   ```bash
+   cd web && npm ci && npm run css
+   ```
+
+Before you commit, run:
 
 ```bash
 export BEERUS_TEST_DATABASE_URL=postgres:///postgres
-```
-
-Fast run, under 10 seconds:
-
-```bash
-go test -short -count=1 ./...
-```
-
-Full run, as CI does it. It starts one shared stack for the contract tests, and needs `max_connections` of 300 in Postgres (the default 100 is too few):
-
-```bash
-go test -race -count=1 ./...
-```
-
-Without `BEERUS_TEST_DATABASE_URL`, the database tests skip.
-
-## Before you commit
-
-```bash
 go vet ./...
 $(go env GOROOT)/bin/gofmt -l .
 go test -short -count=1 ./...
 ```
 
-`gofmt -l` must print nothing. Use the toolchain's gofmt, not Homebrew's.
-
-If you change a template or CSS class, rebuild the CSS and commit the result:
-
-```bash
-cd web && npm ci && npm run css
-```
-
-## Code rules
-
-Read [CLAUDE.md](CLAUDE.md) before you write code. A review bot checks every PR against it. The rules that catch people most:
-
-- No code comments. Names carry the meaning.
-- Money is `int64` kobo. No floats.
-- Time comes from `internal/clock`. No `time.Now()`.
-- Real-world figures go in `internal/countrypack/ng.yaml` with a source link. Invented figures are labelled placeholders.
-- Few, broad, table-driven tests.
+`gofmt -l` must print nothing. CI runs the full suite with `go test -race -count=1 ./...`, which needs Postgres `max_connections` of 300.
 
 ## Open a pull request
 
-1. Branch from `main`.
-2. Keep one change per PR.
-3. Write the commit message as one imperative sentence, about 60 characters: `Add stamp duty to own-bank transfers`.
-4. In the PR body, list every behaviour change, limit and placeholder.
-5. If you change a command, update [README.md](README.md).
+1. Push your branch to your fork.
+2. Open a pull request against `main`.
+3. Fill in the template.
 
-CI must pass before merge. A maintainer reviews every PR.
+## What we expect in a pull request
+
+- **One change.** Split unrelated changes into separate PRs.
+- **A linked issue.** Write `Closes #123` in the body.
+- **What and why.** Say what the PR changes and why it's needed.
+- **Every behaviour change listed,** with any new limit or placeholder figure.
+- **Passing tests.** CI must be green before review.
+- **A clear commit message.** One imperative sentence of about 60 characters: `Add stamp duty to own-bank transfers`.
+
+## Review
+
+A maintainer reviews every PR. Reply to comments and push fixes to the same branch. We merge with squash once CI passes and the PR is approved.
 
 ## License
 
-Beerus is AGPL-3.0. By opening a PR you agree your contribution is released under the same license.
+Beerus is AGPL-3.0. By opening a PR, you agree your contribution is released under the same license.
