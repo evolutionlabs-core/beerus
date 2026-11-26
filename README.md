@@ -9,6 +9,8 @@
 
 Beerus is a local sandbox of Nigeria's banking system. It runs banks, the NIBSS payment switch and CBN settlement, plus an open banking aggregator your app can connect to and read customer data. Build and test financial apps without real money.
 
+<p align="center"><img src="docs/demo.gif" alt="Create banks, send money, take a bank down and link an account with Connect" width="720"></p>
+
 ## Contents
 
 - [Install](#install)
