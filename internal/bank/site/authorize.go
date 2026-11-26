@@ -80,8 +80,8 @@ func sharedData(scopes []string) string {
 }
 
 type consentChoice struct {
-	ID, Name, Type string
-	Checked        bool
+	ID, Name, Type, Last4 string
+	Checked               bool
 }
 
 func (s *site) renderConsent(ctx context.Context, w http.ResponseWriter, sess *session, status int, req *openbanking.Request, errMsg string) {
@@ -93,12 +93,12 @@ func (s *site) renderConsent(ctx context.Context, w http.ResponseWriter, sess *s
 	}
 	choices := []consentChoice{}
 	for _, m := range mine {
-		choices = append(choices, consentChoice{ID: m.ID, Name: m.Name, Type: m.Type, Checked: true})
+		choices = append(choices, consentChoice{ID: m.ID, Name: m.Name, Type: m.Type, Last4: m.ID[max(0, len(m.ID)-4):], Checked: true})
 	}
 	c := req.Consent
 	d := data{
 		"Title": "Share your account data", "Nav": "", "Req": req, "Client": req.Client, "Consent": c, "Choices": choices, "Error": errMsg,
-		"Start": c.TransactionFrom.String(), "Effective": req.Effective.String(), "Capped": req.Capped, "Months": req.Months, "Until": req.Until.Format("2 January 2006"), "Shared": strings.ToUpper(sharedData(c.Scopes)[:1]) + sharedData(c.Scopes)[1:],
+		"Start": c.TransactionFrom.String(), "Effective": req.Effective.String(), "Capped": req.Capped, "Months": req.Months, "Until": req.Until.Format("2 January 2006"), "Scope": sharedData(c.Scopes),
 		"Partner": c.PartnerName, "PartnerLegal": c.PartnerLegal, "Purpose": c.Purpose,
 	}
 	if c.PartnerName == "" {

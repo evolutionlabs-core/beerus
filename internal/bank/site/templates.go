@@ -16,12 +16,12 @@ const templates = `
 {{define "bank_head"}}{{template "bank_doc" .}}
 <header class="sticky top-0 z-10 border-b border-line bg-canvas/85 backdrop-blur-md">
 <div class="mx-auto flex h-15 max-w-[1040px] items-center gap-6 px-5">
-<a href="/accounts" class="flex shrink-0 items-center gap-2.5"><span class="grid size-8 place-items-center rounded-[9px] border border-line-strong bg-raised text-[14px] text-bank">{{initial .Bank.Name}}</span><span class="text-[14.5px] tracking-tight">{{.Bank.Name}}</span></a>
-<nav class="flex flex-1 items-center gap-1 overflow-x-auto text-[13.5px]">
+<a href="/accounts" class="flex shrink-0 items-center gap-2.5"><span class="text-[14.5px] tracking-tight">{{.Bank.Name}}</span></a>
+{{if .Nav}}<nav class="flex flex-1 items-center gap-1 overflow-x-auto text-[13.5px]">
 <a href="/accounts" class="flex h-8 shrink-0 items-center rounded-full px-3 {{if eq .Nav "accounts"}}bg-raised text-ink{{else}}text-muted hover:text-ink{{end}}">Accounts</a>
 <a href="/transfer" class="flex h-8 shrink-0 items-center rounded-full px-3 {{if eq .Nav "transfer"}}bg-raised text-ink{{else}}text-muted hover:text-ink{{end}}">Send money</a>
 <a href="/apps" class="flex h-8 shrink-0 items-center rounded-full px-3 {{if eq .Nav "apps"}}bg-raised text-ink{{else}}text-muted hover:text-ink{{end}}">Connected apps</a>
-</nav>
+</nav>{{end}}
 <div class="ml-auto flex items-center gap-2">{{themeToggle}}<div class="hidden items-center gap-3 text-[13px] text-muted sm:flex"><span class="truncate">{{.User}}</span>
 <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit" class="btn btn-secondary btn-sm">Sign out</button></form></div></div>
 </div>
@@ -37,7 +37,7 @@ const templates = `
 <div class="fixed top-3 right-4">{{themeToggle}}</div>
 <main class="flex min-h-screen flex-col items-center px-4 pt-16 pb-10 sm:pt-24">
 <div class="w-full max-w-[400px]">
-<div class="mb-6 flex items-center gap-3"><span class="grid size-9 place-items-center rounded-[10px] border border-line-strong bg-raised text-[15px] text-bank">{{initial .Bank.Name}}</span><div class="leading-tight"><div class="text-[14px]">{{.Bank.Name}}</div><div class="text-[12.5px] text-muted">Online banking</div></div></div>
+<div class="mb-6"><div class="leading-tight"><div class="text-[14px]">{{.Bank.Name}}</div><div class="text-[12.5px] text-muted">Online banking</div></div></div>
 <section class="rounded-2xl border border-line bg-panel p-7">
 {{end}}
 
@@ -191,40 +191,47 @@ const templates = `
 {{template "bank_auth_foot" .}}{{end}}
 
 {{define "bank_consent"}}{{template "bank_head" .}}
-<div class="mx-auto max-w-[560px]">
-<h1 class="text-[22px] leading-snug">Share account data with {{.Partner}}</h1>
-<p class="mt-2 text-[13.5px] leading-relaxed text-muted">{{.Client.Name}}, on behalf of {{.Partner}}, is asking for access {{.Purpose}}.</p>
-<section class="mt-6 rounded-2xl border border-line bg-panel p-6">
-<dl class="grid grid-cols-[124px_1fr] gap-x-4 gap-y-2.5 text-[13px]">
-<dt class="text-muted">Receiving party</dt><dd>{{.Client.LegalName}}</dd>
-<dt class="text-muted">Registry number</dt><dd class="num">{{.Client.RegistryID}}</dd>
-<dt class="text-muted">CAC number</dt><dd class="num">{{.Client.CAC}}</dd>
-<dt class="text-muted">Acting for</dt><dd>{{.PartnerLegal}} ({{.Partner}})</dd>
-<dt class="text-muted">Access</dt><dd>{{.Shared}}. Read only.</dd>
-<dt class="text-muted">History from</dt><dd>{{.Start}}{{if .Capped}} <span class="text-muted">· {{$.Bank.Name}} shares history from {{.Effective}}</span>{{end}}</dd>
-<dt class="text-muted">Duration</dt><dd>{{count .Months "month" "months"}}, until {{.Until}}</dd>
-<dt class="text-muted">Frequency</dt><dd>Several times a day, and when {{.Partner}} asks</dd>
-</dl>
-</section>
-{{template "bank_error" .}}
-<form method="post" action="/authorize/consent" class="mt-6">
-<input type="hidden" name="csrf" value="{{.CSRF}}">
-<p class="mb-2.5 text-[12.5px] text-muted">Accounts to share</p>
-<div class="space-y-2">
-{{range .Choices}}<label class="flex cursor-pointer items-start gap-3 rounded-xl border border-line px-3.5 py-3 transition-colors hover:border-line-strong has-[:checked]:border-line-strong has-[:checked]:bg-raised">
-<input type="checkbox" name="account" value="{{.ID}}" class="mt-1 accent-[var(--primary)]" {{if .Checked}}checked{{end}}>
-<span class="flex-1"><span class="block text-[14px]">{{.Name}}</span><span class="block text-[12.5px] text-muted"><span class="capitalize">{{.Type}}</span> · <span class="num">{{.ID}}</span></span></span>
-</label>{{end}}
-<label class="flex cursor-pointer items-start gap-3 rounded-xl border border-line px-3.5 py-3 transition-colors hover:border-line-strong">
-<input type="checkbox" name="analytics" value="yes" class="mt-1 accent-[var(--primary)]">
-<span class="flex-1"><span class="block text-[14px]">Anonymised analytics</span><span class="block text-[12.5px] text-muted">Optional. You can connect without it.</span></span>
-</label>
+<div class="mx-auto max-w-[420px] space-y-7 pt-6">
+<div>
+<h1 class="text-[24px] leading-snug font-medium tracking-tight">Allow {{.Partner}} to see your account?</h1>
+<p class="mt-2 text-[14px] text-muted">{{.Partner}} asked through {{.Client.Name}}.</p>
 </div>
-<p class="mt-5 text-[12.5px] leading-relaxed text-muted">You can withdraw access at any time from Connected apps at {{$.Bank.Name}}. When you do, {{.Client.Name}} stops collecting data and deletes what it holds within 30 days. {{.Partner}} keeps records already in your books under its own privacy notice.</p>
-<div class="mt-6 grid grid-cols-2 gap-2">
+<ul class="space-y-3.5 text-[14px] leading-normal">
+<li class="flex gap-3"><svg class="mt-0.5 size-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>{{.Partner}} sees your {{.Scope}}</span></li>
+<li class="flex gap-3"><svg class="mt-0.5 size-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span>{{.Partner}} can't move your money</span></li>
+<li class="flex gap-3"><svg class="mt-0.5 size-[18px] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Access ends {{.Until}}. Stop it any time in Connected apps.</span></li>
+</ul>
+{{template "bank_error" .}}
+<form method="post" action="/authorize/consent" class="space-y-5">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<fieldset class="space-y-2">
+<legend class="mb-2 text-[12.5px] text-muted">{{if gt (len .Choices) 1}}Accounts{{else}}Account{{end}}</legend>
+{{range .Choices}}<label class="flex cursor-pointer items-center gap-3 rounded-xl border border-line px-4 py-3.5 transition-colors hover:border-line-strong has-[:checked]:border-line-strong has-[:checked]:bg-panel">
+<input type="checkbox" name="account" value="{{.ID}}" class="size-4 accent-[var(--primary)]" {{if .Checked}}checked{{end}}>
+<span class="flex-1"><span class="block">{{.Name}}</span><span class="block text-[12.5px] text-muted capitalize">{{.Type}}</span></span>
+<span class="num text-[13px] text-muted">•••• {{.Last4}}</span>
+</label>{{end}}
+</fieldset>
+<div class="grid grid-cols-2 gap-2">
 <button type="submit" name="action" value="decline" class="btn btn-secondary w-full">Decline</button>
 <button type="submit" name="action" value="approve" class="btn btn-primary w-full">Approve</button>
 </div>
+<details class="group border-t border-line pt-4 text-[13px]">
+<summary class="flex cursor-pointer list-none items-center justify-between text-muted [&::-webkit-details-marker]:hidden">More details<svg class="size-3.5 transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></summary>
+<dl class="mt-3.5 grid grid-cols-[112px_1fr] gap-x-4 gap-y-2 leading-normal">
+<dt class="text-muted">Shared with</dt><dd>{{.Client.LegalName}}, for {{.PartnerLegal}}</dd>
+<dt class="text-muted">Registry no.</dt><dd class="num">{{.Client.RegistryID}} · {{.Client.CAC}}</dd>
+<dt class="text-muted">Purpose</dt><dd>{{.Purpose}}. Read only.</dd>
+<dt class="text-muted">History from</dt><dd>{{.Start}}{{if .Capped}} <span class="text-muted">· {{$.Bank.Name}} shares history from {{.Effective}}</span>{{end}}</dd>
+<dt class="text-muted">Duration</dt><dd>{{count .Months "month" "months"}}</dd>
+<dt class="text-muted">Updates</dt><dd>Several times a day, and when {{.Partner}} asks</dd>
+<dt class="text-muted">If you stop it</dt><dd>{{.Client.Name}} deletes your data within 30 days. {{.Partner}} keeps records already in your books.</dd>
+</dl>
+<label class="mt-3.5 flex cursor-pointer items-start gap-2.5">
+<input type="checkbox" name="analytics" value="yes" class="mt-0.5 accent-[var(--primary)]">
+<span>Anonymised analytics <span class="text-muted">(optional)</span></span>
+</label>
+</details>
 </form>
 </div>
 {{template "bank_foot" .}}{{end}}
