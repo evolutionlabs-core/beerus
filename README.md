@@ -13,6 +13,7 @@ Beerus is a local sandbox of Nigeria's banking system. It runs banks, the NIBSS 
 
 ## Contents
 
+- [Requirements](#requirements)
 - [Install](#install)
 - [Start](#start)
 - [Usage](#usage)
@@ -36,9 +37,32 @@ Beerus is a local sandbox of Nigeria's banking system. It runs banks, the NIBSS 
   - [Manage connections](#manage-connections)
 - [License](#license)
 
-## Install
+## Requirements
 
-Requires: Postgres. If yours isn't at `postgres:///postgres`, set `BEERUS_DATABASE_URL`.
+Beerus stores its data in Postgres. Install it and start it if you don't have it.
+
+macOS:
+
+```bash
+brew install postgresql@17
+brew services start postgresql@17
+```
+
+Ubuntu or Debian:
+
+```bash
+sudo apt install postgresql
+sudo systemctl start postgresql
+sudo -u postgres createuser --superuser $USER
+```
+
+Beerus connects to `postgres:///postgres`. If your database is elsewhere, set `BEERUS_DATABASE_URL`:
+
+```bash
+export BEERUS_DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/postgres
+```
+
+## Install
 
 ```bash
 brew install evolutionlabs-core/tap/beerus
