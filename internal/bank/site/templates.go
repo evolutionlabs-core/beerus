@@ -222,14 +222,14 @@ const templates = `
 <dt class="text-muted">Shared with</dt><dd>{{.Client.LegalName}}, for {{.PartnerLegal}}</dd>
 <dt class="text-muted">Registry no.</dt><dd class="num">{{.Client.RegistryID}} · {{.Client.CAC}}</dd>
 <dt class="text-muted">Purpose</dt><dd>{{.Purpose}}. Read only.</dd>
-<dt class="text-muted">History from</dt><dd>{{.Start}}{{if .Capped}} <span class="text-muted">· {{$.Bank.Name}} shares from {{.Effective}}</span>{{end}}</dd>
+<dt class="text-muted">History from</dt><dd>{{.Start}}{{if .Capped}} <span class="text-muted">· {{$.Bank.Name}} shares history from {{.Effective}}</span>{{end}}</dd>
 <dt class="text-muted">Duration</dt><dd>{{count .Months "month" "months"}}</dd>
 <dt class="text-muted">Updates</dt><dd>Several times a day, and when {{.Partner}} asks</dd>
 <dt class="text-muted">If you stop it</dt><dd>{{.Client.Name}} deletes your data within 30 days. {{.Partner}} keeps records already in your books.</dd>
 </dl>
 <label class="mt-3.5 flex cursor-pointer items-start gap-2.5">
 <input type="checkbox" name="analytics" value="yes" class="mt-0.5 accent-[var(--primary)]">
-<span>Also share anonymised analytics <span class="text-muted">(optional)</span></span>
+<span>Anonymised analytics <span class="text-muted">(optional)</span></span>
 </label>
 </details>
 </form>
