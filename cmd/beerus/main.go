@@ -167,7 +167,7 @@ func printInfo(c *config.Config) error {
 		fmt.Println(strings.TrimRight(line, " \n"))
 	}
 	if len(c.Partners) == 0 {
-		fmt.Println("\nNo partner apps yet. Register one when it is ready to connect:\n  beerus partner add balance --redirect-uri http://localhost:3000/bank_connections/callback --webhook-url http://localhost:3000/webhooks/beerus")
+		fmt.Println("\nNo partner apps yet. Register one when it is ready to connect:\n  beerus partner add APP_NAME --redirect-uri REDIRECT_URL --webhook-url WEBHOOK_URL")
 		return nil
 	}
 	fmt.Println("\nPartner apps:")
